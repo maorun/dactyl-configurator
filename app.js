@@ -745,7 +745,6 @@ function createHalfMatrix(matrixData, side) {
   const thumbDefs = [
     { r: 5, c: 6, sub: 0, col: "1", row: "1", isTall: false, defaultLabel: "Esc" },
     { r: 5, c: 0, sub: 0, col: "2", row: "1", isTall: false, defaultLabel: "Cmd" },
-    { r: 5, c: 5, sub: 0, col: "3", row: "1", isTall: false, defaultLabel: "Bksp" },
     { r: 5, c: 1, sub: 0, col: "1", row: "2", isTall: false, defaultLabel: "Alt" },
     { r: 5, c: 4, sub: 0, col: "1", row: "3", isTall: false, defaultLabel: "Tab" },
     { r: 5, c: 3, sub: 0, col: "2", row: "2 / span 2", isTall: true, defaultLabel: "Space (2U)" },
@@ -1872,9 +1871,7 @@ const SCANCODE_MAP_RIGHT = {
   "Space":      { r: 5, c: 3, label: "Space (2U)" },
   // R5C2: 2U Daumentaste Rechts
   "Enter":      { r: 5, c: 2, label: "Enter (2U)" },
-  "NumpadEnter": { r: 5, c: 2, label: "Enter (2U)" },
-  // R5C5: Taste 2
-  "Backspace":  { r: 5, c: 5, label: "Bksp" }
+  "NumpadEnter": { r: 5, c: 2, label: "Enter (2U)" }
 };
 
 const ACTION_CODE_TO_EVENT_CODES = {

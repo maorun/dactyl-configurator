@@ -1128,3 +1128,84 @@ body {
 .key-cap.is-pressed .key-sublabel {
   color: #fff !important;
 }
+
+/* Config Mode Guide Card */
+.config-mode-guide-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.config-guide-icon {
+  font-size: 1.6rem;
+  background: rgba(59, 130, 246, 0.15);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  padding: 0.4rem 0.6rem;
+  border-radius: 10px;
+  line-height: 1;
+}
+
+.config-guide-body {
+  flex: 1;
+}
+
+.config-guide-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+  color: #93c5fd;
+  margin-bottom: 0.35rem;
+}
+
+.config-guide-title strong {
+  color: #fff;
+}
+
+.config-guide-desc {
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.config-guide-desc code {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: #38bdf8;
+  font-family: monospace;
+  font-size: 0.82rem;
+}
+
+/* Config Combo Key Highlight */
+.key-cap.is-config-combo-key {
+  border-color: rgba(59, 130, 246, 0.6) !important;
+  position: relative;
+}
+
+.config-combo-badge {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  background: rgba(59, 130, 246, 0.25);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.5);
+  padding: 1px 4px;
+  border-radius: 3px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}

@@ -11,8 +11,8 @@
     [
       [
         {
-          "tap": "KEY_6",
           "label": "6",
+          "tap": "KEY_6",
           "hold": "NONE"
         },
         {
@@ -169,8 +169,8 @@
           "hold": "NONE"
         },
         {
-          "tap": "KEY_RIGHT_ALT",
-          "label": "Alt",
+          "label": "Fn",
+          "tap": "MAC_GLOBE",
           "hold": "NONE"
         }
       ],

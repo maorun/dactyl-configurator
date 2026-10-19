@@ -29,7 +29,7 @@
           <span class="bat-label" id="batPercentageText">--%</span>
           <span class="bat-sub" id="batVoltageText" style="font-size: 0.75rem; color: #94a3b8; margin-left: 0.2rem;">(-- V)</span>
         </div>
-        <button id="btnConnectBle" class="btn btn-outline" style="border-color: #3b82f6; color: #93c5fd;" title="Kabellos per Web-Bluetooth verbinden für 0.1s Live-Remapping ohne Kabel!">
+        <button id="btnConnectBle" class="btn btn-outline" style="border-color: #3b82f6; color: #93c5fd;" title="Drahtlos per Web-Bluetooth verbinden: Halte auf der Tastatur R4C5 + R0C0 für 0.5s gedrückt und klicke dann hier!">
           <span class="btn-icon">⚡</span> Bluetooth Live-Sync
         </button>
         <button id="btnConnect" class="btn btn-outline" style="border-color: #6366f1; color: #a5b4fc;" title="Direkte USB-Live-Verbindung zum ESP32 für Matrix-Echtzeit-Anzeige aller Tasten und Layer">
@@ -95,6 +95,22 @@
             <option value="us_qwerty">US QWERTY</option>
           </select>
           <button id="btnApplyPreset" class="btn btn-outline btn-sm">Preset anwenden</button>
+        </div>
+      </div>
+
+      <!-- Wireless Bluetooth Config Mode Guide Banner -->
+      <div class="config-mode-guide-card" id="configModeGuideCard">
+        <div class="config-guide-icon">⚡</div>
+        <div class="config-guide-body">
+          <div class="config-guide-title">
+            <strong>Drahtloser Bluetooth Config-Modus (Live-Remapping ohne Kabel)</strong>
+            <span class="badge" style="background: rgba(59,130,246,0.25); color: #93c5fd; font-size: 0.75rem; padding: 2px 8px; border-radius: 4px;">Hardware-Combo: R4C5 + R0C0 (0,5s)</span>
+          </div>
+          <div class="config-guide-desc">
+            <span><strong>1. Modus aktivieren:</strong> Halte auf der Tastatur <strong>R4C5</strong> (unterste rechte Randtaste) + <strong>R0C0</strong> (oberste Zahlenreihe Taste <code>6</code>) für <strong>0,5s</strong> gedrückt. Der ESP32 trennt macOS und sendet als <strong>„Dactyl Config“</strong>.</span>
+            <span><strong>2. Verbinden:</strong> Klicke oben auf <strong>„⚡ Bluetooth Live-Sync“</strong>, um drahtlos zu verbinden. Alle Tastenänderungen werden sofort im ESP32 NVS gespeichert!</span>
+            <span><strong>3. Modus beenden:</strong> Klicke oben auf <strong>„Trennen“</strong> oder halte erneut <strong>R4C5 + R0C0</strong> für 0,5s gedrückt. Die Tastatur verbindet sich sofort wieder als Standard-Tastatur mit macOS.</span>
+          </div>
         </div>
       </div>
 
@@ -309,7 +325,19 @@
           </div>
         </div>
 
-        <div class="settings-actions">
+        <div class="info-card" style="margin-top: 1rem;">
+          <h4>⚡ Drahtloser Bluetooth-Konfigurationsmodus</h4>
+          <p style="font-size: 0.88rem; color: #cbd5e1; line-height: 1.5; margin-bottom: 0.5rem;">
+            Da macOS verbundene HID-Tastaturen für generischen GATT-Zugriff sperrt und bei manuellem Trennen sofort wieder verbindet, besitzt die Firmware einen hardware-getriggerten Konfigurationsmodus:
+          </p>
+          <ul style="padding-left: 1.25rem; font-size: 0.85rem; color: #cbd5e1; line-height: 1.6;">
+            <li><strong>Aktivierung:</strong> Hardware-Matrix-Kombination <code>R4C5 + R0C0</code> für <strong>0,5 Sekunden</strong> gedrückt halten (funktioniert auf jedem Layer, auch im reinen Akkubetrieb ohne Ein/Ausschalter).</li>
+            <li><strong>Verhalten im Config-Modus:</strong> Trennt macOS HID, schaltet BLE Advertising auf <em>„Dactyl Config“</em> um (ohne HID-Dienst) und unterdrückt lokale Keystroke-Ausgabe bei vollem Live-Monitor-Stream.</li>
+            <li><strong>Beenden:</strong> Per Klick auf <em>„Trennen“</em> in der App, durch erneutes Drücken von <code>R4C5 + R0C0</code> oder automatisch nach 3 Minuten Inaktivität.</li>
+          </ul>
+        </div>
+
+        <div class="settings-actions" style="margin-top: 1.5rem;">
           <button id="btnSaveSettings" class="btn btn-success">Einstellungen in Config übernehmen</button>
         </div>
       </div>
@@ -360,6 +388,6 @@
     <div class="toast" id="toastNotification"></div>
   </div>
 
-  <script src="app.js?v=26"></script>
+  <script src="app.js?v=29"></script>
 </body>
 </html>

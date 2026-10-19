@@ -831,6 +831,16 @@ function createKeycapElement(r, c, side, keyData, isThumb = false) {
   posEl.textContent = `${side} R${r}C${c}`;
   keyEl.appendChild(posEl);
 
+  // Highlight hardware combo keys for wireless Bluetooth Config Mode
+  if (side === "R" && ((r === 0 && c === 0) || (r === 4 && c === 5))) {
+    keyEl.classList.add("is-config-combo-key");
+    keyEl.title = "⚡ Bluetooth Config Combo: Halte R4C5 + R0C0 für 0.5s gedrückt!";
+    const cfgBadge = document.createElement("span");
+    cfgBadge.className = "config-combo-badge";
+    cfgBadge.textContent = "CFG";
+    keyEl.appendChild(cfgBadge);
+  }
+
   keyEl.addEventListener("click", () => {
     if (side === "R") {
       selectKey(r, c, side, isThumb);
@@ -1167,10 +1177,12 @@ async function connectBle() {
   }
 
   try {
-    showToast("Suche nach 'Dactyl Keyboard'...");
+    showToast("Suche nach 'Dactyl Config' (R4C5 + R0C0 für 0.5s gedrückt halten)...");
     try {
       bleDevice = await navigator.bluetooth.requestDevice({
         filters: [
+          { name: "Dactyl Config" },
+          { namePrefix: "Dactyl Config" },
           { services: [CONFIG_SERVICE_UUID] },
           { name: "Dactyl Keyboard" },
           { namePrefix: "Dactyl" }
@@ -1200,8 +1212,8 @@ async function connectBle() {
     await bleConfigChar.startNotifications();
     bleConfigChar.addEventListener("characteristicvaluechanged", handleBleNotification);
 
-    updateBleUI(true, bleDevice.name || "Dactyl Keyboard");
-    showToast("⚡ Bluetooth Live-Sync verbunden! Remapping in <0.1s aktiv.");
+    updateBleUI(true, bleDevice.name || "Dactyl Config");
+    showToast("⚡ Drahtloser Live-Sync aktiv! Remapping in <0.1s bereit.");
 
     // Query layer names & info from ESP32
     setTimeout(async () => {
@@ -1212,13 +1224,23 @@ async function connectBle() {
   } catch (err) {
     console.error("BLE connection error:", err);
     updateBleUI(false);
-    if (err.name !== "NotFoundError") {
-      alert("Fehler bei der Bluetooth-Verbindung:\n" + err.message);
+    if (err.name === "NotFoundError") {
+      showToast("⚠️ Kein 'Dactyl Config' gefunden. Halte R4C5 + R0C0 für 0.5s auf der Tastatur gedrückt!");
+    } else {
+      showToast("Bluetooth-Fehler: " + err.message);
     }
   }
 }
 
-function disconnectBle() {
+async function disconnectBle() {
+  if (bleConfigChar) {
+    try {
+      await sendBleCommand("EXIT_CONFIG");
+      await new Promise(r => setTimeout(r, 60));
+    } catch (e) {
+      console.warn("Error sending EXIT_CONFIG:", e);
+    }
+  }
   if (bleDevice && bleDevice.gatt.connected) {
     bleDevice.gatt.disconnect();
   }
@@ -1230,7 +1252,7 @@ function onBleDisconnected() {
   bleServer = null;
   bleDevice = null;
   updateBleUI(false);
-  showToast("Bluetooth Live-Sync getrennt.");
+  showToast("Drahtloser Live-Sync getrennt -> Tastaturmodus aktiv.");
 }
 
 function updateBleUI(connected, devName) {
@@ -1240,17 +1262,19 @@ function updateBleUI(connected, devName) {
 
   if (btn) {
     if (connected) {
-      btn.innerHTML = `<span class="btn-icon">⚡</span> BLE Verbunden (Trennen)`;
+      btn.innerHTML = `<span class="btn-icon">⚡</span> Verbunden (Trennen & Tastatur starten)`;
       btn.classList.add("btn-primary");
       btn.classList.remove("btn-outline");
       btn.style.borderColor = "#10b981";
       btn.style.color = "#ffffff";
+      btn.title = "Drahtlosen Config-Modus beenden und Tastatur für macOS starten";
     } else {
       btn.innerHTML = `<span class="btn-icon">⚡</span> Bluetooth Live-Sync`;
       btn.classList.remove("btn-primary");
       btn.classList.add("btn-outline");
       btn.style.borderColor = "#3b82f6";
       btn.style.color = "#93c5fd";
+      btn.title = "Drahtlos per Web-Bluetooth verbinden: Halte vorher R4C5 + R0C0 für 0.5s gedrückt!";
     }
   }
 
@@ -1626,6 +1650,8 @@ function handleSerialLine(line) {
     const parts = line.split(" ");
     const mins = parts[2] || "60";
     showToast(`✅ Deep-Sleep-Timeout im ESP32 NVS auf ${mins} Min gesetzt!`);
+  } else if (line.startsWith("OK EXIT_CONFIG")) {
+    showToast("✅ Tastaturmodus wiederhergestellt! macOS verbindet sich automatisch.");
   } else if (line.startsWith("SLEEP_STARTING")) {
     showToast("💤 Tastatur geht in Deep Sleep (Stromsparmodus)... Beliebige Taste drücken zum Aufwecken!", 6000);
     resetBatteryUI();

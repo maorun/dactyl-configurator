@@ -76,18 +76,73 @@ Der Server startet unter `http://localhost:8088`.
 
 ### 3. Tastatur verbinden
 
-- **Kabellos via Bluetooth:**
-  1. Auf **„⚡ Bluetooth Live-Sync“** klicken.
-  2. Im Browser-Dialog **„Dactyl Keyboard“** auswählen und verbinden.
-  3. Jede Tastenänderung im GUI wird innerhalb von Millisekunden live in den NVS-Flash der Tastatur geschrieben.
-- **Per USB-Kabel:**
-  1. ESP32 per USB anschließen.
-  2. Auf **„🔌 USB Live-Monitor“** klicken.
-  3. Live-Tastendrücke werden im Visualizer sofort hervorgehoben.
-- **Flashen:**
-  - Mit einem Klick auf **„💾 Auf Dactyl flashen“** wird die C++-Keymap aktualisiert, kompiliert und direkt auf den ESP32 geschrieben.
+- **Kabellos via Bluetooth (Live-Sync & Remapping):**
+  1. Auf der Tastatur die Hardware-Kombination **`R4C5 + R0C0`** für **0,5 Sekunden** gedrückt halten.
+  2. Die Tastatur trennt macOS kurz und meldet sich als reines Konfigurationsgerät **„Dactyl Config“**.
+  3. In der Web-App (oder der nativen macOS Desktop-App) auf **„⚡ Bluetooth Live-Sync“** klicken.
+  4. Im Dialog **„Dactyl Config“** auswählen und verbinden.
+  5. Tastenbelegungen und Ebenen-Namen werden in Echtzeit (< 0,1s) übertragen und dauerhaft im ESP32 NVS gespeichert!
+  6. Zum Beenden: In der App auf **„Trennen“** klicken oder erneut **`R4C5 + R0C0`** drücken.
+- **Per USB-Kabel (Live-Monitor):**
+  1. ESP32 per USB-Kabel an den Rechner anschließen.
+  2. Auf **„🔌 USB Live-Monitor“** klicken und den seriellen Port auswählen.
+  3. Physische Tastendrücke und Layer-Wechsel werden im Visualizer sofort hervorgehoben.
+- **Flashen per USB:**
+  - Mit einem Klick auf **„💾 Auf Dactyl flashen“** kompiliert der lokale Server die C++-Keymap und flasht die Firmware per `arduino-cli` direkt auf den ESP32.
 
 ---
+
+## ⚡ Drahtlose Bluetooth-Live-Konfiguration (Config Mode)
+
+### Das macOS CoreBluetooth HID Exklusivitätsproblem
+Unter macOS (sowohl in Google Chrome als auch in nativen Electron-Apps) sperrt das Betriebssystem aktive BLE-HID-Tastaturen (`HID Service 0x1812` / `Appearance 0x03C1`) für generische GATT-Dienste wie den Web-Bluetooth Config-Service. Trennt man die Tastatur über die macOS-Bluetooth-Einstellungen, verbindet macOS sie innerhalb von Millisekunden automatisch wieder.
+
+### Die Lösung: Der Firmware Config-Modus
+Die Firmware löst dieses Problem elegant und ohne physischen Ein/Aus-Schalter:
+
+1. **Hardware-Auslöser `R4C5 + R0C0`:**
+   - **`R0C0`**: Zeile 0, Spalte 0 (Taste `6` ganz links oben in der Zahlenreihe).
+   - **`R4C5`**: Zeile 4, Spalte 5 (unterste rechte Randtaste neben den Pfeiltasten).
+   - Werden beide Tasten für **0,5 Sekunden gleichzeitig gehalten**, wechselt die Firmware sofort in den Konfigurationsmodus.
+   - **100% Layer-unabhängig:** Die Abfrage erfolgt direkt auf den GPIO-Pins der Hardware-Matrix. Es spielt keine Rolle, welcher Layer aktiv ist oder welche logische Taste darauf gemappt ist.
+   - Funktioniert im laufenden Akkubetrieb ohne Neustart des ESP32.
+
+2. **Verhalten im Config-Modus:**
+   - Der ESP32 trennt aktiv alle HID-Peers (macOS).
+   - Das BLE-Advertising wird gestoppt und als **`"Dactyl Config"`** neu gestartet – mit `Appearance 0x0000` (Generic) und **ausschließlich** dem `CONFIG_SERVICE_UUID` (ohne HID 0x1812!).
+   - macOS ignoriert das Gerät nun vollständig, sodass Web-Bluetooth (Chrome oder Electron) sofort verbinden kann.
+   - Der Matrix-Scan bleibt aktiv und streamt `KEY_PRESS`-Events in den App-Live-Monitor, unterdrückt aber lokale Keystroke-Injektionen in macOS (verhindert Fehlbedienung während des Mappings).
+
+3. **Config-Modus beenden:**
+   - **In der App:** Auf den Button **„Trennen“** klicken (sendet den GATT-Befehl `EXIT_CONFIG`).
+   - **Auf der Tastatur:** Erneut **`R4C5 + R0C0`** für 0,5s gedrückt halten.
+   - **Automatisch:** Bei 3 Minuten Inaktivität im Config-Modus kehrt die Tastatur automatisch in den Normalbetrieb zurück.
+   - Nach dem Beenden startet die Tastatur wieder das reguläre HID-Advertising als **`"Dactyl Keyboard"`** und verbindet sich nahtlos wieder mit macOS.
+
+---
+
+## 🔋 Power Management & Akkubetrieb (Two-Stage Sleep)
+
+Für den echten kabellosen LiPo-Akkubetrieb verfügt die Firmware über eine intelligente, zweistufige Stromspararchitektur:
+
+1. **Stufe 1: Standby / Light Sleep (Standard: 5 Minuten)**
+   - Drosselt die ESP32-CPU von 240 MHz auf **80 MHz** und senkt den Matrix-Scan von 100 Hz auf 20 Hz.
+   - Die BLE-Verbindung zu macOS bleibt **vollständig aktiv** (kein Reconnect nötig).
+   - **0 ms Latenz:** Der erste Tastenanschlag weckt die CPU sofort wieder auf 240 MHz auf.
+   - Spart ca. 70% Energie bei kurzen Tipp-Pausen.
+
+2. **Stufe 2: Deep Sleep (Standard: 60 Minuten)**
+   - Schaltet den ESP32 bei längerer Abwesenheit in den tiefen Tiefschlaf (**~10–15 µA Stromaufnahme**).
+   - Alle 6 Matrix-Zeilen (`GPIO 13, 14, 27, 26, 33, 32`) sind RTC-Pins und werden als **`EXT1 ANY_HIGH` Wakeup-Quellen** konfiguriert.
+   - Die Spalten-Pins werden im Schlaf per Hardware-Hold auf `HIGH` gehalten.
+   - **Aufwecken:** Ein Druck auf **jede beliebige Taste** der Tastatur weckt den ESP32 innerhalb von ~150 ms auf und verbindet ihn automatisch wieder mit dem Mac.
+
+3. **Akkuüberwachung (GPIO 35):**
+   - Der ADC liest die Batteriespannung ein und meldet den Ladestand in Prozent sowohl über den Standard **BLE Battery Service (`0x180F`)** an macOS als auch über `DEVICE_INFO` an die Web-App.
+   - *Hardware-Hinweis für WEMOS LOLIN32 Lite:* Im Gegensatz zu Boards wie dem D32 Pro hat das LOLIN32 Lite **keinen internen Spannungsteiler** an GPIO 35. Für eine echte VBAT-Messung wird ein externer 1:2 Teiler (z.B. zwei 100 kΩ Widerstände zwischen VBAT, GPIO 35 und GND) empfohlen; ohne diesen liest der freie GPIO 35 0 V.
+
+---
+
 
 ## 📁 Projektstruktur
 

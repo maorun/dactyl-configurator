@@ -15,6 +15,20 @@ import re
 import shutil
 import subprocess
 
+# Sicherstellen, dass Standard-Binärpfade (Homebrew unter macOS Apple Silicon / Intel) im PATH vorhanden sind
+EXTRA_PATHS = [
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    os.path.expanduser("~/.local/bin"),
+    os.path.expanduser("~/bin"),
+]
+_current_paths = os.environ.get("PATH", "").split(os.pathsep)
+for _p in EXTRA_PATHS:
+    if _p not in _current_paths and os.path.isdir(_p):
+        _current_paths.insert(0, _p)
+os.environ["PATH"] = os.pathsep.join(_current_paths)
+
 PORT = 8088
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(DIRECTORY, "current_config.json")
@@ -175,23 +189,43 @@ def update_ino_file(keymap_cpp):
     with open(INO_FILE, "w", encoding="utf-8") as f:
         f.write(new_content)
 
+def find_arduino_cli():
+    cli = shutil.which("arduino-cli")
+    if cli:
+        return cli
+    candidates = [
+        "/opt/homebrew/bin/arduino-cli",
+        "/opt/homebrew/sbin/arduino-cli",
+        "/usr/local/bin/arduino-cli",
+        os.path.expanduser("~/bin/arduino-cli"),
+        os.path.expanduser("~/.local/bin/arduino-cli"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return None
+
 def find_serial_port():
     ports = glob.glob("/dev/cu.usbserial*") + glob.glob("/dev/cu.wchusbserial*")
     return ports[0] if ports else None
 
 def flash_firmware():
+    arduino_cli = find_arduino_cli()
+    if not arduino_cli:
+        return {"success": False, "error": "arduino-cli wurde nicht im System-Pfad gefunden! Bitte über 'brew install arduino-cli' installieren."}
+
     port = find_serial_port()
     if not port:
         return {"success": False, "error": "Kein ESP32 USB-Port gefunden (/dev/cu.usbserial*). Bitte sicherstellen, dass die Tastatur per USB angeschlossen ist."}
 
     # 1. Compile
     compile_cmd = [
-        "arduino-cli", "compile",
+        arduino_cli, "compile",
         "--fqbn", "esp32:esp32:lolin32-lite",
         SKETCH_DIR
     ]
     try:
-        proc_comp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False)
+        proc_comp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False, env=os.environ)
         if proc_comp.returncode != 0:
             return {
                 "success": False,
@@ -203,13 +237,13 @@ def flash_firmware():
 
     # 2. Upload
     upload_cmd = [
-        "arduino-cli", "upload",
+        arduino_cli, "upload",
         "-p", port,
         "--fqbn", "esp32:esp32:lolin32-lite",
         "--upload-property", "upload.speed=115200",
         SKETCH_DIR
     ]
-    proc_up = subprocess.run(upload_cmd, capture_output=True, text=True, check=False)
+    proc_up = subprocess.run(upload_cmd, capture_output=True, text=True, check=False, env=os.environ)
     if proc_up.returncode != 0:
         return {
             "success": False,
@@ -237,7 +271,7 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
                 "status": "ok",
                 "port": ports[0] if ports else None,
                 "ports": ports,
-                "has_arduino_cli": bool(shutil.which("arduino-cli"))
+                "has_arduino_cli": bool(find_arduino_cli())
             }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dactyl Keyboard Configurator</title>
+  <link rel="stylesheet" href="style.css?v=10">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo-icon">⌨️</div>
+        <div>
+          <h1>Dactyl Configurator</h1>
+          <p class="subtitle">Custom Keymap & Combo Studio für True-Wireless Dactyl</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="bluetooth-status-pill disconnected" id="btStatusPill">
+          <span class="status-dot"></span>
+          <span class="bt-icon">📶</span>
+          <span class="bt-label">Live-Verbindung:</span>
+          <strong id="btDeviceNameText">Nicht verbunden</strong>
+        </div>
+        <button id="btnConnectBle" class="btn btn-outline" style="border-color: #3b82f6; color: #93c5fd;" title="Kabellos per Web-Bluetooth verbinden für 0.1s Live-Remapping ohne Kabel!">
+          <span class="btn-icon">⚡</span> Bluetooth Live-Sync
+        </button>
+        <button id="btnConnect" class="btn btn-outline" style="border-color: #6366f1; color: #a5b4fc;" title="Direkte USB-Live-Verbindung zum ESP32 für Matrix-Echtzeit-Anzeige aller Tasten und Layer">
+          <span class="btn-icon">🔌</span> USB Live-Monitor
+        </button>
+        <button id="btnSaveToDactyl" class="btn btn-primary" title="Aktuelle Tastenbelegung kompilieren und direkt per USB auf den ESP32 flashen">
+          <span class="btn-icon">💾</span> Auf Dactyl flashen
+        </button>
+        <button id="btnReadConfig" class="btn btn-outline" style="border-color: #8b5cf6; color: #c4b5fd;" title="Gespeicherte Tastenbelegung & Ebenen-Namen aus dem ESP32 NVS auslesen">
+          <span class="btn-icon">📥</span> Vom ESP32 laden
+        </button>
+        <button id="btnWriteConfig" class="btn btn-outline" style="border-color: #10b981; color: #6ee7b7;" title="Aktuelle Tastenbelegung per Bluetooth oder USB sofort im ESP32 NVS speichern (ohne Flashen)">
+          <span class="btn-icon">⚡</span> Auf ESP32 speichern
+        </button>
+        <button id="btnExportJson" class="btn btn-outline">
+          Export JSON
+        </button>
+        <button id="btnImportJson" class="btn btn-outline">
+          Import JSON
+        </button>
+        <input type="file" id="fileInput" accept=".json" style="display: none;">
+      </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+      <button class="tab-btn active" data-tab="matrix-tab">
+        <span class="tab-icon">🗺️</span> Tasten-Matrix & Ebenen
+      </button>
+      <button class="tab-btn" data-tab="combos-tab">
+        <span class="tab-icon">⚡</span> Combos & Chords (2 Tasten gleichzeitig)
+      </button>
+      <button class="tab-btn" data-tab="settings-tab">
+        <span class="tab-icon">⚙️</span> Firmware & Device
+      </button>
+    </nav>
+
+    <!-- Tab 1: Matrix & Layers -->
+    <main class="tab-content active" id="matrix-tab">
+      <div class="layer-bar">
+        <div class="layer-section">
+          <span class="layer-label">Aktive Ebene:</span>
+          <div class="layer-buttons" id="layerButtons">
+            <button class="layer-btn active" data-layer="0">Layer 0 (Base)</button>
+            <button class="layer-btn" data-layer="1">Layer 1 (Nav)</button>
+            <button class="layer-btn" data-layer="2">Layer 2 (Symbole)</button>
+            <button class="layer-btn" data-layer="3">Layer 3 (Numpad)</button>
+            <button class="layer-btn" data-layer="4">Layer 4 (Function)</button>
+            <button class="layer-btn" data-layer="5">Layer 5 (Media)</button>
+            <button class="layer-btn" data-layer="6">Layer 6 (Shortcuts)</button>
+            <button class="layer-btn" data-layer="7">Layer 7 (Custom)</button>
+          </div>
+          <div class="layer-rename-group" style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.6rem;">
+            <input type="text" id="layerNameInput" class="form-control" style="width: 140px; padding: 0.25rem 0.5rem; font-size: 0.85rem;" placeholder="Name der Ebene...">
+            <button id="btnRenameLayer" class="btn btn-outline btn-sm" title="Aktuelle Ebene umbenennen">✏️ Name speichern</button>
+          </div>
+        </div>
+
+        <div class="preset-section">
+          <span class="layer-label">Layout-Preset:</span>
+          <select id="layoutPresetSelect" class="form-control" style="width: auto; padding: 0.35rem 0.6rem; font-size: 0.85rem;">
+            <option value="de_qwertz">Deutsch QWERTZ (macOS)</option>
+            <option value="us_qwerty">US QWERTY</option>
+          </select>
+          <button id="btnApplyPreset" class="btn btn-outline btn-sm">Preset anwenden</button>
+        </div>
+      </div>
+
+      <!-- Live Keypress Monitor -->
+      <div class="live-monitor-card" id="liveMonitorCard">
+        <div class="live-indicator">
+          <span class="pulse-dot"></span>
+          <span>LIVE-MONITOR</span>
+        </div>
+        
+        <div class="active-key-display">
+          <span class="live-label">Aktuell gedrückt:</span>
+          <span class="big-key-badge" id="liveActiveKey">-</span>
+          <span class="live-coords-badge" id="liveActiveCoords">Bereit</span>
+        </div>
+
+        <div class="live-history-container">
+          <span class="live-label">Letzte Tasten:</span>
+          <div class="recent-keys-stream" id="liveKeyHistory">
+            <span class="stream-pill placeholder">Tippe auf deiner Tastatur...</span>
+          </div>
+        </div>
+
+        <div class="combo-active-alert" id="comboActiveAlert" style="display: none;">
+          <span class="combo-pulse">⚡</span>
+          <span id="comboActiveText">COMBO AKTIV: J + K ➔ Escape</span>
+        </div>
+      </div>
+
+      <div class="editor-workspace">
+        <!-- Visual Keyboard Canvas -->
+        <div class="keyboard-preview-container">
+          <div class="keyboard-header">
+            <div class="hand-switcher">
+              <button class="hand-btn active" data-hand="right">Rechte Hand (Aktiv)</button>
+              <button class="hand-btn" data-hand="left">Linke Hand</button>
+              <button class="hand-btn" data-hand="both">Beide Hände (Split)</button>
+            </div>
+            <div class="thumb-format-badge">
+              <span class="badge" style="background: rgba(99,102,241,0.2); color: #a5b4fc; padding: 4px 10px; border-radius: 6px; font-weight: 600; font-size: 0.8rem;">👑 Dactyl Daumen-Cluster (6 Tasten)</span>
+            </div>
+            <span class="help-hint">Klicke eine Taste an, um ihre Belegung rechts zu ändern.</span>
+          </div>
+          
+          <div class="matrix-grid-wrapper">
+            <div class="matrix-grid" id="matrixGrid">
+              <!-- Dynamically generated keys -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Key Inspector / Assignment Panel -->
+        <div class="key-inspector" id="keyInspector">
+          <div class="inspector-header">
+            <h4>Tasten-Inspektor</h4>
+            <span class="key-coords-badge" id="selectedKeyCoords">Keine Taste gewählt</span>
+          </div>
+
+          <div class="inspector-body" id="inspectorBody" style="display: none;">
+            <div class="form-group">
+              <label for="keyLabelInput">Angezeigte Beschriftung:</label>
+              <input type="text" id="keyLabelInput" class="form-control" maxlength="10">
+            </div>
+
+            <div class="form-group">
+              <label for="primaryActionSelect">Haupt-Aktion (Normaler Tastendruck):</label>
+              <select id="primaryActionSelect" class="form-control">
+                <!-- Grouped key options -->
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="holdActionSelect">Halte-Aktion / Mod-Tap (Optional beim Festhalten):</label>
+              <select id="holdActionSelect" class="form-control">
+                <option value="NONE">-- Keine (Nur Einzeltaste) --</option>
+                <optgroup label="Modifier Halten">
+                  <option value="MOD_LCTRL">Halten = Strg / Control (Links)</option>
+                  <option value="MOD_LSHIFT">Halten = Umschalt / Shift (Links)</option>
+                  <option value="MOD_LALT">Halten = Alt / Option (Links)</option>
+                  <option value="MOD_LGUI">Halten = Cmd / Windows (Links)</option>
+                  <option value="MOD_RCTRL">Halten = Strg / Control (Rechts)</option>
+                  <option value="MOD_RSHIFT">Halten = Umschalt / Shift (Rechts)</option>
+                  <option value="MOD_RALT">Halten = Alt / Option (Rechts)</option>
+                  <option value="MOD_RGUI">Halten = Cmd / Windows (Rechts)</option>
+                </optgroup>
+                <optgroup label="Layer temporär aktivieren">
+                  <option value="MO_1">Halten = Layer 1 (Nav)</option>
+                  <option value="MO_2">Halten = Layer 2 (Symbole)</option>
+                  <option value="MO_3">Halten = Layer 3 (Numpad)</option>
+                  <option value="MO_4">Halten = Layer 4 (Function)</option>
+                  <option value="MO_5">Halten = Layer 5 (Media)</option>
+                  <option value="MO_6">Halten = Layer 6 (Shortcuts)</option>
+                  <option value="MO_7">Halten = Layer 7 (Custom)</option>
+                </optgroup>
+              </select>
+              <small class="form-hint">Beispiel: Kurzes Tippen = Space, langes Festhalten = Strg oder Layer 1.</small>
+            </div>
+
+            <div class="inspector-actions">
+              <button id="btnApplyKey" class="btn btn-primary btn-sm">Änderung übernehmen</button>
+            </div>
+          </div>
+
+          <div class="inspector-placeholder" id="inspectorPlaceholder">
+            <p>Wähle oben eine Taste im Layout aus, um ihre Belegung zu bearbeiten.</p>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Tab 2: Combos & Chords -->
+    <main class="tab-content" id="combos-tab">
+      <div class="combos-container">
+        <div class="combos-header">
+          <div>
+            <h3>Tasten-Kombinationen (Combos / Chords)</h3>
+            <p class="subtitle">Drücke 2 Tasten gleichzeitig, um eine alternative Aktion oder einen Modifier (z.B. Strg, Alt, Escape) auszulösen.</p>
+          </div>
+          <button id="btnOpenAddComboModal" class="btn btn-primary">
+            + Neue Combo hinzufügen
+          </button>
+        </div>
+
+        <div class="combos-list-card">
+          <table class="combos-table" id="combosTable">
+            <thead>
+              <tr>
+                <th>Taste 1</th>
+                <th>+</th>
+                <th>Taste 2</th>
+                <th>Ausgelöste Aktion</th>
+                <th>Verhalten</th>
+                <th>Aktionen</th>
+              </tr>
+            </thead>
+            <tbody id="combosTableBody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+          <div class="empty-state" id="emptyCombosState" style="display: none;">
+            <p>Noch keine Combos definiert. Klicke auf „+ Neue Combo hinzufügen“.</p>
+          </div>
+        </div>
+
+        <!-- Combo Examples Card -->
+        <div class="info-card">
+          <h4>💡 Beliebte Combo-Ideen für Split-Keyboards:</h4>
+          <ul>
+            <li><strong>J + K zusammen gedrückt</strong> ➔ <code>Escape</code> (ohne die Finger von der Home Row zu heben!)</li>
+            <li><strong>D + F zusammen gedrückt</strong> ➔ <code>Strg / Control</code> (beide Tasten halten = Modifier aktiv)</li>
+            <li><strong>Daumentaste 1 + Daumentaste 2</strong> ➔ <code>Umschalt / Shift</code> oder <code>Layer Toggle</code></li>
+            <li><strong>U + I zusammen gedrückt</strong> ➔ <code>Backspace</code></li>
+          </ul>
+        </div>
+      </div>
+    </main>
+
+    <!-- Tab 3: Settings -->
+    <main class="tab-content" id="settings-tab">
+      <div class="settings-card">
+        <h3>Device & Firmware Einstellungen</h3>
+        
+        <div class="form-group">
+          <label for="deviceNameInput">Bluetooth Gerätename:</label>
+          <input type="text" id="deviceNameInput" class="form-control" value="Dactyl Keyboard" maxlength="28">
+          <small class="form-hint">Wird bei der Bluetooth-Suche auf Mac/PC angezeigt.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="debounceInput">Entprellzeit (Debounce in Millisekunden):</label>
+          <input type="number" id="debounceInput" class="form-control" value="5" min="1" max="50">
+        </div>
+
+        <div class="form-group">
+          <label for="comboTimeoutInput">Combo-Zeitfenster (Millisekunden für gleichzeitiges Drücken):</label>
+          <input type="number" id="comboTimeoutInput" class="form-control" value="40" min="10" max="150">
+          <small class="form-hint">Innerhalb dieser Zeitspanne müssen beide Tasten gedrückt werden, um als Combo erkannt zu werden.</small>
+        </div>
+
+        <div class="settings-actions">
+          <button id="btnSaveSettings" class="btn btn-success">Einstellungen in Config übernehmen</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- Modal: Add / Edit Combo -->
+    <div class="modal-backdrop" id="comboModal" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h4 id="comboModalTitle">Neue Combo hinzufügen</h4>
+          <button class="modal-close" id="btnCloseComboModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="modal-form-grid">
+            <div class="form-group">
+              <label for="comboKey1Select">Taste 1:</label>
+              <select id="comboKey1Select" class="form-control"></select>
+            </div>
+            <div class="combo-plus">+</div>
+            <div class="form-group">
+              <label for="comboKey2Select">Taste 2:</label>
+              <select id="comboKey2Select" class="form-control"></select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="comboBehaviorSelect">Verhalten:</label>
+            <select id="comboBehaviorSelect" class="form-control">
+              <option value="MODIFIER_HOLD">Modifier Hold (Solange beide gehalten werden, wirkt z.B. Strg oder Alt)</option>
+              <option value="KEY_PRESS">Einzeltaste senden (z.B. Escape, Enter, Backspace)</option>
+              <option value="LAYER_TOGGLE">Layer Umschalten</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="comboActionSelect">Aktion / Auslöser:</label>
+            <select id="comboActionSelect" class="form-control"></select>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCancelCombo">Abbrechen</button>
+          <button class="btn btn-primary" id="btnSaveCombo">Combo speichern</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast" id="toastNotification"></div>
+  </div>
+
+  <script src="app.js?v=24"></script>
+</body>
+</html>

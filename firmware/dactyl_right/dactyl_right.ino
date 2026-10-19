@@ -8,6 +8,9 @@
 #include <BLE2902.h>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
+#include <driver/gpio.h>
 
 /*
  * =============================================================================
@@ -21,6 +24,7 @@
 #define CONFIG_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
 void handleConfigCommand(String cmd);
+void sendConfigNotification(String msg, bool addDelay = false);
 BLECharacteristic *pConfigCharacteristic = nullptr;
 
 class ConfigCallbacks : public BLECharacteristicCallbacks {
@@ -116,6 +120,97 @@ const int NUM_COLS = 7;
 #define ACT_MAC_GLOBE            0x127
 
 #define NUM_LAYERS 8
+
+#define BATTERY_PIN 35
+
+uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, gedrosselter Scan, BLE bleibt an)
+uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
+unsigned long lastActivityTime = 0;
+bool isStandby = false;
+
+void exitStandby() {
+  if (isStandby) {
+    isStandby = false;
+    setCpuFrequencyMhz(240);
+    Serial.println("[POWER] Standby beendet -> CPU wieder auf 240 MHz");
+  }
+}
+
+void enterStandby() {
+  if (!isStandby) {
+    isStandby = true;
+    setCpuFrequencyMhz(80);
+    Serial.println("[POWER] Inaktivität erreicht -> Standby aktiv (CPU 80 MHz, gedrosselter Matrix-Scan)");
+  }
+}
+
+float getBatteryVoltage() {
+  uint32_t rawSum = 0;
+  const int SAMPLES = 8;
+  for (int i = 0; i < SAMPLES; i++) {
+    rawSum += analogRead(BATTERY_PIN);
+    delayMicroseconds(50);
+  }
+  float rawAvg = (float)rawSum / (float)SAMPLES;
+  // ESP32 ADC: 12-Bit (0..4095), 3.3V Referenz, 2:1 Spannungsteiler auf WEMOS LOLIN Boards
+  float voltage = (rawAvg / 4095.0f) * 3.3f * 2.0f;
+  return voltage;
+}
+
+uint8_t calculateBatteryPercentage(float voltage) {
+  // Wenn kein Akku an Pin 35 anliegt (z. B. reiner USB-Betrieb oder unbeschaltet < 1.0V)
+  if (voltage < 1.0f) return 100;
+  if (voltage >= 4.18f) return 100;
+  if (voltage <= 3.30f) return 0;
+  int pct = (int)((voltage - 3.30f) / (4.18f - 3.30f) * 100.0f);
+  if (pct > 100) pct = 100;
+  if (pct < 0) pct = 0;
+  return (uint8_t)pct;
+}
+
+void enterDeepSleep() {
+  Serial.println("\n[POWER] Inaktivitäts-Timeout erreicht! Gehe in Deep Sleep...");
+  Serial.flush();
+
+  sendConfigNotification("SLEEP_STARTING");
+  delay(30);
+
+  // 1. Spalten als OUTPUT HIGH halten (3.3V) - sowoh für RTC als auch normale GPIOs
+  for (int c = 0; c < NUM_COLS; c++) {
+    gpio_num_t pin = (gpio_num_t)COL_PINS[c];
+    if (rtc_gpio_is_valid_gpio(pin)) {
+      rtc_gpio_init(pin);
+      rtc_gpio_set_direction(pin, RTC_GPIO_MODE_OUTPUT_ONLY);
+      rtc_gpio_set_level(pin, 1);
+      rtc_gpio_hold_en(pin);
+    } else {
+      pinMode(COL_PINS[c], OUTPUT);
+      digitalWrite(COL_PINS[c], HIGH);
+      gpio_hold_en(pin);
+    }
+  }
+  gpio_deep_sleep_hold_en();
+
+  // 2. Zeilen als RTC-Eingänge mit PULLDOWN (0V)
+  uint64_t ext1_mask = 0;
+  for (int r = 0; r < NUM_ROWS; r++) {
+    gpio_num_t pin = (gpio_num_t)ROW_PINS[r];
+    rtc_gpio_init(pin);
+    rtc_gpio_set_direction(pin, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pulldown_en(pin);
+    rtc_gpio_pullup_dis(pin);
+    rtc_gpio_hold_en(pin);
+    ext1_mask |= (1ULL << pin);
+  }
+
+  // 3. Ext1 Wakeup aktivieren (ANY_HIGH)
+  esp_sleep_enable_ext1_wakeup(ext1_mask, ESP_EXT1_WAKEUP_ANY_HIGH);
+
+  Serial.println("[POWER] Deep Sleep aktiv. Drücke eine beliebige Taste zum Aufwachen!");
+  Serial.flush();
+
+  esp_deep_sleep_start();
+}
 
 SemaphoreHandle_t configMutex = nullptr;
 
@@ -254,7 +349,34 @@ void loadKeymapFromNVS() {
       Serial.printf("NVS: Layer %d Name geladen: %s\n", i, layerNames[i].c_str());
     }
   }
+  if (preferences.isKey("standby_timeout")) {
+    standbyTimeoutMinutes = preferences.getUInt("standby_timeout", 5);
+  } else {
+    standbyTimeoutMinutes = 5;
+  }
+  if (preferences.isKey("sleep_timeout")) {
+    deepSleepTimeoutMinutes = preferences.getUInt("sleep_timeout", 60);
+  } else {
+    deepSleepTimeoutMinutes = 60;
+  }
+  Serial.printf("NVS: Timeouts geladen: Standby=%u Min, DeepSleep=%u Min\n", standbyTimeoutMinutes, deepSleepTimeoutMinutes);
   preferences.end();
+}
+
+void saveStandbyTimeoutToNVS(uint32_t timeout) {
+  standbyTimeoutMinutes = timeout;
+  preferences.begin("dactyl", false);
+  preferences.putUInt("standby_timeout", timeout);
+  preferences.end();
+  Serial.printf("NVS: Standby-Timeout gespeichert: %u Min\n", timeout);
+}
+
+void saveSleepTimeoutToNVS(uint32_t timeout) {
+  deepSleepTimeoutMinutes = timeout;
+  preferences.begin("dactyl", false);
+  preferences.putUInt("sleep_timeout", timeout);
+  preferences.end();
+  Serial.printf("NVS: Deep-Sleep-Timeout gespeichert: %u Min\n", timeout);
 }
 
 void saveLayerNameToNVS(int idx, String name) {
@@ -267,7 +389,7 @@ void saveLayerNameToNVS(int idx, String name) {
   Serial.printf("NVS: Layer %d Name gespeichert: %s\n", idx, name.c_str());
 }
 
-void sendConfigNotification(String msg, bool addDelay = false) {
+void sendConfigNotification(String msg, bool addDelay) {
   Serial.println(msg);
   if (pConfigCharacteristic) {
     pConfigCharacteristic->setValue(msg.c_str());
@@ -281,6 +403,8 @@ void sendConfigNotification(String msg, bool addDelay = false) {
 void handleConfigCommand(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
+
+  lastActivityTime = millis();
 
   bool mutexTaken = false;
   if (configMutex) {
@@ -312,6 +436,18 @@ void handleConfigCommand(String cmd) {
       saveLayerNameToNVS(l, name);
       sendConfigNotification("OK SET_NAME " + String(l) + " " + name);
     }
+  } else if (cmd.startsWith("SET_STANDBY ")) {
+    int t = cmd.substring(12).toInt();
+    if (t >= 0 && t <= 120) {
+      saveStandbyTimeoutToNVS((uint32_t)t);
+      sendConfigNotification("OK SET_STANDBY " + String(t));
+    }
+  } else if (cmd.startsWith("SET_SLEEP ")) {
+    int t = cmd.substring(10).toInt();
+    if (t >= 0 && t <= 240) {
+      saveSleepTimeoutToNVS((uint32_t)t);
+      sendConfigNotification("OK SET_SLEEP " + String(t));
+    }
   } else if (cmd == "GET_NAMES") {
     String out = "LAYER_NAMES:[";
     for (int i = 0; i < NUM_LAYERS; i++) {
@@ -323,9 +459,11 @@ void handleConfigCommand(String cmd) {
   } else if (cmd == "GET_INFO") {
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
-    char buf[128];
-    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"Dactyl Keyboard\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"battery\":100}",
-      m[0], m[1], m[2], m[3], m[4], m[5]);
+    float v = getBatteryVoltage();
+    uint8_t pct = calculateBatteryPercentage(v);
+    char buf[192];
+    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"Dactyl Keyboard\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"battery\":%d,\"voltage\":%.2f,\"standby_timeout\":%u,\"sleep_timeout\":%u}",
+      m[0], m[1], m[2], m[3], m[4], m[5], pct, v, standbyTimeoutMinutes, deepSleepTimeoutMinutes);
     sendConfigNotification(String(buf));
   } else if (cmd == "GET_CONFIG") {
     String out = "LAYER_NAMES:[";
@@ -366,7 +504,35 @@ void setup() {
   Serial.begin(115200);
   delay(400);
 
+  // Deep-Sleep Wakeup Hold aufheben & RTC Pins zurücksetzen
+  gpio_deep_sleep_hold_dis();
+  for (int c = 0; c < NUM_COLS; c++) {
+    gpio_num_t pin = (gpio_num_t)COL_PINS[c];
+    if (rtc_gpio_is_valid_gpio(pin)) {
+      rtc_gpio_hold_dis(pin);
+      rtc_gpio_deinit(pin);
+    } else {
+      gpio_hold_dis(pin);
+    }
+  }
+  for (int r = 0; r < NUM_ROWS; r++) {
+    gpio_num_t pin = (gpio_num_t)ROW_PINS[r];
+    rtc_gpio_hold_dis(pin);
+    rtc_gpio_deinit(pin);
+  }
+
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+  if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT1) {
+    Serial.println("[POWER] Aufgewacht aus Deep Sleep durch Tastendruck!");
+  }
+
   configMutex = xSemaphoreCreateMutex();
+
+  // Batterie-Messung initialisieren (Pin 35, 11dB Attenuation für 0..3.3V Messbereich)
+  pinMode(BATTERY_PIN, INPUT);
+  analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
+
+  lastActivityTime = millis();
 
   Serial.println("\n=============================================");
   Serial.println("  Dactyl True-Wireless (Rechte Hand)");
@@ -417,6 +583,17 @@ void loop() {
     Serial.flush();
   }
 
+  // Regelmäßige Batterie-Aktualisierung (alle 30s)
+  static unsigned long lastBatteryCheck = 0;
+  if (millis() - lastBatteryCheck > 30000) {
+    lastBatteryCheck = millis();
+    float v = getBatteryVoltage();
+    uint8_t pct = calculateBatteryPercentage(v);
+    if (bleKeyboard.isConnected()) {
+      bleKeyboard.setBatteryLevel(pct);
+    }
+  }
+
   // Matrix-Scan
   bool scanMutexTaken = false;
   if (configMutex) {
@@ -434,6 +611,8 @@ void loop() {
 
         if (isPressed != keyState[r][c]) {
           keyState[r][c] = isPressed;
+          lastActivityTime = millis();
+          exitStandby();
 
           if (isPressed) {
             uint8_t currentLayer = getActiveLayer();
@@ -540,11 +719,24 @@ void loop() {
     xSemaphoreGive(configMutex);
   }
 
+  // Inaktivitäts-Timeouts für Standby (Stufe 1) und Deep Sleep (Stufe 2)
+  if (standbyTimeoutMinutes > 0 && !isStandby) {
+    if (millis() - lastActivityTime > ((unsigned long)standbyTimeoutMinutes * 60UL * 1000UL)) {
+      enterStandby();
+    }
+  }
+
+  if (deepSleepTimeoutMinutes > 0) {
+    if (millis() - lastActivityTime > ((unsigned long)deepSleepTimeoutMinutes * 60UL * 1000UL)) {
+      enterDeepSleep();
+    }
+  }
+
   // Seriellen Puffer auf App-Befehle prüfen
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     handleConfigCommand(cmd);
   }
 
-  delay(10);
+  delay(isStandby ? 40 : 10);
 }

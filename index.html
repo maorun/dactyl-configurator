@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dactyl Keyboard Configurator</title>
-  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
   <div class="app-container">
@@ -23,6 +23,11 @@
           <span class="bt-icon">📶</span>
           <span class="bt-label">Live-Verbindung:</span>
           <strong id="btDeviceNameText">Nicht verbunden</strong>
+        </div>
+        <div class="battery-status-pill" id="batteryStatusPill" title="Akku-Ladestand des ESP32">
+          <span class="bat-icon" id="batIcon">🔋</span>
+          <span class="bat-label" id="batPercentageText">--%</span>
+          <span class="bat-sub" id="batVoltageText" style="font-size: 0.75rem; color: #94a3b8; margin-left: 0.2rem;">(-- V)</span>
         </div>
         <button id="btnConnectBle" class="btn btn-outline" style="border-color: #3b82f6; color: #93c5fd;" title="Kabellos per Web-Bluetooth verbinden für 0.1s Live-Remapping ohne Kabel!">
           <span class="btn-icon">⚡</span> Bluetooth Live-Sync
@@ -269,6 +274,41 @@
           <small class="form-hint">Innerhalb dieser Zeitspanne müssen beide Tasten gedrückt werden, um als Combo erkannt zu werden.</small>
         </div>
 
+        <div class="form-group">
+          <label for="standbyTimeoutSelect">Stufe 1: Standby-Timeout (Light Sleep, Verbindung bleibt aktiv):</label>
+          <select id="standbyTimeoutSelect" class="form-control">
+            <option value="1">1 Minute</option>
+            <option value="3">3 Minuten</option>
+            <option value="5" selected>5 Minuten (Standard)</option>
+            <option value="10">10 Minuten</option>
+            <option value="15">15 Minuten</option>
+            <option value="0">Deaktiviert (Immer volle 240 MHz)</option>
+          </select>
+          <small class="form-hint">Drosselt die CPU auf 80 MHz und verlangsamt den Matrix-Scan. Spart ~70% Strom, tippt bei Berührung sofort ohne Reconnect-Pause weiter.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="sleepTimeoutSelect">Stufe 2: Deep-Sleep-Timeout (Tiefschlaf ~10 µA):</label>
+          <select id="sleepTimeoutSelect" class="form-control">
+            <option value="15">15 Minuten</option>
+            <option value="30">30 Minuten</option>
+            <option value="45">45 Minuten</option>
+            <option value="60" selected>60 Minuten / 1 Stunde (Standard)</option>
+            <option value="120">120 Minuten / 2 Stunden</option>
+            <option value="0">Deaktiviert (Kein Deep Sleep)</option>
+          </select>
+          <small class="form-hint">Schaltet den ESP32 bei längerer Inaktivität komplett ab (~10 µA). Beliebige Taste drücken weckt die Tastatur auf (~150 ms) und koppelt sie neu.</small>
+        </div>
+
+        <div class="form-group" style="background: rgba(15, 23, 42, 0.6); padding: 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); margin-top: 1rem;">
+          <label style="margin-bottom: 0.5rem; display: block; font-weight: 600;">🔋 Akku & Power-Management (GPIO 35):</label>
+          <div style="display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; font-size: 0.9rem;">
+            <div><strong>Ladestand:</strong> <span id="settingsBatPct">--%</span></div>
+            <div><strong>Spannung:</strong> <span id="settingsBatVolt">-- V</span></div>
+            <div><strong>Status:</strong> <span id="settingsBatStatus">Warte auf Verbindung...</span></div>
+          </div>
+        </div>
+
         <div class="settings-actions">
           <button id="btnSaveSettings" class="btn btn-success">Einstellungen in Config übernehmen</button>
         </div>
@@ -320,6 +360,6 @@
     <div class="toast" id="toastNotification"></div>
   </div>
 
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=26"></script>
 </body>
 </html>

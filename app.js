@@ -446,6 +446,28 @@ async function loadSavedConfigFromServer() {
         if (!currentConfig.layerNames || !Array.isArray(currentConfig.layerNames)) {
           currentConfig.layerNames = [...DEFAULT_LAYER_NAMES];
         }
+        if (currentConfig.settings) {
+          if (currentConfig.settings.deviceName) {
+            const el = document.getElementById("deviceNameInput");
+            if (el) el.value = currentConfig.settings.deviceName;
+          }
+          if (currentConfig.settings.debounceMs) {
+            const el = document.getElementById("debounceInput");
+            if (el) el.value = currentConfig.settings.debounceMs;
+          }
+          if (currentConfig.settings.comboTimeoutMs) {
+            const el = document.getElementById("comboTimeoutInput");
+            if (el) el.value = currentConfig.settings.comboTimeoutMs;
+          }
+          if (currentConfig.settings.standbyTimeoutMinutes !== undefined) {
+            const el = document.getElementById("standbyTimeoutSelect");
+            if (el) el.value = String(currentConfig.settings.standbyTimeoutMinutes);
+          }
+          if (currentConfig.settings.sleepTimeoutMinutes !== undefined) {
+            const el = document.getElementById("sleepTimeoutSelect");
+            if (el) el.value = String(currentConfig.settings.sleepTimeoutMinutes);
+          }
+        }
         renderLayerButtons();
         renderMatrix();
         renderCombosTable();
@@ -1024,17 +1046,34 @@ function setupEventListeners() {
 
   const btnSaveSettings = document.getElementById("btnSaveSettings");
   if (btnSaveSettings) {
-    btnSaveSettings.addEventListener("click", () => {
+    btnSaveSettings.addEventListener("click", async () => {
       const devName = document.getElementById("deviceNameInput")?.value || "Dactyl Keyboard";
       const debounce = parseInt(document.getElementById("debounceInput")?.value, 10) || 5;
       const comboTimeout = parseInt(document.getElementById("comboTimeoutInput")?.value, 10) || 40;
+      const standbyTimeoutVal = parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10);
+      const standbyMinutes = isNaN(standbyTimeoutVal) ? 5 : standbyTimeoutVal;
+      const sleepTimeoutVal = parseInt(document.getElementById("sleepTimeoutSelect")?.value, 10);
+      const sleepMinutes = isNaN(sleepTimeoutVal) ? 60 : sleepTimeoutVal;
+
       currentConfig.settings = {
         deviceName: devName,
         debounceMs: debounce,
-        comboTimeoutMs: comboTimeout
+        comboTimeoutMs: comboTimeout,
+        standbyTimeoutMinutes: standbyMinutes,
+        sleepTimeoutMinutes: sleepMinutes,
+        batteryPin: 35
       };
+
+      if (bleConfigChar) {
+        await sendBleCommand(`SET_STANDBY ${standbyMinutes}`);
+        await sendBleCommand(`SET_SLEEP ${sleepMinutes}`);
+      } else if (serialPort && serialPort.writable) {
+        await sendSerialCommand(`SET_STANDBY ${standbyMinutes}`);
+        await sendSerialCommand(`SET_SLEEP ${sleepMinutes}`);
+      }
+
       saveConfigToServer();
-      showToast("✅ Device-Einstellungen gespeichert!");
+      showToast("✅ Device-Einstellungen & Timeouts (Standby & Deep Sleep) gespeichert!");
     });
   }
 }
@@ -1222,6 +1261,7 @@ function updateBleUI(connected, devName) {
     } else if (!serialPort || !serialPort.readable) {
       btPill.className = "bluetooth-status-pill disconnected";
       if (nameText) nameText.textContent = "Nicht verbunden";
+      resetBatteryUI();
     }
   }
 
@@ -1320,6 +1360,69 @@ async function disconnectSerial() {
   showToast("ESP32 getrennt.");
 }
 
+function updateBatteryUI(battery, voltage) {
+  const pill = document.getElementById("batteryStatusPill");
+  const pctText = document.getElementById("batPercentageText");
+  const voltText = document.getElementById("batVoltageText");
+  const icon = document.getElementById("batIcon");
+  const setPct = document.getElementById("settingsBatPct");
+  const setVolt = document.getElementById("settingsBatVolt");
+  const setStatus = document.getElementById("settingsBatStatus");
+
+  const v = typeof voltage === "number" ? voltage : parseFloat(voltage) || 0;
+  const b = typeof battery === "number" ? battery : parseInt(battery, 10) || 0;
+
+  const isUsb = (v < 1.0);
+  const displayPct = isUsb ? 100 : Math.min(100, Math.max(0, b));
+
+  if (pctText) pctText.textContent = isUsb ? "USB" : `${displayPct}%`;
+  if (voltText) voltText.textContent = isUsb ? "(5V USB)" : `(${v.toFixed(2)} V)`;
+  if (icon) icon.textContent = isUsb ? "🔌" : (displayPct < 20 ? "🪫" : "🔋");
+
+  if (pill) {
+    pill.className = "battery-status-pill";
+    if (isUsb || displayPct >= 40) {
+      pill.classList.add("good");
+    } else if (displayPct >= 20) {
+      pill.classList.add("low");
+    } else {
+      pill.classList.add("critical");
+    }
+  }
+
+  if (setPct) setPct.textContent = isUsb ? "100% (USB-Power)" : `${displayPct}%`;
+  if (setVolt) setVolt.textContent = isUsb ? "USB / 5V (Kein LiPo an Pin 35)" : `${v.toFixed(2)} V`;
+  if (setStatus) {
+    if (isUsb) {
+      setStatus.textContent = "USB-Betrieb (Kein LiPo-Akku an Pin 35 erkannt)";
+    } else if (displayPct > 90) {
+      setStatus.textContent = "Voll geladen (~4.2V)";
+    } else if (displayPct >= 20) {
+      setStatus.textContent = "Normaler Akkubetrieb";
+    } else {
+      setStatus.textContent = "⚠️ Akku fast leer (<3.4V)! Bitte per USB laden.";
+    }
+  }
+}
+
+function resetBatteryUI() {
+  const pill = document.getElementById("batteryStatusPill");
+  const pctText = document.getElementById("batPercentageText");
+  const voltText = document.getElementById("batVoltageText");
+  const icon = document.getElementById("batIcon");
+  const setPct = document.getElementById("settingsBatPct");
+  const setVolt = document.getElementById("settingsBatVolt");
+  const setStatus = document.getElementById("settingsBatStatus");
+
+  if (pill) pill.className = "battery-status-pill";
+  if (pctText) pctText.textContent = "--%";
+  if (voltText) voltText.textContent = "(-- V)";
+  if (icon) icon.textContent = "🔋";
+  if (setPct) setPct.textContent = "--%";
+  if (setVolt) setVolt.textContent = "-- V";
+  if (setStatus) setStatus.textContent = "Warte auf Verbindung...";
+}
+
 function updateConnectionUI(connected, text) {
   const btnConnect = document.getElementById("btnConnect");
   const btnRead = document.getElementById("btnReadConfig");
@@ -1339,6 +1442,7 @@ function updateConnectionUI(connected, text) {
   } else if (!bleConfigChar) {
     if (btPill) btPill.className = "bluetooth-status-pill disconnected";
     if (nameText) nameText.textContent = "Nicht verbunden";
+    resetBatteryUI();
   }
 
   const isOnline = connected || !!bleConfigChar;
@@ -1410,6 +1514,24 @@ function handleSerialLine(line) {
       }
       if (nameText) nameText.textContent = devName;
       if (statusText) statusText.textContent = `Verbunden: ${devName}`;
+
+      if (info.battery !== undefined) {
+        updateBatteryUI(info.battery, info.voltage);
+      }
+      if (info.standby_timeout !== undefined) {
+        const standbySelect = document.getElementById("standbyTimeoutSelect");
+        if (standbySelect) standbySelect.value = String(info.standby_timeout);
+        if (currentConfig.settings) {
+          currentConfig.settings.standbyTimeoutMinutes = info.standby_timeout;
+        }
+      }
+      if (info.sleep_timeout !== undefined) {
+        const sleepSelect = document.getElementById("sleepTimeoutSelect");
+        if (sleepSelect) sleepSelect.value = String(info.sleep_timeout);
+        if (currentConfig.settings) {
+          currentConfig.settings.sleepTimeoutMinutes = info.sleep_timeout;
+        }
+      }
       showToast(`Tastatur erkannt: ${devName}`);
     } catch (e) {
       console.warn("Failed to parse DEVICE_INFO:", e, line);
@@ -1496,6 +1618,21 @@ function handleSerialLine(line) {
     showToast("✅ Taste im ESP32 NVS gespeichert!");
   } else if (line.startsWith("OK SET_NAME")) {
     showToast("✅ Ebenen-Name im ESP32 NVS gespeichert!");
+  } else if (line.startsWith("OK SET_STANDBY")) {
+    const parts = line.split(" ");
+    const mins = parts[2] || "5";
+    showToast(`✅ Standby-Timeout im ESP32 NVS auf ${mins} Min gesetzt!`);
+  } else if (line.startsWith("OK SET_SLEEP")) {
+    const parts = line.split(" ");
+    const mins = parts[2] || "60";
+    showToast(`✅ Deep-Sleep-Timeout im ESP32 NVS auf ${mins} Min gesetzt!`);
+  } else if (line.startsWith("SLEEP_STARTING")) {
+    showToast("💤 Tastatur geht in Deep Sleep (Stromsparmodus)... Beliebige Taste drücken zum Aufwecken!", 6000);
+    resetBatteryUI();
+    const btPill = document.getElementById("btStatusPill");
+    const nameText = document.getElementById("btDeviceNameText");
+    if (btPill) btPill.className = "bluetooth-status-pill disconnected";
+    if (nameText) nameText.textContent = "Deep Sleep (Standby)";
   }
 }
 

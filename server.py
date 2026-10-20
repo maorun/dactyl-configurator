@@ -79,6 +79,14 @@ KEY_TO_CPP = {
     "KEY_RIGHT_SHIFT": "KEY_RIGHT_SHIFT",
     "KEY_RIGHT_ALT": "KEY_RIGHT_ALT",
     "KEY_RIGHT_GUI": "KEY_RIGHT_GUI",
+    "MOD_LCTRL": "KEY_LEFT_CTRL",
+    "MOD_LSHIFT": "KEY_LEFT_SHIFT",
+    "MOD_LALT": "KEY_LEFT_ALT",
+    "MOD_LGUI": "KEY_LEFT_GUI",
+    "MOD_RCTRL": "KEY_RIGHT_CTRL",
+    "MOD_RSHIFT": "KEY_RIGHT_SHIFT",
+    "MOD_RALT": "KEY_RIGHT_ALT",
+    "MOD_RGUI": "KEY_RIGHT_GUI",
     "KEY_F1": "KEY_F1", "KEY_F2": "KEY_F2", "KEY_F3": "KEY_F3", "KEY_F4": "KEY_F4",
     "KEY_F5": "KEY_F5", "KEY_F6": "KEY_F6", "KEY_F7": "KEY_F7", "KEY_F8": "KEY_F8",
     "KEY_F9": "KEY_F9", "KEY_F10": "KEY_F10", "KEY_F11": "KEY_F11", "KEY_F12": "KEY_F12",
@@ -109,6 +117,8 @@ KEY_TO_CPP = {
     "MO_5": "ACT_MO_5", "MO_6": "ACT_MO_6", "MO_7": "ACT_MO_7",
     "TG_0": "ACT_TG_0", "TG_1": "ACT_TG_1", "TG_2": "ACT_TG_2", "TG_3": "ACT_TG_3", "TG_4": "ACT_TG_4",
     "TG_5": "ACT_TG_5", "TG_6": "ACT_TG_6", "TG_7": "ACT_TG_7",
+    "LAYER_UP": "ACT_LAYER_UP",
+    "LAYER_DOWN": "ACT_LAYER_DOWN",
     "NONE": "0",
     "": "0",
     "0": "0"
@@ -161,7 +171,10 @@ def generate_keymap_cpp(layers):
                 if r < len(layer_data) and c < len(layer_data[r]):
                     cell = layer_data[r][c]
                     if isinstance(cell, dict):
-                        val = code_to_cpp(cell.get("tap", "NONE"))
+                        tap_code = cell.get("tap", "NONE")
+                        hold_code = cell.get("hold", "NONE")
+                        effective_code = tap_code if (tap_code and tap_code != "NONE") else (hold_code or "NONE")
+                        val = code_to_cpp(effective_code)
                     elif isinstance(cell, str):
                         val = code_to_cpp(cell)
                 row_entries.append(val.ljust(16 if len(val) < 16 else len(val) + 1))
@@ -297,6 +310,21 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"exists": False}).encode("utf-8"))
             return
 
+        if self.path == "/api/open_bluetooth_settings":
+            try:
+                subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth"])
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"success": true}')
+                return
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
+
         super().do_GET()
 
     def do_POST(self):
@@ -315,6 +343,21 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'{"error": "Forbidden origin"}')
             return
+
+        if self.path == "/api/open_bluetooth_settings":
+            try:
+                subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth"])
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"success": true}')
+                return
+            except Exception as e:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+                return
 
         if self.path == "/api/save_and_flash":
             content_length = int(self.headers.get("Content-Length", 0))

@@ -4,15 +4,14 @@
     "debounceMs": 5,
     "comboTimeoutMs": 40,
     "standbyTimeoutMinutes": 5,
-    "sleepTimeoutMinutes": 60,
-    "batteryPin": 35
+    "sleepTimeoutMinutes": 60
   },
   "layers": [
     [
       [
         {
-          "label": "6",
           "tap": "KEY_6",
+          "label": "6",
           "hold": "NONE"
         },
         {
@@ -36,15 +35,15 @@
           "hold": "NONE"
         },
         {
-          "tap": "KEY_MINUS",
-          "label": "\u00df",
+          "label": "back",
+          "tap": "KEY_BACKSPACE",
           "hold": "NONE"
         }
       ],
       [
         {
+          "label": "Y",
           "tap": "KEY_Z",
-          "label": "Z",
           "hold": "NONE"
         },
         {
@@ -69,7 +68,7 @@
         },
         {
           "tap": "KEY_LEFT_BRACKET",
-          "label": "\u00dc",
+          "label": "[",
           "hold": "NONE"
         }
       ],
@@ -96,17 +95,17 @@
         },
         {
           "tap": "KEY_SEMICOLON",
-          "label": "\u00d6",
+          "label": ";",
           "hold": "NONE"
         },
         {
           "tap": "KEY_QUOTE",
-          "label": "\u00c4",
+          "label": "'",
           "hold": "NONE"
         },
         {
           "tap": "KEY_DELETE",
-          "label": "Entf",
+          "label": "Del",
           "hold": "NONE"
         }
       ],
@@ -133,7 +132,7 @@
         },
         {
           "tap": "KEY_SLASH",
-          "label": "-",
+          "label": "/",
           "hold": "NONE"
         },
         {
@@ -164,13 +163,13 @@
           "hold": "NONE"
         },
         {
-          "tap": "KEY_RIGHT_ARROW",
           "label": "\u2192",
+          "tap": "KEY_UP_ARROW",
           "hold": "NONE"
         },
         {
-          "label": "Fn",
-          "tap": "MAC_GLOBE",
+          "tap": "KEY_RIGHT_ALT",
+          "label": "Alt",
           "hold": "NONE"
         }
       ],
@@ -215,8 +214,8 @@
     [
       [
         {
-          "label": "F6",
-          "tap": "TG_0",
+          "label": "TG",
+          "tap": "TG_1",
           "hold": "NONE"
         },
         {
@@ -225,193 +224,213 @@
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F8",
           "label": "F8",
+          "tap": "KEY_F8",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F9",
           "label": "F9",
+          "tap": "KEY_F9",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F10",
           "label": "F10",
+          "tap": "KEY_F10",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F11",
           "label": "F11",
+          "tap": "KEY_F11",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "HOME",
           "tap": "KEY_HOME",
-          "label": "Pos 1",
           "hold": "NONE"
         },
         {
+          "label": "UP_",
           "tap": "KEY_UP_ARROW",
-          "label": "\u2191",
           "hold": "NONE"
         },
         {
+          "label": "END",
           "tap": "KEY_END",
-          "label": "Ende",
           "hold": "NONE"
         },
         {
+          "label": "Page UP",
           "tap": "KEY_PAGE_UP",
-          "label": "Bild \u2191",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "LEFT",
           "tap": "KEY_LEFT_ARROW",
-          "label": "\u2190",
           "hold": "NONE"
         },
         {
+          "label": "DOWN",
           "tap": "KEY_DOWN_ARROW",
-          "label": "\u2193",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT",
           "tap": "KEY_RIGHT_ARROW",
-          "label": "\u2192",
           "hold": "NONE"
         },
         {
+          "label": "Page DOWN",
           "tap": "KEY_PAGE_DOWN",
-          "label": "Bild \u2193",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "DELETE",
           "tap": "KEY_DELETE",
-          "label": "Entf",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_SHIFT",
           "tap": "KEY_RIGHT_SHIFT",
-          "label": "Shift",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "LEFT_ARROW",
           "tap": "KEY_LEFT_ARROW",
-          "label": "\u2190",
           "hold": "NONE"
         },
         {
+          "label": "DOWN_ARROW",
           "tap": "KEY_DOWN_ARROW",
-          "label": "\u2193",
           "hold": "NONE"
         },
         {
+          "label": "UP_ARROW",
           "tap": "KEY_UP_ARROW",
-          "label": "\u2191",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_ARROW",
           "tap": "KEY_RIGHT_ARROW",
-          "label": "\u2192",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_ALT",
           "tap": "KEY_RIGHT_ALT",
-          "label": "Alt",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
+          "label": "LEFT_GUI",
           "tap": "KEY_LEFT_GUI",
-          "label": "Cmd",
           "hold": "NONE"
         },
         {
+          "label": "LEFT_ALT",
           "tap": "KEY_LEFT_ALT",
-          "label": "Alt",
           "hold": "NONE"
         },
         {
+          "label": "RETURN",
           "tap": "KEY_RETURN",
-          "label": "Enter (2U)",
           "hold": "NONE"
         },
         {
+          "label": "Space",
           "tap": "KEY_SPACE",
-          "label": "Space (2U)",
           "hold": "NONE"
         },
         {
+          "label": "TAB",
           "tap": "KEY_TAB",
-          "label": "Tab",
           "hold": "NONE"
         },
         {
+          "label": "BACKSPACE",
           "tap": "KEY_BACKSPACE",
-          "label": "Bksp",
           "hold": "NONE"
         },
         {
+          "label": "ESC",
           "tap": "KEY_ESC",
-          "label": "Esc",
           "hold": "NONE"
         }
       ]
@@ -419,407 +438,223 @@
     [
       [
         {
-          "tap": "KEY_6",
           "label": "6",
+          "tap": "KEY_6",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_7",
           "label": "7",
+          "tap": "KEY_7",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_8",
           "label": "8",
+          "tap": "KEY_8",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_9",
           "label": "9",
+          "tap": "KEY_9",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_0",
           "label": "0",
+          "tap": "KEY_0",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_EQUAL",
           "label": "=",
+          "tap": "KEY_EQUAL",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_7",
           "label": "7",
+          "tap": "KEY_7",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_8",
           "label": "8",
+          "tap": "KEY_8",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_9",
           "label": "9",
+          "tap": "KEY_9",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_SLASH",
           "label": "/",
+          "tap": "KEY_SLASH",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_4",
           "label": "4",
+          "tap": "KEY_4",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_5",
           "label": "5",
+          "tap": "KEY_5",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_6",
           "label": "6",
+          "tap": "KEY_6",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_MINUS",
           "label": "-",
+          "tap": "KEY_MINUS",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "DELETE",
           "tap": "KEY_DELETE",
-          "label": "Entf",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_1",
           "label": "1",
+          "tap": "KEY_1",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_2",
           "label": "2",
+          "tap": "KEY_2",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_3",
           "label": "3",
+          "tap": "KEY_3",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_EQUAL",
-          "label": "+",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_RIGHT_SHIFT",
-          "label": "Shift",
-          "hold": "NONE"
-        }
-      ],
-      [
-        {
-          "tap": "NONE",
-          "label": "---",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_0",
-          "label": "0",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_PERIOD",
-          "label": ".",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_COMMA",
-          "label": ",",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_RETURN",
-          "label": "Enter",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_RIGHT_ALT",
-          "label": "Alt",
-          "hold": "NONE"
-        }
-      ],
-      [
-        {
-          "tap": "KEY_LEFT_GUI",
-          "label": "Cmd",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_LEFT_ALT",
-          "label": "Alt",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_RETURN",
-          "label": "Enter (2U)",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_SPACE",
-          "label": "Space (2U)",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_TAB",
-          "label": "Tab",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_BACKSPACE",
-          "label": "Bksp",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_ESC",
-          "label": "Esc",
-          "hold": "NONE"
-        }
-      ]
-    ],
-    [
-      [
-        {
-          "tap": "KEY_6",
-          "label": "6",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_7",
-          "label": "7",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_8",
-          "label": "8",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_9",
-          "label": "9",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_0",
-          "label": "0",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_EQUAL",
           "label": "=",
-          "hold": "NONE"
-        }
-      ],
-      [
-        {
-          "tap": "NONE",
-          "label": "---",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_7",
-          "label": "7",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_8",
-          "label": "8",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_9",
-          "label": "9",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_SLASH",
-          "label": "/",
-          "hold": "NONE"
-        },
-        {
-          "tap": "NONE",
-          "label": "---",
-          "hold": "NONE"
-        }
-      ],
-      [
-        {
-          "tap": "NONE",
-          "label": "---",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_4",
-          "label": "4",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_5",
-          "label": "5",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_6",
-          "label": "6",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_MINUS",
-          "label": "-",
-          "hold": "NONE"
-        },
-        {
-          "tap": "NONE",
-          "label": "---",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_DELETE",
-          "label": "Entf",
-          "hold": "NONE"
-        }
-      ],
-      [
-        {
-          "tap": "NONE",
-          "label": "---",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_1",
-          "label": "1",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_2",
-          "label": "2",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_3",
-          "label": "3",
-          "hold": "NONE"
-        },
-        {
           "tap": "KEY_EQUAL",
-          "label": "+",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_SHIFT",
           "tap": "KEY_RIGHT_SHIFT",
-          "label": "Shift",
           "hold": "NONE"
-        }
-      ],
-      [
+        },
         {
-          "tap": "NONE",
           "label": "---",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_0",
-          "label": "0",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_PERIOD",
-          "label": ".",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_COMMA",
-          "label": ",",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_RETURN",
-          "label": "Enter",
-          "hold": "NONE"
-        },
-        {
-          "tap": "KEY_RIGHT_ALT",
-          "label": "Alt",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "KEY_LEFT_GUI",
-          "label": "Cmd",
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_LEFT_ALT",
-          "label": "Alt",
+          "label": "0",
+          "tap": "KEY_0",
           "hold": "NONE"
         },
         {
+          "label": ".",
+          "tap": "KEY_PERIOD",
+          "hold": "NONE"
+        },
+        {
+          "label": ",",
+          "tap": "KEY_COMMA",
+          "hold": "NONE"
+        },
+        {
+          "label": "RETURN",
           "tap": "KEY_RETURN",
-          "label": "Enter (2U)",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_ALT",
+          "tap": "KEY_RIGHT_ALT",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        }
+      ],
+      [
+        {
+          "label": "LEFT_GUI",
+          "tap": "KEY_LEFT_GUI",
+          "hold": "NONE"
+        },
+        {
+          "label": "LEFT_ALT",
+          "tap": "KEY_LEFT_ALT",
+          "hold": "NONE"
+        },
+        {
+          "label": "RETURN",
+          "tap": "KEY_RETURN",
+          "hold": "NONE"
+        },
+        {
+          "label": "Space",
           "tap": "KEY_SPACE",
-          "label": "Space (2U)",
           "hold": "NONE"
         },
         {
+          "label": "TAB",
           "tap": "KEY_TAB",
-          "label": "Tab",
           "hold": "NONE"
         },
         {
+          "label": "BACKSPACE",
           "tap": "KEY_BACKSPACE",
-          "label": "Bksp",
           "hold": "NONE"
         },
         {
+          "label": "ESC",
           "tap": "KEY_ESC",
-          "label": "Esc",
           "hold": "NONE"
         }
       ]
@@ -827,203 +662,447 @@
     [
       [
         {
-          "tap": "KEY_F1",
+          "label": "6",
+          "tap": "KEY_6",
+          "hold": "NONE"
+        },
+        {
+          "label": "7",
+          "tap": "KEY_7",
+          "hold": "NONE"
+        },
+        {
+          "label": "8",
+          "tap": "KEY_8",
+          "hold": "NONE"
+        },
+        {
+          "label": "9",
+          "tap": "KEY_9",
+          "hold": "NONE"
+        },
+        {
+          "label": "0",
+          "tap": "KEY_0",
+          "hold": "NONE"
+        },
+        {
+          "label": "=",
+          "tap": "KEY_EQUAL",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        }
+      ],
+      [
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "7",
+          "tap": "KEY_7",
+          "hold": "NONE"
+        },
+        {
+          "label": "8",
+          "tap": "KEY_8",
+          "hold": "NONE"
+        },
+        {
+          "label": "9",
+          "tap": "KEY_9",
+          "hold": "NONE"
+        },
+        {
+          "label": "/",
+          "tap": "KEY_SLASH",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        }
+      ],
+      [
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "4",
+          "tap": "KEY_4",
+          "hold": "NONE"
+        },
+        {
+          "label": "5",
+          "tap": "KEY_5",
+          "hold": "NONE"
+        },
+        {
+          "label": "6",
+          "tap": "KEY_6",
+          "hold": "NONE"
+        },
+        {
+          "label": "-",
+          "tap": "KEY_MINUS",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "DELETE",
+          "tap": "KEY_DELETE",
+          "hold": "NONE"
+        }
+      ],
+      [
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "1",
+          "tap": "KEY_1",
+          "hold": "NONE"
+        },
+        {
+          "label": "2",
+          "tap": "KEY_2",
+          "hold": "NONE"
+        },
+        {
+          "label": "3",
+          "tap": "KEY_3",
+          "hold": "NONE"
+        },
+        {
+          "label": "=",
+          "tap": "KEY_EQUAL",
+          "hold": "NONE"
+        },
+        {
+          "label": "RIGHT_SHIFT",
+          "tap": "KEY_RIGHT_SHIFT",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        }
+      ],
+      [
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "0",
+          "tap": "KEY_0",
+          "hold": "NONE"
+        },
+        {
+          "label": ".",
+          "tap": "KEY_PERIOD",
+          "hold": "NONE"
+        },
+        {
+          "label": ",",
+          "tap": "KEY_COMMA",
+          "hold": "NONE"
+        },
+        {
+          "label": "RETURN",
+          "tap": "KEY_RETURN",
+          "hold": "NONE"
+        },
+        {
+          "label": "RIGHT_ALT",
+          "tap": "KEY_RIGHT_ALT",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        }
+      ],
+      [
+        {
+          "label": "LEFT_GUI",
+          "tap": "KEY_LEFT_GUI",
+          "hold": "NONE"
+        },
+        {
+          "label": "LEFT_ALT",
+          "tap": "KEY_LEFT_ALT",
+          "hold": "NONE"
+        },
+        {
+          "label": "RETURN",
+          "tap": "KEY_RETURN",
+          "hold": "NONE"
+        },
+        {
+          "label": "Space",
+          "tap": "KEY_SPACE",
+          "hold": "NONE"
+        },
+        {
+          "label": "TAB",
+          "tap": "KEY_TAB",
+          "hold": "NONE"
+        },
+        {
+          "label": "BACKSPACE",
+          "tap": "KEY_BACKSPACE",
+          "hold": "NONE"
+        },
+        {
+          "label": "ESC",
+          "tap": "KEY_ESC",
+          "hold": "NONE"
+        }
+      ]
+    ],
+    [
+      [
+        {
           "label": "F1",
+          "tap": "KEY_F1",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F2",
           "label": "F2",
+          "tap": "KEY_F2",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F3",
           "label": "F3",
+          "tap": "KEY_F3",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F4",
           "label": "F4",
+          "tap": "KEY_F4",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F5",
           "label": "F5",
+          "tap": "KEY_F5",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F6",
           "label": "F6",
+          "tap": "KEY_F6",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "KEY_F7",
           "label": "F7",
+          "tap": "KEY_F7",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F8",
           "label": "F8",
+          "tap": "KEY_F8",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F9",
           "label": "F9",
+          "tap": "KEY_F9",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F10",
           "label": "F10",
+          "tap": "KEY_F10",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F11",
           "label": "F11",
+          "tap": "KEY_F11",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_F12",
           "label": "F12",
+          "tap": "KEY_F12",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
-          "label": "---",
+          "label": "f13",
+          "tap": "KEY_F13",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
-          "label": "---",
+          "label": "f14",
+          "tap": "KEY_F14",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "DELETE",
           "tap": "KEY_DELETE",
-          "label": "Entf",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_SHIFT",
           "tap": "KEY_RIGHT_SHIFT",
-          "label": "Shift",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
+          "label": "LEFT_GUI",
           "tap": "KEY_LEFT_GUI",
-          "label": "Cmd",
           "hold": "NONE"
         },
         {
+          "label": "LEFT_ALT",
           "tap": "KEY_LEFT_ALT",
-          "label": "Alt",
           "hold": "NONE"
         },
         {
+          "label": "RETURN",
           "tap": "KEY_RETURN",
-          "label": "Enter (2U)",
           "hold": "NONE"
         },
         {
+          "label": "Space",
           "tap": "KEY_SPACE",
-          "label": "Space (2U)",
           "hold": "NONE"
         },
         {
+          "label": "TAB",
           "tap": "KEY_TAB",
-          "label": "Tab",
           "hold": "NONE"
         },
         {
+          "label": "BACKSPACE",
           "tap": "KEY_BACKSPACE",
-          "label": "Bksp",
           "hold": "NONE"
         },
         {
+          "label": "ESC",
           "tap": "KEY_ESC",
-          "label": "Esc",
           "hold": "NONE"
         }
       ]
@@ -1031,203 +1110,223 @@
     [
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "UP_ARROW",
           "tap": "KEY_UP_ARROW",
-          "label": "Vol +",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "LEFT_ARROW",
           "tap": "KEY_LEFT_ARROW",
-          "label": "Prev",
           "hold": "NONE"
         },
         {
+          "label": "DOWN_ARROW",
           "tap": "KEY_DOWN_ARROW",
-          "label": "Vol -",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_ARROW",
           "tap": "KEY_RIGHT_ARROW",
-          "label": "Next",
           "hold": "NONE"
         },
         {
+          "label": "Space",
           "tap": "KEY_SPACE",
-          "label": "Play/Pause",
           "hold": "NONE"
         },
         {
+          "label": "---",
           "tap": "NONE",
-          "label": "Mute",
           "hold": "NONE"
         },
         {
+          "label": "DELETE",
           "tap": "KEY_DELETE",
-          "label": "Entf",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_SHIFT",
           "tap": "KEY_RIGHT_SHIFT",
-          "label": "Shift",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
+          "label": "LEFT_GUI",
           "tap": "KEY_LEFT_GUI",
-          "label": "Cmd",
           "hold": "NONE"
         },
         {
+          "label": "LEFT_ALT",
           "tap": "KEY_LEFT_ALT",
-          "label": "Alt",
           "hold": "NONE"
         },
         {
+          "label": "RETURN",
           "tap": "KEY_RETURN",
-          "label": "Enter (2U)",
           "hold": "NONE"
         },
         {
+          "label": "Space",
           "tap": "KEY_SPACE",
-          "label": "Space (2U)",
           "hold": "NONE"
         },
         {
+          "label": "TAB",
           "tap": "KEY_TAB",
-          "label": "Tab",
           "hold": "NONE"
         },
         {
+          "label": "BACKSPACE",
           "tap": "KEY_BACKSPACE",
-          "label": "Bksp",
           "hold": "NONE"
         },
         {
+          "label": "ESC",
           "tap": "KEY_ESC",
-          "label": "Esc",
           "hold": "NONE"
         }
       ]
@@ -1235,203 +1334,223 @@
     [
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "DELETE",
           "tap": "KEY_DELETE",
-          "label": "Entf",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_SHIFT",
           "tap": "KEY_RIGHT_SHIFT",
-          "label": "Shift",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
+          "label": "LEFT_GUI",
           "tap": "KEY_LEFT_GUI",
-          "label": "Cmd",
           "hold": "NONE"
         },
         {
+          "label": "LEFT_ALT",
           "tap": "KEY_LEFT_ALT",
-          "label": "Alt",
           "hold": "NONE"
         },
         {
+          "label": "RETURN",
           "tap": "KEY_RETURN",
-          "label": "Enter (2U)",
           "hold": "NONE"
         },
         {
+          "label": "Space",
           "tap": "KEY_SPACE",
-          "label": "Space (2U)",
           "hold": "NONE"
         },
         {
+          "label": "TAB",
           "tap": "KEY_TAB",
-          "label": "Tab",
           "hold": "NONE"
         },
         {
+          "label": "BACKSPACE",
           "tap": "KEY_BACKSPACE",
-          "label": "Bksp",
           "hold": "NONE"
         },
         {
+          "label": "ESC",
           "tap": "KEY_ESC",
-          "label": "Esc",
           "hold": "NONE"
         }
       ]
@@ -1439,203 +1558,223 @@
     [
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "DELETE",
           "tap": "KEY_DELETE",
-          "label": "Entf",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
+          "label": "RIGHT_SHIFT",
           "tap": "KEY_RIGHT_SHIFT",
-          "label": "Shift",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         },
         {
-          "tap": "NONE",
           "label": "---",
+          "tap": "NONE",
+          "hold": "NONE"
+        },
+        {
+          "label": "---",
+          "tap": "NONE",
           "hold": "NONE"
         }
       ],
       [
         {
+          "label": "LEFT_GUI",
           "tap": "KEY_LEFT_GUI",
-          "label": "Cmd",
           "hold": "NONE"
         },
         {
+          "label": "LEFT_ALT",
           "tap": "KEY_LEFT_ALT",
-          "label": "Alt",
           "hold": "NONE"
         },
         {
+          "label": "RETURN",
           "tap": "KEY_RETURN",
-          "label": "Enter (2U)",
           "hold": "NONE"
         },
         {
+          "label": "Space",
           "tap": "KEY_SPACE",
-          "label": "Space (2U)",
           "hold": "NONE"
         },
         {
+          "label": "TAB",
           "tap": "KEY_TAB",
-          "label": "Tab",
           "hold": "NONE"
         },
         {
+          "label": "BACKSPACE",
           "tap": "KEY_BACKSPACE",
-          "label": "Bksp",
           "hold": "NONE"
         },
         {
+          "label": "ESC",
           "tap": "KEY_ESC",
-          "label": "Esc",
           "hold": "NONE"
         }
       ]

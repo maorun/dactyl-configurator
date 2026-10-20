@@ -110,6 +110,8 @@ const KEYCODES = [
     { code: "NONE", label: "--- Keine Belegung (Transparent)", char: "" }
   ]},
   { group: "Layer Umschalter", keys: [
+    { code: "LAYER_UP", label: "⬆️ Layer +1 Hoch (Nächste Ebene)", char: "" },
+    { code: "LAYER_DOWN", label: "⬇️ Layer -1 Runter (Vorherige Ebene)", char: "" },
     { code: "MO_0", label: "Momentary Layer 0 (Base)", char: "" },
     { code: "MO_1", label: "Momentary Layer 1", char: "" },
     { code: "MO_2", label: "Momentary Layer 2", char: "" },
@@ -252,6 +254,14 @@ const ACTION_TO_NUMERIC = {
   "KEY_RIGHT_SHIFT": 0x85, // 133
   "KEY_RIGHT_ALT": 0x86, // 134
   "KEY_RIGHT_GUI": 0x87, // 135
+  "MOD_LCTRL": 0x80,
+  "MOD_LSHIFT": 0x81,
+  "MOD_LALT": 0x82,
+  "MOD_LGUI": 0x83,
+  "MOD_RCTRL": 0x84,
+  "MOD_RSHIFT": 0x85,
+  "MOD_RALT": 0x86,
+  "MOD_RGUI": 0x87,
 
   // System & Control
   "KEY_RETURN": 0xB0, // 176
@@ -299,11 +309,13 @@ const ACTION_TO_NUMERIC = {
   "MEDIA_STOP": 0x126,
   "MAC_GLOBE": 0x127,
 
-  // Layer switches (0x100..0x107 and 0x110..0x117)
+  // Layer switches (0x100..0x107, 0x110..0x117, 0x118..0x119)
   "MO_0": 0x100, "MO_1": 0x101, "MO_2": 0x102, "MO_3": 0x103, "MO_4": 0x104,
   "MO_5": 0x105, "MO_6": 0x106, "MO_7": 0x107,
   "TG_0": 0x110, "TG_1": 0x111, "TG_2": 0x112, "TG_3": 0x113, "TG_4": 0x114,
-  "TG_5": 0x115, "TG_6": 0x116, "TG_7": 0x117
+  "TG_5": 0x115, "TG_6": 0x116, "TG_7": 0x117,
+  "LAYER_UP": 0x118,
+  "LAYER_DOWN": 0x119
 };
 
 function actionCodeToNumeric(code) {
@@ -344,7 +356,9 @@ function findDefinitionByCode(numericCode) {
   for (const [key, num] of Object.entries(ACTION_TO_NUMERIC)) {
     if (num === numericCode) {
       let lbl = key.replace("KEY_", "").replace("ACT_", "");
-      if (key === "ACT_MAC_GLOBE") lbl = "Globe";
+      if (key === "ACT_MAC_GLOBE" || key === "MAC_GLOBE") lbl = "Globe";
+      else if (key === "LAYER_UP") lbl = "Layer ▲";
+      else if (key === "LAYER_DOWN") lbl = "Layer ▼";
       return { label: lbl, tap: key };
     }
   }
@@ -416,10 +430,20 @@ let serialReader = null;
 let serialReadPromise = null;
 let keepReading = true;
 
-// Web Bluetooth State
+// Web Bluetooth & Auto-Sync State
 let bleDevice = null;
 let bleServer = null;
 let bleConfigChar = null;
+let isConfigModeActive = false;
+let isAutoSyncing = false;
+let isConnectingBle = false;
+let pendingSyncCount = 0;
+const watchedBleDevices = new Set();
+const knownBleDevices = [];
+let bleAutoPollTimer = null;
+
+let lastBleDisconnectTime = 0;
+let bleWriteQueue = Promise.resolve();
 
 // Active pressed keys set: stores strings like "R_2_1"
 const activePressedKeys = new Set();
@@ -434,7 +458,79 @@ document.addEventListener("DOMContentLoaded", () => {
   setupEventListeners();
   setupBrowserKeyboardHooks();
   loadSavedConfigFromServer();
+  initModernBleAutoSync();
 });
+
+function updateConfigModeUI(active, syncing = false) {
+  isConfigModeActive = active;
+  isAutoSyncing = syncing;
+
+  const pill = document.getElementById("configModeStatusPill");
+  const pillIcon = document.getElementById("configModeIcon");
+  const pillText = document.getElementById("configModeText");
+  const card = document.getElementById("configModeGuideCard");
+  const badge = document.getElementById("configModeStateBadge");
+  const btnExit = document.getElementById("btnExitConfigBanner");
+
+  if (pill) {
+    pill.className = "config-mode-pill " + (syncing ? "mode-syncing" : (active ? "mode-config" : "mode-normal"));
+  }
+  if (pillIcon) {
+    pillIcon.textContent = syncing ? "🔄" : (active ? "⚡" : "⌨️");
+  }
+  if (pillText) {
+    pillText.textContent = syncing
+      ? "Übertrage auf Dactyl..."
+      : (active ? "KONFIG-MODUS AKTIV" : "Mac-Tastatur");
+  }
+
+  if (card) {
+    card.classList.toggle("is-config-active", active || syncing);
+    card.classList.toggle("has-pending-sync", !active && !syncing && pendingSyncCount > 0);
+  }
+  if (badge) {
+    if (syncing) {
+      badge.className = "config-state-badge state-syncing";
+      badge.textContent = "🔄 Übertrage auf ESP32...";
+    } else if (active) {
+      badge.className = "config-state-badge state-config";
+      badge.textContent = "⚡ KONFIG-MODUS AKTIV";
+    } else {
+      badge.className = "config-state-badge state-normal";
+      badge.textContent = "⌨️ Mac-Tastaturmodus aktiv";
+    }
+  }
+  if (btnExit) {
+    btnExit.style.display = (active && !syncing) ? "inline-flex" : "none";
+  }
+}
+
+function markPendingSync(summaryText = "") {
+  pendingSyncCount++;
+  const badge = document.getElementById("pendingSyncBadge");
+  const card = document.getElementById("configModeGuideCard");
+  if (badge) {
+    badge.className = "pending-sync-badge pending";
+    badge.textContent = `⏳ ${pendingSyncCount} Änderung${pendingSyncCount === 1 ? "" : "en"} vorgemerkt (warte auf Combo)`;
+    badge.style.display = "inline-flex";
+  }
+  if (card && !isConfigModeActive) card.classList.add("has-pending-sync");
+
+  const suffix = summaryText ? ` (${summaryText})` : "";
+  showToast(`💾 Vorgemerkt${suffix}! Halte R4C5 + R0C0 (0.5s) an der Tastatur zum automatischen Übertragen.`);
+}
+
+function clearPendingSync() {
+  pendingSyncCount = 0;
+  const badge = document.getElementById("pendingSyncBadge");
+  const card = document.getElementById("configModeGuideCard");
+  if (badge) {
+    badge.className = "pending-sync-badge synced";
+    badge.textContent = "✓ Alle Einstellungen synchron";
+    badge.style.display = "inline-flex";
+  }
+  if (card) card.classList.remove("has-pending-sync");
+}
 
 async function loadSavedConfigFromServer() {
   try {
@@ -539,13 +635,20 @@ async function renameActiveLayer() {
 
   // An ESP32 per Bluetooth oder USB senden
   if (bleConfigChar) {
-    await sendBleCommand(`SET_NAME ${activeLayerIndex} ${newName}`);
+    const ok = await sendBleCommand(`SET_NAME ${activeLayerIndex} ${newName}`);
+    if (ok) {
+      showToast(`Ebene ${activeLayerIndex} in "${newName}" umbenannt!`);
+    } else {
+      markPendingSync(`Ebene L${activeLayerIndex}: ${newName}`);
+    }
   } else if (serialPort && serialPort.writable) {
     await sendSerialCommand(`SET_NAME ${activeLayerIndex} ${newName}`);
+    showToast(`Ebene ${activeLayerIndex} in "${newName}" umbenannt!`);
+  } else {
+    markPendingSync(`Ebene L${activeLayerIndex}: ${newName}`);
   }
 
   saveConfigToServer();
-  showToast(`Ebene ${activeLayerIndex} in "${newName}" umbenannt!`);
 }
 
 function initUI() {
@@ -578,7 +681,12 @@ function initUI() {
       if (PRESETS[presetKey]) {
         currentConfig.layers[0] = JSON.parse(JSON.stringify(PRESETS[presetKey].layers[0]));
         renderMatrix();
-        showToast(`Preset '${PRESETS[presetKey].name}' angewendet!`);
+        saveConfigToServer();
+        if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
+          markPendingSync(`Preset ${PRESETS[presetKey].name}`);
+        } else {
+          showToast(`Preset '${PRESETS[presetKey].name}' angewendet!`);
+        }
       }
     });
   }
@@ -595,6 +703,29 @@ function initUI() {
     });
   }
 
+  // Bluetooth Permission Check & Open Config Buttons
+  const btnCheckBtPermission = document.getElementById("btnCheckBtPermission");
+  if (btnCheckBtPermission) {
+    btnCheckBtPermission.addEventListener("click", checkBluetoothPermission);
+  }
+
+  const btnOpenBtSettings = document.getElementById("btnOpenBtSettings");
+  if (btnOpenBtSettings) {
+    btnOpenBtSettings.addEventListener("click", openMacBluetoothSettings);
+  }
+
+  const btnSettingsOpenBtConfig = document.getElementById("btnSettingsOpenBtConfig");
+  if (btnSettingsOpenBtConfig) {
+    btnSettingsOpenBtConfig.addEventListener("click", openMacBluetoothSettings);
+  }
+
+  // Initial State: Zeige Berechtigungsprüfung oder den Live-Sync-Button falls bereits verifiziert
+  if (isBtPermissionVerified()) {
+    setBtPermissionUIState("granted");
+  } else {
+    setBtPermissionUIState("unverified");
+  }
+
   // Connect Web Bluetooth Button (Wireless Live-Sync)
   const btnConnectBle = document.getElementById("btnConnectBle");
   if (btnConnectBle) {
@@ -603,6 +734,19 @@ function initUI() {
         disconnectBle();
       } else {
         connectBle();
+      }
+    });
+  }
+
+  // Banner Exit Config Mode Button
+  const btnExitConfigBanner = document.getElementById("btnExitConfigBanner");
+  if (btnExitConfigBanner) {
+    btnExitConfigBanner.addEventListener("click", async () => {
+      if (bleConfigChar) {
+        await disconnectBle();
+      } else if (serialPort && serialPort.writable) {
+        await sendSerialCommand("EXIT_CONFIG");
+        updateConfigModeUI(false, false);
       }
     });
   }
@@ -944,17 +1088,21 @@ function setupEventListeners() {
     layer[r][c] = { label, tap, hold };
     renderMatrix();
 
-    const numericCode = actionCodeToNumeric(tap);
+    const effectiveAction = (tap && tap !== "NONE") ? tap : (hold || "NONE");
+    const numericCode = actionCodeToNumeric(effectiveAction);
 
     if (bleConfigChar) {
-      await sendBleCommand(`SET_KEY ${activeLayerIndex} ${r} ${c} ${numericCode}`);
-      showToast(`⚡ Per Bluetooth an Dactyl übertragen: [R${r}, C${c}] = ${label} (NVS gespeichert)`);
+      const ok = await sendBleCommand(`SET_KEY ${activeLayerIndex} ${r} ${c} ${numericCode}`);
+      if (ok) {
+        showToast(`⚡ Per Bluetooth an Dactyl übertragen: [R${r}, C${c}] = ${label} (NVS gespeichert)`);
+      } else {
+        markPendingSync(`[R${r}, C${c}] = ${label}`);
+      }
     } else if (serialPort && serialPort.writable) {
       await sendSerialCommand(`SET_KEY ${activeLayerIndex} ${r} ${c} ${numericCode}`);
       showToast(`🔌 Per USB an Dactyl übertragen: [R${r}, C${c}] = ${label} (NVS gespeichert)`);
     } else {
-      showToast(`⚠️ Im Browser gespeichert! Tastatur ist nicht live verbunden. Klicke 'Auf Dactyl flashen' oder verbinde USB / Bluetooth.`);
-      alert("Hinweis: Die Änderung ist aktuell nur im Browser gespeichert!\n\nDeine Tastatur ist weder per '⚡ Bluetooth Live-Sync' noch per '🔌 USB Live-Monitor' verbunden.\n\nUm die Belegung auf den ESP32 zu übertragen:\n• Klicke oben auf '💾 Auf Dactyl flashen' (wenn per USB angesteckt),\n• ODER verbinde dich oben mit '⚡ Bluetooth Live-Sync' bzw. '🔌 USB Live-Monitor'.");
+      markPendingSync(`[R${r}, C${c}] = ${label}`);
     }
 
     saveConfigToServer();
@@ -1007,6 +1155,7 @@ function setupEventListeners() {
     comboModal.style.display = "none";
     renderCombosTable();
     renderMatrix();
+    saveConfigToServer();
     showToast("Neuer Combo-Chord angelegt!");
   });
 
@@ -1032,9 +1181,15 @@ function setupEventListeners() {
         const parsed = JSON.parse(event.target.result);
         if (parsed.layers) {
           currentConfig = parsed;
+          renderLayerButtons();
           renderMatrix();
           renderCombosTable();
-          showToast("Konfiguration erfolgreich geladen!");
+          saveConfigToServer();
+          if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
+            markPendingSync("JSON-Import");
+          } else {
+            showToast("Konfiguration erfolgreich geladen!");
+          }
         }
       } catch (err) {
         alert("Ungültige JSON-Datei: " + err.message);
@@ -1044,7 +1199,7 @@ function setupEventListeners() {
   });
 
   const btnWrite = document.getElementById("btnWriteConfig");
-  if (btnWrite) btnWrite.addEventListener("click", writeConfigToESP32);
+  if (btnWrite) btnWrite.addEventListener("click", () => writeConfigToESP32({ autoDisconnectAfter: false }));
   const btnRead = document.getElementById("btnReadConfig");
   if (btnRead) btnRead.addEventListener("click", readConfigFromESP32);
 
@@ -1069,20 +1224,26 @@ function setupEventListeners() {
         debounceMs: debounce,
         comboTimeoutMs: comboTimeout,
         standbyTimeoutMinutes: standbyMinutes,
-        sleepTimeoutMinutes: sleepMinutes,
-        batteryPin: 35
+        sleepTimeoutMinutes: sleepMinutes
       };
 
+      saveConfigToServer();
+
       if (bleConfigChar) {
-        await sendBleCommand(`SET_STANDBY ${standbyMinutes}`);
-        await sendBleCommand(`SET_SLEEP ${sleepMinutes}`);
+        const ok1 = await sendBleCommand(`SET_STANDBY ${standbyMinutes}`);
+        const ok2 = await sendBleCommand(`SET_SLEEP ${sleepMinutes}`);
+        if (ok1 && ok2) {
+          showToast("✅ Device-Einstellungen & Timeouts im ESP32 NVS gespeichert!");
+        } else {
+          markPendingSync(`Timeouts ${standbyMinutes}m/${sleepMinutes}m`);
+        }
       } else if (serialPort && serialPort.writable) {
         await sendSerialCommand(`SET_STANDBY ${standbyMinutes}`);
         await sendSerialCommand(`SET_SLEEP ${sleepMinutes}`);
+        showToast("✅ Device-Einstellungen & Timeouts im ESP32 NVS gespeichert!");
+      } else {
+        markPendingSync(`Timeouts ${standbyMinutes}m/${sleepMinutes}m`);
       }
-
-      saveConfigToServer();
-      showToast("✅ Device-Einstellungen & Timeouts (Standby & Deep Sleep) gespeichert!");
     });
   }
 }
@@ -1113,6 +1274,7 @@ async function saveAndFlashToDactyl() {
 
     const data = await res.json();
     if (res.ok && data.success) {
+      clearPendingSync();
       showToast("✅ Erfolgreich auf Dactyl geflasht!");
       alert("✅ Erfolgreich auf Dactyl gespeichert!\n\nDie Firmware wurde aktualisiert. Die Tastatur verbindet sich jetzt mit deiner neuen Tastenbelegung neu per Bluetooth.");
     } else {
@@ -1161,8 +1323,236 @@ function populateComboKeyDropdowns() {
 }
 
 // =============================================================================
-// Web Bluetooth Live-Sync (Wireless Remapping & Real-time Key Monitoring)
+// Web Bluetooth Permission Management & Live-Sync Flow
 // =============================================================================
+
+function isBtPermissionVerified() {
+  return localStorage.getItem("dactyl_bt_permission_verified") === "true";
+}
+
+function setBtPermissionUIState(state) {
+  // state: 'unverified' | 'denied' | 'granted'
+  const btnCheck = document.getElementById("btnCheckBtPermission");
+  const btnConfig = document.getElementById("btnOpenBtSettings");
+  const btnSync = document.getElementById("btnConnectBle");
+
+  if (state === "granted") {
+    if (btnCheck) btnCheck.style.display = "none";
+    if (btnConfig) btnConfig.style.display = "none";
+    if (btnSync) btnSync.style.display = "inline-flex";
+  } else if (state === "denied") {
+    if (btnCheck) {
+      btnCheck.style.display = "inline-flex";
+      btnCheck.innerHTML = `<span class="btn-icon">🔄</span> Erneut prüfen`;
+      btnCheck.title = "Klicke hier, nachdem du 'Dactyl Configurator' in den macOS Systemeinstellungen aktiviert hast";
+    }
+    if (btnConfig) btnConfig.style.display = "inline-flex";
+    if (btnSync) btnSync.style.display = "none";
+  } else {
+    // unverified (default)
+    if (btnCheck) {
+      btnCheck.style.display = "inline-flex";
+      btnCheck.innerHTML = `<span class="btn-icon">🔒</span> Bluetooth prüfen`;
+      btnCheck.title = "Prüft die macOS Bluetooth-Berechtigung für diese App und schaltet den Live-Sync-Button frei";
+    }
+    if (btnConfig) btnConfig.style.display = "none";
+    if (btnSync) btnSync.style.display = "none";
+  }
+}
+
+async function openMacBluetoothSettings() {
+  showToast("⚙️ Öffne macOS Systemeinstellungen...");
+  try {
+    const res = await fetch("/api/open_bluetooth_settings", { method: "POST" });
+    if (res.ok) {
+      showToast("⚙️ Systemeinstellungen geöffnet! Aktiviere 'Dactyl Configurator' unter Bluetooth und klicke anschließend auf 'Erneut prüfen'.", 8000);
+      return;
+    }
+  } catch (e) {
+    console.warn("Server open_bluetooth_settings failed, falling back to direct URL:", e);
+  }
+  window.open("x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth");
+  showToast("⚙️ Systemeinstellungen geöffnet! Aktiviere 'Dactyl Configurator' unter Bluetooth und klicke anschließend auf 'Erneut prüfen'.", 8000);
+}
+
+async function checkBluetoothPermission() {
+  if (!("bluetooth" in navigator)) {
+    alert("Web Bluetooth wird von deinem Browser oder dieser Electron-App nicht unterstützt.");
+    return;
+  }
+
+  const btnCheck = document.getElementById("btnCheckBtPermission");
+  if (btnCheck) btnCheck.innerHTML = `<span class="btn-icon">⏳</span> Prüfe...`;
+
+  showToast("🔍 Prüfe Bluetooth-Berechtigung (bitte eventuelle Systemabfrage erlauben)...");
+
+  try {
+    const dev = await navigator.bluetooth.requestDevice({
+      filters: [
+        { name: "Dactyl Config" },
+        { namePrefix: "Dactyl Config" },
+        { services: [CONFIG_SERVICE_UUID] },
+        { name: "Dactyl Keyboard" },
+        { namePrefix: "Dactyl" }
+      ],
+      optionalServices: [CONFIG_SERVICE_UUID]
+    });
+
+    localStorage.setItem("dactyl_bt_permission_verified", "true");
+    setBtPermissionUIState("granted");
+    showToast("✅ Bluetooth-Berechtigung erteilt! Verbinde direkt mit Dactyl Config...");
+    registerPermittedBleDevice(dev);
+    await connectToBleDevice(dev, false);
+  } catch (err) {
+    console.warn("Bluetooth permission check result:", err);
+    const msg = (err.message || "").toLowerCase();
+
+    if (msg.includes("denied") || msg.includes("permission") || msg.includes("scan for bluetooth devices")) {
+      // macOS OS-level TCC or user explicitly denied
+      localStorage.removeItem("dactyl_bt_permission_verified");
+      setBtPermissionUIState("denied");
+      showToast("❌ macOS verwehrt Bluetooth-Zugriff! Klicke auf 'macOS Bluetooth-Freigabe öffnen'.", 7000);
+    } else {
+      // Chooser was cancelled or scan timed out without finding device, BUT permission to scan IS GRANTED!
+      localStorage.setItem("dactyl_bt_permission_verified", "true");
+      setBtPermissionUIState("granted");
+      showToast("✅ Bluetooth-Berechtigung aktiv! 'Bluetooth Live-Sync' ist jetzt bereit.", 4000);
+    }
+  }
+}
+
+// =============================================================================
+// Web Bluetooth Live-Sync & Modern Auto-Sync (getDevices + watchAdvertisements)
+// =============================================================================
+
+async function initModernBleAutoSync() {
+  if (!("bluetooth" in navigator) || typeof navigator.bluetooth.getDevices !== "function") {
+    console.log("[BLE Auto-Sync] navigator.bluetooth.getDevices() nicht verfügbar.");
+    return;
+  }
+
+  try {
+    const devices = await navigator.bluetooth.getDevices();
+    for (const dev of devices) {
+      registerPermittedBleDevice(dev);
+    }
+    if (devices.length > 0) {
+      console.log(`[BLE Auto-Sync] ${devices.length} autorisierte(s) Bluetooth-Gerät(e) überwacht.`);
+    }
+  } catch (e) {
+    console.warn("[BLE Auto-Sync] Fehler bei getDevices():", e);
+  }
+
+  if (!bleAutoPollTimer) {
+    bleAutoPollTimer = setInterval(async () => {
+      if (bleConfigChar || isConnectingBle || isAutoSyncing || knownBleDevices.length === 0) return;
+      for (const dev of knownBleDevices) {
+        // Nur für das Config-Profil ("Dactyl Config") im Hintergrund prüfen
+        if (dev.name && !dev.name.includes("Config") && knownBleDevices.length > 1) continue;
+        try {
+          if (typeof dev.watchAdvertisements === "function" && !dev.watchingAdvertisements) {
+            await dev.watchAdvertisements();
+          }
+        } catch (err) {
+          // Ignorieren, falls bereits aktiv oder nicht unterstützt
+        }
+      }
+    }, 3000);
+  }
+}
+
+function registerPermittedBleDevice(dev) {
+  if (!dev) return;
+  if (!knownBleDevices.some(d => d.id === dev.id)) {
+    knownBleDevices.push(dev);
+  }
+  if (watchedBleDevices.has(dev.id)) return;
+  watchedBleDevices.add(dev.id);
+
+  dev.addEventListener("advertisementreceived", async (event) => {
+    const eventName = event.name || "";
+    const hasConfigUuid = Array.isArray(event.uuids) && event.uuids.some(u => u.toLowerCase() === CONFIG_SERVICE_UUID.toLowerCase());
+    const isConfigAdv = eventName.includes("Config") || hasConfigUuid;
+    if (!isConfigAdv) return;
+    if (Date.now() - lastBleDisconnectTime < 2500) return;
+    console.log(`[BLE Auto-Sync] Advertisement empfangen (Name: '${eventName}', RSSI: ${event.rssi})`);
+    if (bleConfigChar || isConnectingBle) return;
+    await connectToBleDevice(dev, true);
+  });
+
+  if (typeof dev.watchAdvertisements === "function") {
+    dev.watchAdvertisements().then(() => {
+      console.log(`[BLE Auto-Sync] watchAdvertisements() aktiv für '${dev.name || dev.id}'`);
+    }).catch((err) => {
+      console.warn(`[BLE Auto-Sync] watchAdvertisements() Hinweis für '${dev.name || dev.id}':`, err.message);
+    });
+  }
+}
+
+async function connectToBleDevice(device, isAutoTriggered = false) {
+  if (!device || bleConfigChar || isConnectingBle) return;
+  isConnectingBle = true;
+
+  try {
+    bleDevice = device;
+    bleDevice.removeEventListener("gattserverdisconnected", onBleDisconnected);
+    bleDevice.addEventListener("gattserverdisconnected", onBleDisconnected);
+
+    if (isAutoTriggered) {
+      showToast("⚡ 'Dactyl Config' erkannt! Verbinde automatisch...");
+    } else {
+      showToast("Verbinde mit Dactyl Bluetooth GATT Server...");
+    }
+
+    bleServer = await bleDevice.gatt.connect();
+    const service = await bleServer.getPrimaryService(CONFIG_SERVICE_UUID);
+    const char = await service.getCharacteristic(CONFIG_CHARACTERISTIC_UUID);
+
+    await char.startNotifications();
+    char.removeEventListener("characteristicvaluechanged", handleBleNotification);
+    char.addEventListener("characteristicvaluechanged", handleBleNotification);
+    bleConfigChar = char;
+
+    updateBleUI(true, bleDevice.name || "Dactyl Config");
+    updateConfigModeUI(true, false);
+
+    const autoSyncChk = document.getElementById("chkAutoSyncOnCombo");
+    const shouldOneShotAutoSync = autoSyncChk && autoSyncChk.checked;
+
+    if (shouldOneShotAutoSync) {
+      // One-Shot Auto-Sync: Konfiguration übertragen, danach automatisch trennen & zurück zur Mac-Tastatur!
+      await new Promise(r => setTimeout(r, 120));
+      await writeConfigToESP32({ autoDisconnectAfter: true });
+    } else {
+      showToast("⚡ Konfig-Modus verbunden! Live-Remapping aktiv.");
+      setTimeout(async () => {
+        if (!bleConfigChar) return;
+        if (pendingSyncCount > 0) {
+          await writeConfigToESP32({ autoDisconnectAfter: false });
+        } else {
+          await sendBleCommand("GET_NAMES");
+          await sendBleCommand("GET_INFO");
+        }
+      }, 180);
+    }
+  } catch (err) {
+    console.warn("BLE connection attempt failed:", err);
+    bleConfigChar = null;
+    bleServer = null;
+    if (bleDevice && bleDevice.gatt && bleDevice.gatt.connected) {
+      try {
+        bleDevice.gatt.disconnect();
+      } catch (_) {}
+    }
+    updateBleUI(false);
+    updateConfigModeUI(false, false);
+    if (!isAutoTriggered) {
+      showToast("Bluetooth-Fehler: " + err.message);
+    }
+  } finally {
+    isConnectingBle = false;
+  }
+}
 
 async function connectBle() {
   if (!("bluetooth" in navigator)) {
@@ -1176,9 +1566,16 @@ async function connectBle() {
   }
 
   try {
+    // Falls die Tastatur per USB verbunden ist und noch nicht im Config-Modus ist, können wir sie direkt per ENTER_CONFIG umschalten
+    if (serialPort && serialPort.writable && !isConfigModeActive) {
+      await sendSerialCommand("ENTER_CONFIG");
+      await new Promise(r => setTimeout(r, 350));
+    }
+
     showToast("Suche nach 'Dactyl Config' (R4C5 + R0C0 für 0.5s gedrückt halten)...");
+    let selectedDevice = null;
     try {
-      bleDevice = await navigator.bluetooth.requestDevice({
+      selectedDevice = await navigator.bluetooth.requestDevice({
         filters: [
           { name: "Dactyl Config" },
           { namePrefix: "Dactyl Config" },
@@ -1191,7 +1588,7 @@ async function connectBle() {
     } catch (filterErr) {
       if (filterErr.name === "NotFoundError" && !filterErr.message.toLowerCase().includes("cancelled") && !filterErr.message.toLowerCase().includes("aborted")) {
         console.log("Filter match failed, trying acceptAllDevices fallback...");
-        bleDevice = await navigator.bluetooth.requestDevice({
+        selectedDevice = await navigator.bluetooth.requestDevice({
           acceptAllDevices: true,
           optionalServices: [CONFIG_SERVICE_UUID]
         });
@@ -1200,31 +1597,19 @@ async function connectBle() {
       }
     }
 
-    bleDevice.addEventListener("gattserverdisconnected", onBleDisconnected);
-
-    showToast("Verbinde mit Dactyl Bluetooth GATT Server...");
-    bleServer = await bleDevice.gatt.connect();
-
-    const service = await bleServer.getPrimaryService(CONFIG_SERVICE_UUID);
-    bleConfigChar = await service.getCharacteristic(CONFIG_CHARACTERISTIC_UUID);
-
-    await bleConfigChar.startNotifications();
-    bleConfigChar.addEventListener("characteristicvaluechanged", handleBleNotification);
-
-    updateBleUI(true, bleDevice.name || "Dactyl Config");
-    showToast("⚡ Drahtloser Live-Sync aktiv! Remapping in <0.1s bereit.");
-
-    // Query layer names & info from ESP32
-    setTimeout(async () => {
-      await sendBleCommand("GET_NAMES");
-      await sendBleCommand("GET_INFO");
-    }, 200);
+    registerPermittedBleDevice(selectedDevice);
+    await connectToBleDevice(selectedDevice, false);
 
   } catch (err) {
-    console.error("BLE connection error:", err);
+    console.error("BLE requestDevice error:", err);
     updateBleUI(false);
-    if (err.name === "NotFoundError") {
-      showToast("⚠️ Kein 'Dactyl Config' gefunden. Halte R4C5 + R0C0 für 0.5s auf der Tastatur gedrückt!");
+    const msg = (err.message || "").toLowerCase();
+    if (msg.includes("denied") || msg.includes("permission") || msg.includes("scan for bluetooth devices")) {
+      localStorage.removeItem("dactyl_bt_permission_verified");
+      setBtPermissionUIState("denied");
+      showToast("❌ macOS verwehrt Bluetooth-Zugriff! Klicke auf 'macOS Bluetooth-Freigabe öffnen'.", 7000);
+    } else if (err.name === "NotFoundError") {
+      showToast("⚠️ Kein 'Dactyl Config' gefunden (" + (err.message || "Timeout") + "). Halte R4C5 + R0C0 für 0.5s auf der Tastatur gedrückt!");
     } else {
       showToast("Bluetooth-Fehler: " + err.message);
     }
@@ -1232,6 +1617,7 @@ async function connectBle() {
 }
 
 async function disconnectBle() {
+  lastBleDisconnectTime = Date.now();
   if (bleConfigChar) {
     try {
       await sendBleCommand("EXIT_CONFIG");
@@ -1247,11 +1633,13 @@ async function disconnectBle() {
 }
 
 function onBleDisconnected() {
+  lastBleDisconnectTime = Date.now();
   bleConfigChar = null;
   bleServer = null;
   bleDevice = null;
   updateBleUI(false);
-  showToast("Drahtloser Live-Sync getrennt -> Tastaturmodus aktiv.");
+  updateConfigModeUI(false, false);
+  showToast("⌨️ Konfig-Modus beendet -> Tastatur wieder mit Mac verbunden.");
 }
 
 function updateBleUI(connected, devName) {
@@ -1273,14 +1661,14 @@ function updateBleUI(connected, devName) {
       btn.classList.add("btn-outline");
       btn.style.borderColor = "#3b82f6";
       btn.style.color = "#93c5fd";
-      btn.title = "Drahtlos per Web-Bluetooth verbinden: Halte vorher R4C5 + R0C0 für 0.5s gedrückt!";
+      btn.title = "Einmalig koppeln oder manuell verbinden (R4C5 + R0C0 für 0.5s gedrückt halten)";
     }
   }
 
   if (btPill) {
     if (connected) {
       btPill.className = "bluetooth-status-pill connected";
-      if (nameText) nameText.textContent = devName || "Dactyl Keyboard";
+      if (nameText) nameText.textContent = devName || "Dactyl Config";
     } else if (!serialPort || !serialPort.readable) {
       btPill.className = "bluetooth-status-pill disconnected";
       if (nameText) nameText.textContent = "Nicht verbunden";
@@ -1295,20 +1683,28 @@ function updateBleUI(connected, devName) {
   if (btnWrite) btnWrite.disabled = !isOnline;
 }
 
-async function sendBleCommand(cmd) {
-  if (!bleConfigChar) return;
-  try {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(cmd + "\n");
-    if (bleConfigChar.writeValueWithResponse) {
-      await bleConfigChar.writeValueWithResponse(data);
-    } else {
-      await bleConfigChar.writeValue(data);
+function sendBleCommand(cmd) {
+  if (!bleConfigChar) return Promise.resolve(false);
+  const runWrite = async () => {
+    if (!bleConfigChar) return false;
+    try {
+      const encoder = new TextEncoder();
+      const data = encoder.encode(cmd + "\n");
+      if (bleConfigChar.writeValueWithResponse) {
+        await bleConfigChar.writeValueWithResponse(data);
+      } else {
+        await bleConfigChar.writeValue(data);
+      }
+      console.log("[BLE SENT]", cmd);
+      return true;
+    } catch (e) {
+      console.warn("BLE send error:", cmd, e);
+      return false;
     }
-    console.log("[BLE SENT]", cmd);
-  } catch (e) {
-    console.warn("BLE send error:", cmd, e);
-  }
+  };
+  const p = bleWriteQueue.then(runWrite, runWrite);
+  bleWriteQueue = p.then(() => {}, () => {});
+  return p;
 }
 
 function handleBleNotification(event) {
@@ -1384,66 +1780,11 @@ async function disconnectSerial() {
 }
 
 function updateBatteryUI(battery, voltage) {
-  const pill = document.getElementById("batteryStatusPill");
-  const pctText = document.getElementById("batPercentageText");
-  const voltText = document.getElementById("batVoltageText");
-  const icon = document.getElementById("batIcon");
-  const setPct = document.getElementById("settingsBatPct");
-  const setVolt = document.getElementById("settingsBatVolt");
-  const setStatus = document.getElementById("settingsBatStatus");
-
-  const v = typeof voltage === "number" ? voltage : parseFloat(voltage) || 0;
-  const b = typeof battery === "number" ? battery : parseInt(battery, 10) || 0;
-
-  const isUsb = (v < 1.0);
-  const displayPct = isUsb ? 100 : Math.min(100, Math.max(0, b));
-
-  if (pctText) pctText.textContent = isUsb ? "USB" : `${displayPct}%`;
-  if (voltText) voltText.textContent = isUsb ? "(5V USB)" : `(${v.toFixed(2)} V)`;
-  if (icon) icon.textContent = isUsb ? "🔌" : (displayPct < 20 ? "🪫" : "🔋");
-
-  if (pill) {
-    pill.className = "battery-status-pill";
-    if (isUsb || displayPct >= 40) {
-      pill.classList.add("good");
-    } else if (displayPct >= 20) {
-      pill.classList.add("low");
-    } else {
-      pill.classList.add("critical");
-    }
-  }
-
-  if (setPct) setPct.textContent = isUsb ? "100% (USB-Power)" : `${displayPct}%`;
-  if (setVolt) setVolt.textContent = isUsb ? "USB / 5V (Kein LiPo an Pin 35)" : `${v.toFixed(2)} V`;
-  if (setStatus) {
-    if (isUsb) {
-      setStatus.textContent = "USB-Betrieb (Kein LiPo-Akku an Pin 35 erkannt)";
-    } else if (displayPct > 90) {
-      setStatus.textContent = "Voll geladen (~4.2V)";
-    } else if (displayPct >= 20) {
-      setStatus.textContent = "Normaler Akkubetrieb";
-    } else {
-      setStatus.textContent = "⚠️ Akku fast leer (<3.4V)! Bitte per USB laden.";
-    }
-  }
+  // Akkumessung deaktiviert (LOLIN32 Lite besitzt keinen internen Spannungsteiler)
 }
 
 function resetBatteryUI() {
-  const pill = document.getElementById("batteryStatusPill");
-  const pctText = document.getElementById("batPercentageText");
-  const voltText = document.getElementById("batVoltageText");
-  const icon = document.getElementById("batIcon");
-  const setPct = document.getElementById("settingsBatPct");
-  const setVolt = document.getElementById("settingsBatVolt");
-  const setStatus = document.getElementById("settingsBatStatus");
-
-  if (pill) pill.className = "battery-status-pill";
-  if (pctText) pctText.textContent = "--%";
-  if (voltText) voltText.textContent = "(-- V)";
-  if (icon) icon.textContent = "🔋";
-  if (setPct) setPct.textContent = "--%";
-  if (setVolt) setVolt.textContent = "-- V";
-  if (setStatus) setStatus.textContent = "Warte auf Verbindung...";
+  // Akkumessung deaktiviert
 }
 
 function updateConnectionUI(connected, text) {
@@ -1522,6 +1863,26 @@ async function startSerialReadLoop() {
 function handleSerialLine(line) {
   if (!line) return;
 
+  // 0. Konfig-Modus Status-Events
+  if (line === "MODE:CONFIG" || line.startsWith("OK ENTER_CONFIG")) {
+    updateConfigModeUI(true, isAutoSyncing);
+    showToast("⚡ Tastatur ist jetzt im KONFIG-MODUS ('Dactyl Config')!");
+    return;
+  }
+  if (line === "MODE:KEYBOARD" || line.startsWith("OK EXIT_CONFIG")) {
+    updateConfigModeUI(false, false);
+    showToast("⌨️ Tastaturmodus aktiv! Verbunden mit macOS.");
+    return;
+  }
+  if (line.startsWith("STATUS:")) {
+    if (line.includes("ConfigMode=1")) {
+      updateConfigModeUI(true, isAutoSyncing);
+    } else if (line.includes("ConfigMode=0") && !bleConfigChar) {
+      updateConfigModeUI(false, false);
+    }
+    return;
+  }
+
   // 1. Device Info (Bluetooth Name, MAC, etc.)
   if (line.startsWith("DEVICE_INFO:")) {
     try {
@@ -1538,6 +1899,9 @@ function handleSerialLine(line) {
       if (nameText) nameText.textContent = devName;
       if (statusText) statusText.textContent = `Verbunden: ${devName}`;
 
+      if (info.config_mode !== undefined) {
+        updateConfigModeUI(!!info.config_mode, isAutoSyncing);
+      }
       if (info.battery !== undefined) {
         updateBatteryUI(info.battery, info.voltage);
       }
@@ -1637,8 +2001,13 @@ function handleSerialLine(line) {
   }
 
   // 7. Bestätigung von Konfigurations-Befehlen
-  else if (line.startsWith("OK SET_KEY")) {
-    showToast("✅ Taste im ESP32 NVS gespeichert!");
+  else if (line.startsWith("OK SET_KEY") || line.startsWith("OK SAVE_NVS")) {
+    if (line.startsWith("OK SAVE_NVS")) {
+      clearPendingSync();
+      showToast("✅ Alle Änderungen dauerhaft im ESP32 NVS gespeichert!");
+    } else {
+      showToast("✅ Taste im ESP32 NVS gespeichert!");
+    }
   } else if (line.startsWith("OK SET_NAME")) {
     showToast("✅ Ebenen-Name im ESP32 NVS gespeichert!");
   } else if (line.startsWith("OK SET_STANDBY")) {
@@ -1649,8 +2018,6 @@ function handleSerialLine(line) {
     const parts = line.split(" ");
     const mins = parts[2] || "60";
     showToast(`✅ Deep-Sleep-Timeout im ESP32 NVS auf ${mins} Min gesetzt!`);
-  } else if (line.startsWith("OK EXIT_CONFIG")) {
-    showToast("✅ Tastaturmodus wiederhergestellt! macOS verbindet sich automatisch.");
   } else if (line.startsWith("SLEEP_STARTING")) {
     showToast("💤 Tastatur geht in Deep Sleep (Stromsparmodus)... Beliebige Taste drücken zum Aufwecken!", 6000);
     resetBatteryUI();
@@ -2042,37 +2409,99 @@ function setupBrowserKeyboardHooks() {
 // Configuration Read/Write
 // =============================================================================
 
-async function writeConfigToESP32() {
+async function writeConfigToESP32(options = {}) {
+  const autoDisconnectAfter = !!(options && options.autoDisconnectAfter);
+
   if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
-    alert("Keine Verbindung zum ESP32 aktiv! Bitte verbinde erst Bluetooth Live-Sync oder USB Live-Monitor.");
+    alert("Keine Verbindung zum ESP32 aktiv! Halte R4C5 + R0C0 für 0.5s an der Tastatur gedrückt oder verbinde USB.");
     return;
   }
+  if (isAutoSyncing) return;
 
-  showToast("Übertrage vollständige Konfiguration an ESP32 NVS...");
+  const progressWrap = document.getElementById("autoSyncProgressWrap");
+  const progressBar = document.getElementById("autoSyncProgressBar");
+  if (progressWrap) progressWrap.style.display = "block";
+  if (progressBar) progressBar.style.width = "2%";
+
+  updateConfigModeUI(true, true);
+  showToast("🔄 Übertrage Konfiguration an Dactyl ESP32 NVS...");
+
   try {
-    for (let l = 0; l < currentConfig.layerNames.length; l++) {
-      const cmd = `SET_NAME ${l} ${currentConfig.layerNames[l]}`;
-      if (bleConfigChar) await sendBleCommand(cmd);
-      else await sendSerialCommand(cmd);
-      await new Promise(r => setTimeout(r, 20));
+    const sendCmd = async (cmd) => {
+      if (bleConfigChar) {
+        const ok = await sendBleCommand(cmd);
+        if (!ok) throw new Error(`BLE-Übertragung unterbrochen (${cmd})`);
+      } else if (serialPort && serialPort.writable) {
+        await sendSerialCommand(cmd);
+      } else {
+        throw new Error("Verbindung zum ESP32 unterbrochen");
+      }
+    };
+
+    const totalLayers = currentConfig.layers.length;
+    const totalSteps = (currentConfig.layerNames ? currentConfig.layerNames.length : 0) + (totalLayers * 6 * 7) + 3;
+    let completedSteps = 0;
+    const updateProgress = () => {
+      completedSteps++;
+      if (progressBar) {
+        const pct = Math.min(100, Math.round((completedSteps / totalSteps) * 100));
+        progressBar.style.width = `${pct}%`;
+      }
+    };
+
+    if (currentConfig.settings) {
+      const sb = currentConfig.settings.standbyTimeoutMinutes ?? 5;
+      const sl = currentConfig.settings.sleepTimeoutMinutes ?? 60;
+      await sendCmd(`SET_STANDBY ${sb}`);
+      updateProgress();
+      await sendCmd(`SET_SLEEP ${sl}`);
+      updateProgress();
     }
-    for (let l = 0; l < currentConfig.layers.length; l++) {
-      const layer = currentConfig.layers[l];
-      for (let r = 0; r < layer.length; r++) {
-        for (let c = 0; c < layer[r].length; c++) {
-          const k = layer[r][c];
-          const num = actionCodeToNumeric(k.tap || "NONE");
-          const cmd = `SET_KEY ${l} ${r} ${c} ${num}`;
-          if (bleConfigChar) await sendBleCommand(cmd);
-          else await sendSerialCommand(cmd);
-          await new Promise(r => setTimeout(r, 15));
+
+    if (Array.isArray(currentConfig.layerNames)) {
+      for (let l = 0; l < currentConfig.layerNames.length; l++) {
+        await sendCmd(`SET_NAME ${l} ${currentConfig.layerNames[l]}`);
+        updateProgress();
+      }
+    }
+
+    // Schnelles RAM-Update für alle Tasten via SET_K + einmaliges SAVE_NVS am Ende
+    for (let l = 0; l < totalLayers; l++) {
+      const layer = currentConfig.layers[l] || [];
+      for (let r = 0; r < 6; r++) {
+        const row = layer[r] || [];
+        for (let c = 0; c < 7; c++) {
+          const k = row[c];
+          const actionStr = (k && k.tap && k.tap !== "NONE") ? k.tap : ((k && k.hold) ? k.hold : "NONE");
+          const num = actionCodeToNumeric(actionStr);
+          await sendCmd(`SET_K ${l} ${r} ${c} ${num}`);
+          updateProgress();
         }
       }
     }
-    showToast("✅ Vollständige Konfiguration im ESP32 NVS gespeichert!");
+
+    await sendCmd("SAVE_NVS");
+    updateProgress();
+    clearPendingSync();
+
+    if (autoDisconnectAfter && bleConfigChar) {
+      await new Promise(r => setTimeout(r, 150));
+      await disconnectBle();
+      showToast("✅ Automatisch synchronisiert & getrennt! Tastatur ist wieder mit deinem Mac verbunden.");
+    } else {
+      updateConfigModeUI(isConfigModeActive, false);
+      showToast("✅ Vollständige Konfiguration im ESP32 NVS gespeichert!");
+    }
   } catch (err) {
     console.error("Write config error:", err);
-    showToast("Fehler beim Übertragen der Konfiguration!");
+    updateConfigModeUI(isConfigModeActive, false);
+    showToast("Fehler beim Übertragen der Konfiguration: " + err.message);
+  } finally {
+    isAutoSyncing = false;
+    setTimeout(() => {
+      if (progressWrap) progressWrap.style.display = "none";
+      if (progressBar) progressBar.style.width = "0%";
+    }, 600);
   }
 }
 

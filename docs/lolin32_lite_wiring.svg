@@ -1,0 +1,529 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1020" width="100%" height="100%" style="background:#090d16; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <defs>
+    <!-- Filter für Leuchteffekt bei aktiven Pins -->
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <linearGradient id="boardGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+
+    <linearGradient id="chipGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2d3748"/>
+      <stop offset="100%" stop-color="#1a202c"/>
+    </linearGradient>
+
+    <linearGradient id="leftHeaderGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+
+    <linearGradient id="rightHeaderGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#a855f7" stop-opacity="0.2"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ================= TITEL-BEREICH ================= -->
+  <text x="800" y="44" text-anchor="middle" fill="#f8fafc" font-size="24px" font-weight="800" letter-spacing="0.5">WEMOS LOLIN32 LITE — MATRIX VERDRAHTUNGSPLAN</text>
+  <text x="800" y="68" text-anchor="middle" fill="#94a3b8" font-size="13.5px">Dactyl ManuForm (Rechte Hand) • Pins physisch nach linker &amp; rechter Board-Seite aufgeteilt (Blick von oben, USB oben)</text>
+
+  <!-- ================= HINTERGRUND-RAHMEN ================= -->
+  <!-- Linke Kartenspalte -->
+  <rect x="40" y="95" width="480" height="790" rx="14" fill="#0f172a" stroke="#1e293b" stroke-width="2"/>
+  <path d="M 40,109 A 14,14 0 0,1 54,95 L 506,95 A 14,14 0 0,1 520,109 L 520,145 L 40,145 Z" fill="url(#leftHeaderGrad)"/>
+  <line x1="40" y1="145" x2="520" y2="145" stroke="#334155" stroke-width="1.5"/>
+  <text x="60" y="123" fill="#38bdf8" font-size="16px" font-weight="700">LINKE SEITE VOM ESP32</text>
+  <text x="60" y="139" fill="#94a3b8" font-size="11px">Pins 1 bis 13 (von oben nach unten)</text>
+
+  <!-- Rechte Kartenspalte -->
+  <rect x="1080" y="95" width="480" height="790" rx="14" fill="#0f172a" stroke="#1e293b" stroke-width="2"/>
+  <path d="M 1080,109 A 14,14 0 0,1 1094,95 L 1546,95 A 14,14 0 0,1 1560,109 L 1560,145 L 1080,145 Z" fill="url(#rightHeaderGrad)"/>
+  <line x1="1080" y1="145" x2="1560" y2="145" stroke="#334155" stroke-width="1.5"/>
+  <text x="1540" y="123" text-anchor="end" fill="#c084fc" font-size="16px" font-weight="700">RECHTE SEITE VOM ESP32</text>
+  <text x="1540" y="139" text-anchor="end" fill="#94a3b8" font-size="11px">Pins 1 bis 13 (von oben nach unten)</text>
+
+  <!-- ================= MITTE: LOLIN32 LITE BOARD ================= -->
+  <!-- Board Outline: x=650, width=300, y=95, height=790 -->
+  <g id="esp32-board">
+    <rect x="650" y="95" width="300" height="790" rx="16" fill="url(#boardGrad)" stroke="#334155" stroke-width="2.5"/>
+
+    <!-- Micro-USB Port oben -->
+    <rect x="745" y="80" width="110" height="30" rx="5" fill="#64748b" stroke="#cbd5e1" stroke-width="1.5"/>
+    <rect x="765" y="85" width="70" height="18" rx="3" fill="#1e293b"/>
+    <text x="800" y="125" text-anchor="middle" fill="#cbd5e1" font-size="10.5px" font-weight="600">Micro-USB</text>
+
+    <!-- JST LiPo Connector -->
+    <rect x="670" y="125" width="48" height="40" rx="4" fill="#f8fafc" stroke="#94a3b8" stroke-width="1.5"/>
+    <rect x="678" y="133" width="12" height="24" fill="#e2e8f0"/>
+    <rect x="698" y="133" width="12" height="24" fill="#e2e8f0"/>
+    <text x="694" y="180" text-anchor="middle" fill="#94a3b8" font-size="9.5px">JST BAT</text>
+
+    <!-- Reset Taster -->
+    <rect x="875" y="130" width="28" height="28" rx="14" fill="#e2e8f0" stroke="#64748b" stroke-width="2"/>
+    <circle cx="889" cy="144" r="8" fill="#cbd5e1"/>
+    <text x="889" y="172" text-anchor="middle" fill="#94a3b8" font-size="9.5px">RESET</text>
+
+    <!-- ESP32 Chip -->
+    <rect x="710" y="175" width="180" height="150" rx="8" fill="url(#chipGrad)" stroke="#475569" stroke-width="1.5"/>
+    <circle cx="730" cy="195" r="4" fill="#64748b"/>
+    <text x="800" y="230" text-anchor="middle" fill="#f1f5f9" font-size="14px" font-weight="800" letter-spacing="1">ESP32-D0WDQ6</text>
+    <text x="800" y="250" text-anchor="middle" fill="#94a3b8" font-size="11px">240MHz Dual-Core</text>
+    <text x="800" y="270" text-anchor="middle" fill="#38bdf8" font-size="10.5px" font-weight="600">WEMOS LOLIN32 Lite</text>
+    <text x="800" y="290" text-anchor="middle" fill="#64748b" font-size="9.5px">4MB Flash • BLE HID / GATT</text>
+
+    <!-- Onboard LED (IO22) -->
+    <rect x="735" y="340" width="14" height="9" rx="2" fill="#3b82f6" opacity="0.9"/>
+    <text x="758" y="348" fill="#93c5fd" font-size="9.5px">LED (IO22)</text>
+  </g>
+
+    <!-- Left Pin 1: GND -->
+    <g transform="translate(670, 390.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#000000" stroke="#64748b" stroke-width="1"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">GND</text>
+    </g>
+
+    <g>
+      <rect x="52" y="374.0" width="456" height="32" rx="6" fill="#1e293b" stroke="#64748b" stroke-width="1.2"/>
+      <circle cx="70" cy="390.0" r="7" fill="#000000" stroke="#64748b" stroke-width="1.5"/>
+      <text x="86" y="388.0" fill="#94a3b8" font-size="11.5px" font-weight="700"><tspan fill="#64748b" font-weight="700">[Schwarz]</tspan> GND (Masse)</text>
+      <text x="86" y="401.0" fill="#94a3b8" font-size="9.5px">Gemeinsame Bezugsmasse für Logik &amp; Taster</text>
+    </g>
+
+    <!-- Wire Left: Pin 1 -->
+    <line x1="508" y1="390.0" x2="661" y2="390.0" stroke="#64748b" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="508" cy="390.0" r="3.5" fill="#64748b"/>
+
+    <!-- Left Pin 2: 3V3 -->
+    <g transform="translate(670, 427.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#ef4444" stroke="#ef4444" stroke-width="1" filter="url(#glow)"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">3V3</text>
+    </g>
+
+    <g>
+      <rect x="52" y="411.5" width="456" height="32" rx="6" fill="#1e293b" stroke="#ef4444" stroke-width="1.2"/>
+      <circle cx="70" cy="427.5" r="7" fill="#ef4444" stroke="#ef4444" stroke-width="1.5"/>
+      <text x="86" y="425.5" fill="#fca5a5" font-size="11.5px" font-weight="700"><tspan fill="#ef4444" font-weight="700">[Rot]</tspan> 3V3 (Power)</text>
+      <text x="86" y="438.5" fill="#94a3b8" font-size="9.5px">3,3V Logik-Versorgungsspannung</text>
+    </g>
+
+    <!-- Wire Left: Pin 2 -->
+    <line x1="508" y1="427.5" x2="661" y2="427.5" stroke="#ef4444" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="508" cy="427.5" r="3.5" fill="#ef4444"/>
+
+    <!-- Left Pin 3: IO0 -->
+    <g transform="translate(670, 465.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO0</text>
+    </g>
+
+    <g>
+      <rect x="52" y="449.0" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="70" cy="465.0" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="86" y="463.0" fill="#64748b" font-size="11.5px" font-weight="700">IO0 (Boot-Pin)</text>
+      <text x="86" y="476.0" fill="#94a3b8" font-size="9.5px">Nicht belegt (frei)</text>
+    </g>
+
+    <!-- Left Pin 4: IO2 -->
+    <g transform="translate(670, 502.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO2</text>
+    </g>
+
+    <g>
+      <rect x="52" y="486.5" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="70" cy="502.5" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="86" y="500.5" fill="#64748b" font-size="11.5px" font-weight="700">IO2</text>
+      <text x="86" y="513.5" fill="#94a3b8" font-size="9.5px">Nicht belegt (frei)</text>
+    </g>
+
+    <!-- Left Pin 5: IO4 -->
+    <g transform="translate(670, 540.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#a855f7" stroke="#a855f7" stroke-width="1" filter="url(#glow)"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO4</text>
+    </g>
+
+    <g>
+      <rect x="52" y="524.0" width="456" height="32" rx="6" fill="#1e293b" stroke="#a855f7" stroke-width="1.2"/>
+      <circle cx="70" cy="540.0" r="7" fill="#a855f7" stroke="#a855f7" stroke-width="1.5"/>
+      <text x="86" y="538.0" fill="#e9d5ff" font-size="11.5px" font-weight="700"><tspan fill="#a855f7" font-weight="700">[Lila]</tspan> Col 5 ➔ Spalte ganz rechts</text>
+      <text x="86" y="551.0" fill="#94a3b8" font-size="9.5px">Tasten: ß, Ü, Ä, Shift, Alt • An Schalterpin 2 (ohne Diode)</text>
+    </g>
+
+    <!-- Wire Left: Pin 5 -->
+    <line x1="508" y1="540.0" x2="661" y2="540.0" stroke="#a855f7" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="508" cy="540.0" r="3.5" fill="#a855f7"/>
+
+    <!-- Left Pin 6: IO5 -->
+    <g transform="translate(670, 577.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO5</text>
+    </g>
+
+    <g>
+      <rect x="52" y="561.5" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="70" cy="577.5" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="86" y="575.5" fill="#64748b" font-size="11.5px" font-weight="700">IO5</text>
+      <text x="86" y="588.5" fill="#94a3b8" font-size="9.5px">Nicht belegt (frei)</text>
+    </g>
+
+    <!-- Left Pin 7: IO12 -->
+    <g transform="translate(670, 615.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO12</text>
+    </g>
+
+    <g>
+      <rect x="52" y="599.0" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="70" cy="615.0" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="86" y="613.0" fill="#64748b" font-size="11.5px" font-weight="700">IO12</text>
+      <text x="86" y="626.0" fill="#94a3b8" font-size="9.5px">Nicht belegt (frei)</text>
+    </g>
+
+    <!-- Left Pin 8: IO13 -->
+    <g transform="translate(670, 652.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#eab308" stroke="#eab308" stroke-width="1" filter="url(#glow)"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO13</text>
+    </g>
+
+    <g>
+      <rect x="52" y="636.5" width="456" height="32" rx="6" fill="#1e293b" stroke="#eab308" stroke-width="1.2"/>
+      <circle cx="70" cy="652.5" r="7" fill="#eab308" stroke="#eab308" stroke-width="1.5"/>
+      <text x="86" y="650.5" fill="#fef08a" font-size="11.5px" font-weight="700"><tspan fill="#eab308" font-weight="700">[Gelb]</tspan> Row 0 ➔ Zahlenreihe (ganz oben)</text>
+      <text x="86" y="663.5" fill="#94a3b8" font-size="9.5px">Tasten: 6, 7, 8, 9, 0, ß • An Dioden-Kathode (schwarzer Ring)</text>
+    </g>
+
+    <!-- Wire Left: Pin 8 -->
+    <line x1="508" y1="652.5" x2="661" y2="652.5" stroke="#eab308" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="508" cy="652.5" r="3.5" fill="#eab308"/>
+
+    <!-- Left Pin 9: IO14 -->
+    <g transform="translate(670, 690.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#f97316" stroke="#f97316" stroke-width="1" filter="url(#glow)"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO14</text>
+    </g>
+
+    <g>
+      <rect x="52" y="674.0" width="456" height="32" rx="6" fill="#1e293b" stroke="#f97316" stroke-width="1.2"/>
+      <circle cx="70" cy="690.0" r="7" fill="#f97316" stroke="#f97316" stroke-width="1.5"/>
+      <text x="86" y="688.0" fill="#fed7aa" font-size="11.5px" font-weight="700"><tspan fill="#f97316" font-weight="700">[Orange]</tspan> Row 1 ➔ Obere Buchstabenreihe</text>
+      <text x="86" y="701.0" fill="#94a3b8" font-size="9.5px">Tasten: Z, U, I, O, P, Ü • An Dioden-Kathode (schwarzer Ring)</text>
+    </g>
+
+    <!-- Wire Left: Pin 9 -->
+    <line x1="508" y1="690.0" x2="661" y2="690.0" stroke="#f97316" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="508" cy="690.0" r="3.5" fill="#f97316"/>
+
+    <!-- Left Pin 10: IO15 -->
+    <g transform="translate(670, 727.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO15</text>
+    </g>
+
+    <g>
+      <rect x="52" y="711.5" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="70" cy="727.5" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="86" y="725.5" fill="#64748b" font-size="11.5px" font-weight="700">IO15</text>
+      <text x="86" y="738.5" fill="#94a3b8" font-size="9.5px">Nicht belegt (frei)</text>
+    </g>
+
+    <!-- Left Pin 11: IO16 -->
+    <g transform="translate(670, 765.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#3b82f6" stroke="#3b82f6" stroke-width="1" filter="url(#glow)"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO16</text>
+    </g>
+
+    <g>
+      <rect x="52" y="749.0" width="456" height="32" rx="6" fill="#1e293b" stroke="#3b82f6" stroke-width="1.2"/>
+      <circle cx="70" cy="765.0" r="7" fill="#3b82f6" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="86" y="763.0" fill="#bfdbfe" font-size="11.5px" font-weight="700"><tspan fill="#3b82f6" font-weight="700">[Blau]</tspan> Col 4 ➔ 5. Spalte von links</text>
+      <text x="86" y="776.0" fill="#94a3b8" font-size="9.5px">Tasten: 0, P, Ö, -, →, Daumen Tab • An Schalterpin 2</text>
+    </g>
+
+    <!-- Wire Left: Pin 11 -->
+    <line x1="508" y1="765.0" x2="661" y2="765.0" stroke="#3b82f6" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="508" cy="765.0" r="3.5" fill="#3b82f6"/>
+
+    <!-- Left Pin 12: IO17 -->
+    <g transform="translate(670, 802.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#b45309" stroke="#d97706" stroke-width="1" filter="url(#glow)"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO17</text>
+    </g>
+
+    <g>
+      <rect x="52" y="786.5" width="456" height="32" rx="6" fill="#1e293b" stroke="#d97706" stroke-width="1.2"/>
+      <circle cx="70" cy="802.5" r="7" fill="#b45309" stroke="#d97706" stroke-width="1.5"/>
+      <text x="86" y="800.5" fill="#fde68a" font-size="11.5px" font-weight="700"><tspan fill="#d97706" font-weight="700">[Braun]</tspan> Col 3 ➔ 4. Spalte von links</text>
+      <text x="86" y="813.5" fill="#94a3b8" font-size="9.5px">Tasten: 9, O, L, ., ↑, Daumen Space 2U • An Schalterpin 2</text>
+    </g>
+
+    <!-- Wire Left: Pin 12 -->
+    <line x1="508" y1="802.5" x2="661" y2="802.5" stroke="#b45309" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="508" cy="802.5" r="3.5" fill="#b45309"/>
+
+    <!-- Left Pin 13: IO18 -->
+    <g transform="translate(670, 840.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#10b981" stroke="#10b981" stroke-width="1" filter="url(#glow)"/>
+      <text x="16" y="4" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO18</text>
+    </g>
+
+    <g>
+      <rect x="52" y="824.0" width="456" height="32" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.2"/>
+      <circle cx="70" cy="840.0" r="7" fill="#10b981" stroke="#10b981" stroke-width="1.5"/>
+      <text x="86" y="838.0" fill="#a7f3d0" font-size="11.5px" font-weight="700"><tspan fill="#10b981" font-weight="700">[Grün]</tspan> Col 2 ➔ 3. Spalte von links (Mitte)</text>
+      <text x="86" y="851.0" fill="#94a3b8" font-size="9.5px">Tasten: 8, I, K, ,, ↓, Daumen Enter 2U • An Schalterpin 2</text>
+    </g>
+
+    <!-- Wire Left: Pin 13 -->
+    <line x1="508" y1="840.0" x2="661" y2="840.0" stroke="#10b981" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="508" cy="840.0" r="3.5" fill="#10b981"/>
+    <!-- Right Pin 1: IO19 -->
+    <g transform="translate(930, 390.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#f97316" stroke="#f97316" stroke-width="1" filter="url(#glow)"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO19</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="374.0" width="456" height="32" rx="6" fill="#1e293b" stroke="#f97316" stroke-width="1.2"/>
+      <circle cx="1530" cy="390.0" r="7" fill="#f97316" stroke="#f97316" stroke-width="1.5"/>
+      <text x="1106" y="388.0" fill="#fed7aa" font-size="11.5px" font-weight="700"><tspan fill="#f97316" font-weight="700">[Orange]</tspan> Col 1 ➔ 2. Spalte von links</text>
+      <text x="1106" y="401.0" fill="#94a3b8" font-size="9.5px">Tasten: 7, U, J, M, ←, Daumen Alt • An Schalterpin 2</text>
+    </g>
+
+    <!-- Wire Right: Pin 1 -->
+    <line x1="939" y1="390.0" x2="1092" y2="390.0" stroke="#f97316" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="1092" cy="390.0" r="3.5" fill="#f97316"/>
+
+    <!-- Right Pin 2: IO22 -->
+    <g transform="translate(930, 427.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO22</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="411.5" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="1530" cy="427.5" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="1106" y="425.5" fill="#64748b" font-size="11.5px" font-weight="700">IO22 (Onboard LED)</text>
+      <text x="1106" y="438.5" fill="#94a3b8" font-size="9.5px">Interne blaue Status-LED</text>
+    </g>
+
+    <!-- Right Pin 3: IO23 -->
+    <g transform="translate(930, 465.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#eab308" stroke="#eab308" stroke-width="1" filter="url(#glow)"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO23</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="449.0" width="456" height="32" rx="6" fill="#1e293b" stroke="#eab308" stroke-width="1.2"/>
+      <circle cx="1530" cy="465.0" r="7" fill="#eab308" stroke="#eab308" stroke-width="1.5"/>
+      <text x="1106" y="463.0" fill="#fef08a" font-size="11.5px" font-weight="700"><tspan fill="#eab308" font-weight="700">[Gelb]</tspan> Col 0 ➔ Spalte ganz links (innen)</text>
+      <text x="1106" y="476.0" fill="#94a3b8" font-size="9.5px">Tasten: 6, Z, H, N, Daumen Cmd • An Schalterpin 2</text>
+    </g>
+
+    <!-- Wire Right: Pin 3 -->
+    <line x1="939" y1="465.0" x2="1092" y2="465.0" stroke="#eab308" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="1092" cy="465.0" r="3.5" fill="#eab308"/>
+
+    <!-- Right Pin 4: IO25 -->
+    <g transform="translate(930, 502.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#ef4444" stroke="#ef4444" stroke-width="1" filter="url(#glow)"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO25</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="486.5" width="456" height="32" rx="6" fill="#1e293b" stroke="#ef4444" stroke-width="1.2"/>
+      <circle cx="1530" cy="502.5" r="7" fill="#ef4444" stroke="#ef4444" stroke-width="1.5"/>
+      <text x="1106" y="500.5" fill="#fecaca" font-size="11.5px" font-weight="700"><tspan fill="#ef4444" font-weight="700">[Rot]</tspan> Col 6 ➔ Daumen-Spalte oben links</text>
+      <text x="1106" y="513.5" fill="#94a3b8" font-size="9.5px">Taste: Esc / Delete (R5C6) • An Schalterpin 2</text>
+    </g>
+
+    <!-- Wire Right: Pin 4 -->
+    <line x1="939" y1="502.5" x2="1092" y2="502.5" stroke="#ef4444" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="1092" cy="502.5" r="3.5" fill="#ef4444"/>
+
+    <!-- Right Pin 5: IO26 -->
+    <g transform="translate(930, 540.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#b45309" stroke="#d97706" stroke-width="1" filter="url(#glow)"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO26</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="524.0" width="456" height="32" rx="6" fill="#1e293b" stroke="#d97706" stroke-width="1.2"/>
+      <circle cx="1530" cy="540.0" r="7" fill="#b45309" stroke="#d97706" stroke-width="1.5"/>
+      <text x="1106" y="538.0" fill="#fde68a" font-size="11.5px" font-weight="700"><tspan fill="#d97706" font-weight="700">[Braun]</tspan> Row 3 ➔ Untere Buchstabenreihe</text>
+      <text x="1106" y="551.0" fill="#94a3b8" font-size="9.5px">Tasten: N, M, ,, ., - • An Dioden-Kathode (schwarzer Ring)</text>
+    </g>
+
+    <!-- Wire Right: Pin 5 -->
+    <line x1="939" y1="540.0" x2="1092" y2="540.0" stroke="#b45309" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="1092" cy="540.0" r="3.5" fill="#b45309"/>
+
+    <!-- Right Pin 6: IO27 -->
+    <g transform="translate(930, 577.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#10b981" stroke="#10b981" stroke-width="1" filter="url(#glow)"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO27</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="561.5" width="456" height="32" rx="6" fill="#1e293b" stroke="#10b981" stroke-width="1.2"/>
+      <circle cx="1530" cy="577.5" r="7" fill="#10b981" stroke="#10b981" stroke-width="1.5"/>
+      <text x="1106" y="575.5" fill="#a7f3d0" font-size="11.5px" font-weight="700"><tspan fill="#10b981" font-weight="700">[Grün]</tspan> Row 2 ➔ Home Row (Grundreihe)</text>
+      <text x="1106" y="588.5" fill="#94a3b8" font-size="9.5px">Tasten: H, J, K, L, Ö, Ä • An Dioden-Kathode (schwarzer Ring)</text>
+    </g>
+
+    <!-- Wire Right: Pin 6 -->
+    <line x1="939" y1="577.5" x2="1092" y2="577.5" stroke="#10b981" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="1092" cy="577.5" r="3.5" fill="#10b981"/>
+
+    <!-- Right Pin 7: IO32 -->
+    <g transform="translate(930, 615.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#a855f7" stroke="#a855f7" stroke-width="1" filter="url(#glow)"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO32</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="599.0" width="456" height="32" rx="6" fill="#1e293b" stroke="#a855f7" stroke-width="1.2"/>
+      <circle cx="1530" cy="615.0" r="7" fill="#a855f7" stroke="#a855f7" stroke-width="1.5"/>
+      <text x="1106" y="613.0" fill="#e9d5ff" font-size="11.5px" font-weight="700"><tspan fill="#a855f7" font-weight="700">[Lila]</tspan> Row 5 ➔ Daumen-Cluster (Row-Leitung)</text>
+      <text x="1106" y="626.0" fill="#94a3b8" font-size="9.5px">Gemeinsame Zeile für alle 6 Daumentasten • An Dioden-Kathode</text>
+    </g>
+
+    <!-- Wire Right: Pin 7 -->
+    <line x1="939" y1="615.0" x2="1092" y2="615.0" stroke="#a855f7" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="1092" cy="615.0" r="3.5" fill="#a855f7"/>
+
+    <!-- Right Pin 8: IO33 -->
+    <g transform="translate(930, 652.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#3b82f6" stroke="#3b82f6" stroke-width="1" filter="url(#glow)"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO33</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="636.5" width="456" height="32" rx="6" fill="#1e293b" stroke="#3b82f6" stroke-width="1.2"/>
+      <circle cx="1530" cy="652.5" r="7" fill="#3b82f6" stroke="#3b82f6" stroke-width="1.5"/>
+      <text x="1106" y="650.5" fill="#bfdbfe" font-size="11.5px" font-weight="700"><tspan fill="#3b82f6" font-weight="700">[Blau]</tspan> Row 4 ➔ Unterste Finger-Reihe (Pfeiltasten)</text>
+      <text x="1106" y="663.5" fill="#94a3b8" font-size="9.5px">Tasten: ←, ↓, ↑, →, Modifiers • An Dioden-Kathode (schwarzer Ring)</text>
+    </g>
+
+    <!-- Wire Right: Pin 8 -->
+    <line x1="939" y1="652.5" x2="1092" y2="652.5" stroke="#3b82f6" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="1092" cy="652.5" r="3.5" fill="#3b82f6"/>
+
+    <!-- Right Pin 9: EN -->
+    <g transform="translate(930, 690.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">EN</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="674.0" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="1530" cy="690.0" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="1106" y="688.0" fill="#64748b" font-size="11.5px" font-weight="700">EN (Chip Enable / Reset)</text>
+      <text x="1106" y="701.0" fill="#94a3b8" font-size="9.5px">Nicht belegt (intern mit Pullup)</text>
+    </g>
+
+    <!-- Right Pin 10: IO34 -->
+    <g transform="translate(930, 727.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO34</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="711.5" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="1530" cy="727.5" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="1106" y="725.5" fill="#64748b" font-size="11.5px" font-weight="700">IO34 (Input-Only)</text>
+      <text x="1106" y="738.5" fill="#94a3b8" font-size="9.5px">Nicht belegt (frei)</text>
+    </g>
+
+    <!-- Right Pin 11: IO35 -->
+    <g transform="translate(930, 765.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO35</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="749.0" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="1530" cy="765.0" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="1106" y="763.0" fill="#64748b" font-size="11.5px" font-weight="700">IO35 (Input-Only)</text>
+      <text x="1106" y="776.0" fill="#94a3b8" font-size="9.5px">Nicht belegt (frei)</text>
+    </g>
+
+    <!-- Right Pin 12: IO36 -->
+    <g transform="translate(930, 802.5)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO36</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="786.5" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="1530" cy="802.5" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="1106" y="800.5" fill="#64748b" font-size="11.5px" font-weight="700">IO36 (VP / Input-Only)</text>
+      <text x="1106" y="813.5" fill="#94a3b8" font-size="9.5px">Nicht belegt (frei)</text>
+    </g>
+
+    <!-- Right Pin 13: IO39 -->
+    <g transform="translate(930, 840.0)">
+      <circle cx="0" cy="0" r="9" fill="#0f172a" stroke="#cbd5e1" stroke-width="1.5"/>
+      <circle cx="0" cy="0" r="6" fill="#1e293b" stroke="#475569" stroke-width="1"/>
+      <text x="-16" y="4" text-anchor="end" fill="#f8fafc" font-size="11.5px" font-weight="700" font-family="monospace">IO39</text>
+    </g>
+
+    <g>
+      <rect x="1092" y="824.0" width="456" height="32" rx="6" fill="#090d16" stroke="#1e293b" stroke-width="1.2"/>
+      <circle cx="1530" cy="840.0" r="4" fill="#334155" stroke="#475569" stroke-width="1"/>
+      <text x="1106" y="838.0" fill="#64748b" font-size="11.5px" font-weight="700">IO39 (VN / Input-Only)</text>
+      <text x="1106" y="851.0" fill="#94a3b8" font-size="9.5px">Nicht belegt (frei)</text>
+    </g>
+  <!-- ================= UNTEN: ZUSAMMENFASSUNG & TROUBLESHOOTING ================= -->
+  <g transform="translate(40, 905)">
+    <!-- Box 1: Dioden-Regel -->
+    <rect x="0" y="0" width="480" height="95" rx="10" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
+    <text x="20" y="24" fill="#38bdf8" font-size="12px" font-weight="700">⚡ DIODEN-REGEL (ROW / ZEILEN):</text>
+    <text x="20" y="44" fill="#cbd5e1" font-size="11px">• <tspan fill="#f1f5f9" font-weight="600">Row 0, 1, 2, 3, 4, 5</tspan> gehen an die durchgehenden Zeilendrähte.</text>
+    <text x="20" y="62" fill="#cbd5e1" font-size="11px">• An jedem Schalter: <tspan fill="#f59e0b" font-weight="600">Kathode (schwarzer Ring)</tspan> an den Zeilendraht!</text>
+    <text x="20" y="80" fill="#cbd5e1" font-size="11px">• <tspan fill="#94a3b8">Anode (ohne Ring)</tspan> wird direkt an Schalterkontakt 1 gelötet.</text>
+
+    <!-- Box 2: Stromsparmodus & Sleep -->
+    <rect x="520" y="0" width="480" height="95" rx="10" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
+    <text x="540" y="24" fill="#10b981" font-size="12px" font-weight="700">⚡ TWO-STAGE SLEEP (STROMSPARMODUS):</text>
+    <text x="540" y="44" fill="#cbd5e1" font-size="11px">• <tspan fill="#f1f5f9" font-weight="600">Reiner Akkubetrieb:</tspan> LiPo direkt an JST-Buchse anschließen.</text>
+    <text x="540" y="62" fill="#cbd5e1" font-size="11px">• <tspan fill="#38bdf8" font-weight="600">Stufe 1 (5 Min):</tspan> 80 MHz Standby, BLE bleibt an, 0ms Aufwachzeit.</text>
+    <text x="540" y="80" fill="#cbd5e1" font-size="11px">• <tspan fill="#a855f7" font-weight="600">Stufe 2 (60 Min):</tspan> Deep Sleep (~10µA), EXT1 Wakeup auf allen Zeilen.</text>
+
+    <!-- Box 3: Spalten-Regel -->
+    <rect x="1040" y="0" width="480" height="95" rx="10" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
+    <text x="1060" y="24" fill="#c084fc" font-size="12px" font-weight="700">🔌 SPALTEN-REGEL (COL / SPALTEN):</text>
+    <text x="1060" y="44" fill="#cbd5e1" font-size="11px">• <tspan fill="#f1f5f9" font-weight="600">Col 0 bis 6</tspan> gehen an die senkrechten Spaltendrähte.</text>
+    <text x="1060" y="62" fill="#cbd5e1" font-size="11px">• Werden direkt an Schalterkontakt 2 <tspan fill="#a855f7" font-weight="600">OHNE Diode</tspan> gelötet.</text>
+    <text x="1060" y="80" fill="#cbd5e1" font-size="11px">• Pullup erfolgt intern über die ESP32-Software (INPUT_PULLUP).</text>
+  </g>
+
+</svg>

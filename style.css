@@ -1209,3 +1209,122 @@ body {
   letter-spacing: 0.02em;
   pointer-events: none;
 }
+
+/* Header Config Mode Pill */
+.config-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  transition: all 0.25s ease;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(30, 41, 59, 0.7);
+  color: #cbd5e1;
+}
+
+.config-mode-pill .mode-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #64748b;
+}
+
+.config-mode-pill.mode-normal {
+  border-color: rgba(56, 189, 248, 0.35);
+  background: rgba(15, 23, 42, 0.85);
+  color: #bae6fd;
+}
+
+.config-mode-pill.mode-normal .mode-dot {
+  background: #38bdf8;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.6);
+}
+
+.config-mode-pill.mode-config {
+  border-color: rgba(168, 85, 247, 0.75);
+  background: rgba(88, 28, 135, 0.45);
+  color: #f3e8ff;
+  box-shadow: 0 0 14px rgba(168, 85, 247, 0.35);
+}
+
+.config-mode-pill.mode-config .mode-dot {
+  background: #c084fc;
+  box-shadow: 0 0 10px #c084fc;
+  animation: pulseGreen 1.2s infinite;
+}
+
+.config-mode-pill.mode-syncing {
+  border-color: rgba(245, 158, 11, 0.8);
+  background: rgba(120, 53, 15, 0.45);
+  color: #fef3c7;
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.35);
+}
+
+.config-mode-pill.mode-syncing .mode-dot {
+  background: #fbbf24;
+  box-shadow: 0 0 10px #fbbf24;
+}
+
+/* Config Mode Guide Banner States */
+.config-mode-guide-card.is-config-active {
+  border-color: rgba(168, 85, 247, 0.75) !important;
+  background: linear-gradient(135deg, rgba(88, 28, 135, 0.28), rgba(15, 23, 42, 0.92)) !important;
+  box-shadow: 0 0 22px rgba(168, 85, 247, 0.22);
+}
+
+.config-mode-guide-card.has-pending-sync {
+  border-color: rgba(245, 158, 11, 0.65);
+}
+
+.config-state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+
+.config-state-badge.state-normal {
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+}
+
+.config-state-badge.state-config {
+  background: rgba(168, 85, 247, 0.3);
+  color: #f3e8ff;
+  border: 1px solid rgba(192, 132, 252, 0.75);
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.35);
+}
+
+.config-state-badge.state-syncing {
+  background: rgba(245, 158, 11, 0.3);
+  color: #fde68a;
+  border: 1px solid rgba(251, 191, 36, 0.75);
+}
+
+.pending-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 6px;
+}
+
+.pending-sync-badge.synced {
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.pending-sync-badge.pending {
+  background: rgba(245, 158, 11, 0.25);
+  color: #fde68a;
+  border: 1px solid rgba(245, 158, 11, 0.65);
+}

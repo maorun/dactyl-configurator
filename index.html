@@ -18,18 +18,26 @@
         </div>
       </div>
       <div class="header-actions">
+        <div class="config-mode-pill mode-normal" id="configModeStatusPill" title="Aktueller Betriebsmodus der Tastatur (Normaler Mac-Tastaturmodus vs. Drahtloser Konfigurationsmodus)">
+          <span class="mode-dot" id="configModeDot"></span>
+          <span class="mode-icon" id="configModeIcon">⌨️</span>
+          <span class="mode-label">Modus:</span>
+          <strong id="configModeText">Mac-Tastatur</strong>
+        </div>
         <div class="bluetooth-status-pill disconnected" id="btStatusPill">
           <span class="status-dot"></span>
           <span class="bt-icon">📶</span>
           <span class="bt-label">Live-Verbindung:</span>
           <strong id="btDeviceNameText">Nicht verbunden</strong>
         </div>
-        <div class="battery-status-pill" id="batteryStatusPill" title="Akku-Ladestand des ESP32">
-          <span class="bat-icon" id="batIcon">🔋</span>
-          <span class="bat-label" id="batPercentageText">--%</span>
-          <span class="bat-sub" id="batVoltageText" style="font-size: 0.75rem; color: #94a3b8; margin-left: 0.2rem;">(-- V)</span>
-        </div>
-        <button id="btnConnectBle" class="btn btn-outline" style="border-color: #3b82f6; color: #93c5fd;" title="Drahtlos per Web-Bluetooth verbinden: Halte auf der Tastatur R4C5 + R0C0 für 0.5s gedrückt und klicke dann hier!">
+        <!-- Bluetooth Permission Check / Config / Live-Sync Button Flow -->
+        <button id="btnCheckBtPermission" class="btn btn-outline" style="border-color: #f59e0b; color: #fcd34d;" title="Prüft die macOS Bluetooth-Berechtigung für diese App">
+          <span class="btn-icon">🔒</span> Bluetooth prüfen
+        </button>
+        <button id="btnOpenBtSettings" class="btn btn-outline" style="border-color: #ef4444; color: #fca5a5; display: none;" title="Öffnet direkt die macOS Systemeinstellungen für Bluetooth">
+          <span class="btn-icon">⚙️</span> macOS Bluetooth-Freigabe öffnen
+        </button>
+        <button id="btnConnectBle" class="btn btn-outline" style="border-color: #3b82f6; color: #93c5fd; display: none;" title="Drahtlos per Web-Bluetooth verbinden: Halte auf der Tastatur R4C5 + R0C0 für 0.5s gedrückt und klicke dann hier!">
           <span class="btn-icon">⚡</span> Bluetooth Live-Sync
         </button>
         <button id="btnConnect" class="btn btn-outline" style="border-color: #6366f1; color: #a5b4fc;" title="Direkte USB-Live-Verbindung zum ESP32 für Matrix-Echtzeit-Anzeige aller Tasten und Layer">
@@ -98,18 +106,34 @@
         </div>
       </div>
 
-      <!-- Wireless Bluetooth Config Mode Guide Banner -->
+      <!-- Wireless Bluetooth Config Mode & Auto-Sync Banner -->
       <div class="config-mode-guide-card" id="configModeGuideCard">
-        <div class="config-guide-icon">⚡</div>
-        <div class="config-guide-body">
-          <div class="config-guide-title">
-            <strong>Drahtloser Bluetooth Config-Modus (Live-Remapping ohne Kabel)</strong>
-            <span class="badge" style="background: rgba(59,130,246,0.25); color: #93c5fd; font-size: 0.75rem; padding: 2px 8px; border-radius: 4px;">Hardware-Combo: R4C5 + R0C0 (0,5s)</span>
+        <div class="config-guide-icon" id="configGuideIcon">⚡</div>
+        <div class="config-guide-body" style="flex: 1;">
+          <div class="config-guide-title" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+            <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+              <strong>Drahtloser Konfig-Modus &amp; Combo Auto-Sync</strong>
+              <span class="badge" style="background: rgba(59,130,246,0.25); color: #93c5fd; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px;">Combo: R4C5 + R0C0 (0,5s)</span>
+              <span class="config-state-badge state-normal" id="configModeStateBadge">⌨️ Mac-Tastaturmodus aktiv</span>
+              <span class="pending-sync-badge synced" id="pendingSyncBadge">✓ Alle Einstellungen synchron</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <label style="display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #cbd5e1; cursor: pointer; user-select: none;" title="Wenn aktiv: Sobald du R4C5 + R0C0 auf der Tastatur drückst, verbindet sich die App automatisch, überträgt alle gespeicherten Einstellungen und gibt die Tastatur sofort wieder an den Mac zurück.">
+                <input type="checkbox" id="chkAutoSyncOnCombo" checked style="accent-color: #3b82f6; width: 15px; height: 15px; cursor: pointer;">
+                <span><strong>One-Shot Auto-Sync:</strong> Bei Combo verbinden ➔ übertragen ➔ sofort zum Mac zurück</span>
+              </label>
+              <button id="btnExitConfigBanner" class="btn btn-outline btn-sm" style="display: none; border-color: #ef4444; color: #fca5a5;">
+                🔙 Konfig-Modus beenden
+              </button>
+            </div>
           </div>
-          <div class="config-guide-desc">
-            <span><strong>1. Modus aktivieren:</strong> Halte auf der Tastatur <strong>R4C5</strong> (unterste rechte Randtaste) + <strong>R0C0</strong> (oberste Zahlenreihe Taste <code>6</code>) für <strong>0,5s</strong> gedrückt. Der ESP32 trennt macOS und sendet als <strong>„Dactyl Config“</strong>.</span>
-            <span><strong>2. Verbinden:</strong> Klicke oben auf <strong>„⚡ Bluetooth Live-Sync“</strong>, um drahtlos zu verbinden. Alle Tastenänderungen werden sofort im ESP32 NVS gespeichert!</span>
-            <span><strong>3. Modus beenden:</strong> Klicke oben auf <strong>„Trennen“</strong> oder halte erneut <strong>R4C5 + R0C0</strong> für 0,5s gedrückt. Die Tastatur verbindet sich sofort wieder als Standard-Tastatur mit macOS.</span>
+          <div id="autoSyncProgressWrap" style="display: none; margin: 0.55rem 0; background: rgba(15,23,42,0.8); border-radius: 6px; height: 8px; overflow: hidden; border: 1px solid rgba(59,130,246,0.3);">
+            <div id="autoSyncProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.15s ease;"></div>
+          </div>
+          <div class="config-guide-desc" id="configGuideDesc">
+            <span><strong>1. In Ruhe einstellen:</strong> Ändere Tasten, Layer-Namen &amp; Timeouts einfach vorab in der App (werden lokal vorgemerkt, während du normal am Mac weiterarbeitest).</span>
+            <span><strong>2. Combo drücken (R4C5 + R0C0 für 0,5s):</strong> Die Tastatur kappt kurz die Mac-Verbindung (eigene Config-MAC), verbindet sich automatisch mit der App, überträgt alle Änderungen in &lt;1s und kehrt sofort wieder zum Mac zurück!</span>
+            <span id="blePermissionHint" style="color: #93c5fd;"><strong>💡 Hinweis:</strong> Beim allerersten Mal einmalig im Konfig-Modus auf <strong>„⚡ Bluetooth Live-Sync“</strong> klicken, damit Chrome die dauerhafte Auto-Sync-Freigabe speichert.</span>
           </div>
         </div>
       </div>
@@ -316,15 +340,6 @@
           <small class="form-hint">Schaltet den ESP32 bei längerer Inaktivität komplett ab (~10 µA). Beliebige Taste drücken weckt die Tastatur auf (~150 ms) und koppelt sie neu.</small>
         </div>
 
-        <div class="form-group" style="background: rgba(15, 23, 42, 0.6); padding: 1rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08); margin-top: 1rem;">
-          <label style="margin-bottom: 0.5rem; display: block; font-weight: 600;">🔋 Akku & Power-Management (GPIO 35):</label>
-          <div style="display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; font-size: 0.9rem;">
-            <div><strong>Ladestand:</strong> <span id="settingsBatPct">--%</span></div>
-            <div><strong>Spannung:</strong> <span id="settingsBatVolt">-- V</span></div>
-            <div><strong>Status:</strong> <span id="settingsBatStatus">Warte auf Verbindung...</span></div>
-          </div>
-        </div>
-
         <div class="info-card" style="margin-top: 1rem;">
           <h4>⚡ Drahtloser Bluetooth-Konfigurationsmodus</h4>
           <p style="font-size: 0.88rem; color: #cbd5e1; line-height: 1.5; margin-bottom: 0.5rem;">
@@ -335,6 +350,11 @@
             <li><strong>Verhalten im Config-Modus:</strong> Trennt macOS HID, schaltet BLE Advertising auf <em>„Dactyl Config“</em> um (ohne HID-Dienst) und unterdrückt lokale Keystroke-Ausgabe bei vollem Live-Monitor-Stream.</li>
             <li><strong>Beenden:</strong> Per Klick auf <em>„Trennen“</em> in der App, durch erneutes Drücken von <code>R4C5 + R0C0</code> oder automatisch nach 3 Minuten Inaktivität.</li>
           </ul>
+          <div style="margin-top: 0.85rem; padding-top: 0.65rem; border-top: 1px solid rgba(255,255,255,0.08);">
+            <button id="btnSettingsOpenBtConfig" type="button" class="btn btn-outline btn-sm" style="border-color: #3b82f6; color: #93c5fd;">
+              <span class="btn-icon">⚙️</span> macOS Bluetooth-Datenschutzeinstellungen öffnen
+            </button>
+          </div>
         </div>
 
         <div class="settings-actions" style="margin-top: 1.5rem;">

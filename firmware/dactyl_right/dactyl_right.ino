@@ -30,6 +30,7 @@ BLECharacteristic *pConfigCharacteristic = nullptr;
 volatile bool isConfigMode = false;
 volatile bool isBleTransitioning = false;
 volatile bool exitConfigRequested = false;
+volatile bool enterConfigRequested = false;
 
 class ConfigCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pChar) override {
@@ -47,20 +48,24 @@ public:
     if (!isConfigMode) {
       BleKeyboard::onConnect(pServer);
     }
-    if (!isBleTransitioning) {
+    if (!isBleTransitioning && !enterConfigRequested && !exitConfigRequested) {
       pServer->getAdvertising()->start();
     }
   }
 
   void onDisconnect(BLEServer *pServer) override {
-    if (!isConfigMode) {
-      if (pServer->getConnectedCount() == 0) {
-        BleKeyboard::onDisconnect(pServer);
-      } else if (!isBleTransitioning) {
-        pServer->getAdvertising()->start();
-      }
-    } else if (!isBleTransitioning) {
+    if (pServer->getConnectedCount() <= 1) {
+      BleKeyboard::onDisconnect(pServer);
+    }
+    if (!isBleTransitioning && !enterConfigRequested && !exitConfigRequested) {
       pServer->getAdvertising()->start();
+    }
+  }
+
+  void setDisconnected() {
+    BLEServer *pServer = BLEDevice::getServer();
+    if (pServer) {
+      BleKeyboard::onDisconnect(pServer);
     }
   }
 
@@ -119,6 +124,8 @@ const int NUM_COLS = 7;
 #define ACT_TG_5  0x115
 #define ACT_TG_6  0x116
 #define ACT_TG_7  0x117
+#define ACT_LAYER_UP   0x118
+#define ACT_LAYER_DOWN 0x119
 
 #define ACT_MEDIA_PLAY_PAUSE     0x120
 #define ACT_MEDIA_MUTE           0x121
@@ -130,8 +137,6 @@ const int NUM_COLS = 7;
 #define ACT_MAC_GLOBE            0x127
 
 #define NUM_LAYERS 8
-
-#define BATTERY_PIN 35
 
 uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, gedrosselter Scan, BLE bleibt an)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
@@ -146,6 +151,7 @@ void enterConfigMode() {
   if (isConfigMode) return;
   isBleTransitioning = true;
   isConfigMode = true;
+  enterConfigRequested = false;
   lastActivityTime = millis();
 
   bleKeyboard.releaseAll();
@@ -154,10 +160,16 @@ void enterConfigMode() {
   Serial.println("  Tastatur sendet als 'Dactyl Config'");
   Serial.println("  macOS getrennt -> Web-App kann drahtlos koppeln");
   Serial.println("=============================================");
+  sendConfigNotification("MODE:CONFIG");
 
   BLEServer *pServer = BLEDevice::getServer();
   if (pServer) {
-    // 1. Alle aktiven Verbindungen trennen (z. B. macOS HID)
+    BLEAdvertising *pAdv = pServer->getAdvertising();
+    // 1. Zuerst altes HID-Advertising stoppen, damit macOS nicht sofort wieder verbindet
+    pAdv->stop();
+    delay(25);
+
+    // 2. Alle aktiven Verbindungen trennen (z. B. macOS HID)
     std::vector<uint16_t> peers;
     for (auto const& peer : pServer->getPeerDevices(false)) {
       peers.push_back(peer.first);
@@ -165,12 +177,33 @@ void enterConfigMode() {
     for (uint16_t id : peers) {
       pServer->disconnect(id);
     }
+    bleKeyboard.setDisconnected();
 
-    // 2. Altes HID-Advertising stoppen
-    BLEAdvertising *pAdv = pServer->getAdvertising();
-    pAdv->stop();
+    // 3. Warten, bis der asynchrone HCI Disconnect sauber abgeschlossen ist
+    for (int i = 0; i < 35 && pServer->getConnectedCount() > 0; i++) {
+      delay(10);
+    }
+    delay(60);
 
-    // 3. Reines Config-Advertising starten (ohne HID Keyboard Service!)
+    // 4. Advertising zurücksetzen und eigene Static Random MAC-Adresse setzen
+    pAdv->reset();
+    delay(25);
+
+    esp_bd_addr_t randAddr;
+    esp_read_mac(randAddr, ESP_MAC_BT);
+    randAddr[0] |= 0xC0;
+    randAddr[5] |= 0xC0;
+    randAddr[4] ^= 0x55;
+
+    esp_err_t errSet = esp_ble_gap_set_rand_addr(randAddr);
+    Serial.printf("[BLE] esp_ble_gap_set_rand_addr rc=%d (Addr: %02X:%02X:%02X:%02X:%02X:%02X)\n",
+      errSet, randAddr[0], randAddr[1], randAddr[2], randAddr[3], randAddr[4], randAddr[5]);
+
+    pAdv->setDeviceAddress(randAddr, BLE_ADDR_TYPE_RANDOM);
+    esp_ble_gap_set_device_name("Dactyl Config");
+    delay(25);
+
+    // 5. Reines Config-Advertising starten (ohne HID Keyboard Service!)
     // WICHTIG: BLE 4.2 Pakete dürfen max 31 Bytes groß sein!
     // advData: Flags (3B) + Name (15B) = 18B <= 31B
     BLEAdvertisementData advData;
@@ -185,6 +218,7 @@ void enterConfigMode() {
     pAdv->setAdvertisementData(advData);
     pAdv->setScanResponseData(scanData);
     pAdv->setScanResponse(true);
+    delay(25);
     pAdv->start();
   }
   isBleTransitioning = false;
@@ -199,43 +233,25 @@ void exitConfigMode() {
 
   bleKeyboard.releaseAll();
   Serial.println("\n=============================================");
-  Serial.println("  [CONFIG MODE] BEENDET -> Tastaturmodus aktiv");
-  Serial.println("  Tastatur sendet wieder als 'Dactyl Keyboard'");
+  Serial.println("  [CONFIG MODE] BEENDET -> Starte Tastatur neu");
   Serial.println("=============================================");
+  sendConfigNotification("MODE:KEYBOARD");
+  delay(120);
 
   BLEServer *pServer = BLEDevice::getServer();
   if (pServer) {
-    // 1. Config Client trennen (Web App)
-    std::vector<uint16_t> peers;
+    pServer->getAdvertising()->stop();
     for (auto const& peer : pServer->getPeerDevices(false)) {
-      peers.push_back(peer.first);
+      pServer->disconnect(peer.first);
     }
-    for (uint16_t id : peers) {
-      pServer->disconnect(id);
-    }
-
-    // 2. Config-Advertising stoppen
-    BLEAdvertising *pAdv = pServer->getAdvertising();
-    pAdv->stop();
-
-    // 3. Normales Tastatur-Advertising wiederherstellen (HID Service 0x1812)
-    // advData: Flags (3B) + Appearance (4B) + 16-Bit HID UUID 0x1812 (4B) = 11B <= 31B
-    BLEAdvertisementData advData;
-    advData.setFlags(0x06);
-    advData.setAppearance(HID_KEYBOARD);
-    advData.setCompleteServices(BLEUUID((uint16_t)0x1812));
-
-    // scanData: 128-Bit CONFIG_SERVICE_UUID (18B) <= 31B (ohne setName, exakt wie in onStarted)
-    BLEAdvertisementData scanData;
-    scanData.setCompleteServices(BLEUUID(CONFIG_SERVICE_UUID));
-
-    pAdv->setAppearance(HID_KEYBOARD);
-    pAdv->setAdvertisementData(advData);
-    pAdv->setScanResponseData(scanData);
-    pAdv->setScanResponse(true);
-    pAdv->start();
+    delay(100);
   }
-  isBleTransitioning = false;
+
+  // Soft-Reboot (dauert nur ~200ms): Stellt die originale gepaarte Public-MAC
+  // und alle HID-Services sauber wieder her, sodass macOS sich sofort wieder verbindet!
+  Serial.println("[BLE] Starte sauberen Neustart für Mac-HID-Verbindung...");
+  Serial.flush();
+  ESP.restart();
 }
 
 void toggleConfigMode() {
@@ -260,30 +276,6 @@ void enterStandby() {
     setCpuFrequencyMhz(80);
     Serial.println("[POWER] Inaktivität erreicht -> Standby aktiv (CPU 80 MHz, gedrosselter Matrix-Scan)");
   }
-}
-
-float getBatteryVoltage() {
-  uint32_t rawSum = 0;
-  const int SAMPLES = 8;
-  for (int i = 0; i < SAMPLES; i++) {
-    rawSum += analogRead(BATTERY_PIN);
-    delayMicroseconds(50);
-  }
-  float rawAvg = (float)rawSum / (float)SAMPLES;
-  // ESP32 ADC: 12-Bit (0..4095), 3.3V Referenz, 2:1 Spannungsteiler auf WEMOS LOLIN Boards
-  float voltage = (rawAvg / 4095.0f) * 3.3f * 2.0f;
-  return voltage;
-}
-
-uint8_t calculateBatteryPercentage(float voltage) {
-  // Wenn kein Akku an Pin 35 anliegt (z. B. reiner USB-Betrieb oder unbeschaltet < 1.0V)
-  if (voltage < 1.0f) return 100;
-  if (voltage >= 4.18f) return 100;
-  if (voltage <= 3.30f) return 0;
-  int pct = (int)((voltage - 3.30f) / (4.18f - 3.30f) * 100.0f);
-  if (pct > 100) pct = 100;
-  if (pct < 0) pct = 0;
-  return (uint8_t)pct;
 }
 
 void enterDeepSleep() {
@@ -346,7 +338,7 @@ uint16_t KEYMAP[NUM_LAYERS][6][7] = {
     { 'z'             , 'u'             , 'i'             , 'o'             , 'p'             , '['             , 0                },
     { 'h'             , 'j'             , 'k'             , 'l'             , ';'             , '\''            , KEY_DELETE       },
     { 'n'             , 'm'             , ','             , '.'             , '/'             , KEY_RIGHT_SHIFT , 0                },
-    { 0               , KEY_LEFT_ARROW  , KEY_DOWN_ARROW  , KEY_UP_ARROW    , KEY_RIGHT_ARROW , ACT_MAC_GLOBE   , 0                },
+    { 0               , KEY_LEFT_ARROW  , KEY_DOWN_ARROW  , KEY_UP_ARROW    , KEY_RIGHT_ARROW , KEY_RIGHT_ALT   , 0                },
     { KEY_LEFT_GUI    , KEY_LEFT_ALT    , KEY_RETURN      , ' '             , KEY_TAB         , KEY_BACKSPACE   , KEY_ESC          }
   },
 
@@ -542,6 +534,17 @@ void handleConfigCommand(String cmd) {
         sendConfigNotification("OK SET_KEY " + String(l) + " " + String(r) + " " + String(c) + " " + String(val));
       }
     }
+  } else if (cmd.startsWith("SET_K ")) {
+    // Schnelles RAM-Update für Batch-Sync (NVS wird am Ende einmalig mit SAVE_NVS geschrieben)
+    int l, r, c, val;
+    if (sscanf(cmd.c_str(), "SET_K %d %d %d %d", &l, &r, &c, &val) == 4) {
+      if (l >= 0 && l < NUM_LAYERS && r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS) {
+        KEYMAP[l][r][c] = (uint16_t)val;
+      }
+    }
+  } else if (cmd == "SAVE_NVS") {
+    saveKeymapToNVS();
+    sendConfigNotification("OK SAVE_NVS");
   } else if (cmd.startsWith("SET_NAME ")) {
     int spaceIdx = cmd.indexOf(' ', 9);
     int l = cmd.substring(9, spaceIdx > 0 ? spaceIdx : 10).toInt();
@@ -577,11 +580,11 @@ void handleConfigCommand(String cmd) {
   } else if (cmd == "GET_INFO") {
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
-    float v = getBatteryVoltage();
-    uint8_t pct = calculateBatteryPercentage(v);
-    char buf[192];
-    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"Dactyl Keyboard\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"battery\":%d,\"voltage\":%.2f,\"standby_timeout\":%u,\"sleep_timeout\":%u}",
-      m[0], m[1], m[2], m[3], m[4], m[5], pct, v, standbyTimeoutMinutes, deepSleepTimeoutMinutes);
+    char buf[224];
+    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"config_mode\":%s}",
+      isConfigMode ? "Dactyl Config" : "Dactyl Keyboard",
+      m[0], m[1], m[2], m[3], m[4], m[5], standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+      isConfigMode ? "true" : "false");
     sendConfigNotification(String(buf));
   } else if (cmd == "GET_CONFIG") {
     String out = "LAYER_NAMES:[";
@@ -612,6 +615,9 @@ void handleConfigCommand(String cmd) {
     preferences.clear();
     preferences.end();
     sendConfigNotification("OK RESET_CONFIG");
+  } else if (cmd == "ENTER_CONFIG") {
+    sendConfigNotification("OK ENTER_CONFIG");
+    enterConfigRequested = true;
   } else if (cmd == "EXIT_CONFIG") {
     sendConfigNotification("OK EXIT_CONFIG");
     exitConfigRequested = true;
@@ -648,10 +654,6 @@ void setup() {
   }
 
   configMutex = xSemaphoreCreateMutex();
-
-  // Batterie-Messung initialisieren (Pin 35, 11dB Attenuation für 0..3.3V Messbereich)
-  pinMode(BATTERY_PIN, INPUT);
-  analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
 
   lastActivityTime = millis();
 
@@ -700,19 +702,8 @@ void loop() {
   static unsigned long lastHeartbeat = 0;
   if (millis() - lastHeartbeat > 2500) {
     lastHeartbeat = millis();
-    Serial.printf("STATUS: BLE verbunden=%d | Matrix aktiv\n", bleKeyboard.isConnected());
+    Serial.printf("STATUS: BLE verbunden=%d | ConfigMode=%d | Matrix aktiv\n", bleKeyboard.isConnected(), isConfigMode ? 1 : 0);
     Serial.flush();
-  }
-
-  // Regelmäßige Batterie-Aktualisierung (alle 30s)
-  static unsigned long lastBatteryCheck = 0;
-  if (millis() - lastBatteryCheck > 30000) {
-    lastBatteryCheck = millis();
-    float v = getBatteryVoltage();
-    uint8_t pct = calculateBatteryPercentage(v);
-    if (bleKeyboard.isConnected()) {
-      bleKeyboard.setBatteryLevel(pct);
-    }
   }
 
   // Matrix-Scan
@@ -764,6 +755,20 @@ void loop() {
               snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"TG_%d\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, l, action, currentLayer, newL);
               sendConfigNotification(String(buf));
               Serial.printf("LAYER: TG(%d) -> Layer %d\n", l, newL);
+            } else if (action == ACT_LAYER_UP || action == ACT_LAYER_DOWN) {
+              uint8_t targetL = (action == ACT_LAYER_UP)
+                ? ((currentLayer + 1) % NUM_LAYERS)
+                : ((currentLayer == 0) ? (NUM_LAYERS - 1) : (currentLayer - 1));
+              for (int i = 1; i < NUM_LAYERS; i++) toggleLayers[i] = false;
+              if (targetL > 0 && targetL < NUM_LAYERS) {
+                toggleLayers[targetL] = true;
+              }
+              uint8_t newL = getActiveLayer();
+              const char* actName = (action == ACT_LAYER_UP) ? "LAYER_UP" : "LAYER_DOWN";
+              char buf[128];
+              snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, actName, action, currentLayer, newL);
+              sendConfigNotification(String(buf));
+              Serial.printf("LAYER: %s -> Layer %d\n", actName, newL);
             } else if (action >= 0x120 && action <= 0x127) {
               const char* mediaName = "MEDIA";
               if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -845,7 +850,6 @@ void loop() {
         comboStartTime = millis();
       } else if (millis() - comboStartTime >= 500) {
         comboStartTime = 0;
-        toggleConfigMode();
 
         // Release-Events senden & States zurücksetzen, damit UI nicht hängen bleibt
         pressedAction[0][0] = 0;
@@ -876,6 +880,14 @@ void loop() {
           if (!r0c0_pressed && !r4c5_pressed) break;
           delay(20);
         }
+
+        // Modus-Wechsel erst nach Freigabe von configMutex (Zeile 959+) ausführen,
+        // damit sofort eintreffende BLE Auto-Sync GATT-Schreibbefehle nicht blockiert werden.
+        if (isConfigMode) {
+          exitConfigRequested = true;
+        } else {
+          enterConfigRequested = true;
+        }
       }
     } else {
       comboStartTime = 0;
@@ -884,7 +896,11 @@ void loop() {
     xSemaphoreGive(configMutex);
   }
 
-  // Deferriertes Beenden des Config-Modus aus loopTask
+  // Deferriertes Starten/Beenden des Config-Modus aus loopTask
+  if (enterConfigRequested) {
+    enterConfigRequested = false;
+    enterConfigMode();
+  }
   if (exitConfigRequested) {
     exitConfigRequested = false;
     exitConfigMode();

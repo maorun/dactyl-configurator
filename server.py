@@ -14,6 +14,7 @@ import glob
 import re
 import shutil
 import subprocess
+import tempfile
 
 # Sicherstellen, dass Standard-Binärpfade (Homebrew unter macOS Apple Silicon / Intel) im PATH vorhanden sind
 EXTRA_PATHS = [
@@ -129,7 +130,14 @@ def code_to_cpp(code):
         return "0"
     if code in KEY_TO_CPP:
         return KEY_TO_CPP[code]
-    if code.startswith("KEY_") or code.startswith("ACT_"):
+    if code.startswith("KEY_"):
+        m = re.match(r"^KEY_(\d+)$", code)
+        if m:
+            return m.group(1)
+        if re.match(r"^[A-Z0-9_]{1,32}$", code):
+            return code
+        return "0"
+    if code.startswith("ACT_"):
         if re.match(r"^[A-Z0-9_]{1,32}$", code):
             return code
         return "0"
@@ -187,7 +195,64 @@ def generate_keymap_cpp(layers):
     lines.append("// [[[END_KEYMAP]]]")
     return "\n".join(lines)
 
-def update_ino_file(keymap_cpp):
+def generate_layer_names_cpp(layer_names):
+    names = list(layer_names)[:8] if layer_names else []
+    default_names = ["Base", "Nav & Pfeile", "Symbole", "Numpad", "Function", "Media", "Shortcuts", "Custom"]
+    while len(names) < 8:
+        names.append(default_names[len(names)])
+    escaped = [n.replace('"', '').replace('\\', '')[:31] for n in names]
+    lines = [
+        "// [[[START_LAYER_NAMES]]]",
+        "String layerNames[NUM_LAYERS] = {",
+        f'  "{escaped[0]}", "{escaped[1]}", "{escaped[2]}", "{escaped[3]}",',
+        f'  "{escaped[4]}", "{escaped[5]}", "{escaped[6]}", "{escaped[7]}"',
+        "};",
+        "// [[[END_LAYER_NAMES]]]"
+    ]
+    return "\n".join(lines)
+
+def generate_combos_cpp(combos):
+    lines = [
+        "// [[[START_COMBOS]]]",
+        f"uint8_t numCombos = {min(len(combos), 16) if combos else 0};",
+        "KeyCombo userCombos[MAX_COMBOS] = {"
+    ]
+    cb_entries = []
+    if combos:
+        for cb in combos[:16]:
+            k1 = cb.get("key1", {})
+            k2 = cb.get("key2", {})
+            r1, c1 = k1.get("r", 0), k1.get("c", 0)
+            r2, c2 = k2.get("r", 0), k2.get("c", 0)
+            beh_map = {"KEY_PRESS": 0, "MODIFIER_HOLD": 1, "LAYER_TOGGLE": 2}
+            beh = beh_map.get(cb.get("behavior"), 0)
+            act = code_to_cpp(cb.get("action", "0"))
+            cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act}, false }}")
+    lines.append(",\n".join(cb_entries) if cb_entries else "  { 0, 0, 0, 0, 0, 0, false }")
+    lines.append("};")
+    lines.append("// [[[END_COMBOS]]]")
+    return "\n".join(lines)
+
+def generate_settings_cpp(settings):
+    if not settings:
+        settings = {}
+    dev_name = str(settings.get("deviceName", "Dactyl Keyboard")).replace('"', '').replace('\\', '')[:31]
+    debounce = int(settings.get("debounceMs", 5))
+    combo_to = int(settings.get("comboTimeoutMs", 40))
+    standby = int(settings.get("standbyTimeoutMinutes", 5))
+    sleep = int(settings.get("sleepTimeoutMinutes", 60))
+    lines = [
+        "// [[[START_SETTINGS]]]",
+        f'String deviceName = "{dev_name}";',
+        f'uint8_t debounceMs = {debounce};',
+        f'uint16_t comboTimeoutMs = {combo_to};',
+        f'uint32_t standbyTimeoutMinutes = {standby};',
+        f'uint32_t deepSleepTimeoutMinutes = {sleep};',
+        "// [[[END_SETTINGS]]]"
+    ]
+    return "\n".join(lines)
+
+def update_ino_file(keymap_cpp, layer_names=None, combos=None, settings=None):
     if not os.path.exists(INO_FILE):
         raise FileNotFoundError(f"Firmware Datei nicht gefunden: {INO_FILE}")
 
@@ -199,8 +264,37 @@ def update_ino_file(keymap_cpp):
         raise ValueError("Markierungen // [[[START_KEYMAP]]] ... // [[[END_KEYMAP]]] fehlen in dactyl_right.ino!")
 
     new_content = re.sub(pattern, keymap_cpp, content, flags=re.DOTALL)
+
+    if layer_names:
+        names_pattern = r"// \[\[\[START_LAYER_NAMES\]\]\].*?// \[\[\[END_LAYER_NAMES\]\]\]"
+        if re.search(names_pattern, new_content, re.DOTALL):
+            layer_names_cpp = generate_layer_names_cpp(layer_names)
+            new_content = re.sub(names_pattern, layer_names_cpp, new_content, flags=re.DOTALL)
+
+    if combos is not None:
+        combos_pattern = r"// \[\[\[START_COMBOS\]\]\].*?// \[\[\[END_COMBOS\]\]\]"
+        if re.search(combos_pattern, new_content, re.DOTALL):
+            combos_cpp = generate_combos_cpp(combos)
+            new_content = re.sub(combos_pattern, combos_cpp, new_content, flags=re.DOTALL)
+
+    if settings is not None:
+        settings_pattern = r"// \[\[\[START_SETTINGS\]\]\].*?// \[\[\[END_SETTINGS\]\]\]"
+        if re.search(settings_pattern, new_content, re.DOTALL):
+            settings_cpp = generate_settings_cpp(settings)
+            new_content = re.sub(settings_pattern, settings_cpp, new_content, flags=re.DOTALL)
+
     with open(INO_FILE, "w", encoding="utf-8") as f:
         f.write(new_content)
+
+def save_config_atomic(config):
+    if not isinstance(config, dict) or "layers" not in config or not isinstance(config["layers"], list) or len(config["layers"]) == 0:
+        raise ValueError("Ungültige Konfiguration: Muss ein Objekt mit einer nicht-leeren 'layers'-Liste sein.")
+
+    dir_name = os.path.dirname(os.path.abspath(CONFIG_FILE))
+    with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as tf:
+        json.dump(config, tf, indent=2)
+        temp_name = tf.name
+    os.replace(temp_name, CONFIG_FILE)
 
 def find_arduino_cli():
     cli = shutil.which("arduino-cli")
@@ -310,21 +404,6 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"exists": False}).encode("utf-8"))
             return
 
-        if self.path == "/api/open_bluetooth_settings":
-            try:
-                subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth"])
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"success": true}')
-                return
-            except Exception as e:
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
-                return
-
         super().do_GET()
 
     def do_POST(self):
@@ -372,17 +451,16 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             try:
-                # 1. Config auf Platte speichern
-                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(config, f, indent=2)
-
-                # 2. C++ Keymap generieren
-                layers = config.get("layers", [])
-                if not layers:
+                # 1. Daten validieren & atomar auf Platte schreiben (Finding #9)
+                layers = config.get("layers", []) if isinstance(config, dict) else None
+                if not layers or not isinstance(layers, list):
                     raise ValueError("Keine Ebenen (layers) in der Konfiguration vorhanden!")
 
+                save_config_atomic(config)
+
+                # 2. C++ Keymap, Layer-Namen, Combos & Settings generieren und in .ino einbetten
                 keymap_cpp = generate_keymap_cpp(layers)
-                update_ino_file(keymap_cpp)
+                update_ino_file(keymap_cpp, config.get("layerNames"), config.get("combos"), config.get("settings"))
 
                 # 3. Flashen
                 result = flash_firmware()
@@ -405,8 +483,7 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             post_data = self.rfile.read(content_length)
             try:
                 config = json.loads(post_data.decode("utf-8"))
-                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(config, f, indent=2)
+                save_config_atomic(config)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()

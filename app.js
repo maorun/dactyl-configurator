@@ -323,6 +323,11 @@ function actionCodeToNumeric(code) {
   if (ACTION_TO_NUMERIC[code] !== undefined) {
     return ACTION_TO_NUMERIC[code];
   }
+  // Single-character ASCII (z.B. 'a', '1', '~', '@')
+  if (code.length === 1) {
+    const c = code.charCodeAt(0);
+    if (c >= 32 && c <= 126) return c;
+  }
   // Check KEY_A..KEY_Z -> 'a'..'z'
   if (code.startsWith("KEY_") && code.length === 5 && code[4] >= 'A' && code[4] <= 'Z') {
     return code[4].toLowerCase().charCodeAt(0);
@@ -347,6 +352,12 @@ function actionCodeToNumeric(code) {
     "KEY_SLASH": 47
   };
   if (punct[code] !== undefined) return punct[code];
+
+  // Numeric fallback KEY_\d+ (Finding #15)
+  if (code.startsWith("KEY_")) {
+    const num = parseInt(code.substring(4), 10);
+    if (!isNaN(num) && num >= 0 && num <= 0xFFFF) return num;
+  }
   return 0;
 }
 const actionToNumeric = actionCodeToNumeric;
@@ -385,6 +396,12 @@ function findDefinitionByCode(numericCode) {
     47: { label: "/", tap: "KEY_SLASH" }
   };
   if (punctRev[numericCode]) return punctRev[numericCode];
+
+  // Printable ASCII fallback (Finding #15)
+  if (numericCode >= 32 && numericCode <= 126) {
+    const ch = String.fromCharCode(numericCode);
+    return { label: ch, tap: ch };
+  }
   return { label: `Key ${numericCode}`, tap: `KEY_${numericCode}` };
 }
 
@@ -419,8 +436,22 @@ const DEFAULT_CONFIG = {
   ]
 };
 
+// Normalisiert importierte oder vom Server geladene Konfigurationen (Finding #8)
+function normalizeConfig(cfg) {
+  if (!cfg || typeof cfg !== "object") cfg = {};
+  if (!Array.isArray(cfg.layers)) cfg.layers = [];
+  if (!Array.isArray(cfg.combos)) cfg.combos = [];
+  if (!Array.isArray(cfg.layerNames) || cfg.layerNames.length === 0) {
+    cfg.layerNames = [...DEFAULT_LAYER_NAMES];
+  }
+  if (!cfg.settings || typeof cfg.settings !== "object") {
+    cfg.settings = { standbyTimeoutMinutes: 5, sleepTimeoutMinutes: 60 };
+  }
+  return cfg;
+}
+
 // State
-let currentConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+let currentConfig = normalizeConfig(JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
 let activeLayerIndex = 0;
 let activeHandView = "right"; // "right", "left", "both"
 let thumbClusterFormat = "2x3"; // "2x3" or "3x2"
@@ -538,10 +569,7 @@ async function loadSavedConfigFromServer() {
     if (res.ok) {
       const data = await res.json();
       if (data && data.layers && data.layers.length > 0) {
-        currentConfig = data;
-        if (!currentConfig.layerNames || !Array.isArray(currentConfig.layerNames)) {
-          currentConfig.layerNames = [...DEFAULT_LAYER_NAMES];
-        }
+        currentConfig = normalizeConfig(data);
         if (currentConfig.settings) {
           if (currentConfig.settings.deviceName) {
             const el = document.getElementById("deviceNameInput");
@@ -1041,18 +1069,50 @@ function renderCombosTable() {
       "MODIFIER_HOLD": "Modifier Hold (z.B. Strg/Alt halten)",
       "KEY_PRESS": "Einzeltaste senden (z.B. Escape/Enter)",
       "LAYER_TOGGLE": "Layer Umschalten"
-    }[combo.behavior] || combo.behavior;
+    }[combo.behavior] || combo.behavior || "";
 
-    tr.innerHTML = `
-      <td><span class="combo-key-badge">${combo.key1.label || `R${combo.key1.r}C${combo.key1.c}`}</span></td>
-      <td><strong>+</strong></td>
-      <td><span class="combo-key-badge">${combo.key2.label || `R${combo.key2.r}C${combo.key2.c}`}</span></td>
-      <td><strong>${combo.actionLabel || combo.action}</strong></td>
-      <td><span style="color: #94a3b8; font-size: 0.85rem;">${behaviorName}</span></td>
-      <td>
-        <button class="btn btn-danger btn-sm" onclick="deleteCombo('${combo.id}')">Löschen</button>
-      </td>
-    `;
+    const td1 = document.createElement("td");
+    const badge1 = document.createElement("span");
+    badge1.className = "combo-key-badge";
+    badge1.textContent = (combo.key1 && combo.key1.label) || `R${combo.key1?.r ?? 0}C${combo.key1?.c ?? 0}`;
+    td1.appendChild(badge1);
+
+    const tdPlus = document.createElement("td");
+    const plusStrong = document.createElement("strong");
+    plusStrong.textContent = "+";
+    tdPlus.appendChild(plusStrong);
+
+    const td2 = document.createElement("td");
+    const badge2 = document.createElement("span");
+    badge2.className = "combo-key-badge";
+    badge2.textContent = (combo.key2 && combo.key2.label) || `R${combo.key2?.r ?? 0}C${combo.key2?.c ?? 0}`;
+    td2.appendChild(badge2);
+
+    const tdAction = document.createElement("td");
+    const actStrong = document.createElement("strong");
+    actStrong.textContent = combo.actionLabel || combo.action || "";
+    tdAction.appendChild(actStrong);
+
+    const tdBehavior = document.createElement("td");
+    const behSpan = document.createElement("span");
+    behSpan.style.color = "#94a3b8";
+    behSpan.style.fontSize = "0.85rem";
+    behSpan.textContent = String(behaviorName);
+    tdBehavior.appendChild(behSpan);
+
+    const tdDel = document.createElement("td");
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-danger btn-sm";
+    delBtn.textContent = "Löschen";
+    delBtn.addEventListener("click", () => deleteCombo(combo.id));
+    tdDel.appendChild(delBtn);
+
+    tr.appendChild(td1);
+    tr.appendChild(tdPlus);
+    tr.appendChild(td2);
+    tr.appendChild(tdAction);
+    tr.appendChild(tdBehavior);
+    tr.appendChild(tdDel);
     tbody.appendChild(tr);
   });
 }
@@ -1179,8 +1239,8 @@ function setupEventListeners() {
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target.result);
-        if (parsed.layers) {
-          currentConfig = parsed;
+        if (parsed && parsed.layers && Array.isArray(parsed.layers)) {
+          currentConfig = normalizeConfig(parsed);
           renderLayerButtons();
           renderMatrix();
           renderCombosTable();
@@ -1232,17 +1292,23 @@ function setupEventListeners() {
       if (bleConfigChar) {
         const ok1 = await sendBleCommand(`SET_STANDBY ${standbyMinutes}`);
         const ok2 = await sendBleCommand(`SET_SLEEP ${sleepMinutes}`);
-        if (ok1 && ok2) {
+        const ok3 = await sendBleCommand(`SET_DEV_NAME ${devName}`);
+        const ok4 = await sendBleCommand(`SET_DEBOUNCE ${debounce}`);
+        const ok5 = await sendBleCommand(`SET_COMBO_TIMEOUT ${comboTimeout}`);
+        if (ok1 && ok2 && ok3 && ok4 && ok5) {
           showToast("✅ Device-Einstellungen & Timeouts im ESP32 NVS gespeichert!");
         } else {
-          markPendingSync(`Timeouts ${standbyMinutes}m/${sleepMinutes}m`);
+          markPendingSync(`Settings ${devName}`);
         }
       } else if (serialPort && serialPort.writable) {
         await sendSerialCommand(`SET_STANDBY ${standbyMinutes}`);
         await sendSerialCommand(`SET_SLEEP ${sleepMinutes}`);
+        await sendSerialCommand(`SET_DEV_NAME ${devName}`);
+        await sendSerialCommand(`SET_DEBOUNCE ${debounce}`);
+        await sendSerialCommand(`SET_COMBO_TIMEOUT ${comboTimeout}`);
         showToast("✅ Device-Einstellungen & Timeouts im ESP32 NVS gespeichert!");
       } else {
-        markPendingSync(`Timeouts ${standbyMinutes}m/${sleepMinutes}m`);
+        markPendingSync(`Settings ${devName}`);
       }
     });
   }
@@ -1274,6 +1340,27 @@ async function saveAndFlashToDactyl() {
 
     const data = await res.json();
     if (res.ok && data.success) {
+      if (hadSerial) {
+        try {
+          await new Promise(r => setTimeout(r, 1200)); // ESP32 Reboot nach Flashen abwarten
+          await connectSerial();
+          if (serialPort && serialPort.writable) {
+            if (currentConfig.settings) {
+              const sb = currentConfig.settings.standbyTimeoutMinutes ?? 5;
+              const sl = currentConfig.settings.sleepTimeoutMinutes ?? 60;
+              await sendSerialCommand(`SET_STANDBY ${sb}`);
+              await sendSerialCommand(`SET_SLEEP ${sl}`);
+            }
+            if (Array.isArray(currentConfig.layerNames)) {
+              for (let l = 0; l < currentConfig.layerNames.length; l++) {
+                await sendSerialCommand(`SET_NAME ${l} ${currentConfig.layerNames[l]}`);
+              }
+            }
+          }
+        } catch (reconnectErr) {
+          console.warn("Serial reconnect nach Flashen fehlgeschlagen:", reconnectErr);
+        }
+      }
       clearPendingSync();
       showToast("✅ Erfolgreich auf Dactyl geflasht!");
       alert("✅ Erfolgreich auf Dactyl gespeichert!\n\nDie Firmware wurde aktualisiert. Die Tastatur verbindet sich jetzt mit deiner neuen Tastenbelegung neu per Bluetooth.");
@@ -1573,29 +1660,16 @@ async function connectBle() {
     }
 
     showToast("Suche nach 'Dactyl Config' (R4C5 + R0C0 für 0.5s gedrückt halten)...");
-    let selectedDevice = null;
-    try {
-      selectedDevice = await navigator.bluetooth.requestDevice({
-        filters: [
-          { name: "Dactyl Config" },
-          { namePrefix: "Dactyl Config" },
-          { services: [CONFIG_SERVICE_UUID] },
-          { name: "Dactyl Keyboard" },
-          { namePrefix: "Dactyl" }
-        ],
-        optionalServices: [CONFIG_SERVICE_UUID]
-      });
-    } catch (filterErr) {
-      if (filterErr.name === "NotFoundError" && !filterErr.message.toLowerCase().includes("cancelled") && !filterErr.message.toLowerCase().includes("aborted")) {
-        console.log("Filter match failed, trying acceptAllDevices fallback...");
-        selectedDevice = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
-          optionalServices: [CONFIG_SERVICE_UUID]
-        });
-      } else {
-        throw filterErr;
-      }
-    }
+    const selectedDevice = await navigator.bluetooth.requestDevice({
+      filters: [
+        { name: "Dactyl Config" },
+        { namePrefix: "Dactyl Config" },
+        { services: [CONFIG_SERVICE_UUID] },
+        { name: "Dactyl Keyboard" },
+        { namePrefix: "Dactyl" }
+      ],
+      optionalServices: [CONFIG_SERVICE_UUID]
+    });
 
     registerPermittedBleDevice(selectedDevice);
     await connectToBleDevice(selectedDevice, false);
@@ -1918,6 +1992,21 @@ function handleSerialLine(line) {
         if (currentConfig.settings) {
           currentConfig.settings.sleepTimeoutMinutes = info.sleep_timeout;
         }
+      }
+      if (info.debounce_ms !== undefined) {
+        const debInput = document.getElementById("debounceInput");
+        if (debInput) debInput.value = String(info.debounce_ms);
+        if (currentConfig.settings) currentConfig.settings.debounceMs = info.debounce_ms;
+      }
+      if (info.combo_timeout_ms !== undefined) {
+        const ctInput = document.getElementById("comboTimeoutInput");
+        if (ctInput) ctInput.value = String(info.combo_timeout_ms);
+        if (currentConfig.settings) currentConfig.settings.comboTimeoutMs = info.combo_timeout_ms;
+      }
+      if (info.name && !info.name.includes("Config")) {
+        const devNameInput = document.getElementById("deviceNameInput");
+        if (devNameInput) devNameInput.value = info.name;
+        if (currentConfig.settings) currentConfig.settings.deviceName = info.name;
       }
       showToast(`Tastatur erkannt: ${devName}`);
     } catch (e) {
@@ -2423,7 +2512,8 @@ async function writeConfigToESP32(options = {}) {
   if (progressWrap) progressWrap.style.display = "block";
   if (progressBar) progressBar.style.width = "2%";
 
-  updateConfigModeUI(true, true);
+  const previousConfigMode = isConfigModeActive;
+  updateConfigModeUI(bleConfigChar ? true : previousConfigMode, true);
   showToast("🔄 Übertrage Konfiguration an Dactyl ESP32 NVS...");
 
   try {
@@ -2433,13 +2523,18 @@ async function writeConfigToESP32(options = {}) {
         if (!ok) throw new Error(`BLE-Übertragung unterbrochen (${cmd})`);
       } else if (serialPort && serialPort.writable) {
         await sendSerialCommand(cmd);
+        // Pacing für USB-Serial Übertragung (Finding #2)
+        if (completedSteps % 16 === 0) {
+          await new Promise(r => setTimeout(r, 4));
+        }
       } else {
         throw new Error("Verbindung zum ESP32 unterbrochen");
       }
     };
 
     const totalLayers = currentConfig.layers.length;
-    const totalSteps = (currentConfig.layerNames ? currentConfig.layerNames.length : 0) + (totalLayers * 6 * 7) + 3;
+    const totalCombos = Array.isArray(currentConfig.combos) ? currentConfig.combos.length : 0;
+    const totalSteps = (currentConfig.layerNames ? currentConfig.layerNames.length : 0) + (totalLayers * 6 * 7) + totalCombos + 8;
     let completedSteps = 0;
     const updateProgress = () => {
       completedSteps++;
@@ -2452,9 +2547,19 @@ async function writeConfigToESP32(options = {}) {
     if (currentConfig.settings) {
       const sb = currentConfig.settings.standbyTimeoutMinutes ?? 5;
       const sl = currentConfig.settings.sleepTimeoutMinutes ?? 60;
+      const devName = currentConfig.settings.deviceName || "Dactyl Keyboard";
+      const debounce = currentConfig.settings.debounceMs ?? 5;
+      const comboTimeout = currentConfig.settings.comboTimeoutMs ?? 40;
+
       await sendCmd(`SET_STANDBY ${sb}`);
       updateProgress();
       await sendCmd(`SET_SLEEP ${sl}`);
+      updateProgress();
+      await sendCmd(`SET_DEV_NAME ${devName}`);
+      updateProgress();
+      await sendCmd(`SET_DEBOUNCE ${debounce}`);
+      updateProgress();
+      await sendCmd(`SET_COMBO_TIMEOUT ${comboTimeout}`);
       updateProgress();
     }
 
@@ -2482,6 +2587,21 @@ async function writeConfigToESP32(options = {}) {
 
     await sendCmd("SAVE_NVS");
     updateProgress();
+
+    // Combos synchronisieren (Item 10)
+    await sendCmd("CLEAR_COMBOS");
+    if (Array.isArray(currentConfig.combos)) {
+      for (const cb of currentConfig.combos) {
+        if (!cb.key1 || !cb.key2) continue;
+        const bMap = { "KEY_PRESS": 0, "MODIFIER_HOLD": 1, "LAYER_TOGGLE": 2 };
+        const bCode = bMap[cb.behavior] ?? 0;
+        const actCode = actionCodeToNumeric(cb.action);
+        await sendCmd(`ADD_COMBO ${cb.key1.r} ${cb.key1.c} ${cb.key2.r} ${cb.key2.c} ${bCode} ${actCode}`);
+        updateProgress();
+      }
+    }
+    await sendCmd("SAVE_COMBOS");
+    updateProgress();
     clearPendingSync();
 
     if (autoDisconnectAfter && bleConfigChar) {
@@ -2489,12 +2609,12 @@ async function writeConfigToESP32(options = {}) {
       await disconnectBle();
       showToast("✅ Automatisch synchronisiert & getrennt! Tastatur ist wieder mit deinem Mac verbunden.");
     } else {
-      updateConfigModeUI(isConfigModeActive, false);
+      updateConfigModeUI(bleConfigChar ? true : previousConfigMode, false);
       showToast("✅ Vollständige Konfiguration im ESP32 NVS gespeichert!");
     }
   } catch (err) {
     console.error("Write config error:", err);
-    updateConfigModeUI(isConfigModeActive, false);
+    updateConfigModeUI(bleConfigChar ? true : previousConfigMode, false);
     showToast("Fehler beim Übertragen der Konfiguration: " + err.message);
   } finally {
     isAutoSyncing = false;

@@ -1,0 +1,65 @@
+name: Tests & Firmware CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  unit-tests:
+    name: Unit Tests & Code Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run Server & Codegen Unit Tests (Python)
+        run: |
+          python3 tests/test_server.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify JavaScript Syntax
+        run: |
+          node --check app.js
+          node --check main.js
+
+      - name: Run Firmware C++ Unit Tests
+        run: |
+          bash firmware/tests/run_tests.sh
+
+  firmware-compile:
+    name: Arduino CLI Firmware Compile Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 Core
+        run: |
+          arduino-cli config init
+          arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32
+
+      - name: Install BleKeyboard Library
+        run: |
+          mkdir -p ~/Arduino/libraries
+          git clone --depth 1 https://github.com/T-vK/ESP32-BLE-Keyboard.git ~/Arduino/libraries/ESP32-BLE-Keyboard
+
+      - name: Compile Dactyl Firmware
+        run: |
+          arduino-cli compile --fqbn esp32:esp32:lolin32-lite firmware/dactyl_right

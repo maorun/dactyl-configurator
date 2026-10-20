@@ -24,7 +24,7 @@
 #define CONFIG_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CONFIG_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-void handleConfigCommand(String cmd);
+void handleConfigCommand(String cmd, bool fromBle = false);
 void sendConfigNotification(String msg, bool addDelay = false);
 BLECharacteristic *pConfigCharacteristic = nullptr;
 volatile bool isConfigMode = false;
@@ -35,7 +35,7 @@ volatile bool enterConfigRequested = false;
 class ConfigCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pChar) override {
     String val = pChar->getValue().c_str();
-    handleConfigCommand(val);
+    handleConfigCommand(val, true);
   }
 };
 
@@ -138,14 +138,39 @@ const int NUM_COLS = 7;
 
 #define NUM_LAYERS 8
 
+// [[[START_SETTINGS]]]
+String deviceName = "Dactyl Keyboard";
+uint8_t debounceMs = 5;
+uint16_t comboTimeoutMs = 40;
 uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, gedrosselter Scan, BLE bleibt an)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
+// [[[END_SETTINGS]]]
+
+#define MAX_COMBOS 16
+
+struct KeyCombo {
+  uint8_t r1, c1;
+  uint8_t r2, c2;
+  uint8_t behavior; // 0 = KEY_PRESS, 1 = MODIFIER_HOLD, 2 = LAYER_TOGGLE
+  uint16_t action;
+  bool active;
+};
+
+// [[[START_COMBOS]]]
+uint8_t numCombos = 2;
+KeyCombo userCombos[MAX_COMBOS] = {
+  { 2, 1, 2, 2, 0, KEY_ESC, false },       // J + K -> Escape
+  { 2, 1, 2, 3, 1, KEY_LEFT_CTRL, false }  // J + L -> Ctrl
+};
+// [[[END_COMBOS]]]
+
 unsigned long lastActivityTime = 0;
 bool isStandby = false;
 
 void exitConfigMode();
 void enterConfigMode();
 void toggleConfigMode();
+void checkUserCombos();
 
 void enterConfigMode() {
   if (isConfigMode) return;
@@ -325,10 +350,12 @@ void enterDeepSleep() {
 SemaphoreHandle_t configMutex = nullptr;
 
 Preferences preferences;
+// [[[START_LAYER_NAMES]]]
 String layerNames[NUM_LAYERS] = {
   "Base", "Nav & Pfeile", "Symbole", "Numpad",
   "Function", "Media", "Shortcuts", "Custom"
 };
+// [[[END_LAYER_NAMES]]]
 
 // [[[START_KEYMAP]]]
 uint16_t KEYMAP[NUM_LAYERS][6][7] = {
@@ -469,7 +496,29 @@ void loadKeymapFromNVS() {
   } else {
     deepSleepTimeoutMinutes = 60;
   }
-  Serial.printf("NVS: Timeouts geladen: Standby=%u Min, DeepSleep=%u Min\n", standbyTimeoutMinutes, deepSleepTimeoutMinutes);
+  if (preferences.isKey("dev_name")) {
+    deviceName = preferences.getString("dev_name", "Dactyl Keyboard");
+  }
+  if (preferences.isKey("debounce")) {
+    debounceMs = preferences.getUChar("debounce", 5);
+  }
+  if (preferences.isKey("combo_to")) {
+    comboTimeoutMs = preferences.getUShort("combo_to", 40);
+  }
+  if (preferences.isKey("num_combos")) {
+    uint8_t n = preferences.getUChar("num_combos", 0);
+    if (n <= MAX_COMBOS && preferences.isKey("combos_data")) {
+      size_t sz = preferences.getBytesLength("combos_data");
+      if (sz == n * sizeof(KeyCombo)) {
+        numCombos = n;
+        preferences.getBytes("combos_data", userCombos, sz);
+        for (int i = 0; i < numCombos; i++) userCombos[i].active = false;
+        Serial.printf("NVS: %d Combos geladen.\n", numCombos);
+      }
+    }
+  }
+  Serial.printf("NVS: Timeouts & Settings geladen: Standby=%u Min, DeepSleep=%u Min, Debounce=%u ms, ComboTO=%u ms, Name='%s'\n",
+    standbyTimeoutMinutes, deepSleepTimeoutMinutes, debounceMs, comboTimeoutMs, deviceName.c_str());
   preferences.end();
 }
 
@@ -489,6 +538,38 @@ void saveSleepTimeoutToNVS(uint32_t timeout) {
   Serial.printf("NVS: Deep-Sleep-Timeout gespeichert: %u Min\n", timeout);
 }
 
+void saveDeviceNameToNVS(String name) {
+  deviceName = name;
+  preferences.begin("dactyl", false);
+  preferences.putString("dev_name", name);
+  preferences.end();
+  Serial.printf("NVS: Gerätename gespeichert: %s\n", name.c_str());
+}
+
+void saveDebounceToNVS(uint8_t ms) {
+  debounceMs = ms;
+  preferences.begin("dactyl", false);
+  preferences.putUChar("debounce", ms);
+  preferences.end();
+  Serial.printf("NVS: Debounce gespeichert: %u ms\n", ms);
+}
+
+void saveComboTimeoutToNVS(uint16_t ms) {
+  comboTimeoutMs = ms;
+  preferences.begin("dactyl", false);
+  preferences.putUShort("combo_to", ms);
+  preferences.end();
+  Serial.printf("NVS: Combo-Timeout gespeichert: %u ms\n", ms);
+}
+
+void saveCombosToNVS() {
+  preferences.begin("dactyl", false);
+  preferences.putUChar("num_combos", numCombos);
+  preferences.putBytes("combos_data", userCombos, numCombos * sizeof(KeyCombo));
+  preferences.end();
+  Serial.printf("NVS: %d Combos gespeichert.\n", numCombos);
+}
+
 void saveLayerNameToNVS(int idx, String name) {
   if (idx < 0 || idx >= NUM_LAYERS) return;
   layerNames[idx] = name;
@@ -502,6 +583,10 @@ void saveLayerNameToNVS(int idx, String name) {
 void sendConfigNotification(String msg, bool addDelay) {
   Serial.println(msg);
   if (pConfigCharacteristic) {
+    // Im normalen Mac-Tastaturmodus keine Tastendrücke über BLE-Notifications senden (Keylogger-Schutz)
+    if (!isConfigMode && (msg.startsWith("KEY_PRESS") || msg.startsWith("KEY_RELEASE"))) {
+      return;
+    }
     pConfigCharacteristic->setValue(msg.c_str());
     pConfigCharacteristic->notify();
     if (addDelay) {
@@ -510,9 +595,16 @@ void sendConfigNotification(String msg, bool addDelay) {
   }
 }
 
-void handleConfigCommand(String cmd) {
+void handleConfigCommand(String cmd, bool fromBle) {
   cmd.trim();
   if (cmd.length() == 0) return;
+
+  // Wenn der Befehl über BLE kommt und die Tastatur NICHT im Config-Modus ist:
+  // Nur ENTER_CONFIG und GET_INFO erlauben (Schutz vor unautorisierten Schreibvorgängen aus der Ferne)
+  if (fromBle && !isConfigMode && cmd != "ENTER_CONFIG" && cmd != "GET_INFO") {
+    Serial.println("WARN: BLE-Schreibbefehl abgelehnt (nicht im Config-Modus): " + cmd);
+    return;
+  }
 
   lastActivityTime = millis();
 
@@ -569,6 +661,50 @@ void handleConfigCommand(String cmd) {
       saveSleepTimeoutToNVS((uint32_t)t);
       sendConfigNotification("OK SET_SLEEP " + String(t));
     }
+  } else if (cmd.startsWith("SET_DEV_NAME ")) {
+    String name = cmd.substring(13);
+    name.replace("\"", "");
+    name.replace("\\", "");
+    name.trim();
+    if (name.length() > 31) name = name.substring(0, 31);
+    if (name.length() > 0) {
+      saveDeviceNameToNVS(name);
+      sendConfigNotification("OK SET_DEV_NAME " + name);
+    }
+  } else if (cmd.startsWith("SET_DEBOUNCE ")) {
+    int d = cmd.substring(13).toInt();
+    if (d >= 1 && d <= 50) {
+      saveDebounceToNVS((uint8_t)d);
+      sendConfigNotification("OK SET_DEBOUNCE " + String(d));
+    }
+  } else if (cmd.startsWith("SET_COMBO_TIMEOUT ")) {
+    int ct = cmd.substring(18).toInt();
+    if (ct >= 10 && ct <= 200) {
+      saveComboTimeoutToNVS((uint16_t)ct);
+      sendConfigNotification("OK SET_COMBO_TIMEOUT " + String(ct));
+    }
+  } else if (cmd == "CLEAR_COMBOS") {
+    numCombos = 0;
+    sendConfigNotification("OK CLEAR_COMBOS");
+  } else if (cmd.startsWith("ADD_COMBO ")) {
+    int r1, c1, r2, c2, beh, act;
+    if (sscanf(cmd.c_str(), "ADD_COMBO %d %d %d %d %d %d", &r1, &c1, &r2, &c2, &beh, &act) == 6) {
+      if (numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
+          r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS) {
+        userCombos[numCombos].r1 = (uint8_t)r1;
+        userCombos[numCombos].c1 = (uint8_t)c1;
+        userCombos[numCombos].r2 = (uint8_t)r2;
+        userCombos[numCombos].c2 = (uint8_t)c2;
+        userCombos[numCombos].behavior = (uint8_t)beh;
+        userCombos[numCombos].action = (uint16_t)act;
+        userCombos[numCombos].active = false;
+        numCombos++;
+        sendConfigNotification("OK ADD_COMBO " + String(numCombos - 1));
+      }
+    }
+  } else if (cmd == "SAVE_COMBOS") {
+    saveCombosToNVS();
+    sendConfigNotification("OK SAVE_COMBOS");
   } else if (cmd == "GET_NAMES") {
     String out = "LAYER_NAMES:[";
     for (int i = 0; i < NUM_LAYERS; i++) {
@@ -580,10 +716,12 @@ void handleConfigCommand(String cmd) {
   } else if (cmd == "GET_INFO") {
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
-    char buf[224];
-    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"config_mode\":%s}",
-      isConfigMode ? "Dactyl Config" : "Dactyl Keyboard",
-      m[0], m[1], m[2], m[3], m[4], m[5], standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+    char buf[288];
+    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"config_mode\":%s}",
+      isConfigMode ? "Dactyl Config" : deviceName.c_str(),
+      m[0], m[1], m[2], m[3], m[4], m[5],
+      standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+      debounceMs, comboTimeoutMs,
       isConfigMode ? "true" : "false");
     sendConfigNotification(String(buf));
   } else if (cmd == "GET_CONFIG") {
@@ -627,7 +765,8 @@ void handleConfigCommand(String cmd) {
 }
 
 void setup() {
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // Brownout-Detektor deaktivieren (verhindert Reboot bei BLE Stromspitzen)
+  // RX-Puffer auf 4KB vergrößern für zuverlässige USB-Batch-Synchronisierung (SET_K x 336)
+  Serial.setRxBufferSize(4096);
   Serial.begin(115200);
   delay(400);
 
@@ -696,6 +835,69 @@ void setup() {
   Serial.println("Initialisiere BleKeyboard..."); Serial.flush();
   bleKeyboard.begin();
   Serial.println("Bluetooth aktiv! Advertising läuft."); Serial.flush();
+}
+
+bool isComboActiveKey(uint8_t r, uint8_t c) {
+  for (uint8_t i = 0; i < numCombos; i++) {
+    if (userCombos[i].active &&
+        ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
+         (userCombos[i].r2 == r && userCombos[i].c2 == c))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void checkUserCombos() {
+  for (uint8_t i = 0; i < numCombos; i++) {
+    bool bothPressed = keyState[userCombos[i].r1][userCombos[i].c1] && keyState[userCombos[i].r2][userCombos[i].c2];
+    if (bothPressed && !userCombos[i].active) {
+      userCombos[i].active = true;
+      // Sofort Einzeltasten auf Mac loslassen, damit der Combo-Chord die Einzeltasten überschreibt
+      if (!isConfigMode && bleKeyboard.isConnected()) {
+        bleKeyboard.releaseAll();
+      }
+      uint16_t act = userCombos[i].action;
+      if (userCombos[i].behavior == 0) { // KEY_PRESS
+        if (!isConfigMode && bleKeyboard.isConnected()) {
+          if (act >= 0x120 && act <= 0x127) {
+            if (act == 0x120) bleKeyboard.write(KEY_MEDIA_PLAY_PAUSE);
+            else if (act == 0x121) bleKeyboard.write(KEY_MEDIA_MUTE);
+            else if (act == 0x122) bleKeyboard.write(KEY_MEDIA_VOLUME_UP);
+            else if (act == 0x123) bleKeyboard.write(KEY_MEDIA_VOLUME_DOWN);
+            else if (act == 0x124) bleKeyboard.write(KEY_MEDIA_NEXT_TRACK);
+            else if (act == 0x125) bleKeyboard.write(KEY_MEDIA_PREVIOUS_TRACK);
+            else if (act == 0x126) bleKeyboard.write(KEY_MEDIA_STOP);
+            else if (act == 0x127) { bleKeyboard.press(KEY_MEDIA_GLOBE); delay(10); bleKeyboard.release(KEY_MEDIA_GLOBE); }
+          } else if (act <= 0xFF) {
+            bleKeyboard.write((uint8_t)act);
+          }
+        }
+        sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
+      } else if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
+        if (!isConfigMode && bleKeyboard.isConnected()) {
+          if (act <= 0xFF) bleKeyboard.press((uint8_t)act);
+        }
+        sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
+      } else if (userCombos[i].behavior == 2) { // LAYER_TOGGLE
+        uint8_t l = act & 0x07;
+        if (l == 0) {
+          for (int j = 1; j < NUM_LAYERS; j++) toggleLayers[j] = false;
+        } else if (l < NUM_LAYERS) {
+          toggleLayers[l] = !toggleLayers[l];
+        }
+        sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
+      }
+    } else if (!bothPressed && userCombos[i].active) {
+      userCombos[i].active = false;
+      if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
+        uint16_t act = userCombos[i].action;
+        if (!isConfigMode && bleKeyboard.isConnected()) {
+          if (act <= 0xFF) bleKeyboard.release((uint8_t)act);
+        }
+      }
+    }
+  }
 }
 
 void loop() {
@@ -812,7 +1014,10 @@ void loop() {
               sendConfigNotification(String(buf));
               Serial.printf("Taste gedrückt: [R%d, C%d] (L%d) -> '%s' (0x%02X)\n", r, c, currentLayer, keyLabel.c_str(), action);
               if (!isConfigMode && bleKeyboard.isConnected()) {
-                bleKeyboard.press((uint8_t)action);
+                // Item 11 & Item 10: R0C0/R4C5 und aktive Combo-Tasten nicht einzeln senden
+                if (!isComboActiveKey(r, c) && !(keyState[0][0] && keyState[4][5] && ((r == 0 && c == 0) || (r == 4 && c == 5)))) {
+                  bleKeyboard.press((uint8_t)action);
+                }
               }
             }
           } else {
@@ -833,7 +1038,9 @@ void loop() {
               }
             } else if (action > 0 && action <= 0xFF) {
               if (!isConfigMode && bleKeyboard.isConnected()) {
-                bleKeyboard.release((uint8_t)action);
+                if (!isComboActiveKey(r, c)) {
+                  bleKeyboard.release((uint8_t)action);
+                }
               }
             }
           }
@@ -843,11 +1050,18 @@ void loop() {
       pinMode(ROW_PINS[r], INPUT);
     }
 
-    // Hardware-Combo R0C0 + R4C5 (500ms gehalten) für drahtlosen Config-Modus
+    // Benutzerdefinierte Tasten-Chords / Combos prüfen (Item 10)
+    checkUserCombos();
+
+    // Hardware-Combo R0C0 + R4C5 (500ms gehalten) für drahtlosen Config-Modus (Item 11)
     static unsigned long comboStartTime = 0;
     if (keyState[0][0] && keyState[4][5]) {
       if (comboStartTime == 0) {
         comboStartTime = millis();
+        // Item 11: Sofort Tasten auf Mac loslassen, damit während der 500ms kein Auto-Repeat "666..." getippt wird
+        if (!isConfigMode && bleKeyboard.isConnected()) {
+          bleKeyboard.releaseAll();
+        }
       } else if (millis() - comboStartTime >= 500) {
         comboStartTime = 0;
 
@@ -858,6 +1072,13 @@ void loop() {
         keyState[4][5] = false;
         sendConfigNotification("KEY_RELEASE:{\"r\":0,\"c\":0}");
         sendConfigNotification("KEY_RELEASE:{\"r\":4,\"c\":5}");
+
+        // configMutex vor der Release-Warteschleife freigeben (Finding #12),
+        // damit andere Tasks/GATT-Befehle während des Tastenhubs nicht blockiert werden
+        if (scanMutexTaken) {
+          xSemaphoreGive(configMutex);
+          scanMutexTaken = false;
+        }
 
         // Bounded Release-Check (maximal 2000ms, verhindert Hängenbleiben bei prellenden Tastern)
         unsigned long releaseStart = millis();
@@ -881,8 +1102,7 @@ void loop() {
           delay(20);
         }
 
-        // Modus-Wechsel erst nach Freigabe von configMutex (Zeile 959+) ausführen,
-        // damit sofort eintreffende BLE Auto-Sync GATT-Schreibbefehle nicht blockiert werden.
+        // Modus-Wechsel nach Tastenfassung ausführen
         if (isConfigMode) {
           exitConfigRequested = true;
         } else {
@@ -893,7 +1113,10 @@ void loop() {
       comboStartTime = 0;
     }
 
-    xSemaphoreGive(configMutex);
+    if (scanMutexTaken) {
+      xSemaphoreGive(configMutex);
+      scanMutexTaken = false;
+    }
   }
 
   // Deferriertes Starten/Beenden des Config-Modus aus loopTask
@@ -927,11 +1150,19 @@ void loop() {
     }
   }
 
-  // Seriellen Puffer auf App-Befehle prüfen
-  if (Serial.available()) {
-    String cmd = Serial.readStringUntil('\n');
-    handleConfigCommand(cmd);
+  // Seriellen Puffer nicht-blockierend leeren und vollständige Zeilen verarbeiten (Finding #2 & #13)
+  static String serialRxBuf = "";
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n') {
+      handleConfigCommand(serialRxBuf, false);
+      serialRxBuf = "";
+    } else if (c != '\r') {
+      if (serialRxBuf.length() < 256) {
+        serialRxBuf += c;
+      }
+    }
   }
 
-  delay(isStandby ? 40 : 10);
+  delay(isStandby ? 40 : debounceMs);
 }

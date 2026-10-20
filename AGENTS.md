@@ -113,7 +113,7 @@ Keys in the matrix use `uint16_t` action codes:
 ### 2. Static Random BLE Address in `enterConfigMode()`
 - Triggered by holding hardware matrix switches **`R4C5 + R0C0` for 500 ms** (100% layer-independent) or via serial command `ENTER_CONFIG`.
 - `enterConfigMode()` sets `isBleTransitioning = true`, stops advertising first (`pAdv->stop()`), disconnects all peers, and waits up to 350 ms until `pServer->getConnectedCount() == 0`.
-- It then calls `pAdv->reset()` and configures a deterministic **Static Random BLE Address** (`configRandAddr[0] |= 0xC0; configRandAddr[5] ^= 0x55;` via `pAdv->setDeviceAddress(configRandAddr, BLE_ADDR_TYPE_RANDOM)`), separated by 25 ms GAP synchronization delays before `pAdv->start()`.
+- It then calls `pAdv->reset()` and configures a deterministic **Static Random BLE Address** (`randAddr[0] |= 0xC0; randAddr[5] |= 0xC0; randAddr[4] ^= 0x55;` via `esp_ble_gap_set_rand_addr(randAddr)` and `pAdv->setDeviceAddress(randAddr, BLE_ADDR_TYPE_RANDOM)`), separated by 25 ms GAP synchronization delays before `pAdv->start()`.
 - In `exitConfigMode()`, Bluedroid's `pAdv->reset()` cannot clear GAP `own_addr_type` from `BLE_ADDR_TYPE_RANDOM` back to `BLE_ADDR_TYPE_PUBLIC` without restarting the controller stack. Therefore, `exitConfigMode()` cleanly disconnects peers and invokes `ESP.restart()` (~200ms reboot), restoring hardware state and the bonded Public MAC (`2E:BC:BB:81:61:A8`), allowing macOS to reconnect immediately.
 
 ### 3. Staged One-Shot Auto-Sync (`getDevices()` + `watchAdvertisements()`)

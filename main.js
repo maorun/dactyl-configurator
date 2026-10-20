@@ -23,7 +23,21 @@ let mainWindow = null;
 let serverProcess = null;
 const PORT = 8088;
 const URL = `http://localhost:${PORT}`;
-const REPO_DIR = '/Users/mdriemel/repos/rovodev-system/dactyl_configurator';
+
+function resolveRepoDir() {
+  if (process.env.REPO_DIR && fs.existsSync(path.join(process.env.REPO_DIR, 'server.py'))) {
+    return process.env.REPO_DIR;
+  }
+  if (fs.existsSync(path.join(__dirname, 'server.py'))) {
+    return __dirname;
+  }
+  const candidateParent = path.resolve(__dirname, '../../../..');
+  if (fs.existsSync(path.join(candidateParent, 'server.py'))) {
+    return candidateParent;
+  }
+  return '/Users/mdriemel/repos/rovodev-system/dactyl_configurator';
+}
+const REPO_DIR = resolveRepoDir();
 
 const extraPaths = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin'];
 const currentPath = process.env.PATH || '';
@@ -85,11 +99,6 @@ function createWindow() {
       return name.includes('dactyl') || name.includes('config');
     });
 
-    if (!dactyl && deviceList.length > 0) {
-      logElectron(`Fallback: selecting first candidate matching GATT filter: ${deviceList[0].deviceName || '(unnamed)'} (${deviceList[0].deviceId})`);
-      dactyl = deviceList[0];
-    }
-
     if (dactyl) {
       logElectron(`Auto-selecting Dactyl: ${dactyl.deviceName || '(unnamed)'} (${dactyl.deviceId})`);
       if (bluetoothScanTimeout) {
@@ -129,10 +138,28 @@ function createWindow() {
     }
   });
 
-  ses.setPermissionCheckHandler(() => true);
-  ses.setDevicePermissionHandler(() => true);
-  ses.setPermissionRequestHandler((webContents, permission, callback) => {
-    callback(true);
+  const ALLOWED_ORIGIN = 'http://localhost:8088';
+
+  ses.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
+    return requestingOrigin === ALLOWED_ORIGIN;
+  });
+  ses.setDevicePermissionHandler((details) => {
+    return details.origin === ALLOWED_ORIGIN;
+  });
+  ses.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const origin = details?.requestingUrl ? new URL(details.requestingUrl).origin : '';
+    callback(origin === ALLOWED_ORIGIN);
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(() => {
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith(ALLOWED_ORIGIN)) {
+      event.preventDefault();
+      logElectron(`Blocked navigation to untrusted URL: ${url}`);
+    }
   });
 
   mainWindow.loadURL(URL);

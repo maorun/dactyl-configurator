@@ -1,11 +1,15 @@
 #include <BleKeyboard.h>
 #include <esp_mac.h>
+#include <esp_bt_main.h>
+#include <esp_gap_ble_api.h>
 #include <nvs_flash.h>
 #include <Preferences.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <BLESecurity.h>
+#include <esp_system.h>
 #include <vector>
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
@@ -23,6 +27,10 @@
 
 #define CONFIG_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CONFIG_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+#define CONFIG_MODE_MAGIC          0xDAC7CF60UL
+
+// Überlebt ESP.restart() im RTC-Slow-Memory, wird aber beim Kaltstart ignoriert
+RTC_NOINIT_ATTR uint32_t rtcConfigModeMagic;
 
 void handleConfigCommand(String cmd, bool fromBle = false);
 void sendConfigNotification(String msg, bool addDelay = false);
@@ -39,32 +47,33 @@ class ConfigCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+class ConfigServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer *pServer) override {
+    Serial.println("[CONFIG BLE] Web-App verbunden!");
+  }
+  void onDisconnect(BLEServer *pServer) override {
+    Serial.println("[CONFIG BLE] Web-App getrennt.");
+    if (!isBleTransitioning && !exitConfigRequested) {
+      pServer->getAdvertising()->start();
+    }
+  }
+};
+
 class DactylBleKeyboard : public BleKeyboard {
 public:
   DactylBleKeyboard(std::string name, std::string mfr, uint8_t batt)
     : BleKeyboard(name, mfr, batt) {}
 
   void onConnect(BLEServer *pServer) override {
-    if (!isConfigMode) {
-      BleKeyboard::onConnect(pServer);
-    }
-    if (!isBleTransitioning && !enterConfigRequested && !exitConfigRequested) {
-      pServer->getAdvertising()->start();
-    }
+    BleKeyboard::onConnect(pServer);
   }
 
   void onDisconnect(BLEServer *pServer) override {
+    if (isBleTransitioning || enterConfigRequested || exitConfigRequested) {
+      return;
+    }
     if (pServer->getConnectedCount() <= 1) {
-      BleKeyboard::onDisconnect(pServer);
-    }
-    if (!isBleTransitioning && !enterConfigRequested && !exitConfigRequested) {
-      pServer->getAdvertising()->start();
-    }
-  }
-
-  void setDisconnected() {
-    BLEServer *pServer = BLEDevice::getServer();
-    if (pServer) {
+      // BleKeyboard::onDisconnect setzt connected = false und startet Advertising neu
       BleKeyboard::onDisconnect(pServer);
     }
   }
@@ -82,12 +91,10 @@ protected:
     pConfigCharacteristic->addDescriptor(new BLE2902());
     pConfigService->start();
 
-    BLEAdvertising *pAdv = pServer->getAdvertising();
-    BLEAdvertisementData scanResponseData;
-    scanResponseData.setCompleteServices(BLEUUID(CONFIG_SERVICE_UUID));
-    pAdv->setScanResponseData(scanResponseData);
-    pAdv->setScanResponse(true);
-    Serial.println("BLE Config Service aktiv! UUID: " CONFIG_SERVICE_UUID);
+    // WICHTIG: Im normalen Keyboard-Modus KEINE CONFIG_SERVICE_UUID im Scan-Response senden,
+    // damit Chrome watchAdvertisements() nicht fälschlicherweise im Tastaturmodus triggert
+    // und der Mac die Tastatur als reines HID-Peripheral sieht!
+    Serial.println("BLE HID + Config Service bereit.");
   }
 };
 
@@ -148,19 +155,26 @@ uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~
 
 #define MAX_COMBOS 16
 
+// Reine NVS-persistierte Combo-Definition (exakt 6 Bytes, kompatibel mit bisherigen NVS-Daten)
 struct KeyCombo {
   uint8_t r1, c1;
   uint8_t r2, c2;
   uint8_t behavior; // 0 = KEY_PRESS, 1 = MODIFIER_HOLD, 2 = LAYER_TOGGLE
   uint16_t action;
-  bool active;
 };
+
+// Separater flüchtiger Runtime-Zustand für Tasten-Chording
+struct ComboRuntime {
+  bool active;
+  unsigned long lastReleaseTime;
+};
+ComboRuntime comboRuntime[MAX_COMBOS];
 
 // [[[START_COMBOS]]]
 uint8_t numCombos = 2;
 KeyCombo userCombos[MAX_COMBOS] = {
-  { 2, 1, 2, 2, 0, KEY_ESC, false },       // J + K -> Escape
-  { 2, 1, 2, 3, 1, KEY_LEFT_CTRL, false }  // J + L -> Ctrl
+  { 2, 1, 2, 2, 0, KEY_ESC },       // J + K -> Escape
+  { 2, 1, 2, 3, 1, KEY_LEFT_CTRL }  // J + L -> Ctrl
 };
 // [[[END_COMBOS]]]
 
@@ -175,26 +189,22 @@ void checkUserCombos();
 void enterConfigMode() {
   if (isConfigMode) return;
   isBleTransitioning = true;
-  isConfigMode = true;
   enterConfigRequested = false;
-  lastActivityTime = millis();
 
   bleKeyboard.releaseAll();
   Serial.println("\n=============================================");
-  Serial.println("  [CONFIG MODE] AKTIVIERT!");
-  Serial.println("  Tastatur sendet als 'Dactyl Config'");
-  Serial.println("  macOS getrennt -> Web-App kann drahtlos koppeln");
+  Serial.println("  [CONFIG MODE] AKTIVIERT -> Starte Config-BLE...");
   Serial.println("=============================================");
   sendConfigNotification("MODE:CONFIG");
+  delay(80);
 
   BLEServer *pServer = BLEDevice::getServer();
   if (pServer) {
-    BLEAdvertising *pAdv = pServer->getAdvertising();
-    // 1. Zuerst altes HID-Advertising stoppen, damit macOS nicht sofort wieder verbindet
-    pAdv->stop();
+    // 1. Zuerst altes HID-Advertising stoppen
+    pServer->getAdvertising()->stop();
     delay(25);
 
-    // 2. Alle aktiven Verbindungen trennen (z. B. macOS HID)
+    // 2. Aktive macOS HID-Verbindung sauber trennen
     std::vector<uint16_t> peers;
     for (auto const& peer : pServer->getPeerDevices(false)) {
       peers.push_back(peer.first);
@@ -202,51 +212,27 @@ void enterConfigMode() {
     for (uint16_t id : peers) {
       pServer->disconnect(id);
     }
-    bleKeyboard.setDisconnected();
 
-    // 3. Warten, bis der asynchrone HCI Disconnect sauber abgeschlossen ist
+    // 3. Warten, bis der asynchrone HCI Disconnect abgeschlossen ist
     for (int i = 0; i < 35 && pServer->getConnectedCount() > 0; i++) {
       delay(10);
     }
     delay(60);
-
-    // 4. Advertising zurücksetzen und eigene Static Random MAC-Adresse setzen
-    pAdv->reset();
-    delay(25);
-
-    esp_bd_addr_t randAddr;
-    esp_read_mac(randAddr, ESP_MAC_BT);
-    randAddr[0] |= 0xC0;
-    randAddr[5] |= 0xC0;
-    randAddr[4] ^= 0x55;
-
-    esp_err_t errSet = esp_ble_gap_set_rand_addr(randAddr);
-    Serial.printf("[BLE] esp_ble_gap_set_rand_addr rc=%d (Addr: %02X:%02X:%02X:%02X:%02X:%02X)\n",
-      errSet, randAddr[0], randAddr[1], randAddr[2], randAddr[3], randAddr[4], randAddr[5]);
-
-    pAdv->setDeviceAddress(randAddr, BLE_ADDR_TYPE_RANDOM);
-    esp_ble_gap_set_device_name("Dactyl Config");
-    delay(25);
-
-    // 5. Reines Config-Advertising starten (ohne HID Keyboard Service!)
-    // WICHTIG: BLE 4.2 Pakete dürfen max 31 Bytes groß sein!
-    // advData: Flags (3B) + Name (15B) = 18B <= 31B
-    BLEAdvertisementData advData;
-    advData.setFlags(0x06);
-    advData.setName("Dactyl Config");
-
-    // scanData: 128-Bit CONFIG_SERVICE_UUID (18B) <= 31B
-    BLEAdvertisementData scanData;
-    scanData.setCompleteServices(BLEUUID(CONFIG_SERVICE_UUID));
-
-    pAdv->setAppearance(0x0000); // Generic (Kein Keyboard!)
-    pAdv->setAdvertisementData(advData);
-    pAdv->setScanResponseData(scanData);
-    pAdv->setScanResponse(true);
-    delay(25);
-    pAdv->start();
   }
-  isBleTransitioning = false;
+
+  // 4. Bluedroid sauber beenden, damit die gültigen macOS HID-Bonding-Keys
+  //    garantiert ins NVS geschrieben werden, BEVOR wir in den unverschlüsselten Config-Modus booten!
+  esp_bluedroid_disable();
+  delay(60);
+
+  // 5. RTC-Flag setzen und sauber neu starten (~200ms).
+  //    Dadurch startet der Config-Modus in einem komplett isolierten BLE-Stack
+  //    OHNE HID-Service (0x1812) und OHNE BLESecurity (m_forceSecurity = false),
+  //    sodass die macOS-Kopplung niemals durch Chrome/Web-Bluetooth überschrieben wird!
+  rtcConfigModeMagic = CONFIG_MODE_MAGIC;
+  Serial.println("[BLE] Starte isolierten Config-Mode-Stack...");
+  Serial.flush();
+  ESP.restart();
 }
 
 void exitConfigMode() {
@@ -254,9 +240,8 @@ void exitConfigMode() {
   isBleTransitioning = true;
   isConfigMode = false;
   exitConfigRequested = false;
-  lastActivityTime = millis();
+  rtcConfigModeMagic = 0;
 
-  bleKeyboard.releaseAll();
   Serial.println("\n=============================================");
   Serial.println("  [CONFIG MODE] BEENDET -> Starte Tastatur neu");
   Serial.println("=============================================");
@@ -266,14 +251,21 @@ void exitConfigMode() {
   BLEServer *pServer = BLEDevice::getServer();
   if (pServer) {
     pServer->getAdvertising()->stop();
+    std::vector<uint16_t> peers;
     for (auto const& peer : pServer->getPeerDevices(false)) {
-      pServer->disconnect(peer.first);
+      peers.push_back(peer.first);
     }
-    delay(100);
+    for (uint16_t id : peers) {
+      pServer->disconnect(id);
+    }
+    for (int i = 0; i < 25 && pServer->getConnectedCount() > 0; i++) {
+      delay(10);
+    }
+    delay(50);
   }
 
-  // Soft-Reboot (dauert nur ~200ms): Stellt die originale gepaarte Public-MAC
-  // und alle HID-Services sauber wieder her, sodass macOS sich sofort wieder verbindet!
+  // WICHTIG: Im Config-Modus KEIN esp_bluedroid_disable() aufrufen, damit Bluedroid
+  // niemals leere/unverschlüsselte Security-Tabellen über den gespeicherten Mac-Bond ins NVS schreibt!
   Serial.println("[BLE] Starte sauberen Neustart für Mac-HID-Verbindung...");
   Serial.flush();
   ESP.restart();
@@ -444,6 +436,8 @@ uint16_t KEYMAP[NUM_LAYERS][6][7] = {
 
 bool keyState[6][7] = {false};
 uint16_t pressedAction[6][7] = {0};
+unsigned long keyPressTime[6][7] = {0};
+bool keySentToHost[6][7] = {false};
 bool momentaryLayers[NUM_LAYERS] = {false};
 bool toggleLayers[NUM_LAYERS] = {false};
 
@@ -512,7 +506,10 @@ void loadKeymapFromNVS() {
       if (sz == n * sizeof(KeyCombo)) {
         numCombos = n;
         preferences.getBytes("combos_data", userCombos, sz);
-        for (int i = 0; i < numCombos; i++) userCombos[i].active = false;
+        for (int i = 0; i < MAX_COMBOS; i++) {
+          comboRuntime[i].active = false;
+          comboRuntime[i].lastReleaseTime = 0;
+        }
         Serial.printf("NVS: %d Combos geladen.\n", numCombos);
       }
     }
@@ -697,7 +694,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
         userCombos[numCombos].c2 = (uint8_t)c2;
         userCombos[numCombos].behavior = (uint8_t)beh;
         userCombos[numCombos].action = (uint16_t)act;
-        userCombos[numCombos].active = false;
+        comboRuntime[numCombos].active = false;
+        comboRuntime[numCombos].lastReleaseTime = 0;
         numCombos++;
         sendConfigNotification("OK ADD_COMBO " + String(numCombos - 1));
       }
@@ -764,11 +762,81 @@ void handleConfigCommand(String cmd, bool fromBle) {
   if (mutexTaken) xSemaphoreGive(configMutex);
 }
 
+void startConfigModeBle() {
+  Serial.println("=============================================");
+  Serial.println("  [CONFIG MODE] Isolierter BLE-Config-Server");
+  Serial.println("  Name: 'Dactyl Config' (Ohne HID / Ohne SMP)");
+  Serial.println("=============================================");
+
+  BLEDevice::init("Dactyl Config");
+
+  // Wichtig: Keine Verschlüsselung/Bonding im Config-Modus erzwingen!
+  // Da bleKeyboard.begin() nicht aufgerufen wurde, ist m_securityEnabled ohnehin false;
+  // zusätzlich deaktivieren wir ForceAuthentication explizit, damit der gespeicherte
+  // macOS HID-Bond in Bluedroid unangetastet bleibt.
+  BLESecurity *pSecurity = new BLESecurity();
+  pSecurity->setForceAuthentication(false);
+  delete pSecurity;
+
+  esp_bd_addr_t randAddr;
+  esp_read_mac(randAddr, ESP_MAC_BT);
+  randAddr[0] |= 0xC0;
+  randAddr[5] |= 0xC0;
+  randAddr[4] ^= 0x55;
+
+  esp_err_t errSet = esp_ble_gap_set_rand_addr(randAddr);
+  Serial.printf("[CONFIG BLE] Random-MAC: %02X:%02X:%02X:%02X:%02X:%02X (rc=%d)\n",
+    randAddr[0], randAddr[1], randAddr[2], randAddr[3], randAddr[4], randAddr[5], errSet);
+
+  BLEServer *pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new ConfigServerCallbacks());
+
+  BLEService *pConfigService = pServer->createService(CONFIG_SERVICE_UUID);
+  pConfigCharacteristic = pConfigService->createCharacteristic(
+    CONFIG_CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_WRITE |
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pConfigCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE);
+  pConfigCharacteristic->setCallbacks(new ConfigCallbacks());
+  pConfigCharacteristic->addDescriptor(new BLE2902());
+  pConfigService->start();
+
+  BLEAdvertising *pAdv = pServer->getAdvertising();
+  pAdv->setDeviceAddress(randAddr, BLE_ADDR_TYPE_RANDOM);
+  esp_ble_gap_set_device_name("Dactyl Config");
+
+  BLEAdvertisementData advData;
+  advData.setFlags(0x06);
+  advData.setName("Dactyl Config");
+
+  BLEAdvertisementData scanData;
+  scanData.setCompleteServices(BLEUUID(CONFIG_SERVICE_UUID));
+
+  pAdv->setAppearance(0x0000);
+  pAdv->setAdvertisementData(advData);
+  pAdv->setScanResponseData(scanData);
+  pAdv->setScanResponse(true);
+  pAdv->start();
+
+  Serial.println("MODE:CONFIG");
+  Serial.println("[CONFIG BLE] Advertising als 'Dactyl Config' aktiv!");
+  Serial.flush();
+}
+
 void setup() {
   // RX-Puffer auf 4KB vergrößern für zuverlässige USB-Batch-Synchronisierung (SET_K x 336)
   Serial.setRxBufferSize(4096);
   Serial.begin(115200);
-  delay(400);
+  delay(200);
+
+  // Prüfen, ob wir per Soft-Reboot gezielt in den isolierten Config-Modus gewechselt sind
+  esp_reset_reason_t resetReason = esp_reset_reason();
+  bool bootIntoConfigMode = (resetReason == ESP_RST_SW && rtcConfigModeMagic == CONFIG_MODE_MAGIC);
+  // Sofort löschen, damit jeder künftige Reset garantiert wieder im normalen Tastaturmodus startet
+  rtcConfigModeMagic = 0;
+  isConfigMode = bootIntoConfigMode;
 
   // Deep-Sleep Wakeup Hold aufheben & RTC Pins zurücksetzen
   gpio_deep_sleep_hold_dis();
@@ -798,22 +866,23 @@ void setup() {
 
   Serial.println("\n=============================================");
   Serial.println("  Dactyl True-Wireless (Rechte Hand)");
-  Serial.println("  Bluetooth-Name: 'Dactyl Keyboard'");
+  Serial.printf("  Modus: %s\n", isConfigMode ? "CONFIG MODE ('Dactyl Config')" : "KEYBOARD MODE ('Dactyl Keyboard')");
   Serial.println("=============================================");
 
-  // 1. MAC-Adresse: Bewährte MAC-Adresse für Dactyl Keyboard (2E:BC:BB:81:61:A8)
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_BASE);
-  mac[5] ^= 0x42;
-  mac[0] |= 0x02;
-  esp_base_mac_addr_set(mac);
+  // 1. MAC-Adresse: Feste, reproduzierbare Basis-MAC (Bluetooth-MAC = Base + 2: 2E:BC:BB:81:61:A8)
+  // Durch feste Zuweisung bleibt die MAC auch nach Soft-Reboot (exitConfigMode) absolut stabil und driftet nicht.
+  const uint8_t base_mac[6] = {0x2E, 0xBC, 0xBB, 0x81, 0x61, 0xA6};
+  esp_base_mac_addr_set(base_mac);
 
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_BT);
   Serial.printf("Bluetooth-MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
   // 2. NVS initialisieren (erhält Pairing-Keys nach dem ersten Verbinden)
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    Serial.println("[NVS] WARN: NVS partition full or new version found, erasing...");
     nvs_flash_erase();
     nvs_flash_init();
   }
@@ -831,17 +900,39 @@ void setup() {
     pinMode(ROW_PINS[r], INPUT);
   }
 
-  // 5. Bluetooth BLE HID Server starten
-  Serial.println("Initialisiere BleKeyboard..."); Serial.flush();
-  bleKeyboard.begin();
-  Serial.println("Bluetooth aktiv! Advertising läuft."); Serial.flush();
+  // 5. Je nach Modus entweder isolierten Config-BLE-Server oder BLE-HID-Tastatur starten
+  if (isConfigMode) {
+    startConfigModeBle();
+  } else {
+    Serial.println("Initialisiere BleKeyboard..."); Serial.flush();
+    bleKeyboard.begin();
+    Serial.println("MODE:KEYBOARD");
+    Serial.println("Bluetooth aktiv! Advertising läuft."); Serial.flush();
+  }
 }
 
-bool isComboActiveKey(uint8_t r, uint8_t c) {
+bool wasComboRecentlyActive(uint8_t r, uint8_t c) {
+  unsigned long now = millis();
   for (uint8_t i = 0; i < numCombos; i++) {
-    if (userCombos[i].active &&
-        ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
-         (userCombos[i].r2 == r && userCombos[i].c2 == c))) {
+    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
+        (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
+      if (comboRuntime[i].active) return true;
+      if (comboRuntime[i].lastReleaseTime > 0 && (now - comboRuntime[i].lastReleaseTime < 300)) {
+        // Nur unterdrücken, wenn der Tastendruck VOR oder WÄHREND des Chords gestartet wurde.
+        // Ein NEUER Tastendruck nach dem Chord (keyPressTime > lastReleaseTime) ist legitim und wird nicht blockiert!
+        if (keyPressTime[r][c] <= comboRuntime[i].lastReleaseTime) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+bool isComboCandidateKey(uint8_t r, uint8_t c) {
+  for (uint8_t i = 0; i < numCombos; i++) {
+    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
+        (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
       return true;
     }
   }
@@ -849,47 +940,67 @@ bool isComboActiveKey(uint8_t r, uint8_t c) {
 }
 
 void checkUserCombos() {
+  unsigned long now = millis();
   for (uint8_t i = 0; i < numCombos; i++) {
-    bool bothPressed = keyState[userCombos[i].r1][userCombos[i].c1] && keyState[userCombos[i].r2][userCombos[i].c2];
-    if (bothPressed && !userCombos[i].active) {
-      userCombos[i].active = true;
-      // Sofort Einzeltasten auf Mac loslassen, damit der Combo-Chord die Einzeltasten überschreibt
-      if (!isConfigMode && bleKeyboard.isConnected()) {
-        bleKeyboard.releaseAll();
-      }
-      uint16_t act = userCombos[i].action;
-      if (userCombos[i].behavior == 0) { // KEY_PRESS
+    uint8_t r1 = userCombos[i].r1;
+    uint8_t c1 = userCombos[i].c1;
+    uint8_t r2 = userCombos[i].r2;
+    uint8_t c2 = userCombos[i].c2;
+
+    bool bothPressed = keyState[r1][c1] && keyState[r2][c2];
+    if (bothPressed && !comboRuntime[i].active) {
+      // Beide Tasten müssen innerhalb des konfigurierbaren comboTimeoutMs gedrückt worden sein!
+      // Wenn eine Taste schon lange gehalten wurde und man dann schnell tippt, ist es KEINE Combo!
+      unsigned long t1 = keyPressTime[r1][c1];
+      unsigned long t2 = keyPressTime[r2][c2];
+      bool inWindow = ((unsigned long)(t1 - t2) <= comboTimeoutMs) || ((unsigned long)(t2 - t1) <= comboTimeoutMs);
+
+      if (inWindow) {
+        comboRuntime[i].active = true;
+        // Beide Tasten als an Host gesendet markieren (Finding #4), damit lingernde Tasten nach dem Chord
+        // nicht nach Ablauf der 300ms Grace Period versehentlich als Einzeltaste nachfeuern!
+        keySentToHost[r1][c1] = true;
+        keySentToHost[r2][c2] = true;
+
+        // Sofort Einzeltasten auf Mac loslassen, damit der Combo-Chord die Einzeltasten überschreibt
         if (!isConfigMode && bleKeyboard.isConnected()) {
-          if (act >= 0x120 && act <= 0x127) {
-            if (act == 0x120) bleKeyboard.write(KEY_MEDIA_PLAY_PAUSE);
-            else if (act == 0x121) bleKeyboard.write(KEY_MEDIA_MUTE);
-            else if (act == 0x122) bleKeyboard.write(KEY_MEDIA_VOLUME_UP);
-            else if (act == 0x123) bleKeyboard.write(KEY_MEDIA_VOLUME_DOWN);
-            else if (act == 0x124) bleKeyboard.write(KEY_MEDIA_NEXT_TRACK);
-            else if (act == 0x125) bleKeyboard.write(KEY_MEDIA_PREVIOUS_TRACK);
-            else if (act == 0x126) bleKeyboard.write(KEY_MEDIA_STOP);
-            else if (act == 0x127) { bleKeyboard.press(KEY_MEDIA_GLOBE); delay(10); bleKeyboard.release(KEY_MEDIA_GLOBE); }
-          } else if (act <= 0xFF) {
-            bleKeyboard.write((uint8_t)act);
+          bleKeyboard.releaseAll();
+        }
+        uint16_t act = userCombos[i].action;
+        if (userCombos[i].behavior == 0) { // KEY_PRESS
+          if (!isConfigMode && bleKeyboard.isConnected()) {
+            if (act >= 0x120 && act <= 0x127) {
+              if (act == 0x120) bleKeyboard.write(KEY_MEDIA_PLAY_PAUSE);
+              else if (act == 0x121) bleKeyboard.write(KEY_MEDIA_MUTE);
+              else if (act == 0x122) bleKeyboard.write(KEY_MEDIA_VOLUME_UP);
+              else if (act == 0x123) bleKeyboard.write(KEY_MEDIA_VOLUME_DOWN);
+              else if (act == 0x124) bleKeyboard.write(KEY_MEDIA_NEXT_TRACK);
+              else if (act == 0x125) bleKeyboard.write(KEY_MEDIA_PREVIOUS_TRACK);
+              else if (act == 0x126) bleKeyboard.write(KEY_MEDIA_STOP);
+              else if (act == 0x127) { bleKeyboard.press(KEY_MEDIA_GLOBE); delay(10); bleKeyboard.release(KEY_MEDIA_GLOBE); }
+            } else if (act <= 0xFF) {
+              bleKeyboard.write((uint8_t)act);
+            }
           }
+          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
+        } else if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
+          if (!isConfigMode && bleKeyboard.isConnected()) {
+            if (act <= 0xFF) bleKeyboard.press((uint8_t)act);
+          }
+          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
+        } else if (userCombos[i].behavior == 2) { // LAYER_TOGGLE
+          uint8_t l = act & 0x07;
+          if (l == 0) {
+            for (int j = 1; j < NUM_LAYERS; j++) toggleLayers[j] = false;
+          } else if (l < NUM_LAYERS) {
+            toggleLayers[l] = !toggleLayers[l];
+          }
+          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
         }
-        sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
-      } else if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
-        if (!isConfigMode && bleKeyboard.isConnected()) {
-          if (act <= 0xFF) bleKeyboard.press((uint8_t)act);
-        }
-        sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
-      } else if (userCombos[i].behavior == 2) { // LAYER_TOGGLE
-        uint8_t l = act & 0x07;
-        if (l == 0) {
-          for (int j = 1; j < NUM_LAYERS; j++) toggleLayers[j] = false;
-        } else if (l < NUM_LAYERS) {
-          toggleLayers[l] = !toggleLayers[l];
-        }
-        sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
       }
-    } else if (!bothPressed && userCombos[i].active) {
-      userCombos[i].active = false;
+    } else if (!bothPressed && comboRuntime[i].active) {
+      comboRuntime[i].active = false;
+      comboRuntime[i].lastReleaseTime = now;
       if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
         uint16_t act = userCombos[i].action;
         if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -904,7 +1015,10 @@ void loop() {
   static unsigned long lastHeartbeat = 0;
   if (millis() - lastHeartbeat > 2500) {
     lastHeartbeat = millis();
-    Serial.printf("STATUS: BLE verbunden=%d | ConfigMode=%d | Matrix aktiv\n", bleKeyboard.isConnected(), isConfigMode ? 1 : 0);
+    int bleConn = isConfigMode
+      ? ((BLEDevice::getServer() && BLEDevice::getServer()->getConnectedCount() > 0) ? 1 : 0)
+      : (bleKeyboard.isConnected() ? 1 : 0);
+    Serial.printf("STATUS: BLE verbunden=%d | ConfigMode=%d | Matrix aktiv\n", bleConn, isConfigMode ? 1 : 0);
     Serial.flush();
   }
 
@@ -929,6 +1043,8 @@ void loop() {
           exitStandby();
 
           if (isPressed) {
+            keyPressTime[r][c] = millis();
+            keySentToHost[r][c] = false;
             uint8_t currentLayer = getActiveLayer();
             uint16_t action = KEYMAP[currentLayer][r][c];
             if (action == 0) {
@@ -1014,15 +1130,18 @@ void loop() {
               sendConfigNotification(String(buf));
               Serial.printf("Taste gedrückt: [R%d, C%d] (L%d) -> '%s' (0x%02X)\n", r, c, currentLayer, keyLabel.c_str(), action);
               if (!isConfigMode && bleKeyboard.isConnected()) {
-                // Item 11 & Item 10: R0C0/R4C5 und aktive Combo-Tasten nicht einzeln senden
-                if (!isComboActiveKey(r, c) && !(keyState[0][0] && keyState[4][5] && ((r == 0 && c == 0) || (r == 4 && c == 5)))) {
+                // Wenn die Taste Teil einer definierten Combo ist, puffern wir das Senden um comboTimeoutMs,
+                // damit beim Drücken des Chords (z. B. J+K) kein Buchstabe vorab gesendet wird!
+                if (!isComboCandidateKey(r, c) && !(keyState[0][0] && keyState[4][5] && ((r == 0 && c == 0) || (r == 4 && c == 5)))) {
                   bleKeyboard.press((uint8_t)action);
+                  keySentToHost[r][c] = true;
                 }
               }
             }
           } else {
             uint16_t action = pressedAction[r][c];
             pressedAction[r][c] = 0;
+            keyPressTime[r][c] = 0;
 
             char buf[64];
             snprintf(buf, sizeof(buf), "KEY_RELEASE:{\"r\":%d,\"c\":%d}", r, c);
@@ -1038,7 +1157,14 @@ void loop() {
               }
             } else if (action > 0 && action <= 0xFF) {
               if (!isConfigMode && bleKeyboard.isConnected()) {
-                if (!isComboActiveKey(r, c)) {
+                if (keySentToHost[r][c]) {
+                  bleKeyboard.release((uint8_t)action);
+                  keySentToHost[r][c] = false;
+                } else if (!wasComboRecentlyActive(r, c) && !(r == 0 && c == 0) && !(r == 4 && c == 5)) {
+                  // Wenn die Taste vor Ablauf des Combo-Timeouts losgelassen wurde (schneller Einzeltipp)
+                  // UND nicht gerade Teil einer ausgelösten Combo war:
+                  bleKeyboard.press((uint8_t)action);
+                  delay(5);
                   bleKeyboard.release((uint8_t)action);
                 }
               }
@@ -1052,6 +1178,24 @@ void loop() {
 
     // Benutzerdefinierte Tasten-Chords / Combos prüfen (Item 10)
     checkUserCombos();
+
+    // Gepufferte Combo-Kandidaten senden, falls Zeitfenster (comboTimeoutMs) ohne zweiten Tastendruck abgelaufen ist
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      unsigned long now = millis();
+      for (int r = 0; r < NUM_ROWS; r++) {
+        for (int c = 0; c < NUM_COLS; c++) {
+          if (keyState[r][c] && !keySentToHost[r][c] && isComboCandidateKey(r, c)) {
+            if ((unsigned long)(now - keyPressTime[r][c]) >= comboTimeoutMs) {
+              uint16_t act = pressedAction[r][c];
+              if (act > 0 && act <= 0xFF) {
+                bleKeyboard.press((uint8_t)act);
+                keySentToHost[r][c] = true;
+              }
+            }
+          }
+        }
+      }
+    }
 
     // Hardware-Combo R0C0 + R4C5 (500ms gehalten) für drahtlosen Config-Modus (Item 11)
     static unsigned long comboStartTime = 0;

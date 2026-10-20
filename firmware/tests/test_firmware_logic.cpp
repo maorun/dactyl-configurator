@@ -29,8 +29,13 @@ struct KeyCombo {
   uint8_t r2, c2;
   uint8_t behavior; // 0 = KEY_PRESS, 1 = MODIFIER_HOLD, 2 = LAYER_TOGGLE
   uint16_t action;
-  bool active;
 };
+
+struct ComboRuntime {
+  bool active;
+  unsigned long lastReleaseTime;
+};
+static ComboRuntime comboRuntime[MAX_COMBOS];
 
 // Firmware State Variables
 static uint16_t KEYMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
@@ -42,6 +47,8 @@ static bool momentaryLayers[NUM_LAYERS] = {false};
 static bool toggleLayers[NUM_LAYERS] = {false};
 static bool keyState[NUM_ROWS][NUM_COLS] = {{false}};
 static uint16_t pressedAction[NUM_ROWS][NUM_COLS] = {{0}};
+static unsigned long keyPressTime[NUM_ROWS][NUM_COLS] = {{0}};
+static bool keySentToHost[NUM_ROWS][NUM_COLS] = {{false}};
 
 static volatile bool isConfigMode = false;
 static volatile bool enterConfigRequested = false;
@@ -240,7 +247,8 @@ void handleConfigCommand(String cmd, bool fromBle = false) {
         userCombos[numCombos].c2 = (uint8_t)c2;
         userCombos[numCombos].behavior = (uint8_t)beh;
         userCombos[numCombos].action = (uint16_t)act;
-        userCombos[numCombos].active = false;
+        comboRuntime[numCombos].active = false;
+        comboRuntime[numCombos].lastReleaseTime = 0;
         numCombos++;
         sendConfigNotification("OK ADD_COMBO " + String(numCombos - 1));
       }
@@ -279,11 +287,26 @@ void handleConfigCommand(String cmd, bool fromBle = false) {
   }
 }
 
-bool isComboActiveKey(uint8_t r, uint8_t c) {
+bool wasComboRecentlyActive(uint8_t r, uint8_t c) {
+  unsigned long now = millis();
   for (uint8_t i = 0; i < numCombos; i++) {
-    if (userCombos[i].active &&
-        ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
-         (userCombos[i].r2 == r && userCombos[i].c2 == c))) {
+    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
+        (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
+      if (comboRuntime[i].active) return true;
+      if (comboRuntime[i].lastReleaseTime > 0 && (now - comboRuntime[i].lastReleaseTime < 300)) {
+        if (keyPressTime[r][c] <= comboRuntime[i].lastReleaseTime) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+bool isComboCandidateKey(uint8_t r, uint8_t c) {
+  for (uint8_t i = 0; i < numCombos; i++) {
+    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
+        (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
       return true;
     }
   }
@@ -291,35 +314,50 @@ bool isComboActiveKey(uint8_t r, uint8_t c) {
 }
 
 void checkUserCombos() {
+  unsigned long now = millis();
   for (uint8_t i = 0; i < numCombos; i++) {
-    bool bothPressed = keyState[userCombos[i].r1][userCombos[i].c1] && keyState[userCombos[i].r2][userCombos[i].c2];
-    if (bothPressed && !userCombos[i].active) {
-      userCombos[i].active = true;
-      if (!isConfigMode && bleKeyboard.isConnected()) {
-        bleKeyboard.releaseAll();
-      }
-      uint16_t act = userCombos[i].action;
-      if (userCombos[i].behavior == 0) { // KEY_PRESS
+    uint8_t r1 = userCombos[i].r1;
+    uint8_t c1 = userCombos[i].c1;
+    uint8_t r2 = userCombos[i].r2;
+    uint8_t c2 = userCombos[i].c2;
+
+    bool bothPressed = keyState[r1][c1] && keyState[r2][c2];
+    if (bothPressed && !comboRuntime[i].active) {
+      unsigned long t1 = keyPressTime[r1][c1];
+      unsigned long t2 = keyPressTime[r2][c2];
+      bool inWindow = ((unsigned long)(t1 - t2) <= comboTimeoutMs) || ((unsigned long)(t2 - t1) <= comboTimeoutMs);
+
+      if (inWindow) {
+        comboRuntime[i].active = true;
+        keySentToHost[r1][c1] = true;
+        keySentToHost[r2][c2] = true;
         if (!isConfigMode && bleKeyboard.isConnected()) {
-          bleKeyboard.write((uint8_t)act);
+          bleKeyboard.releaseAll();
         }
-        sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
-      } else if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
-        if (!isConfigMode && bleKeyboard.isConnected()) {
-          bleKeyboard.press((uint8_t)act);
+        uint16_t act = userCombos[i].action;
+        if (userCombos[i].behavior == 0) { // KEY_PRESS
+          if (!isConfigMode && bleKeyboard.isConnected()) {
+            bleKeyboard.write((uint8_t)act);
+          }
+          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
+        } else if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
+          if (!isConfigMode && bleKeyboard.isConnected()) {
+            bleKeyboard.press((uint8_t)act);
+          }
+          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
+        } else if (userCombos[i].behavior == 2) { // LAYER_TOGGLE
+          uint8_t l = act & 0x07;
+          if (l == 0) {
+            for (int j = 1; j < NUM_LAYERS; j++) toggleLayers[j] = false;
+          } else if (l < NUM_LAYERS) {
+            toggleLayers[l] = !toggleLayers[l];
+          }
+          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
         }
-        sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
-      } else if (userCombos[i].behavior == 2) { // LAYER_TOGGLE
-        uint8_t l = act & 0x07;
-        if (l == 0) {
-          for (int j = 1; j < NUM_LAYERS; j++) toggleLayers[j] = false;
-        } else if (l < NUM_LAYERS) {
-          toggleLayers[l] = !toggleLayers[l];
-        }
-        sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
       }
-    } else if (!bothPressed && userCombos[i].active) {
-      userCombos[i].active = false;
+    } else if (!bothPressed && comboRuntime[i].active) {
+      comboRuntime[i].active = false;
+      comboRuntime[i].lastReleaseTime = now;
       if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
         uint16_t act = userCombos[i].action;
         if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -356,10 +394,17 @@ void resetState() {
         KEYMAP[l][r][c] = 0;
         keyState[r][c] = false;
         pressedAction[r][c] = 0;
+        keyPressTime[r][c] = 0;
+        keySentToHost[r][c] = false;
       }
     }
   }
+  for (int i = 0; i < MAX_COMBOS; i++) {
+    comboRuntime[i].active = false;
+    comboRuntime[i].lastReleaseTime = 0;
+  }
   numCombos = 0;
+  comboTimeoutMs = 40;
   isConfigMode = false;
   enterConfigRequested = false;
   exitConfigRequested = false;
@@ -518,6 +563,7 @@ TEST(test_config_combo_immediate_release) {
 TEST(test_user_combos_engine) {
   resetState();
   isConfigMode = false;
+  comboTimeoutMs = 40;
 
   // 1. Add Chord 1: R2C1 (J) + R2C2 (K) -> KEY_ESC (KEY_PRESS, behavior 0)
   handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // 177 = 0xB1 (KEY_ESC)
@@ -525,37 +571,75 @@ TEST(test_user_combos_engine) {
   handleConfigCommand("ADD_COMBO 2 1 2 3 1 128", false); // 128 = 0x80 (KEY_LEFT_CTRL)
   assert(numCombos == 2);
 
-  // Press J (R2C1)
+  // Fall A: Schnelles Nacheinandertippen (Rollover, Zeitdifferenz > comboTimeoutMs)
+  setMillis(1000);
   keyState[2][1] = true;
+  keyPressTime[2][1] = 1000;
   checkUserCombos();
-  assert(!userCombos[0].active);
-  assert(!userCombos[1].active);
+  assert(!comboRuntime[0].active);
 
-  // Press K (R2C2) -> Triggers Chord 1 (Escape)
+  // K wird 60ms später gedrückt (60ms > 40ms) -> Darf KEINE Combo auslösen!
+  setMillis(1060);
   keyState[2][2] = true;
+  keyPressTime[2][2] = 1060;
   checkUserCombos();
-  assert(userCombos[0].active == true);
-  assert(bleKeyboard.writtenKeys.size() == 1);
-  assert(bleKeyboard.writtenKeys[0] == KEY_ESC);
-  assert(isComboActiveKey(2, 1) == true);
-  assert(isComboActiveKey(2, 2) == true);
+  assert(comboRuntime[0].active == false);
+  assert(bleKeyboard.writtenKeys.empty()); // Keine Escape gesendet!
 
-  // Release K -> Deactivates Chord 1
+  // Tasten loslassen
+  keyState[2][1] = false;
   keyState[2][2] = false;
   checkUserCombos();
-  assert(userCombos[0].active == false);
 
-  // Press L (R2C3) while J is held -> Triggers Chord 2 (Ctrl Hold)
-  keyState[2][3] = true;
+  // Fall B: Fast zeitgleicher Akkord (Zeitdifferenz <= 40ms)
+  setMillis(2000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 2000;
+  keyState[2][2] = true;
+  keyPressTime[2][2] = 2020; // 20ms Differenz <= 40ms
   checkUserCombos();
-  assert(userCombos[1].active == true);
+  assert(comboRuntime[0].active == true);
+  assert(bleKeyboard.writtenKeys.size() == 1);
+  assert(bleKeyboard.writtenKeys[0] == KEY_ESC);
+  assert(wasComboRecentlyActive(2, 1) == true);
+  assert(wasComboRecentlyActive(2, 2) == true);
+  assert(keySentToHost[2][1] == true); // Lingering-Schutz aktiv!
+  assert(keySentToHost[2][2] == true);
+
+  // Release K -> Deaktiviert Chord 1, Grace-Period bleibt aktiv
+  keyState[2][2] = false;
+  checkUserCombos();
+  assert(comboRuntime[0].active == false);
+  assert(wasComboRecentlyActive(2, 1) == true); // Immer noch in 300ms Grace Period
+
+  // Nach 350ms ist Grace-Period abgelaufen
+  advanceMillis(350);
+  assert(wasComboRecentlyActive(2, 1) == false);
+
+  // Fall B2 (Finding Cycle 2): Neuer legitimer Tastendruck von J 100ms nach Chord-Release
+  // darf NICHT von der Grace-Period unterdrückt werden!
+  setMillis(2400); // comboRuntime[0].lastReleaseTime war ~2020
+  keyPressTime[2][1] = 2400; // Neuer Anschlag nach Release
+  assert(wasComboRecentlyActive(2, 1) == false); // Nicht blockiert!
+  assert(isComboCandidateKey(2, 1) == true);
+  assert(isComboCandidateKey(2, 2) == true);
+  assert(isComboCandidateKey(0, 0) == false);
+
+  // Fall C: Modifier Hold Chord (J + L)
+  setMillis(4000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 4000;
+  keyState[2][3] = true;
+  keyPressTime[2][3] = 4015; // 15ms Diff
+  checkUserCombos();
+  assert(comboRuntime[1].active == true);
   assert(bleKeyboard.pressedKeys.size() == 1);
   assert(bleKeyboard.pressedKeys[0] == KEY_LEFT_CTRL);
 
   // Release J -> Releases Ctrl Modifier
   keyState[2][1] = false;
   checkUserCombos();
-  assert(userCombos[1].active == false);
+  assert(comboRuntime[1].active == false);
   assert(bleKeyboard.pressedKeys.empty());
 }
 
@@ -652,6 +736,41 @@ TEST(test_serial_accumulator_drain) {
       }
     }
   }
+}
+
+// -----------------------------------------------------------------------------
+// Test 8: Isolated Config Mode Boot via RTC Magic Flag (BLE Bond Protection)
+// -----------------------------------------------------------------------------
+#define CONFIG_MODE_MAGIC 0xDAC7CF60UL
+enum esp_reset_reason_t { ESP_RST_POWERON = 1, ESP_RST_SW = 3, ESP_RST_DEEPSLEEP = 5 };
+
+TEST(test_rtc_config_mode_boot_isolation) {
+  resetState();
+  uint32_t rtcConfigModeMagic = 0;
+
+  // 1. Cold boot (ESP_RST_POWERON) even with garbage/magic in RTC RAM must boot into Normal Keyboard Mode
+  rtcConfigModeMagic = CONFIG_MODE_MAGIC;
+  esp_reset_reason_t reason = ESP_RST_POWERON;
+  bool bootIntoConfig = (reason == ESP_RST_SW && rtcConfigModeMagic == CONFIG_MODE_MAGIC);
+  rtcConfigModeMagic = 0;
+  isConfigMode = bootIntoConfig;
+  assert(isConfigMode == false);
+  assert(rtcConfigModeMagic == 0);
+
+  // 2. enterConfigMode() sets rtcConfigModeMagic = CONFIG_MODE_MAGIC and triggers ESP_RST_SW
+  rtcConfigModeMagic = CONFIG_MODE_MAGIC;
+  reason = ESP_RST_SW;
+  bootIntoConfig = (reason == ESP_RST_SW && rtcConfigModeMagic == CONFIG_MODE_MAGIC);
+  rtcConfigModeMagic = 0; // Cleared immediately on boot so subsequent resets return to Keyboard Mode
+  isConfigMode = bootIntoConfig;
+  assert(isConfigMode == true);
+  assert(rtcConfigModeMagic == 0);
+
+  // 3. Subsequent software reset (exitConfigMode or crash) boots back into Normal Keyboard Mode
+  reason = ESP_RST_SW;
+  bootIntoConfig = (reason == ESP_RST_SW && rtcConfigModeMagic == CONFIG_MODE_MAGIC);
+  isConfigMode = bootIntoConfig;
+  assert(isConfigMode == false);
 }
 
 int main() {

@@ -2,7 +2,8 @@
 set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$DIR/test_firmware_logic"
+BIN="${TMPDIR:-/tmp}/test_firmware_logic_$$"
+trap 'rm -f "$BIN"' EXIT
 
 echo "Compiling firmware unit tests with clang++..."
 clang++ -std=c++17 -Wall -Wextra "$DIR/test_firmware_logic.cpp" -o "$BIN"

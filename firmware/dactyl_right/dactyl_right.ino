@@ -917,10 +917,11 @@ bool wasComboRecentlyActive(uint8_t r, uint8_t c) {
     if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
         (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
       if (comboRuntime[i].active) return true;
-      if (comboRuntime[i].lastReleaseTime > 0 && (now - comboRuntime[i].lastReleaseTime < 300)) {
+      if (comboRuntime[i].lastReleaseTime > 0 && ((unsigned long)(now - comboRuntime[i].lastReleaseTime) < 300)) {
         // Nur unterdrücken, wenn der Tastendruck VOR oder WÄHREND des Chords gestartet wurde.
-        // Ein NEUER Tastendruck nach dem Chord (keyPressTime > lastReleaseTime) ist legitim und wird nicht blockiert!
-        if (keyPressTime[r][c] <= comboRuntime[i].lastReleaseTime) {
+        // Ein NEUER Tastendruck nach dem Chord ist legitim und wird nicht blockiert!
+        // Vorzeichenbehafteter Cast für sichere Rollover-Differenz:
+        if ((long)(keyPressTime[r][c] - comboRuntime[i].lastReleaseTime) <= 0) {
           return true;
         }
       }
@@ -1141,7 +1142,6 @@ void loop() {
           } else {
             uint16_t action = pressedAction[r][c];
             pressedAction[r][c] = 0;
-            keyPressTime[r][c] = 0;
 
             char buf[64];
             snprintf(buf, sizeof(buf), "KEY_RELEASE:{\"r\":%d,\"c\":%d}", r, c);
@@ -1169,6 +1169,10 @@ void loop() {
                 }
               }
             }
+
+            // keyPressTime erst NACH wasComboRecentlyActive auf 0 setzen (Finding Cycle 3),
+            // damit der echte Anschlag-Zeitstempel für den Grace-Period-Check erhalten bleibt!
+            keyPressTime[r][c] = 0;
           }
         }
       }

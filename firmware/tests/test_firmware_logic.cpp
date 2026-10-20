@@ -293,8 +293,8 @@ bool wasComboRecentlyActive(uint8_t r, uint8_t c) {
     if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
         (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
       if (comboRuntime[i].active) return true;
-      if (comboRuntime[i].lastReleaseTime > 0 && (now - comboRuntime[i].lastReleaseTime < 300)) {
-        if (keyPressTime[r][c] <= comboRuntime[i].lastReleaseTime) {
+      if (comboRuntime[i].lastReleaseTime > 0 && ((unsigned long)(now - comboRuntime[i].lastReleaseTime) < 300)) {
+        if ((long)(keyPressTime[r][c] - comboRuntime[i].lastReleaseTime) <= 0) {
           return true;
         }
       }

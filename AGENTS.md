@@ -190,3 +190,15 @@ python3 server.py
    - Staged edits (`markPendingSync`) store rich change records (`{ type, title, description, revert }`).
    - Revert closures must capture `const targetLayer = activeLayerIndex;` at creation time to prevent mutating the wrong layer if the user switches layer tabs before clicking "Rückgängig".
    - Key revert closures update inspector inputs immediately when the reverted key is currently selected.
+
+9. **Split Keyboard Wireless Architecture (Left Hand -> Right Hand via ESP-NOW):**
+   - **Right Hand (Master / Central Hub):**
+     - Base MAC: `2E:BC:BB:81:61:A6`
+     - Wi-Fi STA MAC (ESP-NOW Receiver): `2E:BC:BB:81:61:A6`
+     - Bluetooth MAC (macOS BLE HID Host): `2E:BC:BB:81:61:A8`
+   - **Left Hand (Slave / Transmitter):**
+     - Base MAC: `2E:BC:BB:81:61:B0`
+     - Wi-Fi STA MAC: `2E:BC:BB:81:61:B0`
+     - Fixed ESP-NOW Target Peer: `2E:BC:BB:81:61:A6` (Kanal 1, unverschlüsselt für <2 ms Airtime).
+   - **Split Payload:** 4-Byte Struct `SplitKeyEvent { uint8_t row; uint8_t col; bool pressed; uint8_t flags; }`.
+   - **Master Merging:** Der rechte Master empfängt das Event im `onDataRecv`-Callback, mappt `col` auf den linken Bereich (Spalten 0..6 Links) und führt es synchron mit den lokalen Zeilen-/Spaltenereignissen in die gemeinsame Tastatur-State-Machine und den BLE HID Stream ein.

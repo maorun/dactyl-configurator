@@ -110,6 +110,25 @@ ESP-NOW ist das latenzarme (< 5 ms) 2.4-GHz-Protokoll von Espressif für die dra
   esp_now_add_peer(&peerInfo);
   ```
 
+### Deterministisches Peer-Addressing (Split Keyboard)
+- **Rechte Master-Hand:**
+  - Base-MAC: `2E:BC:BB:81:61:A6`
+  - Wi-Fi STA MAC: `2E:BC:BB:81:61:A6` (ESP-NOW Receiver auf Kanal 1)
+  - Bluetooth MAC: `2E:BC:BB:81:61:A8` (BLE HID Verbindung zu macOS)
+- **Linke Slave-Hand:**
+  - Base-MAC: `2E:BC:BB:81:61:B0`
+  - Wi-Fi STA MAC: `2E:BC:BB:81:61:B0` (ESP-NOW Transmitter)
+  - Ziel-Peer: `2E:BC:BB:81:61:A6` (ohne Scan sofort nach Boot erreichbar)
+- **Paket-Struktur (`SplitKeyEvent`, 4 Bytes):**
+  ```cpp
+  struct __attribute__((packed)) SplitKeyEvent {
+    uint8_t row;      // 0..5
+    uint8_t col;      // 0..6
+    bool isPressed;   // true = Down, false = Up
+    uint8_t flags;    // 0 = Normal, 1 = Battery Alert, 2 = Ping
+  };
+  ```
+
 ---
 
 ## 6. BLE Core & Advertising Mechanik (`libraries/BLE/src/`)

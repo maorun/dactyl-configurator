@@ -109,6 +109,13 @@ const KEYCODES = [
     { code: "KEY_PRTSC", label: "Drucken (Print Screen)", char: "" },
     { code: "NONE", label: "--- Keine Belegung (Transparent)", char: "" }
   ]},
+  { group: "Maus-Aktionen", keys: [
+    { code: "MOUSE_LEFT", label: "🖱️ Linksklick (Left Click)", char: "" },
+    { code: "MOUSE_RIGHT", label: "🖱️ Rechtsklick (Right Click)", char: "" },
+    { code: "MOUSE_MIDDLE", label: "🖱️ Mittelklick (Middle Click)", char: "" },
+    { code: "MOUSE_WHEEL_UP", label: "🖱️ Mausrad Hoch (Scroll Up)", char: "" },
+    { code: "MOUSE_WHEEL_DOWN", label: "🖱️ Mausrad Runter (Scroll Down)", char: "" }
+  ]},
   { group: "Layer Umschalter", keys: [
     { code: "LAYER_UP", label: "⬆️ Layer +1 Hoch (Nächste Ebene)", char: "" },
     { code: "LAYER_DOWN", label: "⬇️ Layer -1 Runter (Vorherige Ebene)", char: "" },
@@ -315,7 +322,19 @@ const ACTION_TO_NUMERIC = {
   "TG_0": 0x110, "TG_1": 0x111, "TG_2": 0x112, "TG_3": 0x113, "TG_4": 0x114,
   "TG_5": 0x115, "TG_6": 0x116, "TG_7": 0x117,
   "LAYER_UP": 0x118,
-  "LAYER_DOWN": 0x119
+  "LAYER_DOWN": 0x119,
+
+  // Mouse Actions (0x130..0x134)
+  "MOUSE_LEFT": 0x130,
+  "MOUSE_RIGHT": 0x131,
+  "MOUSE_MIDDLE": 0x132,
+  "MOUSE_WHEEL_UP": 0x133,
+  "MOUSE_WHEEL_DOWN": 0x134,
+  "ACT_MOUSE_LEFT": 0x130,
+  "ACT_MOUSE_RIGHT": 0x131,
+  "ACT_MOUSE_MIDDLE": 0x132,
+  "ACT_MOUSE_WHEEL_UP": 0x133,
+  "ACT_MOUSE_WHEEL_DOWN": 0x134
 };
 
 function actionCodeToNumeric(code) {
@@ -469,6 +488,7 @@ let isConfigModeActive = false;
 let isAutoSyncing = false;
 let isConnectingBle = false;
 let pendingSyncCount = 0;
+let pendingChanges = [];
 const watchedBleDevices = new Set();
 const knownBleDevices = [];
 let bleAutoPollTimer = null;
@@ -536,30 +556,212 @@ function updateConfigModeUI(active, syncing = false) {
   }
 }
 
-function markPendingSync(summaryText = "") {
-  pendingSyncCount++;
+function renderPendingSyncUI() {
+  pendingSyncCount = pendingChanges.length;
   const badge = document.getElementById("pendingSyncBadge");
   const card = document.getElementById("configModeGuideCard");
-  if (badge) {
-    badge.className = "pending-sync-badge pending";
-    badge.textContent = `⏳ ${pendingSyncCount} Änderung${pendingSyncCount === 1 ? "" : "en"} vorgemerkt (warte auf Combo)`;
-    badge.style.display = "inline-flex";
-  }
-  if (card && !isConfigModeActive) card.classList.add("has-pending-sync");
+  const toggleBtn = document.getElementById("btnTogglePendingDrawer");
+  const drawer = document.getElementById("pendingChangesDrawer");
+  const list = document.getElementById("pendingChangesList");
+  const countBadge = document.getElementById("pendingChangesCountBadge");
 
-  const suffix = summaryText ? ` (${summaryText})` : "";
+  if (card && !isConfigModeActive) {
+    card.classList.toggle("has-pending-sync", pendingSyncCount > 0);
+  }
+
+  if (badge) {
+    if (pendingSyncCount > 0) {
+      badge.className = "pending-sync-badge pending";
+      badge.textContent = `⏳ ${pendingSyncCount} Änderung${pendingSyncCount === 1 ? "" : "en"} vorgemerkt (warte auf Combo)`;
+      badge.title = "Klicken, um die Details der vorgemerkten Änderungen anzuzeigen.";
+      badge.style.display = "inline-flex";
+      badge.style.cursor = "pointer";
+    } else {
+      badge.className = "pending-sync-badge synced";
+      badge.textContent = "✓ Alle Einstellungen synchron";
+      badge.title = "Alle Einstellungen sind synchron.";
+      badge.style.display = "inline-flex";
+      badge.style.cursor = "default";
+    }
+  }
+
+  if (toggleBtn) {
+    if (pendingSyncCount > 0) {
+      toggleBtn.style.display = "inline-flex";
+      const isExpanded = drawer && drawer.style.display !== "none";
+      toggleBtn.textContent = isExpanded ? "📋 Details verbergen ▴" : "📋 Details anzeigen ▾";
+    } else {
+      toggleBtn.style.display = "none";
+    }
+  }
+
+  if (countBadge) {
+    countBadge.textContent = String(pendingSyncCount);
+  }
+
+  if (drawer && pendingSyncCount === 0) {
+    drawer.style.display = "none";
+  }
+
+  if (list) {
+    list.innerHTML = "";
+    if (pendingSyncCount === 0) {
+      const emptyLi = document.createElement("li");
+      emptyLi.className = "pending-change-item empty";
+      emptyLi.textContent = "Keine ausstehenden Änderungen.";
+      list.appendChild(emptyLi);
+    } else {
+      pendingChanges.forEach((chg) => {
+        const li = document.createElement("li");
+        li.className = "pending-change-item";
+
+        const iconMap = {
+          key: "⌨️",
+          layer_name: "✏️",
+          preset: "🎨",
+          settings: "⚙️",
+          combo_add: "⚡",
+          combo_del: "🗑️",
+          import: "📁"
+        };
+        const icon = iconMap[chg.type] || "📝";
+
+        const mainDiv = document.createElement("div");
+        mainDiv.className = "pending-change-main";
+
+        const titleDiv = document.createElement("div");
+        titleDiv.className = "pending-change-title";
+
+        const iconSpan = document.createElement("span");
+        iconSpan.textContent = icon;
+        const textSpan = document.createElement("span");
+        textSpan.textContent = chg.title || "Änderung";
+        const timeSpan = document.createElement("span");
+        timeSpan.className = "pending-change-time";
+        timeSpan.textContent = chg.time || "";
+
+        titleDiv.appendChild(iconSpan);
+        titleDiv.appendChild(textSpan);
+        titleDiv.appendChild(timeSpan);
+        mainDiv.appendChild(titleDiv);
+
+        if (chg.description) {
+          const descDiv = document.createElement("div");
+          descDiv.className = "pending-change-desc";
+          descDiv.textContent = chg.description;
+          mainDiv.appendChild(descDiv);
+        }
+
+        li.appendChild(mainDiv);
+
+        if (typeof chg.revert === "function") {
+          const undoBtn = document.createElement("button");
+          undoBtn.className = "btn btn-outline btn-xs btn-undo-change";
+          undoBtn.textContent = "↩️ Rückgängig";
+          undoBtn.title = "Diese Änderung rückgängig machen";
+          undoBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            undoPendingChange(chg.id);
+          });
+          li.appendChild(undoBtn);
+        }
+
+        list.appendChild(li);
+      });
+    }
+  }
+}
+
+function togglePendingChangesDrawer() {
+  const drawer = document.getElementById("pendingChangesDrawer");
+  const toggleBtn = document.getElementById("btnTogglePendingDrawer");
+  if (!drawer) return;
+  const isHidden = (drawer.style.display === "none" || !drawer.style.display);
+  drawer.style.display = isHidden ? "block" : "none";
+  if (toggleBtn) {
+    toggleBtn.textContent = isHidden ? "📋 Details verbergen ▴" : "📋 Details anzeigen ▾";
+  }
+}
+
+function undoPendingChange(id) {
+  const idx = pendingChanges.findIndex(c => c.id === id);
+  if (idx === -1) return;
+  const change = pendingChanges[idx];
+  if (typeof change.revert === "function") {
+    try {
+      change.revert();
+    } catch (err) {
+      console.error("Fehler beim Rückgängigmachen der Änderung:", err);
+    }
+  }
+  pendingChanges.splice(idx, 1);
+  if (pendingChanges.length === 0) {
+    clearPendingSync();
+  } else {
+    renderPendingSyncUI();
+  }
+  showToast(`↩️ Änderung rückgängig gemacht: ${change.title}`);
+}
+
+function discardAllPendingChanges() {
+  if (pendingChanges.length === 0) return;
+  const count = pendingChanges.length;
+  if (!confirm(`Möchtest du wirklich alle ${count} vorgemerkten Änderungen verwerfen und rückgängig machen?`)) {
+    return;
+  }
+  for (let i = pendingChanges.length - 1; i >= 0; i--) {
+    const chg = pendingChanges[i];
+    if (typeof chg.revert === "function") {
+      try {
+        chg.revert();
+      } catch (err) {
+        console.error("Fehler beim Verwerfen der Änderung:", err);
+      }
+    }
+  }
+  clearPendingSync();
+  showToast(`🗑️ ${count} vorgemerkte Änderung${count === 1 ? "" : "en"} verworfen.`);
+}
+
+function markPendingSync(changeOrSummary = "") {
+  let changeObj;
+  const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  if (typeof changeOrSummary === "string") {
+    changeObj = {
+      id: "chg_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5),
+      time: nowStr,
+      type: "general",
+      title: changeOrSummary || "Änderung",
+      description: "",
+      revert: null
+    };
+  } else if (typeof changeOrSummary === "object" && changeOrSummary !== null) {
+    changeObj = {
+      id: changeOrSummary.id || ("chg_" + Date.now() + "_" + Math.random().toString(36).substr(2, 5)),
+      time: nowStr,
+      type: changeOrSummary.type || "general",
+      title: changeOrSummary.title || "Änderung",
+      description: changeOrSummary.description || "",
+      revert: changeOrSummary.revert || null
+    };
+  }
+  if (changeObj) {
+    pendingChanges.push(changeObj);
+  }
+  renderPendingSyncUI();
+
+  const titleText = changeObj ? changeObj.title : "";
+  const suffix = titleText ? ` (${titleText})` : "";
   showToast(`💾 Vorgemerkt${suffix}! Halte R4C5 + R0C0 (0.5s) an der Tastatur zum automatischen Übertragen.`);
 }
 
 function clearPendingSync() {
+  pendingChanges = [];
   pendingSyncCount = 0;
-  const badge = document.getElementById("pendingSyncBadge");
+  renderPendingSyncUI();
+  const drawer = document.getElementById("pendingChangesDrawer");
+  if (drawer) drawer.style.display = "none";
   const card = document.getElementById("configModeGuideCard");
-  if (badge) {
-    badge.className = "pending-sync-badge synced";
-    badge.textContent = "✓ Alle Einstellungen synchron";
-    badge.style.display = "inline-flex";
-  }
   if (card) card.classList.remove("has-pending-sync");
 }
 
@@ -658,8 +860,23 @@ async function renameActiveLayer() {
   if (!currentConfig.layerNames) {
     currentConfig.layerNames = [...DEFAULT_LAYER_NAMES];
   }
-  currentConfig.layerNames[activeLayerIndex] = newName;
+  const targetLayer = activeLayerIndex;
+  const oldName = currentConfig.layerNames[targetLayer] || `Layer ${targetLayer}`;
+  currentConfig.layerNames[targetLayer] = newName;
   renderLayerButtons();
+
+  const changeRecord = {
+    type: "layer_name",
+    title: `Ebene ${targetLayer} umbenannt`,
+    description: `"${oldName}" ➔ "${newName}"`,
+    revert: () => {
+      if (currentConfig.layerNames) {
+        currentConfig.layerNames[targetLayer] = oldName;
+        renderLayerButtons();
+        saveConfigToServer();
+      }
+    }
+  };
 
   // An ESP32 per Bluetooth oder USB senden
   if (bleConfigChar) {
@@ -667,13 +884,13 @@ async function renameActiveLayer() {
     if (ok) {
       showToast(`Ebene ${activeLayerIndex} in "${newName}" umbenannt!`);
     } else {
-      markPendingSync(`Ebene L${activeLayerIndex}: ${newName}`);
+      markPendingSync(changeRecord);
     }
   } else if (serialPort && serialPort.writable) {
     await sendSerialCommand(`SET_NAME ${activeLayerIndex} ${newName}`);
     showToast(`Ebene ${activeLayerIndex} in "${newName}" umbenannt!`);
   } else {
-    markPendingSync(`Ebene L${activeLayerIndex}: ${newName}`);
+    markPendingSync(changeRecord);
   }
 
   saveConfigToServer();
@@ -707,11 +924,21 @@ function initUI() {
     btnPreset.addEventListener("click", () => {
       const presetKey = document.getElementById("layoutPresetSelect").value;
       if (PRESETS[presetKey]) {
+        const oldLayer0 = JSON.parse(JSON.stringify(currentConfig.layers[0]));
         currentConfig.layers[0] = JSON.parse(JSON.stringify(PRESETS[presetKey].layers[0]));
         renderMatrix();
         saveConfigToServer();
         if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
-          markPendingSync(`Preset ${PRESETS[presetKey].name}`);
+          markPendingSync({
+            type: "preset",
+            title: `Layout-Preset angewendet`,
+            description: `${PRESETS[presetKey].name} (Ebene 0)`,
+            revert: () => {
+              currentConfig.layers[0] = oldLayer0;
+              renderMatrix();
+              saveConfigToServer();
+            }
+          });
         } else {
           showToast(`Preset '${PRESETS[presetKey].name}' angewendet!`);
         }
@@ -1118,10 +1345,27 @@ function renderCombosTable() {
 }
 
 window.deleteCombo = function(id) {
+  const deletedCombo = currentConfig.combos ? currentConfig.combos.find(c => c.id === id) : null;
   currentConfig.combos = currentConfig.combos.filter(c => c.id !== id);
   renderCombosTable();
   renderMatrix();
-  showToast("Combo gelöscht!");
+  saveConfigToServer();
+  if (deletedCombo && !bleConfigChar && (!serialPort || !serialPort.writable)) {
+    markPendingSync({
+      type: "combo_del",
+      title: `Combo-Chord gelöscht`,
+      description: deletedCombo.name || "Combo",
+      revert: () => {
+        if (!currentConfig.combos) currentConfig.combos = [];
+        currentConfig.combos.push(deletedCombo);
+        renderCombosTable();
+        renderMatrix();
+        saveConfigToServer();
+      }
+    });
+  } else {
+    showToast("Combo gelöscht!");
+  }
 };
 
 function setupEventListeners() {
@@ -1134,7 +1378,8 @@ function setupEventListeners() {
       currentConfig.layers.push(JSON.parse(JSON.stringify(currentConfig.layers[0])));
     }
 
-    const layer = currentConfig.layers[activeLayerIndex];
+    const targetLayer = activeLayerIndex;
+    const layer = currentConfig.layers[targetLayer];
     if (!layer[r]) layer[r] = [];
 
     const labelInput = document.getElementById("keyLabelInput");
@@ -1145,28 +1390,67 @@ function setupEventListeners() {
     const tap = primarySelect.value;
     const hold = holdSelect.value;
 
+    const oldKey = JSON.parse(JSON.stringify(layer[r][c] || { label: "---", tap: "NONE", hold: "NONE" }));
+    const layerName = (currentConfig.layerNames && currentConfig.layerNames[targetLayer]) || `Layer ${targetLayer}`;
+    const oldDesc = oldKey.label || (oldKey.tap && oldKey.tap !== "NONE" ? oldKey.tap : "---");
+    const newDesc = label || (tap && tap !== "NONE" ? tap : (hold || "---"));
+
     layer[r][c] = { label, tap, hold };
     renderMatrix();
 
     const effectiveAction = (tap && tap !== "NONE") ? tap : (hold || "NONE");
     const numericCode = actionCodeToNumeric(effectiveAction);
 
+    const changeRecord = {
+      type: "key",
+      title: `Taste [R${r}, C${c}] (${layerName})`,
+      description: `${oldDesc} ➔ ${newDesc}`,
+      revert: () => {
+        if (currentConfig.layers[targetLayer] && currentConfig.layers[targetLayer][r]) {
+          currentConfig.layers[targetLayer][r][c] = oldKey;
+          renderMatrix();
+          if (selectedKey && selectedKey.r === r && selectedKey.c === c && activeLayerIndex === targetLayer) {
+            updateInspector(r, c);
+          }
+          saveConfigToServer();
+        }
+      }
+    };
+
     if (bleConfigChar) {
       const ok = await sendBleCommand(`SET_KEY ${activeLayerIndex} ${r} ${c} ${numericCode}`);
       if (ok) {
         showToast(`⚡ Per Bluetooth an Dactyl übertragen: [R${r}, C${c}] = ${label} (NVS gespeichert)`);
       } else {
-        markPendingSync(`[R${r}, C${c}] = ${label}`);
+        markPendingSync(changeRecord);
       }
     } else if (serialPort && serialPort.writable) {
       await sendSerialCommand(`SET_KEY ${activeLayerIndex} ${r} ${c} ${numericCode}`);
       showToast(`🔌 Per USB an Dactyl übertragen: [R${r}, C${c}] = ${label} (NVS gespeichert)`);
     } else {
-      markPendingSync(`[R${r}, C${c}] = ${label}`);
+      markPendingSync(changeRecord);
     }
 
     saveConfigToServer();
   });
+
+  // Pending Changes Drawer Event Listeners
+  const pendingBadge = document.getElementById("pendingSyncBadge");
+  if (pendingBadge) {
+    pendingBadge.addEventListener("click", () => {
+      if (pendingChanges.length > 0) {
+        togglePendingChangesDrawer();
+      }
+    });
+  }
+  const btnToggleDrawer = document.getElementById("btnTogglePendingDrawer");
+  if (btnToggleDrawer) {
+    btnToggleDrawer.addEventListener("click", togglePendingChangesDrawer);
+  }
+  const btnDiscardAll = document.getElementById("btnDiscardAllPending");
+  if (btnDiscardAll) {
+    btnDiscardAll.addEventListener("click", discardAllPendingChanges);
+  }
 
   // Combo Modal Events
   const comboModal = document.getElementById("comboModal");
@@ -1216,7 +1500,22 @@ function setupEventListeners() {
     renderCombosTable();
     renderMatrix();
     saveConfigToServer();
-    showToast("Neuer Combo-Chord angelegt!");
+
+    if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
+      markPendingSync({
+        type: "combo_add",
+        title: `Combo-Chord hinzugefügt`,
+        description: newCombo.name,
+        revert: () => {
+          currentConfig.combos = currentConfig.combos.filter(c => c.id !== newCombo.id);
+          renderCombosTable();
+          renderMatrix();
+          saveConfigToServer();
+        }
+      });
+    } else {
+      showToast("Neuer Combo-Chord angelegt!");
+    }
   });
 
   // JSON Import & Export
@@ -1240,13 +1539,25 @@ function setupEventListeners() {
       try {
         const parsed = JSON.parse(event.target.result);
         if (parsed && parsed.layers && Array.isArray(parsed.layers)) {
+          const oldConfig = JSON.parse(JSON.stringify(currentConfig));
           currentConfig = normalizeConfig(parsed);
           renderLayerButtons();
           renderMatrix();
           renderCombosTable();
           saveConfigToServer();
           if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
-            markPendingSync("JSON-Import");
+            markPendingSync({
+              type: "import",
+              title: "JSON-Konfiguration importiert",
+              description: `${file.name || "Backup"} geladen`,
+              revert: () => {
+                currentConfig = oldConfig;
+                renderLayerButtons();
+                renderMatrix();
+                renderCombosTable();
+                saveConfigToServer();
+              }
+            });
           } else {
             showToast("Konfiguration erfolgreich geladen!");
           }
@@ -1279,6 +1590,8 @@ function setupEventListeners() {
       const sleepTimeoutVal = parseInt(document.getElementById("sleepTimeoutSelect")?.value, 10);
       const sleepMinutes = isNaN(sleepTimeoutVal) ? 60 : sleepTimeoutVal;
 
+      const oldSettings = JSON.parse(JSON.stringify(currentConfig.settings || {}));
+
       currentConfig.settings = {
         deviceName: devName,
         debounceMs: debounce,
@@ -1289,6 +1602,16 @@ function setupEventListeners() {
 
       saveConfigToServer();
 
+      const changeRecord = {
+        type: "settings",
+        title: `Einstellungen & Timeouts`,
+        description: `Standby: ${standbyMinutes}m, Sleep: ${sleepMinutes}m, Name: "${devName}"`,
+        revert: () => {
+          currentConfig.settings = oldSettings;
+          saveConfigToServer();
+        }
+      };
+
       if (bleConfigChar) {
         const ok1 = await sendBleCommand(`SET_STANDBY ${standbyMinutes}`);
         const ok2 = await sendBleCommand(`SET_SLEEP ${sleepMinutes}`);
@@ -1298,7 +1621,7 @@ function setupEventListeners() {
         if (ok1 && ok2 && ok3 && ok4 && ok5) {
           showToast("✅ Device-Einstellungen & Timeouts im ESP32 NVS gespeichert!");
         } else {
-          markPendingSync(`Settings ${devName}`);
+          markPendingSync(changeRecord);
         }
       } else if (serialPort && serialPort.writable) {
         await sendSerialCommand(`SET_STANDBY ${standbyMinutes}`);
@@ -1308,7 +1631,7 @@ function setupEventListeners() {
         await sendSerialCommand(`SET_COMBO_TIMEOUT ${comboTimeout}`);
         showToast("✅ Device-Einstellungen & Timeouts im ESP32 NVS gespeichert!");
       } else {
-        markPendingSync(`Settings ${devName}`);
+        markPendingSync(changeRecord);
       }
     });
   }
@@ -2070,6 +2393,7 @@ function handleSerialLine(line) {
       console.warn("Failed to parse LAYER_DATA:", e, line);
     }
   } else if (line.startsWith("CONFIG_SYNC_DONE")) {
+    clearPendingSync();
     saveConfigToServer();
     showToast("✅ Tastaturbelegung vollständig vom ESP32 synchronisiert!");
   }

@@ -22,6 +22,12 @@
 #define ACT_LAYER_UP 0x118
 #define ACT_LAYER_DOWN 0x119
 
+#define ACT_MOUSE_LEFT       0x130
+#define ACT_MOUSE_RIGHT      0x131
+#define ACT_MOUSE_MIDDLE     0x132
+#define ACT_MOUSE_WHEEL_UP   0x133
+#define ACT_MOUSE_WHEEL_DOWN 0x134
+
 #define MAX_COMBOS 16
 
 struct KeyCombo {
@@ -337,12 +343,26 @@ void checkUserCombos() {
         uint16_t act = userCombos[i].action;
         if (userCombos[i].behavior == 0) { // KEY_PRESS
           if (!isConfigMode && bleKeyboard.isConnected()) {
-            bleKeyboard.write((uint8_t)act);
+            if (act >= 0x130 && act <= 0x134) {
+              if (act == 0x130) bleKeyboard.mouseClick(MOUSE_BUTTON_LEFT);
+              else if (act == 0x131) bleKeyboard.mouseClick(MOUSE_BUTTON_RIGHT);
+              else if (act == 0x132) bleKeyboard.mouseClick(MOUSE_BUTTON_MIDDLE);
+              else if (act == 0x133) bleKeyboard.mouseScroll(1);
+              else if (act == 0x134) bleKeyboard.mouseScroll(-1);
+            } else {
+              bleKeyboard.write((uint8_t)act);
+            }
           }
           sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
         } else if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
           if (!isConfigMode && bleKeyboard.isConnected()) {
-            bleKeyboard.press((uint8_t)act);
+            if (act >= 0x130 && act <= 0x132) {
+              if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
+              else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
+              else if (act == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
+            } else {
+              bleKeyboard.press((uint8_t)act);
+            }
           }
           sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
         } else if (userCombos[i].behavior == 2) { // LAYER_TOGGLE
@@ -361,7 +381,13 @@ void checkUserCombos() {
       if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
         uint16_t act = userCombos[i].action;
         if (!isConfigMode && bleKeyboard.isConnected()) {
-          bleKeyboard.release((uint8_t)act);
+          if (act >= 0x130 && act <= 0x132) {
+            if (act == 0x130) bleKeyboard.mouseRelease(MOUSE_BUTTON_LEFT);
+            else if (act == 0x131) bleKeyboard.mouseRelease(MOUSE_BUTTON_RIGHT);
+            else if (act == 0x132) bleKeyboard.mouseRelease(MOUSE_BUTTON_MIDDLE);
+          } else {
+            bleKeyboard.release((uint8_t)act);
+          }
         }
       }
     }
@@ -771,6 +797,79 @@ TEST(test_rtc_config_mode_boot_isolation) {
   bootIntoConfig = (reason == ESP_RST_SW && rtcConfigModeMagic == CONFIG_MODE_MAGIC);
   isConfigMode = bootIntoConfig;
   assert(isConfigMode == false);
+}
+
+// -----------------------------------------------------------------------------
+// Test 9: Simulated Mouse Actions and Combos
+// -----------------------------------------------------------------------------
+TEST(test_mouse_actions_and_combos) {
+  resetState();
+
+  // 1. ADD_COMBO for Left Click (J+K -> ACT_MOUSE_LEFT, behavior 0 = KEY_PRESS)
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 304", false); // 0x130 = 304 (ACT_MOUSE_LEFT)
+  assert(numCombos == 1);
+  assert(userCombos[0].action == ACT_MOUSE_LEFT);
+
+  // 2. ADD_COMBO for Scroll Up (J+L -> ACT_MOUSE_WHEEL_UP, behavior 0)
+  handleConfigCommand("ADD_COMBO 2 1 2 3 0 307", false); // 0x133 = 307 (ACT_MOUSE_WHEEL_UP)
+  assert(numCombos == 2);
+  assert(userCombos[1].action == ACT_MOUSE_WHEEL_UP);
+
+  // 3. ADD_COMBO for Right Click Hold (J+M -> ACT_MOUSE_RIGHT, behavior 1 = MODIFIER_HOLD)
+  handleConfigCommand("ADD_COMBO 2 1 2 4 1 305", false); // 0x131 = 305 (ACT_MOUSE_RIGHT)
+  assert(numCombos == 3);
+  assert(userCombos[2].action == ACT_MOUSE_RIGHT);
+
+  // Trigger Combo 0: Left Click
+  setMillis(1000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 1000;
+  keyState[2][2] = true;
+  keyPressTime[2][2] = 1010;
+  checkUserCombos();
+  assert(comboRuntime[0].active == true);
+  assert(bleKeyboard.clickedMouseButtons.size() == 1);
+  assert(bleKeyboard.clickedMouseButtons[0] == MOUSE_BUTTON_LEFT);
+
+  // Release Combo 0
+  keyState[2][1] = false;
+  keyState[2][2] = false;
+  checkUserCombos();
+  assert(comboRuntime[0].active == false);
+
+  // Trigger Combo 1: Wheel Up
+  setMillis(2000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 2000;
+  keyState[2][3] = true;
+  keyPressTime[2][3] = 2015;
+  checkUserCombos();
+  assert(comboRuntime[1].active == true);
+  assert(bleKeyboard.mouseScrolls.size() == 1);
+  assert(bleKeyboard.mouseScrolls[0] == 1);
+
+  // Release Combo 1
+  keyState[2][1] = false;
+  keyState[2][3] = false;
+  checkUserCombos();
+  assert(comboRuntime[1].active == false);
+
+  // Trigger Combo 2: Right Click Hold
+  setMillis(3000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 3000;
+  keyState[2][4] = true;
+  keyPressTime[2][4] = 2995;
+  checkUserCombos();
+  assert(comboRuntime[2].active == true);
+  assert((bleKeyboard.mouseButtons & MOUSE_BUTTON_RIGHT) != 0);
+
+  // Release Combo 2
+  keyState[2][1] = false;
+  keyState[2][4] = false;
+  checkUserCombos();
+  assert(comboRuntime[2].active == false);
+  assert((bleKeyboard.mouseButtons & MOUSE_BUTTON_RIGHT) == 0);
 }
 
 int main() {

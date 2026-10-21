@@ -59,13 +59,15 @@ class ConfigServerCallbacks : public BLEServerCallbacks {
   }
 };
 
-class DactylBleKeyboard : public BleKeyboard {
+#include "DactylBleComposite.h"
+
+class DactylBleKeyboard : public DactylBleComposite {
 public:
   DactylBleKeyboard(std::string name, std::string mfr, uint8_t batt)
-    : BleKeyboard(name, mfr, batt) {}
+    : DactylBleComposite(name, mfr, batt) {}
 
   void onConnect(BLEServer *pServer) override {
-    BleKeyboard::onConnect(pServer);
+    DactylBleComposite::onConnect(pServer);
   }
 
   void onDisconnect(BLEServer *pServer) override {
@@ -73,8 +75,7 @@ public:
       return;
     }
     if (pServer->getConnectedCount() <= 1) {
-      // BleKeyboard::onDisconnect setzt connected = false und startet Advertising neu
-      BleKeyboard::onDisconnect(pServer);
+      DactylBleComposite::onDisconnect(pServer);
     }
   }
 
@@ -94,7 +95,7 @@ protected:
     // WICHTIG: Im normalen Keyboard-Modus KEINE CONFIG_SERVICE_UUID im Scan-Response senden,
     // damit Chrome watchAdvertisements() nicht fälschlicherweise im Tastaturmodus triggert
     // und der Mac die Tastatur als reines HID-Peripheral sieht!
-    Serial.println("BLE HID + Config Service bereit.");
+    Serial.println("BLE HID (Keyboard + Media + Mouse) + Config Service bereit.");
   }
 };
 
@@ -142,6 +143,12 @@ const int NUM_COLS = 7;
 #define ACT_MEDIA_PREVIOUS_TRACK 0x125
 #define ACT_MEDIA_STOP           0x126
 #define ACT_MAC_GLOBE            0x127
+
+#define ACT_MOUSE_LEFT           0x130
+#define ACT_MOUSE_RIGHT          0x131
+#define ACT_MOUSE_MIDDLE         0x132
+#define ACT_MOUSE_WHEEL_UP       0x133
+#define ACT_MOUSE_WHEEL_DOWN     0x134
 
 #define NUM_LAYERS 8
 
@@ -979,6 +986,12 @@ void checkUserCombos() {
               else if (act == 0x125) bleKeyboard.write(KEY_MEDIA_PREVIOUS_TRACK);
               else if (act == 0x126) bleKeyboard.write(KEY_MEDIA_STOP);
               else if (act == 0x127) { bleKeyboard.press(KEY_MEDIA_GLOBE); delay(10); bleKeyboard.release(KEY_MEDIA_GLOBE); }
+            } else if (act >= 0x130 && act <= 0x134) {
+              if (act == 0x130) bleKeyboard.mouseClick(MOUSE_BUTTON_LEFT);
+              else if (act == 0x131) bleKeyboard.mouseClick(MOUSE_BUTTON_RIGHT);
+              else if (act == 0x132) bleKeyboard.mouseClick(MOUSE_BUTTON_MIDDLE);
+              else if (act == 0x133) bleKeyboard.mouseScroll(1);
+              else if (act == 0x134) bleKeyboard.mouseScroll(-1);
             } else if (act <= 0xFF) {
               bleKeyboard.write((uint8_t)act);
             }
@@ -986,7 +999,13 @@ void checkUserCombos() {
           sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
         } else if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
           if (!isConfigMode && bleKeyboard.isConnected()) {
-            if (act <= 0xFF) bleKeyboard.press((uint8_t)act);
+            if (act >= 0x130 && act <= 0x132) {
+              if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
+              else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
+              else if (act == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
+            } else if (act <= 0xFF) {
+              bleKeyboard.press((uint8_t)act);
+            }
           }
           sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
         } else if (userCombos[i].behavior == 2) { // LAYER_TOGGLE
@@ -1005,7 +1024,13 @@ void checkUserCombos() {
       if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
         uint16_t act = userCombos[i].action;
         if (!isConfigMode && bleKeyboard.isConnected()) {
-          if (act <= 0xFF) bleKeyboard.release((uint8_t)act);
+          if (act >= 0x130 && act <= 0x132) {
+            if (act == 0x130) bleKeyboard.mouseRelease(MOUSE_BUTTON_LEFT);
+            else if (act == 0x131) bleKeyboard.mouseRelease(MOUSE_BUTTON_RIGHT);
+            else if (act == 0x132) bleKeyboard.mouseRelease(MOUSE_BUTTON_MIDDLE);
+          } else if (act <= 0xFF) {
+            bleKeyboard.release((uint8_t)act);
+          }
         }
       }
     }
@@ -1104,6 +1129,29 @@ void loop() {
               snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, mediaName, action, currentLayer);
               sendConfigNotification(String(buf));
               Serial.printf("Media-Taste gedrückt: [R%d, C%d] (L%d) -> %s (0x%02X)\n", r, c, currentLayer, mediaName, action);
+            } else if (action >= 0x130 && action <= 0x134) {
+              const char* mouseName = "MOUSE";
+              if (action == 0x130) mouseName = "Linksklick";
+              else if (action == 0x131) mouseName = "Rechtsklick";
+              else if (action == 0x132) mouseName = "Mittelklick";
+              else if (action == 0x133) mouseName = "Mausrad Hoch";
+              else if (action == 0x134) mouseName = "Mausrad Runter";
+
+              char buf[128];
+              snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, mouseName, action, currentLayer);
+              sendConfigNotification(String(buf));
+              Serial.printf("Maus-Aktion gedrückt: [R%d, C%d] (L%d) -> %s (0x%02X)\n", r, c, currentLayer, mouseName, action);
+
+              if (!isConfigMode && bleKeyboard.isConnected()) {
+                if (!isComboCandidateKey(r, c) && !(keyState[0][0] && keyState[4][5] && ((r == 0 && c == 0) || (r == 4 && c == 5)))) {
+                  if (action == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
+                  else if (action == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
+                  else if (action == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
+                  else if (action == 0x133) bleKeyboard.mouseScroll(1);
+                  else if (action == 0x134) bleKeyboard.mouseScroll(-1);
+                  keySentToHost[r][c] = true;
+                }
+              }
             } else if (action > 0 && action <= 0xFF) {
               String keyLabel = "";
               if (action >= 'a' && action <= 'z') keyLabel = String((char)toupper(action));
@@ -1155,6 +1203,22 @@ void loop() {
               if (!isConfigMode && action == 0x127 && bleKeyboard.isConnected()) {
                 bleKeyboard.release(KEY_MEDIA_GLOBE);
               }
+            } else if (action >= 0x130 && action <= 0x134) {
+              if (!isConfigMode && bleKeyboard.isConnected()) {
+                if (keySentToHost[r][c]) {
+                  if (action == 0x130) bleKeyboard.mouseRelease(MOUSE_BUTTON_LEFT);
+                  else if (action == 0x131) bleKeyboard.mouseRelease(MOUSE_BUTTON_RIGHT);
+                  else if (action == 0x132) bleKeyboard.mouseRelease(MOUSE_BUTTON_MIDDLE);
+                  keySentToHost[r][c] = false;
+                } else if (!wasComboRecentlyActive(r, c) && !(r == 0 && c == 0) && !(r == 4 && c == 5)) {
+                  // Wenn die Taste vor Ablauf des Combo-Timeouts losgelassen wurde (schneller Einzeltipp)
+                  if (action == 0x130) bleKeyboard.mouseClick(MOUSE_BUTTON_LEFT);
+                  else if (action == 0x131) bleKeyboard.mouseClick(MOUSE_BUTTON_RIGHT);
+                  else if (action == 0x132) bleKeyboard.mouseClick(MOUSE_BUTTON_MIDDLE);
+                  else if (action == 0x133) bleKeyboard.mouseScroll(1);
+                  else if (action == 0x134) bleKeyboard.mouseScroll(-1);
+                }
+              }
             } else if (action > 0 && action <= 0xFF) {
               if (!isConfigMode && bleKeyboard.isConnected()) {
                 if (keySentToHost[r][c]) {
@@ -1193,6 +1257,13 @@ void loop() {
               uint16_t act = pressedAction[r][c];
               if (act > 0 && act <= 0xFF) {
                 bleKeyboard.press((uint8_t)act);
+                keySentToHost[r][c] = true;
+              } else if (act >= 0x130 && act <= 0x134) {
+                if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
+                else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
+                else if (act == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
+                else if (act == 0x133) bleKeyboard.mouseScroll(1);
+                else if (act == 0x134) bleKeyboard.mouseScroll(-1);
                 keySentToHost[r][c] = true;
               }
             }

@@ -224,6 +224,10 @@ public:
   void notify() { notifications.push_back(value); }
 };
 
+#define MOUSE_BUTTON_LEFT   0x01
+#define MOUSE_BUTTON_RIGHT  0x02
+#define MOUSE_BUTTON_MIDDLE 0x04
+
 // BleKeyboard Mock
 class BleKeyboard {
 public:
@@ -234,6 +238,9 @@ public:
   std::vector<uint8_t> pressedKeys;
   std::vector<uint8_t> writtenKeys;
   std::vector<uint16_t> pressedMediaKeys;
+  uint8_t mouseButtons = 0;
+  std::vector<uint8_t> clickedMouseButtons;
+  std::vector<int8_t> mouseScrolls;
 
   BleKeyboard(std::string n, std::string m, uint8_t b) : name(n), mfr(m), batt(b) {}
   bool isConnected() { return connected; }
@@ -249,7 +256,19 @@ public:
   }
   void write(uint8_t k) { writtenKeys.push_back(k); }
   void write(uint16_t k) { pressedMediaKeys.push_back(k); }
-  void releaseAll() { pressedKeys.clear(); pressedMediaKeys.clear(); }
+
+  void mousePress(uint8_t btn) { mouseButtons |= btn; }
+  void mouseRelease(uint8_t btn) { mouseButtons &= ~btn; }
+  void mouseClick(uint8_t btn) { clickedMouseButtons.push_back(btn); }
+  void mouseScroll(int8_t wheel) { mouseScrolls.push_back(wheel); }
+
+  void releaseAll() {
+    pressedKeys.clear();
+    pressedMediaKeys.clear();
+    mouseButtons = 0;
+    clickedMouseButtons.clear();
+    mouseScrolls.clear();
+  }
   void setDisconnected() { connected = false; }
 };
 

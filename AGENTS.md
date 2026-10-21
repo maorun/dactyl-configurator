@@ -100,6 +100,7 @@ Keys in the matrix use `uint16_t` action codes:
 | `0x119` | Layer -1 Down (`LAYER_DOWN`) | `ACT_LAYER_DOWN` (`0x119`) steps -1 to previous layer (wrapping `0 -> 7`) |
 | `0x120` .. `0x126` | Media Keys | Play/Pause (0x120), Mute (0x121), Vol+ (0x122), Vol- (0x123), Next (0x124), Prev (0x125), Stop (0x126) |
 | `0x127` | Apple Mac Globe / Fn Key | Emits HID Consumer Usage `0x029D` (*AC Next Keyboard Layout Select* / Globe 🌐) |
+| `0x130` .. `0x134` | Mouse Actions | Left Click (0x130), Right Click (0x131), Middle Click (0x132), Scroll Up (0x133), Scroll Down (0x134) via Composite BLE HID Report ID 3 |
 
 ---
 
@@ -170,3 +171,22 @@ python3 server.py
 
 4. **Live Monitor Layer Filtering:**
    - Visual keypress indicators in the configurator must compare `pressedLayer` with `activeLayerIndex`. Keys pressed on a different layer must not highlight keycaps on the currently viewed layer.
+
+5. **Composite BLE HID Architecture (`DactylBleComposite.h`):**
+   - Implements a single unified HID service with three distinct Input Reports:
+     - Report ID 1: Keyboard (8 bytes: modifier bitmask, reserved, 6 scancodes array).
+     - Report ID 2: Consumer Control (2 bytes: 16 usages including Mac Globe `0x029D`).
+     - Report ID 3: Mouse (4 bytes: buttons bitmask [Bit 0 Left, Bit 1 Right, Bit 2 Middle], X [-127..127], Y [-127..127], Wheel [-127..127]).
+   - Appearance is set to `HID_KEYBOARD` (`0x03C1`).
+
+6. **macOS Bluetooth GATT Report Map Caching:**
+   - macOS caches the BLE HID Report Map upon initial device pairing.
+   - When report descriptors are expanded or modified (such as adding Report ID 3 Mouse), macOS does not re-read the report map on simple reconnects. The device must be explicitly forgotten in macOS Bluetooth Settings ("Dieses Gerät ignorieren...") and re-paired once.
+
+7. **Native Desktop Application (`Dactyl Configurator.app`):**
+   - The Dactyl Configurator is a native macOS desktop application (`Dactyl Configurator.app` / Electron), not a website in a browser. Always treat and refer to it as a native desktop application.
+
+8. **Pending Changes Inspector & Undo Drawer:**
+   - Staged edits (`markPendingSync`) store rich change records (`{ type, title, description, revert }`).
+   - Revert closures must capture `const targetLayer = activeLayerIndex;` at creation time to prevent mutating the wrong layer if the user switches layer tabs before clicking "Rückgängig".
+   - Key revert closures update inspector inputs immediately when the reverted key is currently selected.

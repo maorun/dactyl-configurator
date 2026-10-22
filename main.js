@@ -22,7 +22,7 @@ logElectron('=== Electron main.js loaded ===');
 let mainWindow = null;
 let serverProcess = null;
 const PORT = 8088;
-const URL = `http://localhost:${PORT}`;
+const APP_URL = `http://localhost:${PORT}`;
 
 function resolveRepoDir() {
   if (process.env.REPO_DIR && fs.existsSync(path.join(process.env.REPO_DIR, 'server.py'))) {
@@ -44,31 +44,74 @@ const currentPath = process.env.PATH || '';
 const newPath = extraPaths.filter(p => !currentPath.includes(p)).concat(currentPath).join(':');
 process.env.PATH = newPath;
 
-function ensureServer(callback) {
-  const req = http.get(URL, () => {
-    callback();
-  });
-  req.on('error', () => {
-    const serverScript = path.join(REPO_DIR, 'server.py');
-    serverProcess = spawn('python3', [serverScript], {
-      cwd: REPO_DIR,
-      env: process.env,
-      detached: false,
-      stdio: 'ignore'
+// Prüft, ob auf dem Port wirklich der Dactyl-Configurator-Server antwortet (nicht ein fremder Prozess)
+function probeServer(onResult) {
+  let done = false;
+  const finish = (ok) => {
+    if (done) return;
+    done = true;
+    onResult(ok);
+  };
+  const req = http.get(`${APP_URL}/api/status`, { timeout: 1500 }, (res) => {
+    let body = '';
+    res.setEncoding('utf8');
+    res.on('data', (chunk) => { body += chunk; });
+    res.on('end', () => {
+      try {
+        finish(res.statusCode === 200 && JSON.parse(body).app === 'dactyl-configurator');
+      } catch (e) {
+        finish(false);
+      }
     });
-    const startTime = Date.now();
-    const interval = setInterval(() => {
-      http.get(URL, () => {
-        clearInterval(interval);
-        callback();
-      }).on('error', () => {
-        if (Date.now() - startTime > 15000) {
-          clearInterval(interval);
-          callback();
-        }
-      });
-    }, 150);
   });
+  req.on('timeout', () => req.destroy(new Error('timeout')));
+  req.on('error', () => finish(false));
+}
+
+function ensureServer(callback) {
+  probeServer((running) => {
+    if (running) {
+      callback();
+      return;
+    }
+    startServer(callback);
+  });
+}
+
+function startServer(callback) {
+  const serverScript = path.join(REPO_DIR, 'server.py');
+  serverProcess = spawn('python3', [serverScript], {
+    cwd: REPO_DIR,
+    env: process.env,
+    detached: false,
+    stdio: 'ignore'
+  });
+  // Fehlt python3, emittiert spawn ein 'error'-Event; ohne Listener stürzt der Main-Prozess ab
+  serverProcess.on('error', (err) => {
+    logElectron(`Failed to start server.py: ${err.message}`);
+    serverProcess = null;
+  });
+  const startTime = Date.now();
+  let probing = false;
+  const interval = setInterval(() => {
+    if (probing) return;
+    probing = true;
+    probeServer((ok) => {
+      probing = false;
+      if (ok || Date.now() - startTime > 15000) {
+        clearInterval(interval);
+        if (!ok) logElectron('Server did not become ready within 15s.');
+        callback();
+      }
+    });
+  }, 150);
+}
+
+function stopServer() {
+  if (serverProcess) {
+    try { serverProcess.kill(); } catch (e) {}
+    serverProcess = null;
+  }
 }
 
 function createWindow() {
@@ -156,13 +199,16 @@ function createWindow() {
   });
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    if (!url.startsWith(ALLOWED_ORIGIN)) {
+    let origin = '';
+    try { origin = new URL(url).origin; } catch (e) {}
+    // Exakter Origin-Vergleich: startsWith ließe z. B. http://localhost:8088.evil.com zu
+    if (origin !== ALLOWED_ORIGIN) {
       event.preventDefault();
       logElectron(`Blocked navigation to untrusted URL: ${url}`);
     }
   });
 
-  mainWindow.loadURL(URL);
+  mainWindow.loadURL(APP_URL);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -176,8 +222,9 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (serverProcess) {
-    try { serverProcess.kill(); } catch (e) {}
-  }
+  stopServer();
   app.quit();
 });
+
+// Cmd+Q / Dock-Beenden löst window-all-closed nicht aus: Server auch hier beenden
+app.on('before-quit', stopServer);

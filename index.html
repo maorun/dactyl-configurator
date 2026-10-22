@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dactyl Keyboard Configurator</title>
-  <link rel="stylesheet" href="style.css?v=11">
+  <link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
   <div class="app-container">
@@ -91,7 +91,7 @@
             <button class="layer-btn" data-layer="7">Layer 7 (Custom)</button>
           </div>
           <div class="layer-rename-group" style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.6rem;">
-            <input type="text" id="layerNameInput" class="form-control" style="width: 140px; padding: 0.25rem 0.5rem; font-size: 0.85rem;" placeholder="Name der Ebene...">
+            <input type="text" id="layerNameInput" class="form-control" maxlength="31" style="width: 140px; padding: 0.25rem 0.5rem; font-size: 0.85rem;" placeholder="Name der Ebene...">
             <button id="btnRenameLayer" class="btn btn-outline btn-sm" title="Aktuelle Ebene umbenennen">✏️ Name speichern</button>
           </div>
         </div>
@@ -115,7 +115,10 @@
               <strong>Drahtloser Konfig-Modus &amp; Combo Auto-Sync</strong>
               <span class="badge" style="background: rgba(59,130,246,0.25); color: #93c5fd; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px;">Combo: R4C5 + R0C0 (0,5s)</span>
               <span class="config-state-badge state-normal" id="configModeStateBadge">⌨️ Mac-Tastaturmodus aktiv</span>
-              <span class="pending-sync-badge synced" id="pendingSyncBadge">✓ Alle Einstellungen synchron</span>
+              <span class="pending-sync-badge synced" id="pendingSyncBadge" title="Alle Einstellungen sind synchron">✓ Alle Einstellungen synchron</span>
+              <button id="btnTogglePendingDrawer" class="btn-pending-toggle" style="display: none;" title="Vorgemerkte Änderungen anzeigen oder ausblenden">
+                📋 Details anzeigen ▾
+              </button>
             </div>
             <div style="display: flex; align-items: center; gap: 0.75rem;">
               <label style="display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #cbd5e1; cursor: pointer; user-select: none;" title="Wenn aktiv: Sobald du R4C5 + R0C0 auf der Tastatur drückst, verbindet sich die App automatisch, überträgt alle gespeicherten Einstellungen und gibt die Tastatur sofort wieder an den Mac zurück.">
@@ -129,6 +132,22 @@
           </div>
           <div id="autoSyncProgressWrap" style="display: none; margin: 0.55rem 0; background: rgba(15,23,42,0.8); border-radius: 6px; height: 8px; overflow: hidden; border: 1px solid rgba(59,130,246,0.3);">
             <div id="autoSyncProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.15s ease;"></div>
+          </div>
+
+          <!-- Vorgemerkte Änderungen Detail-Drawer -->
+          <div id="pendingChangesDrawer" class="pending-changes-drawer" style="display: none;">
+            <div class="pending-changes-header">
+              <div class="pending-changes-header-left">
+                <span class="pending-changes-title-text">📋 Vorgemerkte Änderungen zur Übertragung</span>
+                <span id="pendingChangesCountBadge" class="pending-changes-count">0</span>
+              </div>
+              <div class="pending-changes-header-right">
+                <button id="btnDiscardAllPending" class="btn btn-outline btn-xs" style="color: #fca5a5; border-color: rgba(239,68,68,0.4);">
+                  🗑️ Alle verwerfen
+                </button>
+              </div>
+            </div>
+            <ul id="pendingChangesList" class="pending-changes-list"></ul>
           </div>
           <div class="config-guide-desc" id="configGuideDesc">
             <span><strong>1. In Ruhe einstellen:</strong> Ändere Tasten, Layer-Namen &amp; Timeouts einfach vorab in der App (werden lokal vorgemerkt, während du normal am Mac weiterarbeitest).</span>
@@ -190,7 +209,10 @@
         <div class="key-inspector" id="keyInspector">
           <div class="inspector-header">
             <h4>Tasten-Inspektor</h4>
-            <span class="key-coords-badge" id="selectedKeyCoords">Keine Taste gewählt</span>
+            <div class="inspector-header-actions">
+              <span class="key-coords-badge" id="selectedKeyCoords">Keine Taste gewählt</span>
+              <button id="btnClearKeySelection" class="btn btn-outline btn-xs" title="Auswahl aufheben (Esc)" style="display: none;">✕ Auswahl aufheben</button>
+            </div>
           </div>
 
           <div class="inspector-body" id="inspectorBody" style="display: none;">
@@ -209,28 +231,9 @@
             <div class="form-group">
               <label for="holdActionSelect">Halte-Aktion / Mod-Tap (Optional beim Festhalten):</label>
               <select id="holdActionSelect" class="form-control">
-                <option value="NONE">-- Keine (Nur Einzeltaste) --</option>
-                <optgroup label="Modifier Halten">
-                  <option value="MOD_LCTRL">Halten = Strg / Control (Links)</option>
-                  <option value="MOD_LSHIFT">Halten = Umschalt / Shift (Links)</option>
-                  <option value="MOD_LALT">Halten = Alt / Option (Links)</option>
-                  <option value="MOD_LGUI">Halten = Cmd / Windows (Links)</option>
-                  <option value="MOD_RCTRL">Halten = Strg / Control (Rechts)</option>
-                  <option value="MOD_RSHIFT">Halten = Umschalt / Shift (Rechts)</option>
-                  <option value="MOD_RALT">Halten = Alt / Option (Rechts)</option>
-                  <option value="MOD_RGUI">Halten = Cmd / Windows (Rechts)</option>
-                </optgroup>
-                <optgroup label="Layer temporär aktivieren">
-                  <option value="MO_1">Halten = Layer 1 (Nav)</option>
-                  <option value="MO_2">Halten = Layer 2 (Symbole)</option>
-                  <option value="MO_3">Halten = Layer 3 (Numpad)</option>
-                  <option value="MO_4">Halten = Layer 4 (Function)</option>
-                  <option value="MO_5">Halten = Layer 5 (Media)</option>
-                  <option value="MO_6">Halten = Layer 6 (Shortcuts)</option>
-                  <option value="MO_7">Halten = Layer 7 (Custom)</option>
-                </optgroup>
+                <!-- Wird von app.js mit allen Aktionen befüllt (Tap A / Halten B) -->
               </select>
-              <small class="form-hint">Beispiel: Kurzes Tippen = Space, langes Festhalten = Strg oder Layer 1.</small>
+              <small class="form-hint">Beispiel: Kurzes Tippen = A, Festhalten (&gt; 200 ms) oder gleichzeitiges Drücken einer weiteren Taste = B, Strg oder Layer 1.</small>
             </div>
 
             <div class="inspector-actions">
@@ -299,7 +302,7 @@
         
         <div class="form-group">
           <label for="deviceNameInput">Bluetooth Gerätename:</label>
-          <input type="text" id="deviceNameInput" class="form-control" value="Dactyl Keyboard" maxlength="28">
+          <input type="text" id="deviceNameInput" class="form-control" value="Dactyl Keyboard" maxlength="31">
           <small class="form-hint">Wird bei der Bluetooth-Suche auf Mac/PC angezeigt.</small>
         </div>
 
@@ -310,7 +313,7 @@
 
         <div class="form-group">
           <label for="comboTimeoutInput">Combo-Zeitfenster (Millisekunden für gleichzeitiges Drücken):</label>
-          <input type="number" id="comboTimeoutInput" class="form-control" value="40" min="10" max="150">
+          <input type="number" id="comboTimeoutInput" class="form-control" value="40" min="10" max="200">
           <small class="form-hint">Innerhalb dieser Zeitspanne müssen beide Tasten gedrückt werden, um als Combo erkannt zu werden.</small>
         </div>
 
@@ -408,6 +411,6 @@
     <div class="toast" id="toastNotification"></div>
   </div>
 
-  <script src="app.js?v=30"></script>
+  <script src="app.js?v=34"></script>
 </body>
 </html>

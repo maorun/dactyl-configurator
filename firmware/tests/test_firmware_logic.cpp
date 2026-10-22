@@ -2,27 +2,30 @@
 #include <cassert>
 #include <iostream>
 
-// Include or replicate firmware definitions and logic
+// Firmware-Definitionen, die DactylLogic.h von der einbindenden Übersetzungseinheit erwartet.
+// Die getestete Logik selbst stammt unverändert aus firmware/dactyl_right/DactylLogic.h.
 #define NUM_LAYERS 8
 #define NUM_ROWS 6
 #define NUM_COLS 7
 
-#define ACT_MO_BASE 0x100
 #define ACT_MO_0 0x100
 #define ACT_MO_1 0x101
 #define ACT_MO_2 0x102
-#define ACT_MO_7 0x107
-
-#define ACT_TG_BASE 0x110
 #define ACT_TG_0 0x110
 #define ACT_TG_1 0x111
-#define ACT_TG_2 0x112
-#define ACT_TG_7 0x117
-
 #define ACT_LAYER_UP 0x118
 #define ACT_LAYER_DOWN 0x119
+#define ACT_MOUSE_LEFT       0x130
+#define ACT_MOUSE_RIGHT      0x131
+#define ACT_MOUSE_MIDDLE     0x132
+#define ACT_MOUSE_WHEEL_UP   0x133
+#define ACT_MOUSE_WHEEL_DOWN 0x134
 
 #define MAX_COMBOS 16
+#define CONFIG_MODE_MAGIC 0xDAC7CF60UL
+// Im Test änderbar, um einen Flash aus der App (ID != 0) zu simulieren
+static uint32_t testDefaultsId = 0;
+#define KEYMAP_DEFAULTS_ID testDefaultsId
 
 struct KeyCombo {
   uint8_t r1, c1;
@@ -37,8 +40,8 @@ struct ComboRuntime {
 };
 static ComboRuntime comboRuntime[MAX_COMBOS];
 
-// Firmware State Variables
 static uint16_t KEYMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+static uint16_t HOLDMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static String layerNames[NUM_LAYERS] = {
   "Base", "Nav & Pfeile", "Symbole", "Numpad",
   "Function", "Media", "Shortcuts", "Custom"
@@ -64,309 +67,16 @@ static uint32_t deepSleepTimeoutMinutes = 60;
 static uint8_t numCombos = 0;
 static KeyCombo userCombos[MAX_COMBOS];
 
+static SemaphoreHandle_t configMutex = xSemaphoreCreateMutex();
+static Preferences preferences;
 static BLECharacteristic mockChar;
 static BLECharacteristic* pConfigCharacteristic = &mockChar;
 static BleKeyboard bleKeyboard("Dactyl Keyboard", "Dactyl DIY", 100);
 
-// Replicate firmware functions
-uint8_t getActiveLayer() {
-  for (int i = NUM_LAYERS - 1; i >= 1; i--) {
-    if (momentaryLayers[i]) return i;
-  }
-  for (int i = NUM_LAYERS - 1; i >= 1; i--) {
-    if (toggleLayers[i]) return i;
-  }
-  return 0;
-}
+void handleConfigCommand(String cmd, bool fromBle = false);
+void sendConfigNotification(String msg, bool addDelay = false);
 
-void sendConfigNotification(String msg, bool = false) {
-  Serial.println(msg);
-  if (pConfigCharacteristic) {
-    // Im normalen Mac-Tastaturmodus keine Tastendrücke über BLE-Notifications senden (Finding #1 Keylogger-Schutz)
-    if (!isConfigMode && (msg.startsWith("KEY_PRESS") || msg.startsWith("KEY_RELEASE"))) {
-      return;
-    }
-    pConfigCharacteristic->setValue(msg.c_str());
-    pConfigCharacteristic->notify();
-  }
-}
-
-void saveLayerNameToNVS(int idx, String name) {
-  if (idx < 0 || idx >= NUM_LAYERS) return;
-  layerNames[idx] = name;
-  Preferences prefs;
-  prefs.begin("dactyl", false);
-  String k = "name_" + String(idx);
-  prefs.putString(k.c_str(), name);
-  prefs.end();
-}
-
-void saveKeymapToNVS() {
-  Preferences prefs;
-  prefs.begin("dactyl", false);
-  prefs.putBytes("keymap", KEYMAP, sizeof(KEYMAP));
-  prefs.end();
-}
-
-void saveStandbyTimeoutToNVS(uint32_t t) {
-  standbyTimeoutMinutes = t;
-  Preferences prefs;
-  prefs.begin("dactyl", false);
-  prefs.putUInt("standby_timeout", t);
-  prefs.end();
-}
-
-void saveSleepTimeoutToNVS(uint32_t t) {
-  deepSleepTimeoutMinutes = t;
-  Preferences prefs;
-  prefs.begin("dactyl", false);
-  prefs.putUInt("sleep_timeout", t);
-  prefs.end();
-}
-
-void saveDeviceNameToNVS(String name) {
-  deviceName = name;
-  Preferences prefs;
-  prefs.begin("dactyl", false);
-  prefs.putString("dev_name", name);
-  prefs.end();
-}
-
-void saveDebounceToNVS(uint8_t ms) {
-  debounceMs = ms;
-  Preferences prefs;
-  prefs.begin("dactyl", false);
-  prefs.putUChar("debounce", ms);
-  prefs.end();
-}
-
-void saveComboTimeoutToNVS(uint16_t ms) {
-  comboTimeoutMs = ms;
-  Preferences prefs;
-  prefs.begin("dactyl", false);
-  prefs.putUShort("combo_to", ms);
-  prefs.end();
-}
-
-void saveCombosToNVS() {
-  Preferences prefs;
-  prefs.begin("dactyl", false);
-  prefs.putUChar("num_combos", numCombos);
-  prefs.putBytes("combos_data", userCombos, numCombos * sizeof(KeyCombo));
-  prefs.end();
-}
-
-void handleConfigCommand(String cmd, bool fromBle = false) {
-  cmd.trim();
-  if (cmd.length() == 0) return;
-
-  // Finding #1: BLE write security check
-  if (fromBle && !isConfigMode && cmd != "ENTER_CONFIG" && cmd != "GET_INFO") {
-    Serial.println("WARN: BLE config write rejected (not in config mode): " + cmd);
-    return;
-  }
-
-  lastActivityTime = millis();
-
-  if (cmd.startsWith("SET_KEY ")) {
-    int l, r, c, val;
-    if (sscanf(cmd.c_str(), "SET_KEY %d %d %d %d", &l, &r, &c, &val) == 4) {
-      if (l >= 0 && l < NUM_LAYERS && r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS) {
-        KEYMAP[l][r][c] = (uint16_t)val;
-        saveKeymapToNVS();
-        sendConfigNotification("OK SET_KEY " + String(l) + " " + String(r) + " " + String(c) + " " + String(val));
-      }
-    }
-  } else if (cmd.startsWith("SET_K ")) {
-    int l, r, c, val;
-    if (sscanf(cmd.c_str(), "SET_K %d %d %d %d", &l, &r, &c, &val) == 4) {
-      if (l >= 0 && l < NUM_LAYERS && r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS) {
-        KEYMAP[l][r][c] = (uint16_t)val;
-      }
-    }
-  } else if (cmd == "SAVE_NVS") {
-    saveKeymapToNVS();
-    sendConfigNotification("OK SAVE_NVS");
-  } else if (cmd.startsWith("SET_NAME ")) {
-    int spaceIdx = cmd.indexOf(' ', 9);
-    int l = cmd.substring(9, spaceIdx > 0 ? spaceIdx : 10).toInt();
-    String name = spaceIdx > 0 ? cmd.substring(spaceIdx + 1) : "";
-    name.replace("\"", "");
-    name.replace("\\", "");
-    name.trim();
-    if (name.length() > 31) name = name.substring(0, 31);
-    if (l >= 0 && l < NUM_LAYERS && name.length() > 0) {
-      saveLayerNameToNVS(l, name);
-      sendConfigNotification("OK SET_NAME " + String(l) + " " + name);
-    }
-  } else if (cmd.startsWith("SET_STANDBY ")) {
-    int t = cmd.substring(12).toInt();
-    if (t >= 0 && t <= 120) {
-      saveStandbyTimeoutToNVS((uint32_t)t);
-      sendConfigNotification("OK SET_STANDBY " + String(t));
-    }
-  } else if (cmd.startsWith("SET_SLEEP ")) {
-    int t = cmd.substring(10).toInt();
-    if (t >= 0 && t <= 240) {
-      saveSleepTimeoutToNVS((uint32_t)t);
-      sendConfigNotification("OK SET_SLEEP " + String(t));
-    }
-  } else if (cmd.startsWith("SET_DEV_NAME ")) {
-    String name = cmd.substring(13);
-    name.replace("\"", "");
-    name.replace("\\", "");
-    name.trim();
-    if (name.length() > 31) name = name.substring(0, 31);
-    if (name.length() > 0) {
-      saveDeviceNameToNVS(name);
-      sendConfigNotification("OK SET_DEV_NAME " + name);
-    }
-  } else if (cmd.startsWith("SET_DEBOUNCE ")) {
-    int d = cmd.substring(13).toInt();
-    if (d >= 1 && d <= 50) {
-      saveDebounceToNVS((uint8_t)d);
-      sendConfigNotification("OK SET_DEBOUNCE " + String(d));
-    }
-  } else if (cmd.startsWith("SET_COMBO_TIMEOUT ")) {
-    int ct = cmd.substring(18).toInt();
-    if (ct >= 10 && ct <= 200) {
-      saveComboTimeoutToNVS((uint16_t)ct);
-      sendConfigNotification("OK SET_COMBO_TIMEOUT " + String(ct));
-    }
-  } else if (cmd == "CLEAR_COMBOS") {
-    numCombos = 0;
-    sendConfigNotification("OK CLEAR_COMBOS");
-  } else if (cmd.startsWith("ADD_COMBO ")) {
-    int r1, c1, r2, c2, beh, act;
-    if (sscanf(cmd.c_str(), "ADD_COMBO %d %d %d %d %d %d", &r1, &c1, &r2, &c2, &beh, &act) == 6) {
-      if (numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
-          r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS) {
-        userCombos[numCombos].r1 = (uint8_t)r1;
-        userCombos[numCombos].c1 = (uint8_t)c1;
-        userCombos[numCombos].r2 = (uint8_t)r2;
-        userCombos[numCombos].c2 = (uint8_t)c2;
-        userCombos[numCombos].behavior = (uint8_t)beh;
-        userCombos[numCombos].action = (uint16_t)act;
-        comboRuntime[numCombos].active = false;
-        comboRuntime[numCombos].lastReleaseTime = 0;
-        numCombos++;
-        sendConfigNotification("OK ADD_COMBO " + String(numCombos - 1));
-      }
-    }
-  } else if (cmd == "SAVE_COMBOS") {
-    saveCombosToNVS();
-    sendConfigNotification("OK SAVE_COMBOS");
-  } else if (cmd == "GET_NAMES") {
-    String out = "LAYER_NAMES:[";
-    for (int i = 0; i < NUM_LAYERS; i++) {
-      out += "\"" + layerNames[i] + "\"";
-      if (i < NUM_LAYERS - 1) out += ",";
-    }
-    out += "]";
-    sendConfigNotification(out);
-  } else if (cmd == "GET_INFO") {
-    char buf[288];
-    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"mac\":\"2E:BC:BB:81:61:A8\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"config_mode\":%s}",
-      isConfigMode ? "Dactyl Config" : deviceName.c_str(),
-      standbyTimeoutMinutes, deepSleepTimeoutMinutes,
-      debounceMs, comboTimeoutMs,
-      isConfigMode ? "true" : "false");
-    sendConfigNotification(String(buf));
-  } else if (cmd == "RESET_CONFIG") {
-    Preferences prefs;
-    prefs.begin("dactyl", false);
-    prefs.clear();
-    prefs.end();
-    sendConfigNotification("OK RESET_CONFIG");
-  } else if (cmd == "ENTER_CONFIG") {
-    sendConfigNotification("OK ENTER_CONFIG");
-    enterConfigRequested = true;
-  } else if (cmd == "EXIT_CONFIG") {
-    sendConfigNotification("OK EXIT_CONFIG");
-    exitConfigRequested = true;
-  }
-}
-
-bool wasComboRecentlyActive(uint8_t r, uint8_t c) {
-  unsigned long now = millis();
-  for (uint8_t i = 0; i < numCombos; i++) {
-    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
-        (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
-      if (comboRuntime[i].active) return true;
-      if (comboRuntime[i].lastReleaseTime > 0 && ((unsigned long)(now - comboRuntime[i].lastReleaseTime) < 300)) {
-        if ((long)(keyPressTime[r][c] - comboRuntime[i].lastReleaseTime) <= 0) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-bool isComboCandidateKey(uint8_t r, uint8_t c) {
-  for (uint8_t i = 0; i < numCombos; i++) {
-    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
-        (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void checkUserCombos() {
-  unsigned long now = millis();
-  for (uint8_t i = 0; i < numCombos; i++) {
-    uint8_t r1 = userCombos[i].r1;
-    uint8_t c1 = userCombos[i].c1;
-    uint8_t r2 = userCombos[i].r2;
-    uint8_t c2 = userCombos[i].c2;
-
-    bool bothPressed = keyState[r1][c1] && keyState[r2][c2];
-    if (bothPressed && !comboRuntime[i].active) {
-      unsigned long t1 = keyPressTime[r1][c1];
-      unsigned long t2 = keyPressTime[r2][c2];
-      bool inWindow = ((unsigned long)(t1 - t2) <= comboTimeoutMs) || ((unsigned long)(t2 - t1) <= comboTimeoutMs);
-
-      if (inWindow) {
-        comboRuntime[i].active = true;
-        keySentToHost[r1][c1] = true;
-        keySentToHost[r2][c2] = true;
-        if (!isConfigMode && bleKeyboard.isConnected()) {
-          bleKeyboard.releaseAll();
-        }
-        uint16_t act = userCombos[i].action;
-        if (userCombos[i].behavior == 0) { // KEY_PRESS
-          if (!isConfigMode && bleKeyboard.isConnected()) {
-            bleKeyboard.write((uint8_t)act);
-          }
-          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
-        } else if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
-          if (!isConfigMode && bleKeyboard.isConnected()) {
-            bleKeyboard.press((uint8_t)act);
-          }
-          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
-        } else if (userCombos[i].behavior == 2) { // LAYER_TOGGLE
-          uint8_t l = act & 0x07;
-          if (l == 0) {
-            for (int j = 1; j < NUM_LAYERS; j++) toggleLayers[j] = false;
-          } else if (l < NUM_LAYERS) {
-            toggleLayers[l] = !toggleLayers[l];
-          }
-          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
-        }
-      }
-    } else if (!bothPressed && comboRuntime[i].active) {
-      comboRuntime[i].active = false;
-      comboRuntime[i].lastReleaseTime = now;
-      if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
-        uint16_t act = userCombos[i].action;
-        if (!isConfigMode && bleKeyboard.isConnected()) {
-          bleKeyboard.release((uint8_t)act);
-        }
-      }
-    }
-  }
-}
+#include "../dactyl_right/DactylLogic.h"
 
 // =============================================================================
 // TEST SUITE ASSERTIONS
@@ -403,8 +113,31 @@ void resetState() {
     comboRuntime[i].active = false;
     comboRuntime[i].lastReleaseTime = 0;
   }
+  for (int l = 0; l < NUM_LAYERS; l++)
+    for (int r = 0; r < NUM_ROWS; r++)
+      for (int c = 0; c < NUM_COLS; c++) HOLDMAP[l][r][c] = 0;
+  resetTapHold();
   numCombos = 0;
+  // Globale Settings und NVS-Mock zurücksetzen, damit Tests unabhängig von ihrer Reihenfolge sind
   comboTimeoutMs = 40;
+  debounceMs = 5;
+  standbyTimeoutMinutes = 5;
+  deepSleepTimeoutMinutes = 60;
+  deviceName = "Dactyl Keyboard";
+  {
+    const String defaultNames[NUM_LAYERS] = { "Base", "Nav & Pfeile", "Symbole", "Numpad", "Function", "Media", "Shortcuts", "Custom" };
+    for (int l = 0; l < NUM_LAYERS; l++) layerNames[l] = defaultNames[l];
+  }
+  Preferences::strStore.clear();
+  Preferences::uintStore.clear();
+  Preferences::bytesStore.clear();
+  testDefaultsId = 0;
+  Preferences::failWrites = false;
+  Preferences::failBytesKey.clear();
+  _mock_mutex_busy = false;
+  bleKeyboard.connected = true;
+  bleKeyboard.writtenKeys.clear();
+  bleKeyboard.pressHistory.clear();
   isConfigMode = false;
   enterConfigRequested = false;
   exitConfigRequested = false;
@@ -436,23 +169,30 @@ TEST(test_layer_resolution_and_navigation) {
   toggleLayers[3] = true;
   assert(getActiveLayer() == 3);
   momentaryLayers[2] = true;
-  assert(getActiveLayer() == 2); // Momentary takes precedence over toggle
+  assert(getActiveLayer() == 3); // Höchste aktive Ebene gewinnt (Toggle 3 > Momentary 2)
+  momentaryLayers[5] = true;
+  assert(getActiveLayer() == 5); // Höhere Momentary-Ebene überdeckt Toggle 3
+  momentaryLayers[5] = false;
   momentaryLayers[2] = false;
+  assert(getActiveLayer() == 3);
+
+  // MO_0 erzwingt temporär Layer 0, auch wenn Ebenen getoggelt sind
+  momentaryLayers[0] = true;
+  assert(getActiveLayer() == 0);
+  momentaryLayers[0] = false;
   assert(getActiveLayer() == 3);
 
   // 4. TG_0 resets all toggles
   for (int i = 1; i < NUM_LAYERS; i++) toggleLayers[i] = false;
   assert(getActiveLayer() == 0);
 
-  // 5. LAYER_UP wrap 7 -> 0
-  uint8_t curr = 7;
-  uint8_t nextUp = (curr + 1) % NUM_LAYERS;
-  assert(nextUp == 0);
+  // 5. LAYER_DOWN wrap 0 -> 7 (Produktions-Dispatch)
+  dispatchPress(0, 0, ACT_LAYER_DOWN, getActiveLayer());
+  assert(getActiveLayer() == 7);
 
-  // 6. LAYER_DOWN wrap 0 -> 7
-  curr = 0;
-  uint8_t nextDown = (curr == 0) ? (NUM_LAYERS - 1) : (curr - 1);
-  assert(nextDown == 7);
+  // 6. LAYER_UP wrap 7 -> 0
+  dispatchPress(0, 0, ACT_LAYER_UP, getActiveLayer());
+  assert(getActiveLayer() == 0);
 }
 
 // -----------------------------------------------------------------------------
@@ -478,7 +218,10 @@ TEST(test_security_ble_command_rejection) {
   assert(!mockChar.notifications.empty());
   assert(mockChar.value.find("DEVICE_INFO:") != std::string::npos);
 
+  // ENTER_CONFIG über BLE ist im Tastaturmodus abgelehnt: Config-Modus nur physisch oder per USB
   handleConfigCommand("ENTER_CONFIG", true);
+  assert(enterConfigRequested == false);
+  handleConfigCommand("ENTER_CONFIG", false);
   assert(enterConfigRequested == true);
 
   // In config mode, SET_KEY over BLE MUST succeed
@@ -550,10 +293,11 @@ TEST(test_config_combo_immediate_release) {
   // Verification: All pressed keys on macOS are immediately released!
   assert(bleKeyboard.pressedKeys.empty());
 
-  // Individual press handler check: while both are held, press() is suppressed
-  if (!(keyState[0][0] && keyState[4][5])) {
-    bleKeyboard.press((uint8_t)'6');
-  }
+  // Produktions-Dispatch: während beide gehalten sind, wird R0C0 nicht an den Host gesendet
+  assert(isConfigComboSuppressed(0, 0));
+  assert(isConfigComboSuppressed(4, 5));
+  assert(!isConfigComboSuppressed(1, 1));
+  dispatchPress(0, 0, '6', 0);
   assert(bleKeyboard.pressedKeys.empty()); // Keystroke suppressed!
 }
 
@@ -689,15 +433,7 @@ TEST(test_serial_accumulator_drain) {
 
   static String serialRxBuf = "";
   while (Serial.available()) {
-    char c = (char)Serial.read();
-    if (c == '\n') {
-      handleConfigCommand(serialRxBuf, false);
-      serialRxBuf = "";
-    } else if (c != '\r') {
-      if (serialRxBuf.length() < 256) {
-        serialRxBuf += c;
-      }
-    }
+    feedSerialChar((char)Serial.read(), serialRxBuf);
   }
 
   assert(KEYMAP[0][1][2] == 45);
@@ -716,15 +452,7 @@ TEST(test_serial_accumulator_drain) {
   Serial.feed(batch);
 
   while (Serial.available()) {
-    char c = (char)Serial.read();
-    if (c == '\n') {
-      handleConfigCommand(serialRxBuf, false);
-      serialRxBuf = "";
-    } else if (c != '\r') {
-      if (serialRxBuf.length() < 256) {
-        serialRxBuf += c;
-      }
-    }
+    feedSerialChar((char)Serial.read(), serialRxBuf);
   }
 
   // Verify all 336 keys arrived accurately
@@ -741,9 +469,6 @@ TEST(test_serial_accumulator_drain) {
 // -----------------------------------------------------------------------------
 // Test 8: Isolated Config Mode Boot via RTC Magic Flag (BLE Bond Protection)
 // -----------------------------------------------------------------------------
-#define CONFIG_MODE_MAGIC 0xDAC7CF60UL
-enum esp_reset_reason_t { ESP_RST_POWERON = 1, ESP_RST_SW = 3, ESP_RST_DEEPSLEEP = 5 };
-
 TEST(test_rtc_config_mode_boot_isolation) {
   resetState();
   uint32_t rtcConfigModeMagic = 0;
@@ -751,7 +476,7 @@ TEST(test_rtc_config_mode_boot_isolation) {
   // 1. Cold boot (ESP_RST_POWERON) even with garbage/magic in RTC RAM must boot into Normal Keyboard Mode
   rtcConfigModeMagic = CONFIG_MODE_MAGIC;
   esp_reset_reason_t reason = ESP_RST_POWERON;
-  bool bootIntoConfig = (reason == ESP_RST_SW && rtcConfigModeMagic == CONFIG_MODE_MAGIC);
+  bool bootIntoConfig = shouldBootIntoConfigMode(reason, rtcConfigModeMagic);
   rtcConfigModeMagic = 0;
   isConfigMode = bootIntoConfig;
   assert(isConfigMode == false);
@@ -760,7 +485,7 @@ TEST(test_rtc_config_mode_boot_isolation) {
   // 2. enterConfigMode() sets rtcConfigModeMagic = CONFIG_MODE_MAGIC and triggers ESP_RST_SW
   rtcConfigModeMagic = CONFIG_MODE_MAGIC;
   reason = ESP_RST_SW;
-  bootIntoConfig = (reason == ESP_RST_SW && rtcConfigModeMagic == CONFIG_MODE_MAGIC);
+  bootIntoConfig = shouldBootIntoConfigMode(reason, rtcConfigModeMagic);
   rtcConfigModeMagic = 0; // Cleared immediately on boot so subsequent resets return to Keyboard Mode
   isConfigMode = bootIntoConfig;
   assert(isConfigMode == true);
@@ -768,9 +493,724 @@ TEST(test_rtc_config_mode_boot_isolation) {
 
   // 3. Subsequent software reset (exitConfigMode or crash) boots back into Normal Keyboard Mode
   reason = ESP_RST_SW;
-  bootIntoConfig = (reason == ESP_RST_SW && rtcConfigModeMagic == CONFIG_MODE_MAGIC);
+  bootIntoConfig = shouldBootIntoConfigMode(reason, rtcConfigModeMagic);
   isConfigMode = bootIntoConfig;
   assert(isConfigMode == false);
+}
+
+// -----------------------------------------------------------------------------
+// Test 9: Simulated Mouse Actions and Combos
+// -----------------------------------------------------------------------------
+TEST(test_mouse_actions_and_combos) {
+  resetState();
+
+  // 1. ADD_COMBO for Left Click (J+K -> ACT_MOUSE_LEFT, behavior 0 = KEY_PRESS)
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 304", false); // 0x130 = 304 (ACT_MOUSE_LEFT)
+  assert(numCombos == 1);
+  assert(userCombos[0].action == ACT_MOUSE_LEFT);
+
+  // 2. ADD_COMBO for Scroll Up (J+L -> ACT_MOUSE_WHEEL_UP, behavior 0)
+  handleConfigCommand("ADD_COMBO 2 1 2 3 0 307", false); // 0x133 = 307 (ACT_MOUSE_WHEEL_UP)
+  assert(numCombos == 2);
+  assert(userCombos[1].action == ACT_MOUSE_WHEEL_UP);
+
+  // 3. ADD_COMBO for Right Click Hold (J+M -> ACT_MOUSE_RIGHT, behavior 1 = MODIFIER_HOLD)
+  handleConfigCommand("ADD_COMBO 2 1 2 4 1 305", false); // 0x131 = 305 (ACT_MOUSE_RIGHT)
+  assert(numCombos == 3);
+  assert(userCombos[2].action == ACT_MOUSE_RIGHT);
+
+  // Trigger Combo 0: Left Click
+  setMillis(1000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 1000;
+  keyState[2][2] = true;
+  keyPressTime[2][2] = 1010;
+  checkUserCombos();
+  assert(comboRuntime[0].active == true);
+  assert(bleKeyboard.clickedMouseButtons.size() == 1);
+  assert(bleKeyboard.clickedMouseButtons[0] == MOUSE_BUTTON_LEFT);
+
+  // Release Combo 0
+  keyState[2][1] = false;
+  keyState[2][2] = false;
+  checkUserCombos();
+  assert(comboRuntime[0].active == false);
+
+  // Trigger Combo 1: Wheel Up
+  setMillis(2000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 2000;
+  keyState[2][3] = true;
+  keyPressTime[2][3] = 2015;
+  checkUserCombos();
+  assert(comboRuntime[1].active == true);
+  assert(bleKeyboard.mouseScrolls.size() == 1);
+  assert(bleKeyboard.mouseScrolls[0] == 1);
+
+  // Release Combo 1
+  keyState[2][1] = false;
+  keyState[2][3] = false;
+  checkUserCombos();
+  assert(comboRuntime[1].active == false);
+
+  // Trigger Combo 2: Right Click Hold
+  setMillis(3000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 3000;
+  keyState[2][4] = true;
+  keyPressTime[2][4] = 2995;
+  checkUserCombos();
+  assert(comboRuntime[2].active == true);
+  assert((bleKeyboard.mouseButtons & MOUSE_BUTTON_RIGHT) != 0);
+
+  // Release Combo 2
+  keyState[2][1] = false;
+  keyState[2][4] = false;
+  checkUserCombos();
+  assert(comboRuntime[2].active == false);
+  assert((bleKeyboard.mouseButtons & MOUSE_BUTTON_RIGHT) == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 10: NVS-Schreibfehler werden als ERR gemeldet statt als OK
+// -----------------------------------------------------------------------------
+TEST(test_nvs_write_failure_reports_error) {
+  resetState();
+  Preferences::failWrites = true;
+
+  mockChar.notifications.clear();
+  handleConfigCommand("SAVE_NVS", false);
+  assert(mockChar.value == "ERR NVS SAVE_NVS");
+
+  handleConfigCommand("SET_KEY 0 0 0 42", false);
+  assert(mockChar.value == "ERR NVS SET_KEY");
+
+  handleConfigCommand("SAVE_COMBOS", false);
+  assert(mockChar.value == "ERR NVS SAVE_COMBOS");
+
+  handleConfigCommand("SET_DEV_NAME Broken", false);
+  assert(mockChar.value == "ERR NVS SET_DEV_NAME");
+
+  // ERR enthält den Layer-Index, auf den die App-Bestätigung ("SET_NAME <l>") wartet
+  handleConfigCommand("SET_NAME 3 Broken", false);
+  assert(mockChar.value == "ERR NVS SET_NAME 3");
+  assert(layerNames[3] == "Numpad");
+  assert(deviceName != "Broken"); // RAM-Zustand bleibt beim Fehler unverändert
+
+  Preferences::failWrites = false;
+  handleConfigCommand("SAVE_NVS", false);
+  assert(mockChar.value == "OK SAVE_NVS");
+
+  // Leere Combo-Liste ist kein Fehler
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("SAVE_COMBOS", false);
+  assert(mockChar.value == "OK SAVE_COMBOS");
+}
+
+// -----------------------------------------------------------------------------
+// Test 11: Busy-Mutex und ungültige Argumente werden gemeldet
+// -----------------------------------------------------------------------------
+TEST(test_busy_and_invalid_args_report_error) {
+  resetState();
+  _mock_mutex_busy = true;
+  handleConfigCommand("SET_K 0 0 0 42", false);
+  assert(KEYMAP[0][0][0] == 0);
+  assert(mockChar.value == "ERR BUSY SET_K 0 0 0 42");
+  _mock_mutex_busy = false;
+
+  handleConfigCommand("SET_K 9 0 0 42", false);
+  assert(mockChar.value == "ERR ARGS SET_K 9 0 0 42");
+  handleConfigCommand("SET_DEBOUNCE 99", false);
+  assert(mockChar.value == "ERR ARGS SET_DEBOUNCE 99");
+  handleConfigCommand("ADD_COMBO 2 1 2 2 7 177", false);
+  assert(mockChar.value == "ERR ARGS ADD_COMBO 2 1 2 2 7 177");
+  assert(numCombos == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 12: Mod-Tap (Tap-Aktion + Halte-Aktion) über SET_K / SET_KEY
+// -----------------------------------------------------------------------------
+TEST(test_mod_tap_tap_and_hold) {
+  resetState();
+  // R5C3: Tap = Space, Hold = Left Ctrl
+  handleConfigCommand("SET_K 0 5 3 32 128", false);
+  assert(KEYMAP[0][5][3] == ' ');
+  assert(HOLDMAP[0][5][3] == KEY_LEFT_CTRL);
+  // SET_K ohne Hold-Argument bleibt kompatibel und löscht die Halte-Aktion
+  HOLDMAP[0][2][0] = KEY_LEFT_ALT;
+  handleConfigCommand("SET_K 0 2 0 104", false);
+  assert(HOLDMAP[0][2][0] == 0);
+
+  // Fall A: Kurzer Tap (< TAPPING_TERM_MS) sendet Space als Press + Release
+  setMillis(1000);
+  keyState[5][3] = true;
+  onMatrixKeyChange(5, 3, true);
+  assert(bleKeyboard.pressedKeys.empty()); // Noch unentschieden
+  setMillis(1100);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressedKeys.empty());
+  keyState[5][3] = false;
+  onMatrixKeyChange(5, 3, false);
+  assert(bleKeyboard.pressedKeys.empty()); // Space gedrückt und wieder losgelassen
+  assert(tapHold[5][3].pending == false);
+
+  // Fall B: Halten >= TAPPING_TERM_MS aktiviert Ctrl, Loslassen sendet kein Space
+  setMillis(2000);
+  keyState[5][3] = true;
+  onMatrixKeyChange(5, 3, true);
+  setMillis(2000 + TAPPING_TERM_MS);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1);
+  assert(bleKeyboard.pressedKeys[0] == KEY_LEFT_CTRL);
+  keyState[5][3] = false;
+  onMatrixKeyChange(5, 3, false);
+  assert(bleKeyboard.pressedKeys.empty());
+
+  // Fall C: Andere Taste innerhalb des Tapping-Terms entscheidet sofort Hold (Ctrl + H)
+  KEYMAP[0][2][0] = 'h';
+  setMillis(3000);
+  keyState[5][3] = true;
+  onMatrixKeyChange(5, 3, true);
+  setMillis(3050);
+  keyState[2][0] = true;
+  onMatrixKeyChange(2, 0, true);
+  assert(bleKeyboard.pressedKeys.size() == 2);
+  assert(bleKeyboard.pressedKeys[0] == KEY_LEFT_CTRL);
+  assert(bleKeyboard.pressedKeys[1] == 'h');
+  keyState[2][0] = false;
+  onMatrixKeyChange(2, 0, false);
+  keyState[5][3] = false;
+  onMatrixKeyChange(5, 3, false);
+  assert(bleKeyboard.pressedKeys.empty());
+
+  // Fall D: Layer-Tap (Tap = Esc, Hold = MO_1)
+  handleConfigCommand("SET_K 0 5 6 177 257", false);
+  setMillis(4000);
+  keyState[5][6] = true;
+  onMatrixKeyChange(5, 6, true);
+  setMillis(4000 + TAPPING_TERM_MS);
+  processDeferredKeys(millis());
+  assert(getActiveLayer() == 1);
+  keyState[5][6] = false;
+  onMatrixKeyChange(5, 6, false);
+  assert(getActiveLayer() == 0);
+
+  // GET_CONFIG liefert die Halte-Aktionen als HOLD_DATA
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool foundHold = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n.rfind("HOLD_DATA:{\"l\":0,", 0) == 0 && n.find("128") != std::string::npos) foundHold = true;
+  }
+  assert(foundHold);
+  assert(mockChar.notifications.back() == "CONFIG_SYNC_DONE");
+}
+
+// -----------------------------------------------------------------------------
+// Test 12b: Media-Keys & Mac Globe (Consumer-Report-Bits aus DactylKeycodes.h)
+// -----------------------------------------------------------------------------
+TEST(test_media_and_globe_keys) {
+  resetState();
+  // Globe = Bit 10 (AC Next Keyboard Layout Select 0x029D im Report-Descriptor)
+  assert(mediaBits(KEY_MEDIA_GLOBE) == 0x0400);
+  assert(mediaBits(KEY_MEDIA_PLAY_PAUSE) == 0x0008);
+
+  KEYMAP[0][1][1] = 0x127; // MAC_GLOBE
+  keyState[1][1] = true;
+  onMatrixKeyChange(1, 1, true);
+  assert(bleKeyboard.pressedMediaKeys.size() == 1);
+  assert(bleKeyboard.pressedMediaKeys[0] == 0x0400);
+  keyState[1][1] = false;
+  onMatrixKeyChange(1, 1, false);
+  assert(bleKeyboard.pressedMediaKeys.empty()); // Globe wird beim Loslassen freigegeben
+
+  KEYMAP[0][1][2] = 0x120; // MEDIA_PLAY_PAUSE
+  keyState[1][2] = true;
+  onMatrixKeyChange(1, 2, true);
+  assert(bleKeyboard.writtenMediaKeys.size() == 1);
+  assert(bleKeyboard.writtenMediaKeys[0] == 0x0008);
+  keyState[1][2] = false;
+  onMatrixKeyChange(1, 2, false);
+}
+
+// -----------------------------------------------------------------------------
+// Test 13: Transparente Taste mit Halte-Aktion fällt auf Layer 0 zurück
+// -----------------------------------------------------------------------------
+TEST(test_resolve_key_actions_fallback) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  HOLDMAP[0][1][1] = KEY_LEFT_SHIFT;
+  uint16_t tap, hold;
+  resolveKeyActions(2, 1, 1, tap, hold);
+  assert(tap == 'u' && hold == KEY_LEFT_SHIFT);
+
+  // Nur Halte-Aktion ohne Tap verhält sich wie eine normale Taste
+  HOLDMAP[3][1][1] = KEY_LEFT_ALT;
+  resolveKeyActions(3, 1, 1, tap, hold);
+  assert(tap == KEY_LEFT_ALT && hold == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 14: Release nach Ablauf des Tapping-Terms ohne vorherigen Tick ist Hold, kein Tap
+// -----------------------------------------------------------------------------
+TEST(test_tap_hold_release_after_term_is_hold) {
+  resetState();
+  KEYMAP[0][5][3] = ' ';
+  HOLDMAP[0][5][3] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[5][3] = true;
+  onMatrixKeyChange(5, 3, true);
+  setMillis(1190);
+  processDeferredKeys(millis()); // letzter Tick vor dem Tapping-Term
+  assert(bleKeyboard.pressedKeys.empty());
+  // Release wird im nächsten Scan (210 ms) vor processDeferredKeys() verarbeitet
+  setMillis(1210);
+  keyState[5][3] = false;
+  onMatrixKeyChange(5, 3, false);
+  assert(bleKeyboard.writtenKeys.empty());
+  assert(bleKeyboard.pressedKeys.empty()); // Ctrl gedrückt und wieder losgelassen, kein Space
+  for (const auto& n : Serial.outputLines) {
+    assert(n.find("\"key\":\" \"") == std::string::npos); // kein Space-KEY_PRESS
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Test 15: Erzwungener Hold einer Combo-Kandidatentaste erreicht den Host vor der Folgetaste
+// -----------------------------------------------------------------------------
+TEST(test_forced_hold_on_combo_candidate_reaches_host_first) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;                      // J: Tap j / Hold Ctrl
+  KEYMAP[0][2][0] = 'h';                                 // H: kein Combo-Kandidat
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1020); // innerhalb comboTimeoutMs (40 ms)
+  keyState[2][0] = true;
+  onMatrixKeyChange(2, 0, true);
+  assert(bleKeyboard.pressedKeys.size() == 2);
+  assert(bleKeyboard.pressedKeys[0] == KEY_LEFT_CTRL); // Modifier zuerst
+  assert(bleKeyboard.pressedKeys[1] == 'h');
+  keyState[2][0] = false;
+  onMatrixKeyChange(2, 0, false);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 16: Eine ausgelöste Combo verwirft die Mod-Tap-Entscheidung ihrer Tasten
+// -----------------------------------------------------------------------------
+TEST(test_combo_cancels_member_tap_hold) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  HOLDMAP[0][2][2] = 0x101;                              // K: Hold MO_1
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1010);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  // Beide Tasten 200 ms weiter halten: Layer 1 darf NICHT aktiv werden
+  setMillis(1000 + TAPPING_TERM_MS + 20);
+  processDeferredKeys(millis());
+  assert(getActiveLayer() == 0);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  keyState[2][2] = false;
+  onMatrixKeyChange(2, 2, false);
+  checkUserCombos();
+  assert(getActiveLayer() == 0);
+  assert(bleKeyboard.writtenKeys.size() == 1); // keine zusätzliche Einzeltaste
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 17: Gespeicherte leere Combo-Liste überlebt den Neustart
+// -----------------------------------------------------------------------------
+TEST(test_empty_combo_list_persists_across_reboot) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  handleConfigCommand("SAVE_COMBOS", false);
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("SAVE_COMBOS", false);
+  assert(mockChar.value == "OK SAVE_COMBOS");
+  // Neustart simulieren: einkompilierte Default-Combo ist wieder im RAM
+  numCombos = 1;
+  loadKeymapFromNVS();
+  assert(numCombos == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 18: Keyboard-Report-Descriptor deckt alle gesendeten Usages ab (inkl. F13..F24)
+// -----------------------------------------------------------------------------
+// Liefert den Data-Wert des n-ten Vorkommens eines 1-Byte-Items im Keyboard-Collection-Abschnitt
+// Liefert den Data-Wert des ersten 1-Byte-Items `prefix` im Key-Array der Keyboard-Collection.
+// Das Key-Array beginnt semantisch mit REPORT_COUNT(6) (6 Scancodes) und endet mit dem INPUT-Item.
+static int keyArrayDescriptorItem(uint8_t prefix) {
+  bool inKeyArray = false;
+  for (size_t i = 0; i + 1 < sizeof(_compositeReportDescriptor); i++) {
+    uint8_t b = _compositeReportDescriptor[i];
+    uint8_t data = _compositeReportDescriptor[i + 1];
+    if (b == END_COLLECTION(0)) break; // Ende der Keyboard-Collection
+    if (b == REPORT_COUNT(1) && data == 0x06) inKeyArray = true;
+    else if (inKeyArray && b == prefix) return data;
+    else if (inKeyArray && b == HIDINPUT(1)) break;
+    if ((b & 0x03) == 1) i++; // 1-Byte-Item: Datenbyte überspringen
+  }
+  return -1;
+}
+
+TEST(test_keyboard_descriptor_covers_f13_to_f24) {
+  int logicalMax = keyArrayDescriptorItem(LOGICAL_MAXIMUM(1));
+  int usageMax = keyArrayDescriptorItem(USAGE_MAXIMUM(1));
+  assert(logicalMax >= 0 && usageMax >= 0); // Key-Array gefunden
+  // press() sendet Sondertasten als Usage (code - 136); F24 = 0xFB -> 0x73
+  int highestUsage = KEY_F24 - 136;
+  assert(highestUsage == 0x73);
+  assert(logicalMax >= highestUsage);
+  assert(usageMax >= highestUsage);
+  // Auch alle anderen Sondertasten bis 0xFB liegen im Bereich
+  assert(KEY_F13 - 136 == 0x68);
+}
+
+// -----------------------------------------------------------------------------
+// Test 19: Erzwungener Hold einer Combo-Taste sendet kein Modifier-Tippen, wenn die Combo gewinnt
+// -----------------------------------------------------------------------------
+TEST(test_forced_hold_does_not_leak_modifier_when_combo_fires) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;                      // J: Tap j / Hold Ctrl
+  KEYMAP[0][2][2] = 'k';
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1015);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true); // erzwingt J-Hold, Partner K ist im Combo-Fenster gedrückt
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  for (uint8_t k : bleKeyboard.pressHistory) assert(k != KEY_LEFT_CTRL); // kein verirrtes Ctrl
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  keyState[2][2] = false;
+  onMatrixKeyChange(2, 2, false);
+  checkUserCombos();
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 20: Combo nimmt eine bereits aktive Halte-Aktion (MO-Layer) eines Mitglieds zurück
+// -----------------------------------------------------------------------------
+TEST(test_combo_unwinds_active_member_hold) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = 0x101;                              // J: Hold MO_1
+  KEYMAP[0][2][2] = 'k';
+  KEYMAP[0][2][0] = 'h';
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1010);
+  keyState[2][0] = true;
+  onMatrixKeyChange(2, 0, true);            // H erzwingt J-Hold -> Layer 1 aktiv
+  assert(getActiveLayer() == 1);
+  assert(tapHold[2][1].holdActive);
+  setMillis(1030);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);
+  checkUserCombos();                        // J + K innerhalb 40 ms -> Combo gewinnt
+  assert(comboRuntime[0].active);
+  assert(!tapHold[2][1].holdActive);
+  assert(getActiveLayer() == 0);            // MO_1 zurückgenommen
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(getActiveLayer() == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 21: Erzwungener Maus-Hold einer Combo-Kandidatentaste wird gedrückt und wieder gelöst
+// -----------------------------------------------------------------------------
+TEST(test_forced_mouse_hold_on_combo_candidate) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = ACT_MOUSE_LEFT;                     // J: Hold Linksklick
+  KEYMAP[0][2][0] = 'h';
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1020);
+  keyState[2][0] = true;
+  onMatrixKeyChange(2, 0, true);
+  assert((bleKeyboard.mouseButtons & MOUSE_BUTTON_LEFT) != 0);
+  keyState[2][0] = false;
+  onMatrixKeyChange(2, 0, false);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert((bleKeyboard.mouseButtons & MOUSE_BUTTON_LEFT) == 0);
+  assert(bleKeyboard.clickedMouseButtons.empty()); // kein zusätzlicher Klick beim Loslassen
+}
+
+// -----------------------------------------------------------------------------
+// Test 22: Combo-Partner außerhalb des Combo-Fensters: erzwungener Hold geht sofort an den Host
+// -----------------------------------------------------------------------------
+TEST(test_forced_hold_with_partner_outside_window_reaches_host) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;                      // J: Tap j / Hold Ctrl
+  KEYMAP[0][2][2] = 'k';
+  KEYMAP[0][2][0] = 'h';
+  setMillis(1000);
+  keyState[2][2] = true;                                 // Partner K zuerst (gehalten)
+  onMatrixKeyChange(2, 2, true);
+  setMillis(1100);                                       // J 100 ms später: außerhalb 40 ms
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1110);
+  keyState[2][0] = true;
+  onMatrixKeyChange(2, 0, true);                         // H erzwingt J-Hold
+  checkUserCombos();
+  assert(!comboRuntime[0].active);                       // keine Combo
+  bool ctrlBeforeH = false;
+  for (size_t i = 0; i < bleKeyboard.pressHistory.size(); i++) {
+    if (bleKeyboard.pressHistory[i] == KEY_LEFT_CTRL) { ctrlBeforeH = true; break; }
+    assert(bleKeyboard.pressHistory[i] != 'h');          // H darf nicht vor Ctrl kommen
+  }
+  assert(ctrlBeforeH);
+}
+
+// -----------------------------------------------------------------------------
+// Test 23: Partner im Fenster gedrückt und vor checkUserCombos() gelöst: Hold erreicht den Host
+// -----------------------------------------------------------------------------
+TEST(test_forced_hold_partner_released_before_combo_check) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;                      // J: Tap j / Hold Ctrl
+  KEYMAP[0][2][2] = 'k';
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1015);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);                         // erzwingt J-Hold, Partner im Fenster
+  keyState[2][2] = false;
+  onMatrixKeyChange(2, 2, false);                        // K im selben Scan wieder gelöst
+  checkUserCombos();
+  assert(!comboRuntime[0].active);                       // Combo greift nicht
+  // Spätestens nach comboTimeoutMs sendet processDeferredKeys() die gepufferte Halte-Aktion
+  setMillis(1000 + 40 + 5);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == KEY_LEFT_CTRL);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());               // Ctrl wird beim Loslassen gelöst
+}
+
+// -----------------------------------------------------------------------------
+// Test 24: Beliebige Halte-Aktion: Tap A / Halten B
+// -----------------------------------------------------------------------------
+TEST(test_tap_a_hold_b) {
+  resetState();
+  handleConfigCommand("SET_K 0 1 1 97 98", false); // Tap 'a' / Hold 'b'
+  // Tap
+  setMillis(1000);
+  keyState[1][1] = true;
+  onMatrixKeyChange(1, 1, true);
+  setMillis(1050);
+  keyState[1][1] = false;
+  onMatrixKeyChange(1, 1, false);
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == 'a');
+  // Hold
+  setMillis(2000);
+  keyState[1][1] = true;
+  onMatrixKeyChange(1, 1, true);
+  setMillis(2000 + TAPPING_TERM_MS);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'b');
+  keyState[1][1] = false;
+  onMatrixKeyChange(1, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(bleKeyboard.pressHistory.size() == 2 && bleKeyboard.pressHistory[1] == 'b'); // kein 'a' beim Hold
+}
+
+// -----------------------------------------------------------------------------
+// Test 25: Reiner Firmware-Flash (gleiche Defaults) behält die Nutzer-Belegung im NVS
+// -----------------------------------------------------------------------------
+TEST(test_reflash_with_same_defaults_keeps_user_keymap) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';                      // einkompilierter Default
+  loadKeymapFromNVS();                        // erster Start: Defaults -> NVS
+  assert(KEYMAP[0][1][1] == 'u');
+  handleConfigCommand("SET_KEY 0 1 1 98 99", false); // Nutzer: Tap b / Hold c
+  assert(mockChar.value.rfind("OK SET_KEY", 0) == 0);
+
+  // Neustart nach Flash mit unveränderten Defaults (anderer Build-Zeitpunkt egal)
+  KEYMAP[0][1][1] = 'u';
+  HOLDMAP[0][1][1] = 0;
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'b');             // Nutzer-Belegung bleibt
+  assert(HOLDMAP[0][1][1] == 'c');
+}
+
+// -----------------------------------------------------------------------------
+// Test 26: Neue Default-Belegung (Flash aus der App) überschreibt das NVS bewusst
+// -----------------------------------------------------------------------------
+TEST(test_flash_with_new_defaults_overwrites_keymap) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+
+  // "Auf Dactyl flashen": App-Belegung wird als neue Defaults einkompiliert
+  KEYMAP[0][1][1] = 'x';
+  HOLDMAP[0][1][1] = KEY_LEFT_ALT;
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'x');
+  assert(HOLDMAP[0][1][1] == KEY_LEFT_ALT);
+  uint32_t fp = keymapDefaultsFingerprint();
+  assert(Preferences::uintStore["defaults_fp"] == fp);
+  // NVS enthält jetzt die neue Belegung (nächster Start ohne Änderung lädt sie)
+  KEYMAP[0][1][1] = 'x';
+  HOLDMAP[0][1][1] = KEY_LEFT_ALT;
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'x' && HOLDMAP[0][1][1] == KEY_LEFT_ALT);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26b: Flash aus der App mit UNVERÄNDERTER Belegung überschreibt Geräte-Änderungen trotzdem
+// -----------------------------------------------------------------------------
+TEST(test_app_flash_with_same_layout_overwrites_device_edits) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false); // Änderung direkt auf dem Gerät
+  // Flash aus der App: gleiche Belegung, aber neue Kennung
+  testDefaultsId = 0x1234;
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'u');
+}
+
+// -----------------------------------------------------------------------------
+// Test 26c: Fehlgeschlagenes Schreiben der Defaults speichert keinen Fingerprint (Retry beim nächsten Start)
+// -----------------------------------------------------------------------------
+TEST(test_failed_defaults_write_is_retried) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  Preferences::failWrites = true;
+  loadKeymapFromNVS();
+  assert(!preferences.isKey("defaults_fp"));
+  Preferences::failWrites = false;
+  loadKeymapFromNVS();
+  assert(preferences.isKey("defaults_fp"));
+  assert(preferences.getBytesLength("keymap") == sizeof(KEYMAP));
+}
+
+// -----------------------------------------------------------------------------
+// Test 26e: Keymap geschrieben, Holdmap fehlgeschlagen: kein Fingerprint, Holdmap beim nächsten Start ergänzt
+// -----------------------------------------------------------------------------
+TEST(test_partial_defaults_write_retries_holdmap) {
+  resetState();
+  HOLDMAP[0][1][1] = KEY_LEFT_ALT;
+  Preferences::failBytesKey = "holdmap";
+  loadKeymapFromNVS();
+  assert(preferences.getBytesLength("keymap") == sizeof(KEYMAP));
+  assert(!preferences.isKey("holdmap"));
+  assert(!preferences.isKey("defaults_fp"));
+
+  Preferences::failBytesKey.clear();
+  HOLDMAP[0][1][1] = KEY_LEFT_ALT;            // Neustart: einkompilierte Defaults im RAM
+  loadKeymapFromNVS();
+  assert(preferences.getBytesLength("holdmap") == sizeof(HOLDMAP));
+  assert(Preferences::uintStore["defaults_fp"] == keymapDefaultsFingerprint());
+  assert(HOLDMAP[0][1][1] == KEY_LEFT_ALT);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26f: Erhaltene Keymap ohne Holdmap, Ergänzen schlägt fehl: kein Fingerprint, Keymap bleibt, Retry
+// -----------------------------------------------------------------------------
+TEST(test_failed_holdmap_fill_keeps_keymap_and_retries) {
+  resetState();
+  uint16_t userMap[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+  userMap[0][2][2] = 'q';
+  preferences.putBytes("keymap", userMap, sizeof(userMap)); // älteres Schema: keine Holdmap, kein Fingerprint
+  HOLDMAP[0][2][2] = KEY_LEFT_ALT;
+  Preferences::failBytesKey = "holdmap";
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][2][2] == 'q');
+  assert(!preferences.isKey("holdmap"));
+  assert(!preferences.isKey("defaults_fp"));
+
+  Preferences::failBytesKey.clear();
+  KEYMAP[0][2][2] = 'k';                      // Neustart: einkompilierte Defaults im RAM
+  uint32_t fp = keymapDefaultsFingerprint();  // vor dem Laden: Fingerprint der einkompilierten Defaults
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][2][2] == 'q');
+  assert(preferences.getBytesLength("holdmap") == sizeof(HOLDMAP));
+  assert(Preferences::uintStore["defaults_fp"] == fp);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26d: RESET_CONFIG + Neustart stellt die einkompilierten Defaults wieder her
+// -----------------------------------------------------------------------------
+TEST(test_reset_config_restores_defaults_after_reboot) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  handleConfigCommand("RESET_CONFIG", false);
+  assert(mockChar.value == "OK RESET_CONFIG");
+  KEYMAP[0][1][1] = 'u';                      // Neustart: einkompilierte Defaults im RAM
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'u');
+  assert(preferences.isKey("keymap") && preferences.isKey("defaults_fp"));
+}
+
+// -----------------------------------------------------------------------------
+// Test 27: Migration vom alten fw_build-Schema behält die Nutzer-Belegung
+// -----------------------------------------------------------------------------
+TEST(test_migration_from_fw_build_keeps_user_keymap) {
+  resetState();
+  // Zustand einer älteren Firmware: keymap + fw_build, kein defaults_fp
+  uint16_t userMap[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+  userMap[0][2][2] = 'q';
+  preferences.putBytes("keymap", userMap, sizeof(userMap));
+  preferences.putString("fw_build", "Oct 21 2026 10:00:00");
+
+  KEYMAP[0][2][2] = 'k';                      // neue Firmware mit anderem Default
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][2][2] == 'q');             // Nutzer-Belegung bleibt
+  assert(preferences.isKey("defaults_fp"));
+  assert(!preferences.isKey("fw_build"));
+}
+
+// -----------------------------------------------------------------------------
+// Test 27b: Migration vom fw_build-Schema mit einem Flash aus der App übernimmt die App-Belegung
+// -----------------------------------------------------------------------------
+TEST(test_migration_with_app_flash_uses_new_defaults) {
+  resetState();
+  uint16_t userMap[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+  userMap[0][2][2] = 'q';
+  preferences.putBytes("keymap", userMap, sizeof(userMap));
+  preferences.putString("fw_build", "Oct 21 2026 10:00:00");
+
+  testDefaultsId = 0xBEEF;                    // "Auf Dactyl flashen" aus der App
+  KEYMAP[0][2][2] = 'k';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][2][2] == 'k');
+  assert(!preferences.isKey("fw_build"));
 }
 
 int main() {

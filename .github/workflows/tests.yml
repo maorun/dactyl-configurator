@@ -33,6 +33,11 @@ jobs:
         run: |
           node --check app.js
           node --check main.js
+          python3 -m py_compile server.py
+
+      - name: Run Configurator Logic Unit Tests (Node)
+        run: |
+          node tests/test_app_logic.js
 
       - name: Run Firmware C++ Unit Tests
         run: |
@@ -53,13 +58,9 @@ jobs:
           arduino-cli config init
           arduino-cli config set board_manager.additional_urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
           arduino-cli core update-index
-          arduino-cli core install esp32:esp32
+          arduino-cli core install esp32:esp32@3.3.12
 
-      - name: Install BleKeyboard Library
-        run: |
-          mkdir -p ~/Arduino/libraries
-          git clone --depth 1 https://github.com/T-vK/ESP32-BLE-Keyboard.git ~/Arduino/libraries/ESP32-BLE-Keyboard
-
+      # Keine externe BleKeyboard-Bibliothek: Keycodes & HID-Report-Typen liegen in DactylKeycodes.h
       - name: Compile Dactyl Firmware
         run: |
           arduino-cli compile --fqbn esp32:esp32:lolin32-lite firmware/dactyl_right

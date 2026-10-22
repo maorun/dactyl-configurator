@@ -100,7 +100,7 @@ Die Kabel sind im Diagramm und in der folgenden Tabelle exakt nach der **linken 
   brew install arduino-cli
   arduino-cli core install esp32:esp32
   ```
-- **Arduino Library:** [`ESP32-BLE-Keyboard`](https://github.com/T-vK/ESP32-BLE-Keyboard).
+- **Arduino Core:** `esp32:esp32@3.3.12` (keine externe Bibliothek nötig; die Composite-BLE-HID-Implementierung liegt in `firmware/dactyl_right/DactylBleComposite.h`, Keycodes in `DactylKeycodes.h`).
 - **Browser:** Chromium-basierter Browser (Google Chrome, Arc, Brave, Edge, Opera) mit aktivierter Web-Bluetooth- und Web-Serial-Unterstützung.
 
 ### 2. Server starten
@@ -126,6 +126,10 @@ Der Server startet unter `http://localhost:8088`.
   3. Physische Tastendrücke und Layer-Wechsel werden im Visualizer sofort hervorgehoben.
 - **Flashen per USB:**
   - Mit einem Klick auf **„💾 Auf Dactyl flashen“** kompiliert der lokale Server die C++-Keymap und flasht die Firmware per `arduino-cli` direkt auf den ESP32.
+- **Nach einer Änderung des HID-Report-Descriptors erneut koppeln:**
+  - macOS speichert die Report-Map beim ersten Koppeln und liest sie bei Reconnects nicht neu.
+  - Die Firmware mit Mod-Tap erweitert den Keyboard-Report um F13–F24 (Usages `0x68`–`0x73`).
+  - Entferne die Tastatur nach dem Flashen dieser Version in den macOS-Bluetooth-Einstellungen („Dieses Gerät ignorieren …“) und kopple sie neu. Sonst ignoriert macOS F13–F24.
 
 ---
 
@@ -194,10 +198,13 @@ dactyl_configurator/
 ├── index.html                    # Single-Page-App Dashboard
 ├── style.css                     # Modernes Dark-Mode CSS Layout
 ├── server.py                     # Lokaler Python Backend-Server (Flash & Sync API)
-├── current_config.json           # Persistierte Keymaps, Combos & Einstellungen
+├── default_config.json           # Versionierte Vorlage für Keymaps, Combos & Einstellungen
+├── current_config.json           # Lokaler Stand der App (nicht versioniert, .gitignore)
 ├── .gitignore                    # Git Ignore Definitionen
 └── README.md                     # Diese Dokumentation
 ```
+
+> **Upgrade-Hinweis:** Ältere Stände versionierten `current_config.json`. Ein `git pull` über den Commit, der die Datei aus Git entfernt, löscht die lokale Datei. Sichern Sie `current_config.json` vor dem Pull (z. B. `cp current_config.json ~/dactyl_config.backup.json`) und kopieren Sie sie danach zurück.
 
 ---
 

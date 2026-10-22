@@ -205,8 +205,8 @@
           "hold": "NONE"
         },
         {
-          "tap": "KEY_ESC",
-          "label": "Esc",
+          "label": "Maus links",
+          "tap": "MOUSE_LEFT",
           "hold": "NONE"
         }
       ]

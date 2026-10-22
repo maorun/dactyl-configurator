@@ -8,6 +8,7 @@
 #include <cstring>
 #include <algorithm>
 #include <sstream>
+#include <cctype>
 
 // Basic Arduino Types & Constants
 #define HIGH 1
@@ -24,7 +25,8 @@ typedef void* SemaphoreHandle_t;
 #define pdMS_TO_TICKS(ms) (ms)
 
 inline SemaphoreHandle_t xSemaphoreCreateMutex() { return (void*)1; }
-inline int xSemaphoreTake(SemaphoreHandle_t, uint32_t) { return pdTRUE; }
+static bool _mock_mutex_busy = false;
+inline int xSemaphoreTake(SemaphoreHandle_t, uint32_t) { return _mock_mutex_busy ? pdFALSE : pdTRUE; }
 inline void xSemaphoreGive(SemaphoreHandle_t) {}
 
 // Mock Time
@@ -145,13 +147,21 @@ public:
   static std::map<std::string, std::string> strStore;
   static std::map<std::string, uint32_t> uintStore;
   static std::map<std::string, std::vector<uint8_t>> bytesStore;
+  static bool failWrites; // Simuliert volle/defekte NVS-Partition
+  static std::string failBytesKey; // Simuliert einen fehlschlagenden putBytes für genau diesen Key
 
   bool begin(const char*, bool) { return true; }
   void end() {}
-  void clear() {
+  bool clear() {
+    if (failWrites) return false;
     strStore.clear();
     uintStore.clear();
     bytesStore.clear();
+    return true;
+  }
+  bool remove(const char* key) {
+    strStore.erase(key); uintStore.erase(key); bytesStore.erase(key);
+    return true;
   }
 
   bool isKey(const char* key) {
@@ -160,31 +170,32 @@ public:
     return (strStore.count(k) > 0 || uintStore.count(k) > 0 || bytesStore.count(k) > 0);
   }
 
-  void putString(const char* key, String val) { strStore[key] = val.c_str(); }
+  size_t putString(const char* key, String val) { if (failWrites) return 0; strStore[key] = val.c_str(); return val.length(); }
   String getString(const char* key, String def = "") {
     if (strStore.count(key)) return String(strStore[key]);
     return def;
   }
 
-  void putUInt(const char* key, uint32_t val) { uintStore[key] = val; }
+  size_t putUInt(const char* key, uint32_t val) { if (failWrites) return 0; uintStore[key] = val; return 4; }
   uint32_t getUInt(const char* key, uint32_t def = 0) {
     if (uintStore.count(key)) return uintStore[key];
     return def;
   }
 
-  void putUChar(const char* key, uint8_t val) { uintStore[key] = val; }
+  size_t putUChar(const char* key, uint8_t val) { if (failWrites) return 0; uintStore[key] = val; return 1; }
   uint8_t getUChar(const char* key, uint8_t def = 0) {
     if (uintStore.count(key)) return (uint8_t)uintStore[key];
     return def;
   }
 
-  void putUShort(const char* key, uint16_t val) { uintStore[key] = val; }
+  size_t putUShort(const char* key, uint16_t val) { if (failWrites) return 0; uintStore[key] = val; return 2; }
   uint16_t getUShort(const char* key, uint16_t def = 0) {
     if (uintStore.count(key)) return (uint16_t)uintStore[key];
     return def;
   }
 
   size_t putBytes(const char* key, const void* buf, size_t len) {
+    if (failWrites || failBytesKey == key) return 0;
     const uint8_t* p = (const uint8_t*)buf;
     bytesStore[key] = std::vector<uint8_t>(p, p + len);
     return len;
@@ -204,6 +215,10 @@ public:
 std::map<std::string, std::string> Preferences::strStore;
 std::map<std::string, uint32_t> Preferences::uintStore;
 std::map<std::string, std::vector<uint8_t>> Preferences::bytesStore;
+bool Preferences::failWrites = false;
+std::string Preferences::failBytesKey;
+
+enum esp_reset_reason_t { ESP_RST_POWERON = 1, ESP_RST_SW = 3, ESP_RST_DEEPSLEEP = 5 };
 
 // Mock BLE
 #define ESP_MAC_BT 2
@@ -224,6 +239,16 @@ public:
   void notify() { notifications.push_back(value); }
 };
 
+// Report-IDs, Maus-Buttons & Report-Descriptor direkt aus der Firmware
+// ("HIDTypes.h" wird zuerst im Testordner gefunden: Host-Ersatz ohne ESP32-Core)
+#include "../dactyl_right/DactylHidDescriptor.h"
+
+// Keycodes & Report-Typen direkt aus der Firmware (keine doppelte Pflege im Mock)
+#include "../dactyl_right/DactylKeycodes.h"
+
+// Media-Report als 16-Bit-Wert (Bitposition wie im Consumer-Report-Descriptor)
+inline uint16_t mediaBits(const MediaKeyReport k) { return (uint16_t)(k[0] | (k[1] << 8)); }
+
 // BleKeyboard Mock
 class BleKeyboard {
 public:
@@ -234,57 +259,39 @@ public:
   std::vector<uint8_t> pressedKeys;
   std::vector<uint8_t> writtenKeys;
   std::vector<uint16_t> pressedMediaKeys;
+  uint8_t mouseButtons = 0;
+  std::vector<uint8_t> clickedMouseButtons;
+  std::vector<int8_t> mouseScrolls;
 
   BleKeyboard(std::string n, std::string m, uint8_t b) : name(n), mfr(m), batt(b) {}
   bool isConnected() { return connected; }
-  void press(uint8_t k) { pressedKeys.push_back(k); }
+  std::vector<uint8_t> pressHistory; // jeder press() an den Host, wird von releaseAll() nicht geleert
+  void press(uint8_t k) { pressedKeys.push_back(k); pressHistory.push_back(k); }
   void release(uint8_t k) {
     auto it = std::find(pressedKeys.begin(), pressedKeys.end(), k);
     if (it != pressedKeys.end()) pressedKeys.erase(it);
   }
-  void press(uint16_t k) { pressedMediaKeys.push_back(k); }
-  void release(uint16_t k) {
-    auto it = std::find(pressedMediaKeys.begin(), pressedMediaKeys.end(), k);
+  std::vector<uint16_t> writtenMediaKeys;
+  void press(const MediaKeyReport k) { pressedMediaKeys.push_back(mediaBits(k)); }
+  void release(const MediaKeyReport k) {
+    auto it = std::find(pressedMediaKeys.begin(), pressedMediaKeys.end(), mediaBits(k));
     if (it != pressedMediaKeys.end()) pressedMediaKeys.erase(it);
   }
   void write(uint8_t k) { writtenKeys.push_back(k); }
-  void write(uint16_t k) { pressedMediaKeys.push_back(k); }
-  void releaseAll() { pressedKeys.clear(); pressedMediaKeys.clear(); }
+  void write(const MediaKeyReport k) { writtenMediaKeys.push_back(mediaBits(k)); }
+
+  void mousePress(uint8_t btn) { mouseButtons |= btn; }
+  void mouseRelease(uint8_t btn) { mouseButtons &= ~btn; }
+  void mouseClick(uint8_t btn) { clickedMouseButtons.push_back(btn); }
+  void mouseScroll(int8_t wheel) { mouseScrolls.push_back(wheel); }
+
+  void releaseAll() {
+    pressedKeys.clear();
+    pressedMediaKeys.clear();
+    writtenMediaKeys.clear();
+    mouseButtons = 0;
+    clickedMouseButtons.clear();
+    mouseScrolls.clear();
+  }
   void setDisconnected() { connected = false; }
 };
-
-// Keyboard Definitions
-#define KEY_ESC 0xB1
-#define KEY_RETURN 0xB0
-#define KEY_BACKSPACE 0xB2
-#define KEY_TAB 0xB3
-#define KEY_DELETE 0xD4
-#define KEY_CAPS_LOCK 0xC1
-#define KEY_INSERT 0xD1
-#define KEY_PRTSC 0xCE
-#define KEY_UP_ARROW 0xDA
-#define KEY_DOWN_ARROW 0xD9
-#define KEY_LEFT_ARROW 0xD8
-#define KEY_RIGHT_ARROW 0xD7
-#define KEY_LEFT_CTRL 0x80
-#define KEY_LEFT_SHIFT 0x81
-#define KEY_LEFT_ALT 0x82
-#define KEY_RIGHT_ALT 0x86
-#define KEY_RIGHT_SHIFT 0x85
-#define KEY_NUM_0 0xEA
-#define KEY_NUM_1 0xE1
-#define KEY_NUM_9 0xE9
-#define KEY_F1 0xC2
-#define KEY_F7 0xC8
-#define KEY_F12 0xCD
-#define KEY_F13 0xF0
-#define KEY_F24 0xFB
-
-#define KEY_MEDIA_PLAY_PAUSE 0xE8
-#define KEY_MEDIA_MUTE 0xE2
-#define KEY_MEDIA_VOLUME_UP 0xE9
-#define KEY_MEDIA_VOLUME_DOWN 0xEA
-#define KEY_MEDIA_NEXT_TRACK 0xEB
-#define KEY_MEDIA_PREVIOUS_TRACK 0xEC
-#define KEY_MEDIA_STOP 0xED
-#define KEY_MEDIA_GLOBE 0x127

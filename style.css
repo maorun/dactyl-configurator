@@ -1499,3 +1499,44 @@ body {
   color: #38bdf8;
   background: rgba(56, 189, 248, 0.1);
 }
+
+/* Typing Stats (WPM) & Key Heatmap */
+.typing-stats {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.stat-badge {
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-family: monospace;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  min-width: 2.5rem;
+  text-align: center;
+  color: var(--text-main);
+}
+
+.matrix-grid.heatmap-on .key-cap:not(.selected).heat-1 { background: rgba(245, 158, 11, 0.12); }
+.matrix-grid.heatmap-on .key-cap:not(.selected).heat-2 { background: rgba(245, 158, 11, 0.28); }
+.matrix-grid.heatmap-on .key-cap:not(.selected).heat-3 { background: rgba(249, 115, 22, 0.45); }
+.matrix-grid.heatmap-on .key-cap:not(.selected).heat-4 { background: rgba(239, 68, 68, 0.6); }
+.matrix-grid.heatmap-on .key-cap:not(.selected).heat-5 { background: rgba(220, 38, 38, 0.8); }
+
+.matrix-grid.heatmap-on .key-cap[data-heat-count]::before {
+  content: attr(data-heat-count);
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 0.6rem;
+  font-family: monospace;
+  color: var(--text-muted);
+}
+
+.matrix-grid.heatmap-on .key-cap.heat-4[data-heat-count]::before,
+.matrix-grid.heatmap-on .key-cap.heat-5[data-heat-count]::before {
+  color: #fef2f2;
+}

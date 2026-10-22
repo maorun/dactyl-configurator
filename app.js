@@ -561,6 +561,60 @@ function normalizeConfig(cfg) {
   return cfg;
 }
 
+// Tipp-Statistik für Heatmap & WPM (DOM-frei, Zählung nur physischer Tasten der rechten Hand)
+const WPM_WINDOW_MS = 60000;
+const CHARS_PER_WORD = 5;
+const HEAT_LEVELS = 5;
+
+function createTypingStats(counts) {
+  const stats = { counts: {}, total: 0, recent: [] };
+  if (counts && typeof counts === "object") {
+    for (const [id, n] of Object.entries(counts)) {
+      const m = /^(\d+)_(\d+)$/.exec(id);
+      if (!m || !Number.isSafeInteger(n) || n <= 0) continue;
+      const r = Number(m[1]), c = Number(m[2]);
+      if (!isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS) || !isPhysicalKey(r, c)) continue;
+      stats.counts[`${r}_${c}`] = n;
+      stats.total += n;
+    }
+  }
+  return stats;
+}
+
+function recordKeyPress(stats, r, c, nowMs) {
+  if (!isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS) || !isPhysicalKey(r, c)) return false;
+  const id = `${r}_${c}`;
+  stats.counts[id] = (stats.counts[id] || 0) + 1;
+  stats.total++;
+  stats.recent.push(nowMs);
+  pruneRecentPresses(stats, nowMs);
+  return true;
+}
+
+function pruneRecentPresses(stats, nowMs) {
+  let drop = 0;
+  while (drop < stats.recent.length && nowMs - stats.recent[drop] >= WPM_WINDOW_MS) drop++;
+  if (drop) stats.recent.splice(0, drop);
+}
+
+// Wörter pro Minute über das gleitende Fenster der letzten 60 s (5 Anschläge = 1 Wort)
+function computeWpm(stats, nowMs) {
+  pruneRecentPresses(stats, nowMs);
+  return Math.round(stats.recent.length / CHARS_PER_WORD * (60000 / WPM_WINDOW_MS));
+}
+
+// Heat-Stufe 0 (nie gedrückt) bis HEAT_LEVELS (häufigste Taste)
+function heatLevel(count, maxCount) {
+  if (!count || !maxCount) return 0;
+  return Math.max(1, Math.ceil(count / maxCount * HEAT_LEVELS));
+}
+
+function maxKeyCount(stats) {
+  let max = 0;
+  for (const n of Object.values(stats.counts)) if (n > max) max = n;
+  return max;
+}
+
 // State
 let currentConfig = normalizeConfig(JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
 let activeLayerIndex = 0;
@@ -591,6 +645,13 @@ let bleWriteQueue = Promise.resolve();
 // Active pressed keys set: stores strings like "R_2_1"
 const activePressedKeys = new Set();
 
+// Heatmap & WPM: Zähler bleiben lokal in diesem Browser-Profil.
+// Annahme: genau ein App-Fenster (main.js); ein zweites Fenster überschreibt den gespeicherten Stand.
+const HEATMAP_STORAGE_KEY = "dactyl_key_heatmap_v1";
+let typingStats = createTypingStats(loadStoredHeatmap());
+let heatmapEnabled = false;
+let heatmapSaveTimer = null;
+
 // Initialisierung
 document.addEventListener("DOMContentLoaded", () => {
   initUI();
@@ -602,6 +663,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupBrowserKeyboardHooks();
   loadSavedConfigFromServer();
   initModernBleAutoSync();
+  initHeatmapUI();
 });
 
 function updateConfigModeUI(active, syncing = false) {
@@ -1225,6 +1287,7 @@ function renderMatrix() {
   } else {
     container.appendChild(createHalfMatrix(layer, "R"));
   }
+  if (heatmapEnabled) applyHeatmap();
 }
 
 function createHalfMatrix(matrixData, side) {
@@ -2663,6 +2726,7 @@ function handleSerialLine(line) {
         switchLayerUI(evt.target_layer);
       }
       triggerVisualKeyPress(evt.r, evt.c, typeof evt.key === "string" ? evt.key : "", "R", pressedLayer);
+      if (recordKeyPress(typingStats, evt.r, evt.c, Date.now())) onTypingStatsChanged();
     } catch (e) {
       console.warn("Failed to parse KEY_PRESS:", e, line);
     }
@@ -2885,6 +2949,96 @@ function triggerVisualKeyRelease(r, c, side = "R") {
       hideComboAlert();
     }
   }, 100);
+}
+
+// =============================================================================
+// Tasten-Heatmap & WPM-Anzeige
+// =============================================================================
+
+function loadStoredHeatmap() {
+  try {
+    const raw = localStorage.getItem(HEATMAP_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveHeatmapNow() {
+  if (heatmapSaveTimer) {
+    clearTimeout(heatmapSaveTimer);
+    heatmapSaveTimer = null;
+  }
+  try {
+    localStorage.setItem(HEATMAP_STORAGE_KEY, JSON.stringify(typingStats.counts));
+  } catch (e) {
+    console.warn("Heatmap konnte nicht gespeichert werden:", e);
+  }
+}
+
+function saveHeatmapSoon() {
+  if (heatmapSaveTimer) return;
+  heatmapSaveTimer = setTimeout(saveHeatmapNow, 1000);
+}
+
+function applyHeatClass(keyEl, maxCount) {
+  for (let i = 1; i <= HEAT_LEVELS; i++) keyEl.classList.remove(`heat-${i}`);
+  const count = typingStats.counts[`${keyEl.dataset.row}_${keyEl.dataset.col}`] || 0;
+  const level = heatLevel(count, maxCount);
+  if (heatmapEnabled && level) keyEl.classList.add(`heat-${level}`);
+  if (heatmapEnabled && count > 0) keyEl.dataset.heatCount = String(count);
+  else delete keyEl.dataset.heatCount;
+}
+
+function applyHeatmap() {
+  const maxCount = maxKeyCount(typingStats);
+  document.querySelectorAll('.key-cap[data-side="R"]:not(.key-cap-spacer)').forEach(el => applyHeatClass(el, maxCount));
+}
+
+function updateTypingStatsUI() {
+  const wpmEl = document.getElementById("liveWpm");
+  const totalEl = document.getElementById("liveKeyTotal");
+  if (wpmEl) wpmEl.textContent = String(computeWpm(typingStats, Date.now()));
+  if (totalEl) totalEl.textContent = String(typingStats.total);
+}
+
+function onTypingStatsChanged() {
+  saveHeatmapSoon();
+  updateTypingStatsUI();
+  if (heatmapEnabled) applyHeatmap();
+}
+
+function initHeatmapUI() {
+  const toggle = document.getElementById("btnToggleHeatmap");
+  const reset = document.getElementById("btnResetHeatmap");
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      heatmapEnabled = !heatmapEnabled;
+      toggle.classList.toggle("active", heatmapEnabled);
+      document.getElementById("matrixGrid").classList.toggle("heatmap-on", heatmapEnabled);
+      applyHeatmap();
+    });
+  }
+  if (reset) {
+    reset.addEventListener("click", () => {
+      if (!confirm("Tasten-Statistik (Heatmap & Anschläge) zurücksetzen?")) return;
+      typingStats = createTypingStats(null);
+      if (heatmapSaveTimer) {
+        clearTimeout(heatmapSaveTimer);
+        heatmapSaveTimer = null;
+      }
+      try { localStorage.removeItem(HEATMAP_STORAGE_KEY); } catch (e) {}
+      updateTypingStatsUI();
+      applyHeatmap();
+    });
+  }
+  // Ausstehende Zähler beim Schließen der App sofort sichern
+  window.addEventListener("beforeunload", () => {
+    if (heatmapSaveTimer) saveHeatmapNow();
+  });
+  updateTypingStatsUI();
+  // WPM fällt ohne neue Anschläge über das gleitende Fenster wieder ab
+  setInterval(updateTypingStatsUI, 2000);
 }
 
 function checkActiveCombos() {

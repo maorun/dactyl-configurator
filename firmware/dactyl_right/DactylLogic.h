@@ -244,12 +244,58 @@ void tapHoldOnPress(uint8_t r, uint8_t c, uint16_t tapAct, uint16_t holdAct, uin
   tapHold[r][c] = { true, false, tapAct, holdAct, layer, now };
 }
 
+// true, wenn (r, c) mit einer bereits gedrückten Partnertaste innerhalb von comboTimeoutMs eine Combo bildet.
+// Diese Combo wird im selben Scan von checkUserCombos() ausgelöst.
+bool hasPressedComboPartnerInWindow(uint8_t r, uint8_t c) {
+  for (uint8_t i = 0; i < numCombos; i++) {
+    uint8_t pr, pc;
+    if (userCombos[i].r1 == r && userCombos[i].c1 == c) { pr = userCombos[i].r2; pc = userCombos[i].c2; }
+    else if (userCombos[i].r2 == r && userCombos[i].c2 == c) { pr = userCombos[i].r1; pc = userCombos[i].c1; }
+    else continue;
+    if (!keyState[pr][pc]) continue;
+    unsigned long t1 = keyPressTime[r][c];
+    unsigned long t2 = keyPressTime[pr][pc];
+    if ((unsigned long)(t1 - t2) <= comboTimeoutMs || (unsigned long)(t2 - t1) <= comboTimeoutMs) return true;
+  }
+  return false;
+}
+
 void activateTapHoldAsHold(uint8_t r, uint8_t c) {
   TapHoldKey &k = tapHold[r][c];
   if (!k.pending) return;
   k.pending = false;
   k.holdActive = true;
   dispatchPress(r, c, k.holdAction, k.layer);
+  // Die Hold-Entscheidung ist endgültig: eine als Combo-Kandidat gepufferte Halte-Aktion
+  // (z. B. Ctrl) sofort an den Host senden, damit sie VOR der abhängigen Taste ankommt.
+  // Ausnahme: Der Combo-Partner ist im Combo-Fenster gedrückt. Dann gewinnt die Combo im selben Scan,
+  // und ein vorab gesendetes Ctrl würde durch releaseAll() als einzelnes Ctrl-Tippen am Host ankommen.
+  if (!keySentToHost[r][c] && !isConfigMode && bleKeyboard.isConnected() && !isConfigComboSuppressed(r, c) &&
+      !hasPressedComboPartnerInWindow(r, c)) {
+    uint16_t act = k.holdAction;
+    if (act > 0 && act <= 0xFF) {
+      bleKeyboard.press((uint8_t)act);
+      keySentToHost[r][c] = true;
+    } else if (act >= 0x130 && act <= 0x132) {
+      if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
+      else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
+      else bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
+      keySentToHost[r][c] = true;
+    }
+  }
+}
+
+// Eine Combo hat die Taste verbraucht: offene Tap-Hold-Entscheidung verwerfen und eine bereits
+// aktive Halte-Aktion zurücknehmen, damit die Einzelaktion nicht zusätzlich zur Combo wirkt.
+void cancelTapHoldForCombo(uint8_t r, uint8_t c) {
+  TapHoldKey &k = tapHold[r][c];
+  if (k.holdActive) {
+    k.holdActive = false;
+    // Combo hat bereits releaseAll() gesendet; nur den Layer-/Aktionszustand zurücksetzen
+    keySentToHost[r][c] = false;
+    dispatchRelease(r, c, k.holdAction);
+  }
+  k.pending = false;
 }
 
 // Eine andere Taste wurde gedrückt, während Mod-Tap-Tasten noch unentschieden sind:
@@ -264,8 +310,13 @@ void resolvePendingTapHoldsAsHold(uint8_t exceptR, uint8_t exceptC) {
 }
 
 // Gibt true zurück, wenn die Taste vom Tap-Hold-Automaten behandelt wurde
-bool tapHoldOnRelease(uint8_t r, uint8_t c) {
+bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now) {
   TapHoldKey &k = tapHold[r][c];
+  // Release wird vor dem Tick verarbeitet: Tapping-Term hier erneut prüfen,
+  // sonst würde ein Halten über TAPPING_TERM_MS noch als Tap gewertet.
+  if (k.pending && (unsigned long)(now - k.pressTime) >= TAPPING_TERM_MS) {
+    activateTapHoldAsHold(r, c);
+  }
   if (k.pending) {
     k.pending = false;
     dispatchPress(r, c, k.tapAction, k.layer);
@@ -309,7 +360,7 @@ void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
       dispatchPress(r, c, tapAct, layer);
     }
   } else {
-    if (!tapHoldOnRelease(r, c)) {
+    if (!tapHoldOnRelease(r, c, now)) {
       dispatchRelease(r, c, pressedAction[r][c]);
     }
     // KEY_RELEASE erst nach einem eventuellen Tap-KEY_PRESS senden, damit die UI nicht hängen bleibt
@@ -425,7 +476,11 @@ void loadKeymapFromNVS() {
   }
   if (preferences.isKey("num_combos")) {
     uint8_t n = preferences.getUChar("num_combos", 0);
-    if (n <= MAX_COMBOS && preferences.isKey("combos_data")) {
+    if (n == 0) {
+      // Gespeicherte leere Liste (CLEAR_COMBOS + SAVE_COMBOS) überschreibt die einkompilierten Combos
+      numCombos = 0;
+      Serial.println("NVS: 0 Combos geladen.");
+    } else if (n <= MAX_COMBOS && preferences.isKey("combos_data")) {
       size_t sz = preferences.getBytesLength("combos_data");
       if (sz == n * sizeof(KeyCombo)) {
         numCombos = n;
@@ -779,6 +834,9 @@ void checkUserCombos() {
 
       if (inWindow) {
         comboRuntime[i].active = true;
+        // Die Combo verbraucht beide Tasten: deren Mod-Tap-Entscheidung darf nicht mehr greifen
+        cancelTapHoldForCombo(r1, c1);
+        cancelTapHoldForCombo(r2, c2);
         // Beide Tasten als an Host gesendet markieren, damit lingernde Tasten nach dem Chord
         // nicht nach Ablauf der 300ms Grace Period versehentlich als Einzeltaste nachfeuern!
         keySentToHost[r1][c1] = true;

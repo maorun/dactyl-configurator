@@ -132,6 +132,7 @@ void resetState() {
   _mock_mutex_busy = false;
   bleKeyboard.connected = true;
   bleKeyboard.writtenKeys.clear();
+  bleKeyboard.pressHistory.clear();
   isConfigMode = false;
   enterConfigRequested = false;
   exitConfigRequested = false;
@@ -742,6 +743,274 @@ TEST(test_resolve_key_actions_fallback) {
   HOLDMAP[3][1][1] = KEY_LEFT_ALT;
   resolveKeyActions(3, 1, 1, tap, hold);
   assert(tap == KEY_LEFT_ALT && hold == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 14: Release nach Ablauf des Tapping-Terms ohne vorherigen Tick ist Hold, kein Tap
+// -----------------------------------------------------------------------------
+TEST(test_tap_hold_release_after_term_is_hold) {
+  resetState();
+  KEYMAP[0][5][3] = ' ';
+  HOLDMAP[0][5][3] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[5][3] = true;
+  onMatrixKeyChange(5, 3, true);
+  setMillis(1190);
+  processDeferredKeys(millis()); // letzter Tick vor dem Tapping-Term
+  assert(bleKeyboard.pressedKeys.empty());
+  // Release wird im nächsten Scan (210 ms) vor processDeferredKeys() verarbeitet
+  setMillis(1210);
+  keyState[5][3] = false;
+  onMatrixKeyChange(5, 3, false);
+  assert(bleKeyboard.writtenKeys.empty());
+  assert(bleKeyboard.pressedKeys.empty()); // Ctrl gedrückt und wieder losgelassen, kein Space
+  for (const auto& n : Serial.outputLines) {
+    assert(n.find("\"key\":\" \"") == std::string::npos); // kein Space-KEY_PRESS
+  }
+}
+
+// -----------------------------------------------------------------------------
+// Test 15: Erzwungener Hold einer Combo-Kandidatentaste erreicht den Host vor der Folgetaste
+// -----------------------------------------------------------------------------
+TEST(test_forced_hold_on_combo_candidate_reaches_host_first) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;                      // J: Tap j / Hold Ctrl
+  KEYMAP[0][2][0] = 'h';                                 // H: kein Combo-Kandidat
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1020); // innerhalb comboTimeoutMs (40 ms)
+  keyState[2][0] = true;
+  onMatrixKeyChange(2, 0, true);
+  assert(bleKeyboard.pressedKeys.size() == 2);
+  assert(bleKeyboard.pressedKeys[0] == KEY_LEFT_CTRL); // Modifier zuerst
+  assert(bleKeyboard.pressedKeys[1] == 'h');
+  keyState[2][0] = false;
+  onMatrixKeyChange(2, 0, false);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 16: Eine ausgelöste Combo verwirft die Mod-Tap-Entscheidung ihrer Tasten
+// -----------------------------------------------------------------------------
+TEST(test_combo_cancels_member_tap_hold) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  HOLDMAP[0][2][2] = 0x101;                              // K: Hold MO_1
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1010);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  // Beide Tasten 200 ms weiter halten: Layer 1 darf NICHT aktiv werden
+  setMillis(1000 + TAPPING_TERM_MS + 20);
+  processDeferredKeys(millis());
+  assert(getActiveLayer() == 0);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  keyState[2][2] = false;
+  onMatrixKeyChange(2, 2, false);
+  checkUserCombos();
+  assert(getActiveLayer() == 0);
+  assert(bleKeyboard.writtenKeys.size() == 1); // keine zusätzliche Einzeltaste
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 17: Gespeicherte leere Combo-Liste überlebt den Neustart
+// -----------------------------------------------------------------------------
+TEST(test_empty_combo_list_persists_across_reboot) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  handleConfigCommand("SAVE_COMBOS", false);
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("SAVE_COMBOS", false);
+  assert(mockChar.value == "OK SAVE_COMBOS");
+  // Neustart simulieren: einkompilierte Default-Combo ist wieder im RAM
+  numCombos = 1;
+  loadKeymapFromNVS();
+  assert(numCombos == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 18: Keyboard-Report-Descriptor deckt alle gesendeten Usages ab (inkl. F13..F24)
+// -----------------------------------------------------------------------------
+// Liefert den Data-Wert des n-ten Vorkommens eines 1-Byte-Items im Keyboard-Collection-Abschnitt
+// Liefert den Data-Wert des ersten 1-Byte-Items `prefix` im Key-Array der Keyboard-Collection.
+// Das Key-Array beginnt semantisch mit REPORT_COUNT(6) (6 Scancodes) und endet mit dem INPUT-Item.
+static int keyArrayDescriptorItem(uint8_t prefix) {
+  bool inKeyArray = false;
+  for (size_t i = 0; i + 1 < sizeof(_compositeReportDescriptor); i++) {
+    uint8_t b = _compositeReportDescriptor[i];
+    uint8_t data = _compositeReportDescriptor[i + 1];
+    if (b == END_COLLECTION(0)) break; // Ende der Keyboard-Collection
+    if (b == REPORT_COUNT(1) && data == 0x06) inKeyArray = true;
+    else if (inKeyArray && b == prefix) return data;
+    else if (inKeyArray && b == HIDINPUT(1)) break;
+    if ((b & 0x03) == 1) i++; // 1-Byte-Item: Datenbyte überspringen
+  }
+  return -1;
+}
+
+TEST(test_keyboard_descriptor_covers_f13_to_f24) {
+  int logicalMax = keyArrayDescriptorItem(LOGICAL_MAXIMUM(1));
+  int usageMax = keyArrayDescriptorItem(USAGE_MAXIMUM(1));
+  assert(logicalMax >= 0 && usageMax >= 0); // Key-Array gefunden
+  // press() sendet Sondertasten als Usage (code - 136); F24 = 0xFB -> 0x73
+  int highestUsage = KEY_F24 - 136;
+  assert(highestUsage == 0x73);
+  assert(logicalMax >= highestUsage);
+  assert(usageMax >= highestUsage);
+  // Auch alle anderen Sondertasten bis 0xFB liegen im Bereich
+  assert(KEY_F13 - 136 == 0x68);
+}
+
+// -----------------------------------------------------------------------------
+// Test 19: Erzwungener Hold einer Combo-Taste sendet kein Modifier-Tippen, wenn die Combo gewinnt
+// -----------------------------------------------------------------------------
+TEST(test_forced_hold_does_not_leak_modifier_when_combo_fires) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;                      // J: Tap j / Hold Ctrl
+  KEYMAP[0][2][2] = 'k';
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1015);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true); // erzwingt J-Hold, Partner K ist im Combo-Fenster gedrückt
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  for (uint8_t k : bleKeyboard.pressHistory) assert(k != KEY_LEFT_CTRL); // kein verirrtes Ctrl
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  keyState[2][2] = false;
+  onMatrixKeyChange(2, 2, false);
+  checkUserCombos();
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 20: Combo nimmt eine bereits aktive Halte-Aktion (MO-Layer) eines Mitglieds zurück
+// -----------------------------------------------------------------------------
+TEST(test_combo_unwinds_active_member_hold) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = 0x101;                              // J: Hold MO_1
+  KEYMAP[0][2][2] = 'k';
+  KEYMAP[0][2][0] = 'h';
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1010);
+  keyState[2][0] = true;
+  onMatrixKeyChange(2, 0, true);            // H erzwingt J-Hold -> Layer 1 aktiv
+  assert(getActiveLayer() == 1);
+  assert(tapHold[2][1].holdActive);
+  setMillis(1030);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);
+  checkUserCombos();                        // J + K innerhalb 40 ms -> Combo gewinnt
+  assert(comboRuntime[0].active);
+  assert(!tapHold[2][1].holdActive);
+  assert(getActiveLayer() == 0);            // MO_1 zurückgenommen
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(getActiveLayer() == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 21: Erzwungener Maus-Hold einer Combo-Kandidatentaste wird gedrückt und wieder gelöst
+// -----------------------------------------------------------------------------
+TEST(test_forced_mouse_hold_on_combo_candidate) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = ACT_MOUSE_LEFT;                     // J: Hold Linksklick
+  KEYMAP[0][2][0] = 'h';
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1020);
+  keyState[2][0] = true;
+  onMatrixKeyChange(2, 0, true);
+  assert((bleKeyboard.mouseButtons & MOUSE_BUTTON_LEFT) != 0);
+  keyState[2][0] = false;
+  onMatrixKeyChange(2, 0, false);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert((bleKeyboard.mouseButtons & MOUSE_BUTTON_LEFT) == 0);
+  assert(bleKeyboard.clickedMouseButtons.empty()); // kein zusätzlicher Klick beim Loslassen
+}
+
+// -----------------------------------------------------------------------------
+// Test 22: Combo-Partner außerhalb des Combo-Fensters: erzwungener Hold geht sofort an den Host
+// -----------------------------------------------------------------------------
+TEST(test_forced_hold_with_partner_outside_window_reaches_host) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;                      // J: Tap j / Hold Ctrl
+  KEYMAP[0][2][2] = 'k';
+  KEYMAP[0][2][0] = 'h';
+  setMillis(1000);
+  keyState[2][2] = true;                                 // Partner K zuerst (gehalten)
+  onMatrixKeyChange(2, 2, true);
+  setMillis(1100);                                       // J 100 ms später: außerhalb 40 ms
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1110);
+  keyState[2][0] = true;
+  onMatrixKeyChange(2, 0, true);                         // H erzwingt J-Hold
+  checkUserCombos();
+  assert(!comboRuntime[0].active);                       // keine Combo
+  bool ctrlBeforeH = false;
+  for (size_t i = 0; i < bleKeyboard.pressHistory.size(); i++) {
+    if (bleKeyboard.pressHistory[i] == KEY_LEFT_CTRL) { ctrlBeforeH = true; break; }
+    assert(bleKeyboard.pressHistory[i] != 'h');          // H darf nicht vor Ctrl kommen
+  }
+  assert(ctrlBeforeH);
+}
+
+// -----------------------------------------------------------------------------
+// Test 23: Partner im Fenster gedrückt und vor checkUserCombos() gelöst: Hold erreicht den Host
+// -----------------------------------------------------------------------------
+TEST(test_forced_hold_partner_released_before_combo_check) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;                      // J: Tap j / Hold Ctrl
+  KEYMAP[0][2][2] = 'k';
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1015);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);                         // erzwingt J-Hold, Partner im Fenster
+  keyState[2][2] = false;
+  onMatrixKeyChange(2, 2, false);                        // K im selben Scan wieder gelöst
+  checkUserCombos();
+  assert(!comboRuntime[0].active);                       // Combo greift nicht
+  // Spätestens nach comboTimeoutMs sendet processDeferredKeys() die gepufferte Halte-Aktion
+  setMillis(1000 + 40 + 5);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == KEY_LEFT_CTRL);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());               // Ctrl wird beim Loslassen gelöst
 }
 
 int main() {

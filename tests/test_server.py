@@ -226,6 +226,20 @@ class TestServerAndCodegen(unittest.TestCase):
             self.assertEqual(str(ctx.exception), "replace failed #2")
             self.assertEqual(sorted(os.listdir(d)), ["a.txt", "b.txt"])
 
+    def test_validate_config_rejects_malformed_matrix(self):
+        bad_configs = [
+            {"layers": [None]},
+            {"layers": [[[]] * 7]},                       # 7 Zeilen
+            {"layers": [[[{"tap": "KEY_A"}] * 8]]},       # 8 Spalten
+            {"layers": [["not-a-row"]]},
+            {"layers": [[[42]]]},                         # Taste weder Objekt noch Code
+        ]
+        for cfg in bad_configs:
+            with self.assertRaises(ValueError, msg=str(cfg)[:60]):
+                server.validate_config(cfg)
+        # Kürzere Matrizen bleiben erlaubt
+        server.validate_config({"layers": [[], [[{"tap": "KEY_A"}]], [["KEY_B"] * 7] * 6]})
+
     def test_handler_has_socket_timeout(self):
         self.assertGreater(server.ConfiguratorHandler.timeout or 0, 0)
 
@@ -294,6 +308,12 @@ class TestServerHttp(unittest.TestCase):
         self.assertEqual(status, 400)
         status, _ = self.request("POST", "/api/config", body="{}", headers={"Content-Length": str(server.MAX_BODY_BYTES + 1)})
         self.assertEqual(status, 413)
+
+    def test_post_json_null_returns_400(self):
+        for path in ("/api/config", "/api/save_and_flash"):
+            status, data = self.request("POST", path, body="null", headers={"Origin": "http://localhost:8088"})
+            self.assertEqual(status, 400, path)
+            self.assertFalse(json.loads(data)["success"])
 
     def test_post_config_roundtrip_and_invalid(self):
         status, _ = self.request("POST", "/api/config", body=json.dumps({"layers": []}),

@@ -422,6 +422,17 @@ def validate_config(config):
         raise ValueError("Ungültige Konfiguration: Muss ein Objekt mit einer nicht-leeren 'layers'-Liste sein.")
     if len(config["layers"]) > NUM_LAYERS:
         raise ValueError(f"Ungültige Konfiguration: maximal {NUM_LAYERS} Ebenen erlaubt.")
+    # Jede Ebene muss eine Liste mit höchstens 6 Zeilen à höchstens 7 Spalten sein (kürzer ist erlaubt).
+    # Sonst würde der Codegen fehlerhafte Ebenen still durch Nullen ersetzen oder Tasten abschneiden.
+    for l_idx, layer in enumerate(config["layers"]):
+        if not isinstance(layer, list) or len(layer) > NUM_ROWS:
+            raise ValueError(f"Ungültige Ebene {l_idx}: Liste mit maximal {NUM_ROWS} Zeilen erwartet.")
+        for r_idx, row in enumerate(layer):
+            if not isinstance(row, list) or len(row) > NUM_COLS:
+                raise ValueError(f"Ungültige Zeile {r_idx} in Ebene {l_idx}: Liste mit maximal {NUM_COLS} Tasten erwartet.")
+            for c_idx, cell in enumerate(row):
+                if not isinstance(cell, (dict, str)):
+                    raise ValueError(f"Ungültige Taste R{r_idx}C{c_idx} in Ebene {l_idx}: Objekt oder Code erwartet.")
     # Codegen prüft Combos und Einstellungen vollständig (Bereiche identisch zur Firmware)
     generate_combos_cpp(config.get("combos"))
     generate_settings_cpp(config.get("settings"))
@@ -560,10 +571,15 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(413, {"success": False, "error": "Anfrage zu groß."})
             return None
         try:
-            return json.loads(self.rfile.read(length).decode("utf-8"))
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             self.send_json(400, {"success": False, "error": f"Ungültiges JSON: {e}"})
             return None
+        # None signalisiert den Aufrufern "Fehlerantwort bereits gesendet": JSON null daher hier ablehnen
+        if body is None:
+            self.send_json(400, {"success": False, "error": "Ungültige Konfiguration: JSON null ist nicht erlaubt."})
+            return None
+        return body
 
     def do_GET(self):
         if not self.check_host():

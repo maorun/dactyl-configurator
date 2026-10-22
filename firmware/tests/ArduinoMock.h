@@ -237,9 +237,9 @@ public:
   void notify() { notifications.push_back(value); }
 };
 
-#define MOUSE_BUTTON_LEFT   0x01
-#define MOUSE_BUTTON_RIGHT  0x02
-#define MOUSE_BUTTON_MIDDLE 0x04
+// Report-IDs, Maus-Buttons & Report-Descriptor direkt aus der Firmware
+// ("HIDTypes.h" wird zuerst im Testordner gefunden: Host-Ersatz ohne ESP32-Core)
+#include "../dactyl_right/DactylHidDescriptor.h"
 
 // Keycodes & Report-Typen direkt aus der Firmware (keine doppelte Pflege im Mock)
 #include "../dactyl_right/DactylKeycodes.h"
@@ -263,7 +263,8 @@ public:
 
   BleKeyboard(std::string n, std::string m, uint8_t b) : name(n), mfr(m), batt(b) {}
   bool isConnected() { return connected; }
-  void press(uint8_t k) { pressedKeys.push_back(k); }
+  std::vector<uint8_t> pressHistory; // jeder press() an den Host, wird von releaseAll() nicht geleert
+  void press(uint8_t k) { pressedKeys.push_back(k); pressHistory.push_back(k); }
   void release(uint8_t k) {
     auto it = std::find(pressedKeys.begin(), pressedKeys.end(), k);
     if (it != pressedKeys.end()) pressedKeys.erase(it);

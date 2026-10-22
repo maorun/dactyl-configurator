@@ -126,6 +126,10 @@ Der Server startet unter `http://localhost:8088`.
   3. Physische Tastendrücke und Layer-Wechsel werden im Visualizer sofort hervorgehoben.
 - **Flashen per USB:**
   - Mit einem Klick auf **„💾 Auf Dactyl flashen“** kompiliert der lokale Server die C++-Keymap und flasht die Firmware per `arduino-cli` direkt auf den ESP32.
+- **Nach einer Änderung des HID-Report-Descriptors erneut koppeln:**
+  - macOS speichert die Report-Map beim ersten Koppeln und liest sie bei Reconnects nicht neu.
+  - Die Firmware mit Mod-Tap erweitert den Keyboard-Report um F13–F24 (Usages `0x68`–`0x73`).
+  - Entferne die Tastatur nach dem Flashen dieser Version in den macOS-Bluetooth-Einstellungen („Dieses Gerät ignorieren …“) und kopple sie neu. Sonst ignoriert macOS F13–F24.
 
 ---
 

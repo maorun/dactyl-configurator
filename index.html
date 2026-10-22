@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dactyl Keyboard Configurator</title>
-  <link rel="stylesheet" href="style.css?v=11">
+  <link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
   <div class="app-container">
@@ -209,7 +209,10 @@
         <div class="key-inspector" id="keyInspector">
           <div class="inspector-header">
             <h4>Tasten-Inspektor</h4>
-            <span class="key-coords-badge" id="selectedKeyCoords">Keine Taste gewählt</span>
+            <div class="inspector-header-actions">
+              <span class="key-coords-badge" id="selectedKeyCoords">Keine Taste gewählt</span>
+              <button id="btnClearKeySelection" class="btn btn-outline btn-xs" title="Auswahl aufheben (Esc)" style="display: none;">✕ Auswahl aufheben</button>
+            </div>
           </div>
 
           <div class="inspector-body" id="inspectorBody" style="display: none;">
@@ -408,6 +411,6 @@
     <div class="toast" id="toastNotification"></div>
   </div>
 
-  <script src="app.js?v=32"></script>
+  <script src="app.js?v=33"></script>
 </body>
 </html>

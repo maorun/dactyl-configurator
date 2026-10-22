@@ -696,18 +696,26 @@ body {
   font-weight: 700;
   color: var(--key-text);
   line-height: 1.1;
+  text-align: center;
+  max-width: 100%;
+  padding: 0 4px;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
 }
 
 .key-cap .key-sublabel {
   font-size: 0.68rem;
   color: #94a3b8;
   margin-top: 3px;
+  text-align: center;
 }
 
 .key-cap .key-pos {
   position: absolute;
   bottom: 2px;
-  left: 4px;
+  left: 0;
+  right: 0;
+  text-align: center;
   font-size: 9px;
   color: #64748b;
 }
@@ -731,6 +739,17 @@ body {
 
 .inspector-header h4 {
   font-size: 1.1rem;
+}
+
+.inspector-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.btn-xs {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
 }
 
 .key-coords-badge {
@@ -1197,7 +1216,8 @@ body {
 .config-combo-badge {
   position: absolute;
   top: 3px;
-  right: 4px;
+  left: 50%;
+  transform: translateX(-50%);
   font-size: 0.62rem;
   font-weight: 700;
   background: rgba(59, 130, 246, 0.25);

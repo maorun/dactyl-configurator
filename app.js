@@ -1392,6 +1392,18 @@ function selectKey(r, c, side = "R", isThumb = false) {
   updateInspector(r, c);
 }
 
+// Setzt den Tasten-Inspektor in den Ausgangszustand zurück (keine Taste gewählt, keine Markierung)
+function clearKeySelection() {
+  if (!selectedKey) return;
+  selectedKey = null;
+  renderMatrix();
+  document.getElementById("inspectorBody").style.display = "none";
+  document.getElementById("inspectorPlaceholder").style.display = "";
+  document.getElementById("selectedKeyCoords").textContent = "Keine Taste gewählt";
+  const btnClear = document.getElementById("btnClearKeySelection");
+  if (btnClear) btnClear.style.display = "none";
+}
+
 function updateInspector(r, c) {
   const inspectorBody = document.getElementById("inspectorBody");
   const inspectorPlaceholder = document.getElementById("inspectorPlaceholder");
@@ -1402,6 +1414,8 @@ function updateInspector(r, c) {
 
   inspectorPlaceholder.style.display = "none";
   inspectorBody.style.display = "block";
+  const btnClear = document.getElementById("btnClearKeySelection");
+  if (btnClear) btnClear.style.display = "inline-flex";
 
   const isThumb = (r === 5 || (r === 2 && c === 6));
   coordsBadge.textContent = `Zeile ${r}, Spalte ${c} ${isThumb ? '(Daumenbereich)' : ''}`;
@@ -1516,6 +1530,12 @@ window.deleteCombo = function(id) {
 };
 
 function setupEventListeners() {
+  // Tasten-Inspektor zurücksetzen: Button im Header oder Esc (außerhalb von Eingabefeldern)
+  document.getElementById("btnClearKeySelection").addEventListener("click", clearKeySelection);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && selectedKey && !isEditableTarget(e.target)) clearKeySelection();
+  });
+
   // Apply key inspector changes
   document.getElementById("btnApplyKey").addEventListener("click", async () => {
     if (!selectedKey) return;

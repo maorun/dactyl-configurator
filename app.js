@@ -876,12 +876,14 @@ async function loadSavedConfigFromServer() {
           showToast(`⚠️ Gespeicherte Konfiguration ungültig (${validationErr.message}). Standard wird verwendet.`, 7000);
           return;
         }
-        currentConfig = normalizeConfig(data);
+        // "source" ist Server-Metadatum ("user" = lokale Config, "default" = versionierte Vorlage), kein Config-Feld
+        const { source, ...cfg } = data;
+        currentConfig = normalizeConfig(cfg);
         applySettingsToInputs(currentConfig.settings);
         renderLayerButtons();
         renderMatrix();
         renderCombosTable();
-        showToast("Gespeicherte Konfiguration geladen!");
+        showToast(source === "default" ? "Standard-Vorlage geladen (noch keine eigene Konfiguration gespeichert)." : "Gespeicherte Konfiguration geladen!");
       }
     }
   } catch (e) {

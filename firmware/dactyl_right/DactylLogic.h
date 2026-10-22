@@ -430,29 +430,64 @@ bool saveKeymapToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
   bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
   ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
-  String build = String(__DATE__ " " __TIME__);
-  ok = (preferences.putString("fw_build", build) == build.length()) && ok;
   preferences.end();
   Serial.println(ok ? "NVS: Keymap gespeichert." : "NVS: FEHLER beim Speichern der Keymap!");
   return ok;
 }
 
+// FNV-1a-Prüfsumme über die EINKOMPILIERTEN Defaults (KEYMAP + HOLDMAP vor dem NVS-Laden) und
+// KEYMAP_DEFAULTS_ID. Die ID ist im Repository 0; "Auf Dactyl flashen" (server.py) setzt bei jedem Flash
+// aus der App eine neue ID. Ein Flash aus der App übernimmt so immer die App-Belegung, ein reiner
+// Firmware-Flash aus dem Repository (gleiche Defaults, gleiche ID) behält die Belegung im NVS.
+uint32_t keymapDefaultsFingerprint() {
+  uint32_t h = 2166136261u;
+  const uint32_t id = KEYMAP_DEFAULTS_ID;
+  const uint8_t* parts[3] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, (const uint8_t*)&id };
+  const size_t sizes[3] = { sizeof(KEYMAP), sizeof(HOLDMAP), sizeof(id) };
+  for (int p = 0; p < 3; p++) {
+    for (size_t i = 0; i < sizes[p]; i++) {
+      h ^= parts[p][i];
+      h *= 16777619u;
+    }
+  }
+  return h;
+}
+
 void loadKeymapFromNVS() {
   preferences.begin("dactyl", false);
-  String lastBuild = preferences.getString("fw_build", "");
-  String currentBuild = String(__DATE__ " " __TIME__);
+  uint32_t defaultsHash = keymapDefaultsFingerprint();
+  bool hasStoredHash = preferences.isKey("defaults_fp");
+  uint32_t storedHash = hasStoredHash ? preferences.getUInt("defaults_fp", 0) : 0;
+  bool hasKeymap = preferences.isKey("keymap") && preferences.getBytesLength("keymap") == sizeof(KEYMAP);
 
-  if (lastBuild != currentBuild) {
-    Serial.printf("NVS: Neue Firmware geflasht (%s != %s). Synchronisiere NVS mit Firmware-Defaults.\n", lastBuild.c_str(), currentBuild.c_str());
-    preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP));
-    preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP));
-    preferences.putString("fw_build", currentBuild);
-  } else {
-    if (preferences.isKey("keymap") && preferences.getBytesLength("keymap") == sizeof(KEYMAP)) {
-      preferences.getBytes("keymap", KEYMAP, sizeof(KEYMAP));
-      Serial.println("NVS: Gespeicherte Keymap geladen.");
+  // Defaults übernehmen bei: erstem Start / nach RESET_CONFIG (keine Keymap), neuer Belegung aus der App
+  // (anderer Fingerprint) oder Migration vom alten fw_build-Schema mit einem Flash aus der App (ID != 0).
+  bool useDefaults = !hasKeymap || (hasStoredHash ? storedHash != defaultsHash : KEYMAP_DEFAULTS_ID != 0);
+
+  if (useDefaults) {
+    Serial.printf("NVS: Neue Default-Belegung (0x%08X). Synchronisiere NVS mit Firmware-Defaults.\n", (unsigned)defaultsHash);
+    bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
+    ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
+    // Fingerprint zuletzt und nur nach vollständigem Schreiben: sonst beim nächsten Start erneut versuchen
+    if (ok) {
+      preferences.putUInt("defaults_fp", defaultsHash);
+      preferences.remove("fw_build");
+    } else {
+      Serial.println("NVS: FEHLER beim Schreiben der Defaults, Wiederholung beim nächsten Start.");
     }
-    if (preferences.isKey("holdmap") && preferences.getBytesLength("holdmap") == sizeof(HOLDMAP)) {
+  } else {
+    // Gleiche Defaults (reiner Firmware-Flash) oder Migration ohne App-Flash:
+    // die im NVS gespeicherte Belegung des Nutzers bleibt erhalten.
+    bool hasHoldmap = preferences.isKey("holdmap") && preferences.getBytesLength("holdmap") == sizeof(HOLDMAP);
+    // Fehlende Holdmap (älteres Schema oder abgebrochenes Schreiben) mit den einkompilierten Defaults ergänzen
+    bool holdmapOk = hasHoldmap || preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP);
+    if (!hasStoredHash && holdmapOk) {
+      preferences.putUInt("defaults_fp", defaultsHash);
+      preferences.remove("fw_build");
+    }
+    preferences.getBytes("keymap", KEYMAP, sizeof(KEYMAP));
+    Serial.println("NVS: Gespeicherte Keymap geladen.");
+    if (hasHoldmap) {
       preferences.getBytes("holdmap", HOLDMAP, sizeof(HOLDMAP));
     }
   }

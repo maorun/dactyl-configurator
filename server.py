@@ -12,6 +12,7 @@ import sys
 import json
 import glob
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -32,7 +33,9 @@ os.environ["PATH"] = os.pathsep.join(_current_paths)
 
 PORT = 8088
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+# current_config.json ist lokaler Laufzeitzustand der App (in .gitignore); default_config.json die versionierte Vorlage
 CONFIG_FILE = os.path.join(DIRECTORY, "current_config.json")
+DEFAULT_CONFIG_FILE = os.path.join(DIRECTORY, "default_config.json")
 INO_FILE = os.path.join(DIRECTORY, "firmware", "dactyl_right", "dactyl_right.ino")
 SKETCH_DIR = os.path.join(DIRECTORY, "firmware", "dactyl_right")
 
@@ -340,11 +343,24 @@ def replace_marked_block(content, marker, replacement, required=False):
     # Lambda statt Ersatz-String: re.sub würde sonst Backslash-Sequenzen ('\\\\' -> '\\') interpretieren
     return re.sub(pattern, lambda _m: replacement, content, count=1, flags=re.DOTALL)
 
-def render_ino_content(content, config):
+def generate_defaults_id_cpp(defaults_id):
+    return "\n".join([
+        "// [[[START_DEFAULTS_ID]]]",
+        f"#define KEYMAP_DEFAULTS_ID {int(defaults_id)}UL",
+        "// [[[END_DEFAULTS_ID]]]",
+    ])
+
+def new_defaults_id():
+    """Neue, nie 0 werdende Kennung pro Flash aus der App (0 ist für den Repository-Stand reserviert)."""
+    return secrets.randbelow(0xFFFFFFFF) + 1
+
+def render_ino_content(content, config, defaults_id=None):
     """Erzeugt den neuen .ino-Inhalt vollständig im Speicher (wirft ValueError bei ungültiger Konfiguration)."""
     layers = config.get("layers")
     content = replace_marked_block(content, "KEYMAP", generate_keymap_cpp(layers), required=True)
     content = replace_marked_block(content, "HOLDMAP", generate_holdmap_cpp(layers), required=True)
+    if defaults_id is not None:
+        content = replace_marked_block(content, "DEFAULTS_ID", generate_defaults_id_cpp(defaults_id), required=True)
     if config.get("layerNames"):
         content = replace_marked_block(content, "LAYER_NAMES", generate_layer_names_cpp(config.get("layerNames")))
     if "combos" in config:
@@ -437,17 +453,43 @@ def validate_config(config):
     generate_combos_cpp(config.get("combos"))
     generate_settings_cpp(config.get("settings"))
 
+def load_config_for_app():
+    """Lokale Nutzer-Config (nicht versioniert) oder, falls nicht vorhanden, die versionierte Vorlage."""
+    for path, source in ((CONFIG_FILE, "user"), (DEFAULT_CONFIG_FILE, "default")):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            # Beschädigte/unlesbare Nutzer-Config nicht still durch die Vorlage ersetzen: App zeigt Standard
+            return {"exists": False}
+        if not isinstance(config, dict):
+            return {"exists": False}
+        config["source"] = source
+        return config
+    return {"exists": False}
+
+def strip_response_metadata(config):
+    """Entfernt das von GET /api/config ergänzte Metadatum "source", damit es nicht in der Nutzer-Config landet."""
+    if isinstance(config, dict) and "source" in config:
+        config = {k: v for k, v in config.items() if k != "source"}
+    return config
+
 def save_config_atomic(config):
+    config = strip_response_metadata(config)
     validate_config(config)
     write_file_atomic(CONFIG_FILE, json.dumps(config, indent=2))
 
 def save_config_and_firmware(config):
     """Validiert und rendert alles im Speicher, bevor eine Datei geschrieben wird."""
+    config = strip_response_metadata(config)
     validate_config(config)
     if not os.path.exists(INO_FILE):
         raise FileNotFoundError(f"Firmware Datei nicht gefunden: {INO_FILE}")
     with open(INO_FILE, "r", encoding="utf-8") as f:
-        new_ino = render_ino_content(f.read(), config)
+        # Neue Kennung: ein Flash aus der App überschreibt die Belegung auf der Tastatur immer
+        new_ino = render_ino_content(f.read(), config, defaults_id=new_defaults_id())
     write_files_atomic([(INO_FILE, new_ino), (CONFIG_FILE, json.dumps(config, indent=2))])
 
 def find_arduino_cli():
@@ -598,12 +640,7 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if path == "/api/config":
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    content = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
-                content = {"exists": False}
-            self.send_json(200, content)
+            self.send_json(200, load_config_for_app())
             return
 
         if path in STATIC_ALLOWLIST:

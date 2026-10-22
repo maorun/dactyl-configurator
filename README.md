@@ -198,10 +198,13 @@ dactyl_configurator/
 ├── index.html                    # Single-Page-App Dashboard
 ├── style.css                     # Modernes Dark-Mode CSS Layout
 ├── server.py                     # Lokaler Python Backend-Server (Flash & Sync API)
-├── current_config.json           # Persistierte Keymaps, Combos & Einstellungen
+├── default_config.json           # Versionierte Vorlage für Keymaps, Combos & Einstellungen
+├── current_config.json           # Lokaler Stand der App (nicht versioniert, .gitignore)
 ├── .gitignore                    # Git Ignore Definitionen
 └── README.md                     # Diese Dokumentation
 ```
+
+> **Upgrade-Hinweis:** Ältere Stände versionierten `current_config.json`. Ein `git pull` über den Commit, der die Datei aus Git entfernt, löscht die lokale Datei. Sichern Sie `current_config.json` vor dem Pull (z. B. `cp current_config.json ~/dactyl_config.backup.json`) und kopieren Sie sie danach zurück.
 
 ---
 

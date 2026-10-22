@@ -26,7 +26,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
    - Ensures Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) are in `PATH` even when launched from macOS Finder/Dock.
    - Serves configurator web assets with no-cache headers.
    - Provides `/api/save_and_flash` to compile C++ defaults into `dactyl_right.ino` and flash the board via `arduino-cli` at `upload.speed=115200`.
-   - Provides `/api/config` to read and write `current_config.json`.
+   - Provides `/api/config` to read and write `current_config.json` (falls back to `default_config.json` when no local config exists).
 
 5. **Wiring Diagrams (`docs/lolin32_lite_wiring.svg`, `docs/lolin32_lite_wiring.png`):**
    - Physical Left-Side (Pins 1–13) and Right-Side (Pins 1–13) board pinout and wire color assignment for the WEMOS LOLIN32 Lite.
@@ -188,7 +188,15 @@ python3 server.py
 
 3. **NVS Synchronization upon Flashing:**
    - A persisted combo count of `0` (after `CLEAR_COMBOS` + `SAVE_COMBOS`) overrides the compiled-in combos at boot.
-   - `loadKeymapFromNVS()` compares `fw_build` (`__DATE__ " " __TIME__`). When a newly compiled firmware binary is flashed via USB, it automatically writes the new C++ `KEYMAP` defaults to NVS.
+   - `loadKeymapFromNVS()` compares an FNV-1a fingerprint (`defaults_fp`) of the compiled-in `KEYMAP` + `HOLDMAP` defaults and `KEYMAP_DEFAULTS_ID` with the value stored in NVS. The repository keeps `KEYMAP_DEFAULTS_ID 0UL`; "Auf Dactyl flashen" (`/api/save_and_flash`) writes a new random non-zero ID, so a flash from the app always overwrites `keymap`/`holdmap` with the app layout. A plain re-flash from the repository (e.g. `arduino-cli upload`, same defaults and ID 0) keeps the user's on-device key assignment.
+   - `defaults_fp` is written last and only after both `keymap` and `holdmap` were written completely, so a failed write is retried at the next boot. After `RESET_CONFIG` the next boot restores the compiled-in defaults.
+   - Devices with the old `fw_build` key keep their keymap on a repository flash; a migration flash from the app (ID != 0) applies the app layout.
+   - Never flash from the repository to "sync" a layout: use the app (BLE sync or "Auf Dactyl flashen").
+
+3a. **User Config Is Local State:**
+   - `current_config.json` is the app's local runtime state and is listed in `.gitignore`; never commit it. `default_config.json` is the versioned template that `GET /api/config` returns when no local `current_config.json` exists. The response carries `source` (`"user"` or `"default"`); the app strips it before use. An unreadable or corrupt user config returns `{"exists": false}` without a template fallback.
+   - Upgrade: checkouts from before the untracking lose their local `current_config.json` on `git pull`. Back up the file before the pull and restore it afterwards.
+   - A missing `holdmap` next to a kept user `keymap` (older schema or interrupted write) is filled with the compiled-in `HOLDMAP`; `defaults_fp` is written only after that write succeeds.
 
 4. **Live Monitor Layer Filtering:**
    - Visual keypress indicators in the configurator must compare `pressedLayer` with `activeLayerIndex`. Keys pressed on a different layer must not highlight keycaps on the currently viewed layer.

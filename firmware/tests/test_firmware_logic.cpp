@@ -23,6 +23,9 @@
 
 #define MAX_COMBOS 16
 #define CONFIG_MODE_MAGIC 0xDAC7CF60UL
+// Im Test änderbar, um einen Flash aus der App (ID != 0) zu simulieren
+static uint32_t testDefaultsId = 0;
+#define KEYMAP_DEFAULTS_ID testDefaultsId
 
 struct KeyCombo {
   uint8_t r1, c1;
@@ -128,7 +131,9 @@ void resetState() {
   Preferences::strStore.clear();
   Preferences::uintStore.clear();
   Preferences::bytesStore.clear();
+  testDefaultsId = 0;
   Preferences::failWrites = false;
+  Preferences::failBytesKey.clear();
   _mock_mutex_busy = false;
   bleKeyboard.connected = true;
   bleKeyboard.writtenKeys.clear();
@@ -1038,6 +1043,174 @@ TEST(test_tap_a_hold_b) {
   onMatrixKeyChange(1, 1, false);
   assert(bleKeyboard.pressedKeys.empty());
   assert(bleKeyboard.pressHistory.size() == 2 && bleKeyboard.pressHistory[1] == 'b'); // kein 'a' beim Hold
+}
+
+// -----------------------------------------------------------------------------
+// Test 25: Reiner Firmware-Flash (gleiche Defaults) behält die Nutzer-Belegung im NVS
+// -----------------------------------------------------------------------------
+TEST(test_reflash_with_same_defaults_keeps_user_keymap) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';                      // einkompilierter Default
+  loadKeymapFromNVS();                        // erster Start: Defaults -> NVS
+  assert(KEYMAP[0][1][1] == 'u');
+  handleConfigCommand("SET_KEY 0 1 1 98 99", false); // Nutzer: Tap b / Hold c
+  assert(mockChar.value.rfind("OK SET_KEY", 0) == 0);
+
+  // Neustart nach Flash mit unveränderten Defaults (anderer Build-Zeitpunkt egal)
+  KEYMAP[0][1][1] = 'u';
+  HOLDMAP[0][1][1] = 0;
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'b');             // Nutzer-Belegung bleibt
+  assert(HOLDMAP[0][1][1] == 'c');
+}
+
+// -----------------------------------------------------------------------------
+// Test 26: Neue Default-Belegung (Flash aus der App) überschreibt das NVS bewusst
+// -----------------------------------------------------------------------------
+TEST(test_flash_with_new_defaults_overwrites_keymap) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+
+  // "Auf Dactyl flashen": App-Belegung wird als neue Defaults einkompiliert
+  KEYMAP[0][1][1] = 'x';
+  HOLDMAP[0][1][1] = KEY_LEFT_ALT;
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'x');
+  assert(HOLDMAP[0][1][1] == KEY_LEFT_ALT);
+  uint32_t fp = keymapDefaultsFingerprint();
+  assert(Preferences::uintStore["defaults_fp"] == fp);
+  // NVS enthält jetzt die neue Belegung (nächster Start ohne Änderung lädt sie)
+  KEYMAP[0][1][1] = 'x';
+  HOLDMAP[0][1][1] = KEY_LEFT_ALT;
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'x' && HOLDMAP[0][1][1] == KEY_LEFT_ALT);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26b: Flash aus der App mit UNVERÄNDERTER Belegung überschreibt Geräte-Änderungen trotzdem
+// -----------------------------------------------------------------------------
+TEST(test_app_flash_with_same_layout_overwrites_device_edits) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false); // Änderung direkt auf dem Gerät
+  // Flash aus der App: gleiche Belegung, aber neue Kennung
+  testDefaultsId = 0x1234;
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'u');
+}
+
+// -----------------------------------------------------------------------------
+// Test 26c: Fehlgeschlagenes Schreiben der Defaults speichert keinen Fingerprint (Retry beim nächsten Start)
+// -----------------------------------------------------------------------------
+TEST(test_failed_defaults_write_is_retried) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  Preferences::failWrites = true;
+  loadKeymapFromNVS();
+  assert(!preferences.isKey("defaults_fp"));
+  Preferences::failWrites = false;
+  loadKeymapFromNVS();
+  assert(preferences.isKey("defaults_fp"));
+  assert(preferences.getBytesLength("keymap") == sizeof(KEYMAP));
+}
+
+// -----------------------------------------------------------------------------
+// Test 26e: Keymap geschrieben, Holdmap fehlgeschlagen: kein Fingerprint, Holdmap beim nächsten Start ergänzt
+// -----------------------------------------------------------------------------
+TEST(test_partial_defaults_write_retries_holdmap) {
+  resetState();
+  HOLDMAP[0][1][1] = KEY_LEFT_ALT;
+  Preferences::failBytesKey = "holdmap";
+  loadKeymapFromNVS();
+  assert(preferences.getBytesLength("keymap") == sizeof(KEYMAP));
+  assert(!preferences.isKey("holdmap"));
+  assert(!preferences.isKey("defaults_fp"));
+
+  Preferences::failBytesKey.clear();
+  HOLDMAP[0][1][1] = KEY_LEFT_ALT;            // Neustart: einkompilierte Defaults im RAM
+  loadKeymapFromNVS();
+  assert(preferences.getBytesLength("holdmap") == sizeof(HOLDMAP));
+  assert(Preferences::uintStore["defaults_fp"] == keymapDefaultsFingerprint());
+  assert(HOLDMAP[0][1][1] == KEY_LEFT_ALT);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26f: Erhaltene Keymap ohne Holdmap, Ergänzen schlägt fehl: kein Fingerprint, Keymap bleibt, Retry
+// -----------------------------------------------------------------------------
+TEST(test_failed_holdmap_fill_keeps_keymap_and_retries) {
+  resetState();
+  uint16_t userMap[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+  userMap[0][2][2] = 'q';
+  preferences.putBytes("keymap", userMap, sizeof(userMap)); // älteres Schema: keine Holdmap, kein Fingerprint
+  HOLDMAP[0][2][2] = KEY_LEFT_ALT;
+  Preferences::failBytesKey = "holdmap";
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][2][2] == 'q');
+  assert(!preferences.isKey("holdmap"));
+  assert(!preferences.isKey("defaults_fp"));
+
+  Preferences::failBytesKey.clear();
+  KEYMAP[0][2][2] = 'k';                      // Neustart: einkompilierte Defaults im RAM
+  uint32_t fp = keymapDefaultsFingerprint();  // vor dem Laden: Fingerprint der einkompilierten Defaults
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][2][2] == 'q');
+  assert(preferences.getBytesLength("holdmap") == sizeof(HOLDMAP));
+  assert(Preferences::uintStore["defaults_fp"] == fp);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26d: RESET_CONFIG + Neustart stellt die einkompilierten Defaults wieder her
+// -----------------------------------------------------------------------------
+TEST(test_reset_config_restores_defaults_after_reboot) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  handleConfigCommand("RESET_CONFIG", false);
+  assert(mockChar.value == "OK RESET_CONFIG");
+  KEYMAP[0][1][1] = 'u';                      // Neustart: einkompilierte Defaults im RAM
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'u');
+  assert(preferences.isKey("keymap") && preferences.isKey("defaults_fp"));
+}
+
+// -----------------------------------------------------------------------------
+// Test 27: Migration vom alten fw_build-Schema behält die Nutzer-Belegung
+// -----------------------------------------------------------------------------
+TEST(test_migration_from_fw_build_keeps_user_keymap) {
+  resetState();
+  // Zustand einer älteren Firmware: keymap + fw_build, kein defaults_fp
+  uint16_t userMap[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+  userMap[0][2][2] = 'q';
+  preferences.putBytes("keymap", userMap, sizeof(userMap));
+  preferences.putString("fw_build", "Oct 21 2026 10:00:00");
+
+  KEYMAP[0][2][2] = 'k';                      // neue Firmware mit anderem Default
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][2][2] == 'q');             // Nutzer-Belegung bleibt
+  assert(preferences.isKey("defaults_fp"));
+  assert(!preferences.isKey("fw_build"));
+}
+
+// -----------------------------------------------------------------------------
+// Test 27b: Migration vom fw_build-Schema mit einem Flash aus der App übernimmt die App-Belegung
+// -----------------------------------------------------------------------------
+TEST(test_migration_with_app_flash_uses_new_defaults) {
+  resetState();
+  uint16_t userMap[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+  userMap[0][2][2] = 'q';
+  preferences.putBytes("keymap", userMap, sizeof(userMap));
+  preferences.putString("fw_build", "Oct 21 2026 10:00:00");
+
+  testDefaultsId = 0xBEEF;                    // "Auf Dactyl flashen" aus der App
+  KEYMAP[0][2][2] = 'k';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][2][2] == 'k');
+  assert(!preferences.isKey("fw_build"));
 }
 
 int main() {

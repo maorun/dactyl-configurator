@@ -148,6 +148,7 @@ public:
   static std::map<std::string, uint32_t> uintStore;
   static std::map<std::string, std::vector<uint8_t>> bytesStore;
   static bool failWrites; // Simuliert volle/defekte NVS-Partition
+  static std::string failBytesKey; // Simuliert einen fehlschlagenden putBytes für genau diesen Key
 
   bool begin(const char*, bool) { return true; }
   void end() {}
@@ -194,7 +195,7 @@ public:
   }
 
   size_t putBytes(const char* key, const void* buf, size_t len) {
-    if (failWrites) return 0;
+    if (failWrites || failBytesKey == key) return 0;
     const uint8_t* p = (const uint8_t*)buf;
     bytesStore[key] = std::vector<uint8_t>(p, p + len);
     return len;
@@ -215,6 +216,7 @@ std::map<std::string, std::string> Preferences::strStore;
 std::map<std::string, uint32_t> Preferences::uintStore;
 std::map<std::string, std::vector<uint8_t>> Preferences::bytesStore;
 bool Preferences::failWrites = false;
+std::string Preferences::failBytesKey;
 
 enum esp_reset_reason_t { ESP_RST_POWERON = 1, ESP_RST_SW = 3, ESP_RST_DEEPSLEEP = 5 };
 

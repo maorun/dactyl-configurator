@@ -1,6 +1,7 @@
 import unittest
 import json
 import os
+import re
 import sys
 import tempfile
 import http.client
@@ -123,7 +124,7 @@ class TestServerAndCodegen(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cfg_path = os.path.join(d, "current_config.json")
             ino_path = os.path.join(d, "dactyl_right.ino")
-            original_ino = "// [[[START_KEYMAP]]]\nx\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n"
+            original_ino = "// [[[START_KEYMAP]]]\nx\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n// [[[START_DEFAULTS_ID]]]\n// [[[END_DEFAULTS_ID]]]\n"
             with open(ino_path, "w") as f:
                 f.write(original_ino)
             with open(cfg_path, "w") as f:
@@ -148,7 +149,7 @@ class TestServerAndCodegen(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cfg_path = os.path.join(d, "current_config.json")
             ino_path = os.path.join(d, "dactyl_right.ino")
-            original_ino = "// [[[START_KEYMAP]]]\nx\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n"
+            original_ino = "// [[[START_KEYMAP]]]\nx\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n// [[[START_DEFAULTS_ID]]]\n// [[[END_DEFAULTS_ID]]]\n"
             with open(ino_path, "w") as f:
                 f.write(original_ino)
             with open(cfg_path, "w") as f:
@@ -246,11 +247,75 @@ class TestServerAndCodegen(unittest.TestCase):
     def test_real_ino_renders_with_all_markers(self):
         with open(server.INO_FILE, encoding="utf-8") as f:
             content = f.read()
-        with open(os.path.join(os.path.dirname(server.INO_FILE), "..", "..", "current_config.json"), encoding="utf-8") as f:
+        # Versionierte Vorlage (current_config.json ist lokaler Laufzeitzustand und fehlt in CI)
+        with open(server.DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
             cfg = json.load(f)
+        server.validate_config(cfg)
         out = server.render_ino_content(content, cfg)
         for marker in ("KEYMAP", "HOLDMAP", "LAYER_NAMES", "COMBOS", "SETTINGS"):
             self.assertEqual(out.count(f"// [[[START_{marker}]]]"), 1)
+
+    def test_app_flash_sets_new_nonzero_defaults_id(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg_path, ino_path = os.path.join(d, "current_config.json"), os.path.join(d, "dactyl_right.ino")
+            with open(server.INO_FILE, encoding="utf-8") as f:
+                real_ino = f.read()
+            # Fixture mit Repository-Stand (ID 0); die echte .ino trägt nach einem App-Flash lokal eine andere ID
+            fixture_ino, n = re.subn(r"#define KEYMAP_DEFAULTS_ID \d+UL", "#define KEYMAP_DEFAULTS_ID 0UL", real_ino)
+            self.assertEqual(n, 1)
+            with open(ino_path, "w", encoding="utf-8") as f:
+                f.write(fixture_ino)
+            old_cfg, old_ino = server.CONFIG_FILE, server.INO_FILE
+            server.CONFIG_FILE, server.INO_FILE = cfg_path, ino_path
+            try:
+                ids = []
+                for _ in range(2):
+                    server.save_config_and_firmware({"layers": [[[{"tap": "KEY_A"}]]]})
+                    with open(ino_path, encoding="utf-8") as f:
+                        m = re.search(r"#define KEYMAP_DEFAULTS_ID (\d+)UL", f.read())
+                    self.assertIsNotNone(m)
+                    ids.append(int(m.group(1)))
+                self.assertTrue(all(0 < i <= 0xFFFFFFFF for i in ids))
+                self.assertNotEqual(ids[0], ids[1])  # jeder App-Flash überschreibt die Geräte-Belegung
+            finally:
+                server.CONFIG_FILE, server.INO_FILE = old_cfg, old_ino
+
+    def test_load_config_falls_back_to_default_template(self):
+        with tempfile.TemporaryDirectory() as d:
+            user, default = os.path.join(d, "current_config.json"), os.path.join(d, "default_config.json")
+            with open(default, "w") as f:
+                f.write('{"layers": [[]], "tag": "default-file"}')
+            old_cfg, old_default = server.CONFIG_FILE, server.DEFAULT_CONFIG_FILE
+            server.CONFIG_FILE, server.DEFAULT_CONFIG_FILE = user, default
+            try:
+                cfg = server.load_config_for_app()                                   # keine Nutzer-Config
+                self.assertEqual((cfg["tag"], cfg["source"]), ("default-file", "default"))
+                with open(user, "w") as f:
+                    f.write('{"layers": [[]], "tag": "user-file"}')
+                cfg = server.load_config_for_app()                                   # Nutzer-Config gewinnt
+                self.assertEqual((cfg["tag"], cfg["source"]), ("user-file", "user"))
+                with open(user, "w") as f:
+                    f.write("null")
+                self.assertEqual(server.load_config_for_app(), {"exists": False})     # kein Objekt
+                os.remove(user)
+                os.mkdir(user)                                                        # unlesbar (IsADirectoryError)
+                self.assertEqual(server.load_config_for_app(), {"exists": False})
+                os.rmdir(user)
+                with open(user, "w") as f:
+                    f.write("{kaputt")
+                self.assertEqual(server.load_config_for_app(), {"exists": False})     # kein stiller Fallback
+                os.remove(user)
+                os.remove(default)
+                self.assertEqual(server.load_config_for_app(), {"exists": False})
+            finally:
+                server.CONFIG_FILE, server.DEFAULT_CONFIG_FILE = old_cfg, old_default
+
+    def test_user_config_is_not_versioned(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with open(os.path.join(root, ".gitignore"), encoding="utf-8") as f:
+            ignored = [line.strip() for line in f]
+        self.assertIn("current_config.json", ignored)
+        self.assertTrue(os.path.exists(os.path.join(root, "default_config.json")))
 
 
 class TestServerHttp(unittest.TestCase):
@@ -324,7 +389,15 @@ class TestServerHttp(unittest.TestCase):
         self.assertEqual(status, 200)
         status, data = self.request("GET", "/api/config")
         self.assertEqual(status, 200)
-        self.assertEqual(json.loads(data), cfg)
+        self.assertEqual(json.loads(data), dict(cfg, source="user"))
+
+    def test_post_config_does_not_persist_source_metadata(self):
+        cfg = {"layers": [[[{"tap": "KEY_B"}]]], "source": "default"}
+        status, _ = self.request("POST", "/api/config", body=json.dumps(cfg), headers={"Origin": "http://localhost:8088"})
+        self.assertEqual(status, 200)
+        with open(server.CONFIG_FILE, encoding="utf-8") as f:
+            self.assertNotIn("source", json.load(f))
+        self.assertEqual(json.loads(self.request("GET", "/api/config")[1])["source"], "user")
 
     def test_save_config_atomic_validation(self):
         # Must reject non-dict or missing layers

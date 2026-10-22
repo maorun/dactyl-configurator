@@ -442,6 +442,12 @@ uint16_t KEYMAP[NUM_LAYERS][6][7] = {
 // [[[END_KEYMAP]]]
 
 // Halte-Aktionen (Mod-Tap / Layer-Tap): 0 = keine Halte-Aktion, sonst Aktion beim Festhalten > TAPPING_TERM_MS
+// Kennung der einkompilierten Default-Belegung. 0 = Repository-Stand (Flash behält die Belegung im NVS).
+// "Auf Dactyl flashen" setzt hier eine neue Kennung, damit die App-Belegung das NVS immer überschreibt.
+// [[[START_DEFAULTS_ID]]]
+#define KEYMAP_DEFAULTS_ID 0UL
+// [[[END_DEFAULTS_ID]]]
+
 // [[[START_HOLDMAP]]]
 uint16_t HOLDMAP[NUM_LAYERS][6][7] = {};
 // [[[END_HOLDMAP]]]

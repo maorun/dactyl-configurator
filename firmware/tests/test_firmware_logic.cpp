@@ -1013,6 +1013,33 @@ TEST(test_forced_hold_partner_released_before_combo_check) {
   assert(bleKeyboard.pressedKeys.empty());               // Ctrl wird beim Loslassen gelöst
 }
 
+// -----------------------------------------------------------------------------
+// Test 24: Beliebige Halte-Aktion: Tap A / Halten B
+// -----------------------------------------------------------------------------
+TEST(test_tap_a_hold_b) {
+  resetState();
+  handleConfigCommand("SET_K 0 1 1 97 98", false); // Tap 'a' / Hold 'b'
+  // Tap
+  setMillis(1000);
+  keyState[1][1] = true;
+  onMatrixKeyChange(1, 1, true);
+  setMillis(1050);
+  keyState[1][1] = false;
+  onMatrixKeyChange(1, 1, false);
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == 'a');
+  // Hold
+  setMillis(2000);
+  keyState[1][1] = true;
+  onMatrixKeyChange(1, 1, true);
+  setMillis(2000 + TAPPING_TERM_MS);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'b');
+  keyState[1][1] = false;
+  onMatrixKeyChange(1, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(bleKeyboard.pressHistory.size() == 2 && bleKeyboard.pressHistory[1] == 'b'); // kein 'a' beim Hold
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

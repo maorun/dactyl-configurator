@@ -1129,33 +1129,60 @@ function initUI() {
   }
 }
 
-function populateKeycodeSelects() {
-  const primarySelect = document.getElementById("primaryActionSelect");
-  const comboActionSelect = document.getElementById("comboActionSelect");
-  primarySelect.innerHTML = "";
-  comboActionSelect.innerHTML = "";
+// Alte Configs speichern Modifier-Halte-Aktionen als MOD_*; im Dropdown entsprechen sie den KEY_*-Modifiern
+const LEGACY_HOLD_CODES = {
+  MOD_LCTRL: "KEY_LEFT_CTRL", MOD_LSHIFT: "KEY_LEFT_SHIFT", MOD_LALT: "KEY_LEFT_ALT", MOD_LGUI: "KEY_LEFT_GUI",
+  MOD_RCTRL: "KEY_RIGHT_CTRL", MOD_RSHIFT: "KEY_RIGHT_SHIFT", MOD_RALT: "KEY_RIGHT_ALT", MOD_RGUI: "KEY_RIGHT_GUI"
+};
 
+function normalizeHoldCode(code) {
+  return LEGACY_HOLD_CODES[code] || code || "NONE";
+}
+
+// Kurze Unterbeschriftung der Halte-Aktion auf der Keycap (max. 6 Zeichen)
+const HOLD_SUBLABEL_SHORT = {
+  KEY_LEFT_CTRL: "Ctrl", KEY_RIGHT_CTRL: "Ctrl", KEY_LEFT_SHIFT: "Shift", KEY_RIGHT_SHIFT: "Shift",
+  KEY_LEFT_ALT: "Alt", KEY_RIGHT_ALT: "Alt", KEY_LEFT_GUI: "Cmd", KEY_RIGHT_GUI: "Cmd",
+  LAYER_UP: "L+1", LAYER_DOWN: "L-1", MAC_GLOBE: "Globe"
+};
+
+function holdSublabel(code) {
+  const c = normalizeHoldCode(code);
+  if (HOLD_SUBLABEL_SHORT[c]) return HOLD_SUBLABEL_SHORT[c];
+  let m = /^MO_(\d)$/.exec(c);
+  if (m) return `L${m[1]}`;
+  m = /^TG_(\d)$/.exec(c);
+  if (m) return `TG${m[1]}`;
+  return c.replace(/^(KEY_|MEDIA_|MOUSE_)/, "").slice(0, 6);
+}
+
+function fillKeycodeSelect(select, { holdMode = false } = {}) {
+  select.innerHTML = "";
+  if (holdMode) {
+    // Halte-Aktion: jede Aktion ist erlaubt (Tap A / Halten B, Modifier, Layer, Media, Maus)
+    const none = document.createElement("option");
+    none.value = "NONE";
+    none.textContent = "-- Keine (Nur Einzeltaste) --";
+    select.appendChild(none);
+  }
   KEYCODES.forEach(group => {
-    const optgroup1 = document.createElement("optgroup");
-    optgroup1.label = group.group;
-    const optgroup2 = document.createElement("optgroup");
-    optgroup2.label = group.group;
-
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = group.group;
     group.keys.forEach(k => {
-      const opt1 = document.createElement("option");
-      opt1.value = k.code;
-      opt1.textContent = `${k.label} (${k.code})`;
-      optgroup1.appendChild(opt1);
-
-      const opt2 = document.createElement("option");
-      opt2.value = k.code;
-      opt2.textContent = `${k.label} (${k.code})`;
-      optgroup2.appendChild(opt2);
+      if (holdMode && k.code === "NONE") return; // "Keine" steht bereits oben
+      const opt = document.createElement("option");
+      opt.value = k.code;
+      opt.textContent = holdMode ? `Halten = ${k.label} (${k.code})` : `${k.label} (${k.code})`;
+      optgroup.appendChild(opt);
     });
-
-    primarySelect.appendChild(optgroup1);
-    comboActionSelect.appendChild(optgroup2);
+    select.appendChild(optgroup);
   });
+}
+
+function populateKeycodeSelects() {
+  fillKeycodeSelect(document.getElementById("primaryActionSelect"));
+  fillKeycodeSelect(document.getElementById("comboActionSelect"));
+  fillKeycodeSelect(document.getElementById("holdActionSelect"), { holdMode: true });
 }
 
 const LEFT_HAND_DEFAULT = [
@@ -1328,7 +1355,8 @@ function createKeycapElement(r, c, side, keyData, isThumb = false) {
   if (keyData.hold && keyData.hold !== "NONE") {
     const sublabelEl = document.createElement("span");
     sublabelEl.className = "key-sublabel";
-    sublabelEl.textContent = keyData.hold.replace("MOD_", "").replace("MO_", "L");
+    sublabelEl.textContent = holdSublabel(keyData.hold);
+    sublabelEl.title = `Halten = ${keyData.hold}`;
     keyEl.appendChild(sublabelEl);
   }
 
@@ -1383,7 +1411,18 @@ function updateInspector(r, c) {
 
   labelInput.value = keyData.label || "";
   primarySelect.value = keyData.tap || "KEY_SPACE";
-  holdSelect.value = keyData.hold || "NONE";
+  // Zuvor angehängte Optionen für unbekannte Codes entfernen (sonst sammeln sie sich pro Tastenwahl an)
+  holdSelect.querySelectorAll("option[data-unknown-hold]").forEach(o => o.remove());
+  holdSelect.value = normalizeHoldCode(keyData.hold);
+  // Unbekannter Code (z. B. aus einem Import): nicht still auf "Keine" fallen, sondern anzeigen
+  if (holdSelect.value !== normalizeHoldCode(keyData.hold)) {
+    const opt = document.createElement("option");
+    opt.dataset.unknownHold = "true";
+    opt.value = keyData.hold;
+    opt.textContent = `Halten = ${keyData.hold}`;
+    holdSelect.appendChild(opt);
+    holdSelect.value = keyData.hold;
+  }
 }
 
 function renderCombosTable() {

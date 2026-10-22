@@ -18,14 +18,16 @@ function section(startMarker, endMarker) {
 const code = [
   section("const DEFAULT_LAYER_NAMES", "// BLE GATT"),
   section("const ACTION_TO_NUMERIC", "// Standard-Konfiguration"),
-  section("// Matrix- und Firmware-Grenzen", "// State")
+  section("// Matrix- und Firmware-Grenzen", "// State"),
+  section("// Alte Configs speichern Modifier-Halte-Aktionen", "function fillKeycodeSelect")
 ].join("\n");
 
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateConfigShape,
-             normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES };`, ctx);
+             normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
+             LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel };`, ctx);
 const api = ctx.api;
 
 let passed = 0;
@@ -40,6 +42,33 @@ test("Mod-Tap: Tap und Hold werden als Zahlencodes gesendet", () => {
   // Hold ohne Tap wirkt wie eine normale Taste
   assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "NONE", hold: "MO_1" }) }, { tapCode: 0x101, holdCode: 0 });
   assert.deepStrictEqual({ ...api.keyToNumericActions(undefined) }, { tapCode: 0, holdCode: 0 });
+  // Beliebige Halte-Aktion: Tap A / Halten B, Media, Maus, Toggle-Layer
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "KEY_B" }) }, { tapCode: 97, holdCode: 98 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "MEDIA_MUTE" }) }, { tapCode: 97, holdCode: 0x121 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "MOUSE_LEFT" }) }, { tapCode: 97, holdCode: 0x130 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "TG_2" }) }, { tapCode: 97, holdCode: 0x112 });
+});
+
+test("Halte-Dropdown: alte MOD_*-Werte entsprechen den KEY_*-Modifiern", () => {
+  for (const [legacy, code] of Object.entries(api.LEGACY_HOLD_CODES)) {
+    assert.strictEqual(api.normalizeHoldCode(legacy), code);
+    assert.strictEqual(api.actionCodeToNumeric(legacy), api.actionCodeToNumeric(code), legacy);
+  }
+  assert.strictEqual(api.normalizeHoldCode(undefined), "NONE");
+  assert.strictEqual(api.normalizeHoldCode("KEY_B"), "KEY_B");
+});
+
+test("Halte-Unterbeschriftung: kurze Labels für alle Halte-Aktionen", () => {
+  assert.strictEqual(api.holdSublabel("MOD_LCTRL"), "Ctrl");
+  assert.strictEqual(api.holdSublabel("KEY_LEFT_CTRL"), "Ctrl");
+  assert.strictEqual(api.holdSublabel("MO_1"), "L1");
+  assert.strictEqual(api.holdSublabel("TG_3"), "TG3");
+  assert.strictEqual(api.holdSublabel("KEY_B"), "B");
+  assert.strictEqual(api.holdSublabel("MEDIA_VOLUME_UP"), "VOLUME");
+  assert.strictEqual(api.holdSublabel("MOUSE_LEFT"), "LEFT");
+  for (const code of ["KEY_PAGE_DOWN", "MEDIA_PREVIOUS_TRACK", "MOUSE_WHEEL_DOWN", "MAC_GLOBE", "LAYER_UP"]) {
+    assert.ok(api.holdSublabel(code).length <= 6, code);
+  }
 });
 
 test("Action-Codes: Roundtrip Name -> Zahl -> Name", () => {

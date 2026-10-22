@@ -228,28 +228,9 @@
             <div class="form-group">
               <label for="holdActionSelect">Halte-Aktion / Mod-Tap (Optional beim Festhalten):</label>
               <select id="holdActionSelect" class="form-control">
-                <option value="NONE">-- Keine (Nur Einzeltaste) --</option>
-                <optgroup label="Modifier Halten">
-                  <option value="MOD_LCTRL">Halten = Strg / Control (Links)</option>
-                  <option value="MOD_LSHIFT">Halten = Umschalt / Shift (Links)</option>
-                  <option value="MOD_LALT">Halten = Alt / Option (Links)</option>
-                  <option value="MOD_LGUI">Halten = Cmd / Windows (Links)</option>
-                  <option value="MOD_RCTRL">Halten = Strg / Control (Rechts)</option>
-                  <option value="MOD_RSHIFT">Halten = Umschalt / Shift (Rechts)</option>
-                  <option value="MOD_RALT">Halten = Alt / Option (Rechts)</option>
-                  <option value="MOD_RGUI">Halten = Cmd / Windows (Rechts)</option>
-                </optgroup>
-                <optgroup label="Layer temporär aktivieren">
-                  <option value="MO_1">Halten = Layer 1 (Nav)</option>
-                  <option value="MO_2">Halten = Layer 2 (Symbole)</option>
-                  <option value="MO_3">Halten = Layer 3 (Numpad)</option>
-                  <option value="MO_4">Halten = Layer 4 (Function)</option>
-                  <option value="MO_5">Halten = Layer 5 (Media)</option>
-                  <option value="MO_6">Halten = Layer 6 (Shortcuts)</option>
-                  <option value="MO_7">Halten = Layer 7 (Custom)</option>
-                </optgroup>
+                <!-- Wird von app.js mit allen Aktionen befüllt (Tap A / Halten B) -->
               </select>
-              <small class="form-hint">Beispiel: Kurzes Tippen = Space, Festhalten (&gt; 200 ms) oder gleichzeitiges Drücken einer weiteren Taste = Strg oder Layer 1.</small>
+              <small class="form-hint">Beispiel: Kurzes Tippen = A, Festhalten (&gt; 200 ms) oder gleichzeitiges Drücken einer weiteren Taste = B, Strg oder Layer 1.</small>
             </div>
 
             <div class="inspector-actions">
@@ -427,6 +408,6 @@
     <div class="toast" id="toastNotification"></div>
   </div>
 
-  <script src="app.js?v=31"></script>
+  <script src="app.js?v=32"></script>
 </body>
 </html>

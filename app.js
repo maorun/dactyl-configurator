@@ -486,6 +486,53 @@ function isValidIndex(value, max) {
   return Number.isInteger(value) && value >= 0 && value < max;
 }
 
+// Matrix-Test (Löt-Tester): Leitungen laut Verdrahtungsplan (AGENTS.md / docs/lolin32_lite_wiring.svg)
+const MATRIX_ROW_WIRES = [
+  { gpio: 13, color: "Gelb" }, { gpio: 14, color: "Orange" }, { gpio: 27, color: "Grün" },
+  { gpio: 26, color: "Braun" }, { gpio: 33, color: "Blau" }, { gpio: 32, color: "Lila" }
+];
+const MATRIX_COL_WIRES = [
+  { gpio: 23, color: "Gelb" }, { gpio: 19, color: "Orange" }, { gpio: 18, color: "Grün" },
+  { gpio: 17, color: "Braun" }, { gpio: 16, color: "Blau" }, { gpio: 4, color: "Lila" },
+  { gpio: 25, color: "Rot" }
+];
+
+// Tatsächlich verlötete Schalter: Finger 5x6 ohne R4C0, Daumen R5C0..R5C4 + R5C6
+function isWiredSwitch(r, c) {
+  if (r >= 0 && r < 5) return c >= 0 && c < 6 && !(r === 4 && c === 0);
+  return r === 5 && c >= 0 && c < NUM_COLS && c !== 5;
+}
+
+function createMatrixTest() {
+  return { tested: new Set() };
+}
+
+function markMatrixKeyTested(test, r, c) {
+  if (!isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS) || !isWiredSwitch(r, c)) return false;
+  const id = `${r}_${c}`;
+  if (test.tested.has(id)) return false;
+  test.tested.add(id);
+  return true;
+}
+
+// Fortschritt und verdächtige Leitungen: Zeile/Spalte ohne erkannte Taste, obwohl andere Tasten funktionieren
+function summarizeMatrixTest(test) {
+  const rowHits = new Array(NUM_ROWS).fill(0);
+  const colHits = new Array(NUM_COLS).fill(0);
+  let total = 0;
+  for (let r = 0; r < NUM_ROWS; r++) {
+    for (let c = 0; c < NUM_COLS; c++) {
+      if (!isWiredSwitch(r, c)) continue;
+      total++;
+      if (test.tested.has(`${r}_${c}`)) { rowHits[r]++; colHits[c]++; }
+    }
+  }
+  const tested = test.tested.size;
+  const suspectRows = tested ? rowHits.map((n, r) => n === 0 ? r : -1).filter(r => r >= 0) : [];
+  const suspectCols = tested ? colHits.map((n, c) => n === 0 ? c : -1).filter(c => c >= 0) : [];
+  return { tested, total, suspectRows, suspectCols };
+}
+
 // Entfernt Steuerzeichen (z. B. Zeilenumbrüche = Befehlsinjektion über Serial), Quotes & Backslashes
 function sanitizeCommandText(value, fallback = "") {
   const cleaned = String(value ?? "")
@@ -591,6 +638,9 @@ let bleWriteQueue = Promise.resolve();
 // Active pressed keys set: stores strings like "R_2_1"
 const activePressedKeys = new Set();
 
+// Matrix-Test: nur für die laufende Sitzung, nicht gespeichert
+let matrixTest = createMatrixTest();
+
 // Initialisierung
 document.addEventListener("DOMContentLoaded", () => {
   initUI();
@@ -602,6 +652,7 @@ document.addEventListener("DOMContentLoaded", () => {
   setupBrowserKeyboardHooks();
   loadSavedConfigFromServer();
   initModernBleAutoSync();
+  initMatrixTestUI();
 });
 
 function updateConfigModeUI(active, syncing = false) {
@@ -2663,6 +2714,7 @@ function handleSerialLine(line) {
         switchLayerUI(evt.target_layer);
       }
       triggerVisualKeyPress(evt.r, evt.c, typeof evt.key === "string" ? evt.key : "", "R", pressedLayer);
+      if (markMatrixKeyTested(matrixTest, evt.r, evt.c)) renderMatrixTest();
     } catch (e) {
       console.warn("Failed to parse KEY_PRESS:", e, line);
     }
@@ -2885,6 +2937,83 @@ function triggerVisualKeyRelease(r, c, side = "R") {
       hideComboAlert();
     }
   }, 100);
+}
+
+// =============================================================================
+// Matrix-Test (Löt- und Dioden-Tester)
+// =============================================================================
+
+function wireLabel(kind, index) {
+  const wire = (kind === "row" ? MATRIX_ROW_WIRES : MATRIX_COL_WIRES)[index];
+  return `${kind === "row" ? "Row" : "Col"} ${index} (GPIO ${wire.gpio}, ${wire.color})`;
+}
+
+function renderMatrixTest() {
+  const grid = document.getElementById("matrixTestGrid");
+  const progress = document.getElementById("matrixTestProgress");
+  const suspects = document.getElementById("matrixTestSuspects");
+  if (!grid || !progress || !suspects) return;
+
+  grid.innerHTML = "";
+  grid.appendChild(document.createElement("span"));
+  for (let c = 0; c < NUM_COLS; c++) {
+    const head = document.createElement("span");
+    head.className = "matrix-test-head";
+    head.textContent = `C${c}`;
+    head.title = wireLabel("col", c);
+    grid.appendChild(head);
+  }
+  for (let r = 0; r < NUM_ROWS; r++) {
+    const head = document.createElement("span");
+    head.className = "matrix-test-head";
+    head.textContent = `R${r}`;
+    head.title = wireLabel("row", r);
+    grid.appendChild(head);
+    for (let c = 0; c < NUM_COLS; c++) {
+      const cell = document.createElement("span");
+      cell.className = "matrix-test-cell";
+      if (!isWiredSwitch(r, c)) {
+        cell.classList.add("is-absent");
+      } else {
+        cell.textContent = `R${r}C${c}`;
+        if (matrixTest.tested.has(`${r}_${c}`)) cell.classList.add("is-ok");
+      }
+      grid.appendChild(cell);
+    }
+  }
+
+  const summary = summarizeMatrixTest(matrixTest);
+  progress.textContent = `${summary.tested} / ${summary.total}`;
+  suspects.innerHTML = "";
+  const lines = [
+    ...summary.suspectRows.map(r => wireLabel("row", r)),
+    ...summary.suspectCols.map(c => wireLabel("col", c))
+  ];
+  if (summary.tested === summary.total) {
+    suspects.textContent = "✅ Alle Tasten erkannt.";
+  } else if (lines.length) {
+    const title = document.createElement("strong");
+    title.textContent = "⚠️ Noch keine Taste erkannt auf:";
+    suspects.appendChild(title);
+    const list = document.createElement("ul");
+    lines.forEach(text => {
+      const li = document.createElement("li");
+      li.textContent = text;
+      list.appendChild(li);
+    });
+    suspects.appendChild(list);
+  }
+}
+
+function initMatrixTestUI() {
+  const reset = document.getElementById("btnResetMatrixTest");
+  if (reset) {
+    reset.addEventListener("click", () => {
+      matrixTest = createMatrixTest();
+      renderMatrixTest();
+    });
+  }
+  renderMatrixTest();
 }
 
 function checkActiveCombos() {

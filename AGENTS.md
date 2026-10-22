@@ -8,7 +8,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 
 1. **Firmware (`firmware/dactyl_right/dactyl_right.ino`):**
    - Target Board: WEMOS LOLIN32 Lite (`esp32:esp32:lolin32-lite`, `ESP32-D0WDQ6-V3`).
-   - Core Features: BLE HID Keyboard (`ESP32-BLE-Keyboard`), custom BLE GATT Configuration Service (`4fafc201-1fb5-459e-8fcc-c5c9c331914b`), persistent Non-Volatile Storage (NVS) via ESP32 `Preferences`, two-stage power management (Standby + Deep Sleep), and real-time USB Serial monitor/command interface (`115200` baud).
+   - Core Features: Composite BLE HID Keyboard (own implementation in `DactylBleComposite.h` and `DactylKeycodes.h`; no external `ESP32-BLE-Keyboard` library, which does not build against ESP32 Arduino Core 3.x), custom BLE GATT Configuration Service (`4fafc201-1fb5-459e-8fcc-c5c9c331914b`), persistent Non-Volatile Storage (NVS) via ESP32 `Preferences`, two-stage power management (Standby + Deep Sleep), and real-time USB Serial monitor/command interface (`115200` baud).
    - Matrix scanning: 6 Rows (`ROW_PINS = {13, 14, 27, 26, 33, 32}`) x 7 Columns (`COL_PINS = {23, 19, 18, 17, 16, 4, 25}`). Hand-wired matrix using 1N4148 diodes (Cathode/black ring to Row wire, Anode to switch pin 1, Columns soldered directly to switch pin 2 on active-low `INPUT_PULLUP`).
 
 2. **Web Configurator (`index.html`, `style.css`, `app.js`):**
@@ -139,6 +139,7 @@ Keys in the matrix use `uint16_t` action codes:
 ### 0. Firmware Code Layout
 - `firmware/dactyl_right/DactylLogic.h` contains all hardware-independent logic (layer resolution, tap-hold, combos, action dispatch, config command parser, NVS persistence). It is included by `dactyl_right.ino` **and** by `firmware/tests/test_firmware_logic.cpp`, so unit tests execute production code. Never copy logic into the test file.
 - `dactyl_right.ino` keeps hardware setup, BLE stack transitions, matrix scanning, and power management.
+- `firmware/dactyl_right/DactylKeycodes.h` defines the keycodes, `KeyReport`, `MediaKeyReport` (incl. Mac Globe `{0, 4}`), and the ASCII-to-HID mapping. The firmware builds with only the ESP32 core libraries (`BLE`, `Preferences`); CI pins `esp32:esp32@3.3.12`.
 
 ### 1. Compile Firmware
 ```bash

@@ -8,9 +8,7 @@
 #include <BLESecurity.h>
 #include "HIDTypes.h"
 #include "Print.h"
-#include <BleKeyboard.h>
-
-extern const uint8_t _asciimap[128];
+#include "DactylKeycodes.h" // Keycodes & Report-Typen (keine externe BleKeyboard-Bibliothek nötig)
 
 #define KEYBOARD_ID    0x01
 #define MEDIA_KEYS_ID  0x02
@@ -261,11 +259,11 @@ public:
       _keyReport.modifiers |= (1 << (k - 128));
       k = 0;
     } else { // Printing key
-      k = pgm_read_byte(_asciimap + k);
+      k = dactylAsciiToHid(k);
       if (!k) {
         return 0;
       }
-      if (k & 0x80) { // Capital letter / shifted char
+      if (k & DACTYL_ASCII_SHIFT) { // Capital letter / shifted char
         _keyReport.modifiers |= 0x02;
         k &= 0x7F;
       }
@@ -296,7 +294,7 @@ public:
       _keyReport.modifiers &= ~(1 << (k - 128));
       k = 0;
     } else {
-      k = pgm_read_byte(_asciimap + k);
+      k = dactylAsciiToHid(k);
       if (!k) {
         return 0;
       }

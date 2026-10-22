@@ -701,6 +701,33 @@ TEST(test_mod_tap_tap_and_hold) {
 }
 
 // -----------------------------------------------------------------------------
+// Test 12b: Media-Keys & Mac Globe (Consumer-Report-Bits aus DactylKeycodes.h)
+// -----------------------------------------------------------------------------
+TEST(test_media_and_globe_keys) {
+  resetState();
+  // Globe = Bit 10 (AC Next Keyboard Layout Select 0x029D im Report-Descriptor)
+  assert(mediaBits(KEY_MEDIA_GLOBE) == 0x0400);
+  assert(mediaBits(KEY_MEDIA_PLAY_PAUSE) == 0x0008);
+
+  KEYMAP[0][1][1] = 0x127; // MAC_GLOBE
+  keyState[1][1] = true;
+  onMatrixKeyChange(1, 1, true);
+  assert(bleKeyboard.pressedMediaKeys.size() == 1);
+  assert(bleKeyboard.pressedMediaKeys[0] == 0x0400);
+  keyState[1][1] = false;
+  onMatrixKeyChange(1, 1, false);
+  assert(bleKeyboard.pressedMediaKeys.empty()); // Globe wird beim Loslassen freigegeben
+
+  KEYMAP[0][1][2] = 0x120; // MEDIA_PLAY_PAUSE
+  keyState[1][2] = true;
+  onMatrixKeyChange(1, 2, true);
+  assert(bleKeyboard.writtenMediaKeys.size() == 1);
+  assert(bleKeyboard.writtenMediaKeys[0] == 0x0008);
+  keyState[1][2] = false;
+  onMatrixKeyChange(1, 2, false);
+}
+
+// -----------------------------------------------------------------------------
 // Test 13: Transparente Taste mit Halte-Aktion fällt auf Layer 0 zurück
 // -----------------------------------------------------------------------------
 TEST(test_resolve_key_actions_fallback) {

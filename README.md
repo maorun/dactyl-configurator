@@ -100,7 +100,7 @@ Die Kabel sind im Diagramm und in der folgenden Tabelle exakt nach der **linken 
   brew install arduino-cli
   arduino-cli core install esp32:esp32
   ```
-- **Arduino Library:** [`ESP32-BLE-Keyboard`](https://github.com/T-vK/ESP32-BLE-Keyboard).
+- **Arduino Core:** `esp32:esp32@3.3.12` (keine externe Bibliothek nötig; die Composite-BLE-HID-Implementierung liegt in `firmware/dactyl_right/DactylBleComposite.h`, Keycodes in `DactylKeycodes.h`).
 - **Browser:** Chromium-basierter Browser (Google Chrome, Arc, Brave, Edge, Opera) mit aktivierter Web-Bluetooth- und Web-Serial-Unterstützung.
 
 ### 2. Server starten

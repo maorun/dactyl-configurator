@@ -241,6 +241,12 @@ public:
 #define MOUSE_BUTTON_RIGHT  0x02
 #define MOUSE_BUTTON_MIDDLE 0x04
 
+// Keycodes & Report-Typen direkt aus der Firmware (keine doppelte Pflege im Mock)
+#include "../dactyl_right/DactylKeycodes.h"
+
+// Media-Report als 16-Bit-Wert (Bitposition wie im Consumer-Report-Descriptor)
+inline uint16_t mediaBits(const MediaKeyReport k) { return (uint16_t)(k[0] | (k[1] << 8)); }
+
 // BleKeyboard Mock
 class BleKeyboard {
 public:
@@ -262,13 +268,14 @@ public:
     auto it = std::find(pressedKeys.begin(), pressedKeys.end(), k);
     if (it != pressedKeys.end()) pressedKeys.erase(it);
   }
-  void press(uint16_t k) { pressedMediaKeys.push_back(k); }
-  void release(uint16_t k) {
-    auto it = std::find(pressedMediaKeys.begin(), pressedMediaKeys.end(), k);
+  std::vector<uint16_t> writtenMediaKeys;
+  void press(const MediaKeyReport k) { pressedMediaKeys.push_back(mediaBits(k)); }
+  void release(const MediaKeyReport k) {
+    auto it = std::find(pressedMediaKeys.begin(), pressedMediaKeys.end(), mediaBits(k));
     if (it != pressedMediaKeys.end()) pressedMediaKeys.erase(it);
   }
   void write(uint8_t k) { writtenKeys.push_back(k); }
-  void write(uint16_t k) { pressedMediaKeys.push_back(k); }
+  void write(const MediaKeyReport k) { writtenMediaKeys.push_back(mediaBits(k)); }
 
   void mousePress(uint8_t btn) { mouseButtons |= btn; }
   void mouseRelease(uint8_t btn) { mouseButtons &= ~btn; }
@@ -278,46 +285,10 @@ public:
   void releaseAll() {
     pressedKeys.clear();
     pressedMediaKeys.clear();
+    writtenMediaKeys.clear();
     mouseButtons = 0;
     clickedMouseButtons.clear();
     mouseScrolls.clear();
   }
   void setDisconnected() { connected = false; }
 };
-
-// Keyboard Definitions
-#define KEY_ESC 0xB1
-#define KEY_RETURN 0xB0
-#define KEY_BACKSPACE 0xB2
-#define KEY_TAB 0xB3
-#define KEY_DELETE 0xD4
-#define KEY_CAPS_LOCK 0xC1
-#define KEY_INSERT 0xD1
-#define KEY_PRTSC 0xCE
-#define KEY_UP_ARROW 0xDA
-#define KEY_DOWN_ARROW 0xD9
-#define KEY_LEFT_ARROW 0xD8
-#define KEY_RIGHT_ARROW 0xD7
-#define KEY_LEFT_CTRL 0x80
-#define KEY_LEFT_SHIFT 0x81
-#define KEY_LEFT_ALT 0x82
-#define KEY_RIGHT_ALT 0x86
-#define KEY_RIGHT_SHIFT 0x85
-#define KEY_NUM_0 0xEA
-#define KEY_NUM_1 0xE1
-#define KEY_NUM_9 0xE9
-#define KEY_F1 0xC2
-#define KEY_F7 0xC8
-#define KEY_F12 0xCD
-#define KEY_F13 0xF0
-#define KEY_F24 0xFB
-
-// Media-Keys als uint16_t, damit write()/press() eindeutig die Media-Überladung wählen
-static const uint16_t KEY_MEDIA_PLAY_PAUSE = 0x0008;
-static const uint16_t KEY_MEDIA_MUTE = 0x0010;
-static const uint16_t KEY_MEDIA_VOLUME_UP = 0x0020;
-static const uint16_t KEY_MEDIA_VOLUME_DOWN = 0x0040;
-static const uint16_t KEY_MEDIA_NEXT_TRACK = 0x0001;
-static const uint16_t KEY_MEDIA_PREVIOUS_TRACK = 0x0002;
-static const uint16_t KEY_MEDIA_STOP = 0x0004;
-static const uint16_t KEY_MEDIA_GLOBE = 0x0400;

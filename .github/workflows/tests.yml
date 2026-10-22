@@ -33,6 +33,11 @@ jobs:
         run: |
           node --check app.js
           node --check main.js
+          python3 -m py_compile server.py
+
+      - name: Run Configurator Logic Unit Tests (Node)
+        run: |
+          node tests/test_app_logic.js
 
       - name: Run Firmware C++ Unit Tests
         run: |

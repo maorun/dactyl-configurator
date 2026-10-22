@@ -174,6 +174,11 @@ public:
     memset(&_mediaKeyReport, 0, sizeof(MediaKeyReport));
   }
 
+  // Muss vor begin() aufgerufen werden, damit der Name im Advertising erscheint
+  void setName(const std::string& name) {
+    deviceName = name.substr(0, 31);
+  }
+
   void begin() {
     BLEDevice::init(String(deviceName.c_str()));
     BLEServer* pServer = BLEDevice::createServer();

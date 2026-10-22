@@ -381,6 +381,14 @@ function actionCodeToNumeric(code) {
 }
 const actionToNumeric = actionCodeToNumeric;
 
+// Tap- und Halte-Code einer Taste für SET_K/SET_KEY. Hold ohne Tap wirkt wie eine normale Taste.
+function keyToNumericActions(k) {
+  const tap = (k && k.tap && k.tap !== "NONE") ? k.tap : "NONE";
+  const hold = (k && k.hold && k.hold !== "NONE") ? k.hold : "NONE";
+  if (tap === "NONE") return { tapCode: actionCodeToNumeric(hold), holdCode: 0 };
+  return { tapCode: actionCodeToNumeric(tap), holdCode: actionCodeToNumeric(hold) };
+}
+
 function findDefinitionByCode(numericCode) {
   if (!numericCode || numericCode === 0) return { label: "---", tap: "NONE" };
   for (const [key, num] of Object.entries(ACTION_TO_NUMERIC)) {
@@ -455,17 +463,101 @@ const DEFAULT_CONFIG = {
   ]
 };
 
-// Normalisiert importierte oder vom Server geladene Konfigurationen (Finding #8)
+// Matrix- und Firmware-Grenzen (identisch zu dactyl_right.ino / server.py)
+const NUM_LAYERS = 8;
+const NUM_ROWS = 6;
+const NUM_COLS = 7;
+const MAX_COMBOS = 16;
+const MAX_NAME_LENGTH = 31;
+const SETTINGS_RANGES = {
+  debounceMs: [1, 50, 5],
+  comboTimeoutMs: [10, 200, 40],
+  standbyTimeoutMinutes: [0, 120, 5],
+  sleepTimeoutMinutes: [0, 240, 60]
+};
+const COMBO_BEHAVIORS = ["KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"];
+
+// Physisch nicht vorhandene Positionen (R4C0 im Fingerbereich, R5C5 im Daumen-Cluster)
+function isPhysicalKey(r, c) {
+  return !(r === 4 && c === 0) && !(r === 5 && c === 5);
+}
+
+function isValidIndex(value, max) {
+  return Number.isInteger(value) && value >= 0 && value < max;
+}
+
+// Entfernt Steuerzeichen (z. B. Zeilenumbrüche = Befehlsinjektion über Serial), Quotes & Backslashes
+function sanitizeCommandText(value, fallback = "") {
+  const cleaned = String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f"\\]/g, "")
+    .trim()
+    .slice(0, MAX_NAME_LENGTH);
+  return cleaned || fallback;
+}
+
+function clampSetting(field, value) {
+  const [lo, hi, def] = SETTINGS_RANGES[field];
+  const n = Number(value);
+  if (!Number.isInteger(n)) return def;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+function normalizeKeyCell(cell) {
+  if (!cell || typeof cell !== "object") return { label: "---", tap: "NONE", hold: "NONE" };
+  return {
+    label: typeof cell.label === "string" ? cell.label.slice(0, 16) : "",
+    tap: typeof cell.tap === "string" ? cell.tap : "NONE",
+    hold: typeof cell.hold === "string" ? cell.hold : "NONE"
+  };
+}
+
+// Prüft eine importierte oder vom Server geladene Konfiguration und wirft bei ungültiger Struktur
+function validateConfigShape(cfg) {
+  if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("Konfiguration muss ein Objekt sein.");
+  if (!Array.isArray(cfg.layers) || cfg.layers.length === 0 || cfg.layers.length > NUM_LAYERS) {
+    throw new Error(`'layers' muss 1..${NUM_LAYERS} Ebenen enthalten.`);
+  }
+  cfg.layers.forEach((layer, l) => {
+    if (!Array.isArray(layer) || layer.length > NUM_ROWS || layer.some(row => !Array.isArray(row) || row.length > NUM_COLS)) {
+      throw new Error(`Ebene ${l} hat keine gültige ${NUM_ROWS}x${NUM_COLS}-Matrix.`);
+    }
+  });
+  if (cfg.combos !== undefined) {
+    if (!Array.isArray(cfg.combos) || cfg.combos.length > MAX_COMBOS) throw new Error(`'combos' muss eine Liste mit maximal ${MAX_COMBOS} Einträgen sein.`);
+    cfg.combos.forEach((cb, i) => {
+      const ok = cb && typeof cb === "object" && cb.key1 && cb.key2 &&
+        isValidIndex(cb.key1.r, NUM_ROWS) && isValidIndex(cb.key1.c, NUM_COLS) &&
+        isValidIndex(cb.key2.r, NUM_ROWS) && isValidIndex(cb.key2.c, NUM_COLS);
+      if (!ok) throw new Error(`Combo ${i + 1} hat ungültige Tasten (key1/key2).`);
+    });
+  }
+  if (cfg.layerNames !== undefined && !Array.isArray(cfg.layerNames)) throw new Error("'layerNames' muss eine Liste sein.");
+  if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");
+}
+
+// Normalisiert importierte oder vom Server geladene Konfigurationen (nach validateConfigShape)
 function normalizeConfig(cfg) {
   if (!cfg || typeof cfg !== "object") cfg = {};
-  if (!Array.isArray(cfg.layers)) cfg.layers = [];
-  if (!Array.isArray(cfg.combos)) cfg.combos = [];
-  if (!Array.isArray(cfg.layerNames) || cfg.layerNames.length === 0) {
-    cfg.layerNames = [...DEFAULT_LAYER_NAMES];
-  }
-  if (!cfg.settings || typeof cfg.settings !== "object") {
-    cfg.settings = { standbyTimeoutMinutes: 5, sleepTimeoutMinutes: 60 };
-  }
+  cfg.layers = Array.isArray(cfg.layers)
+    ? cfg.layers.slice(0, NUM_LAYERS).map(layer => Array.isArray(layer)
+      ? layer.slice(0, NUM_ROWS).map(row => Array.isArray(row) ? row.slice(0, NUM_COLS).map(normalizeKeyCell) : [])
+      : [])
+    : [];
+  cfg.combos = Array.isArray(cfg.combos)
+    ? cfg.combos.filter(cb => cb && cb.key1 && cb.key2 &&
+        isValidIndex(cb.key1.r, NUM_ROWS) && isValidIndex(cb.key1.c, NUM_COLS) &&
+        isValidIndex(cb.key2.r, NUM_ROWS) && isValidIndex(cb.key2.c, NUM_COLS)).slice(0, MAX_COMBOS)
+    : [];
+  const names = Array.isArray(cfg.layerNames) ? cfg.layerNames : [];
+  cfg.layerNames = DEFAULT_LAYER_NAMES.map((def, i) => sanitizeCommandText(names[i], def));
+  const s = (cfg.settings && typeof cfg.settings === "object") ? cfg.settings : {};
+  cfg.settings = {
+    deviceName: sanitizeCommandText(s.deviceName, "Dactyl Keyboard"),
+    debounceMs: clampSetting("debounceMs", s.debounceMs ?? 5),
+    comboTimeoutMs: clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40),
+    standbyTimeoutMinutes: clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5),
+    sleepTimeoutMinutes: clampSetting("sleepTimeoutMinutes", s.sleepTimeoutMinutes ?? 60)
+  };
   return cfg;
 }
 
@@ -687,6 +779,12 @@ function undoPendingChange(id) {
   const idx = pendingChanges.findIndex(c => c.id === id);
   if (idx === -1) return;
   const change = pendingChanges[idx];
+  // Snapshot-Reverts (Import, Preset, Einstellungen) stellen ganze Bereiche wieder her und würden spätere
+  // Änderungen überschreiben, deren Datensätze dann veraltet wären: nur als jüngste Änderung zulassen.
+  if (change.snapshot && idx !== pendingChanges.length - 1) {
+    showToast("↩️ Bitte zuerst die neueren Änderungen rückgängig machen.", 5000);
+    return;
+  }
   if (typeof change.revert === "function") {
     try {
       change.revert();
@@ -742,7 +840,8 @@ function markPendingSync(changeOrSummary = "") {
       type: changeOrSummary.type || "general",
       title: changeOrSummary.title || "Änderung",
       description: changeOrSummary.description || "",
-      revert: changeOrSummary.revert || null
+      revert: changeOrSummary.revert || null,
+      snapshot: !!changeOrSummary.snapshot
     };
   }
   if (changeObj) {
@@ -771,29 +870,14 @@ async function loadSavedConfigFromServer() {
     if (res.ok) {
       const data = await res.json();
       if (data && data.layers && data.layers.length > 0) {
-        currentConfig = normalizeConfig(data);
-        if (currentConfig.settings) {
-          if (currentConfig.settings.deviceName) {
-            const el = document.getElementById("deviceNameInput");
-            if (el) el.value = currentConfig.settings.deviceName;
-          }
-          if (currentConfig.settings.debounceMs) {
-            const el = document.getElementById("debounceInput");
-            if (el) el.value = currentConfig.settings.debounceMs;
-          }
-          if (currentConfig.settings.comboTimeoutMs) {
-            const el = document.getElementById("comboTimeoutInput");
-            if (el) el.value = currentConfig.settings.comboTimeoutMs;
-          }
-          if (currentConfig.settings.standbyTimeoutMinutes !== undefined) {
-            const el = document.getElementById("standbyTimeoutSelect");
-            if (el) el.value = String(currentConfig.settings.standbyTimeoutMinutes);
-          }
-          if (currentConfig.settings.sleepTimeoutMinutes !== undefined) {
-            const el = document.getElementById("sleepTimeoutSelect");
-            if (el) el.value = String(currentConfig.settings.sleepTimeoutMinutes);
-          }
+        try {
+          validateConfigShape(data);
+        } catch (validationErr) {
+          showToast(`⚠️ Gespeicherte Konfiguration ungültig (${validationErr.message}). Standard wird verwendet.`, 7000);
+          return;
         }
+        currentConfig = normalizeConfig(data);
+        applySettingsToInputs(currentConfig.settings);
         renderLayerButtons();
         renderMatrix();
         renderCombosTable();
@@ -805,16 +889,42 @@ async function loadSavedConfigFromServer() {
   }
 }
 
-async function saveConfigToServer() {
-  try {
-    await fetch("/api/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(currentConfig)
-    });
-  } catch (e) {
-    console.warn("Could not auto-save config to server:", e);
-  }
+function applySettingsToInputs(settings) {
+  if (!settings) return;
+  const setVal = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.value = String(v); };
+  setVal("deviceNameInput", settings.deviceName);
+  setVal("debounceInput", settings.debounceMs);
+  setVal("comboTimeoutInput", settings.comboTimeoutMs);
+  setVal("standbyTimeoutSelect", settings.standbyTimeoutMinutes);
+  setVal("sleepTimeoutSelect", settings.sleepTimeoutMinutes);
+}
+
+// Saves werden seriell ausgeführt: ein später eintreffender älterer POST kann neuere Daten nicht überschreiben
+let serverSaveQueue = Promise.resolve(true);
+function saveConfigToServer() {
+  const snapshot = JSON.stringify(currentConfig);
+  const run = async () => {
+    try {
+      const res = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: snapshot
+      });
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try { msg = (await res.json()).error || msg; } catch (_) {}
+        showToast(`⚠️ Konfiguration konnte nicht gespeichert werden: ${msg}`, 6000);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.warn("Could not auto-save config to server:", e);
+      showToast("⚠️ Server nicht erreichbar: Konfiguration nicht gespeichert.", 6000);
+      return false;
+    }
+  };
+  serverSaveQueue = serverSaveQueue.then(run, run);
+  return serverSaveQueue;
 }
 
 function renderLayerButtons() {
@@ -852,7 +962,7 @@ function updateLayerNameInput() {
 async function renameActiveLayer() {
   const input = document.getElementById("layerNameInput");
   if (!input) return;
-  const newName = input.value.trim();
+  const newName = sanitizeCommandText(input.value);
   if (!newName) {
     showToast("Bitte gib einen Namen für die Ebene ein.");
     return;
@@ -878,17 +988,10 @@ async function renameActiveLayer() {
     }
   };
 
-  // An ESP32 per Bluetooth oder USB senden
-  if (bleConfigChar) {
-    const ok = await sendBleCommand(`SET_NAME ${activeLayerIndex} ${newName}`);
-    if (ok) {
-      showToast(`Ebene ${activeLayerIndex} in "${newName}" umbenannt!`);
-    } else {
-      markPendingSync(changeRecord);
-    }
-  } else if (serialPort && serialPort.writable) {
-    await sendSerialCommand(`SET_NAME ${activeLayerIndex} ${newName}`);
-    showToast(`Ebene ${activeLayerIndex} in "${newName}" umbenannt!`);
+  // An ESP32 per Bluetooth oder USB senden (bei Fehler als ausstehend vormerken)
+  const ok = await sendDeviceCommand(`SET_NAME ${targetLayer} ${newName}`);
+  if (ok) {
+    showToast(`Ebene ${targetLayer} in "${newName}" umbenannt!`);
   } else {
     markPendingSync(changeRecord);
   }
@@ -928,20 +1031,19 @@ function initUI() {
         currentConfig.layers[0] = JSON.parse(JSON.stringify(PRESETS[presetKey].layers[0]));
         renderMatrix();
         saveConfigToServer();
-        if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
-          markPendingSync({
-            type: "preset",
-            title: `Layout-Preset angewendet`,
-            description: `${PRESETS[presetKey].name} (Ebene 0)`,
-            revert: () => {
-              currentConfig.layers[0] = oldLayer0;
-              renderMatrix();
-              saveConfigToServer();
-            }
-          });
-        } else {
-          showToast(`Preset '${PRESETS[presetKey].name}' angewendet!`);
-        }
+        // Immer vormerken: das Preset wird mit dem nächsten Sync (Combo oder "Schreiben") übertragen
+        markPendingSync({
+          type: "preset",
+          snapshot: true,
+          title: `Layout-Preset angewendet`,
+          description: `${PRESETS[presetKey].name} (Ebene 0)`,
+          revert: () => {
+            currentConfig.layers[0] = oldLayer0;
+            renderMatrix();
+            if (selectedKey && activeLayerIndex === 0) updateInspector(selectedKey.r, selectedKey.c);
+            saveConfigToServer();
+          }
+        });
       }
     });
   }
@@ -1000,8 +1102,14 @@ function initUI() {
       if (bleConfigChar) {
         await disconnectBle();
       } else if (serialPort && serialPort.writable) {
-        await sendSerialCommand("EXIT_CONFIG");
-        updateConfigModeUI(false, false);
+        // UI wechselt erst über "OK EXIT_CONFIG" / "MODE:KEYBOARD" vom Gerät (handleSerialLine)
+        const ack = waitForAck("EXIT_CONFIG", 1500);
+        if (!(await sendSerialCommand("EXIT_CONFIG"))) {
+          resolveAcksForLine("ERR SEND EXIT_CONFIG");
+        }
+        if ((await ack) !== true) {
+          showToast("⚠️ EXIT_CONFIG wurde von der Tastatur nicht bestätigt.", 6000);
+        }
       }
     });
   }
@@ -1204,8 +1312,8 @@ function createKeycapElement(r, c, side, keyData, isThumb = false) {
 
   // Check if part of an active combo
   if (side === "R") {
-    const isComboKey = currentConfig.combos.some(combo => 
-      (combo.key1.r === r && combo.key1.c === c) || (combo.key2.r === r && combo.key2.c === c)
+    const isComboKey = currentConfig.combos.some(combo => combo.key1 && combo.key2 &&
+      ((combo.key1.r === r && combo.key1.c === c) || (combo.key2.r === r && combo.key2.c === c))
     );
     if (isComboKey) {
       keyEl.classList.add("has-combo");
@@ -1350,21 +1458,21 @@ window.deleteCombo = function(id) {
   renderCombosTable();
   renderMatrix();
   saveConfigToServer();
-  if (deletedCombo && !bleConfigChar && (!serialPort || !serialPort.writable)) {
+  if (deletedCombo) {
     markPendingSync({
       type: "combo_del",
       title: `Combo-Chord gelöscht`,
       description: deletedCombo.name || "Combo",
       revert: () => {
         if (!currentConfig.combos) currentConfig.combos = [];
-        currentConfig.combos.push(deletedCombo);
+        if (!currentConfig.combos.some(c => c.id === deletedCombo.id) && currentConfig.combos.length < MAX_COMBOS) {
+          currentConfig.combos.push(deletedCombo);
+        }
         renderCombosTable();
         renderMatrix();
         saveConfigToServer();
       }
     });
-  } else {
-    showToast("Combo gelöscht!");
   }
 };
 
@@ -1389,6 +1497,10 @@ function setupEventListeners() {
     const label = labelInput.value.trim() || primarySelect.options[primarySelect.selectedIndex].text.split(" ")[0];
     const tap = primarySelect.value;
     const hold = holdSelect.value;
+    if (!isPhysicalKey(r, c)) {
+      showToast(`R${r}C${c} existiert physisch nicht.`);
+      return;
+    }
 
     const oldKey = JSON.parse(JSON.stringify(layer[r][c] || { label: "---", tap: "NONE", hold: "NONE" }));
     const layerName = (currentConfig.layerNames && currentConfig.layerNames[targetLayer]) || `Layer ${targetLayer}`;
@@ -1398,8 +1510,7 @@ function setupEventListeners() {
     layer[r][c] = { label, tap, hold };
     renderMatrix();
 
-    const effectiveAction = (tap && tap !== "NONE") ? tap : (hold || "NONE");
-    const numericCode = actionCodeToNumeric(effectiveAction);
+    const { tapCode, holdCode } = keyToNumericActions(layer[r][c]);
 
     const changeRecord = {
       type: "key",
@@ -1417,16 +1528,10 @@ function setupEventListeners() {
       }
     };
 
-    if (bleConfigChar) {
-      const ok = await sendBleCommand(`SET_KEY ${activeLayerIndex} ${r} ${c} ${numericCode}`);
-      if (ok) {
-        showToast(`⚡ Per Bluetooth an Dactyl übertragen: [R${r}, C${c}] = ${label} (NVS gespeichert)`);
-      } else {
-        markPendingSync(changeRecord);
-      }
-    } else if (serialPort && serialPort.writable) {
-      await sendSerialCommand(`SET_KEY ${activeLayerIndex} ${r} ${c} ${numericCode}`);
-      showToast(`🔌 Per USB an Dactyl übertragen: [R${r}, C${c}] = ${label} (NVS gespeichert)`);
+    // SET_KEY <l> <r> <c> <tap> <hold>: Firmware antwortet mit OK SET_KEY bzw. ERR (Toast im Notification-Handler)
+    const sent = await sendDeviceCommand(`SET_KEY ${targetLayer} ${r} ${c} ${tapCode} ${holdCode}`);
+    if (sent) {
+      showToast(`⚡ An Dactyl übertragen: [R${r}, C${c}] = ${label}`);
     } else {
       markPendingSync(changeRecord);
     }
@@ -1477,6 +1582,10 @@ function setupEventListeners() {
       alert("Taste 1 und Taste 2 dürfen nicht identisch sein!");
       return;
     }
+    if (currentConfig.combos.length >= MAX_COMBOS) {
+      alert(`Maximal ${MAX_COMBOS} Combos werden von der Firmware unterstützt.`);
+      return;
+    }
 
     const r1 = parseInt(k1Val[0], 10), c1 = parseInt(k1Val[1], 10);
     const r2 = parseInt(k2Val[0], 10), c2 = parseInt(k2Val[1], 10);
@@ -1501,21 +1610,17 @@ function setupEventListeners() {
     renderMatrix();
     saveConfigToServer();
 
-    if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
-      markPendingSync({
-        type: "combo_add",
-        title: `Combo-Chord hinzugefügt`,
-        description: newCombo.name,
-        revert: () => {
-          currentConfig.combos = currentConfig.combos.filter(c => c.id !== newCombo.id);
-          renderCombosTable();
-          renderMatrix();
-          saveConfigToServer();
-        }
-      });
-    } else {
-      showToast("Neuer Combo-Chord angelegt!");
-    }
+    markPendingSync({
+      type: "combo_add",
+      title: `Combo-Chord hinzugefügt`,
+      description: newCombo.name,
+      revert: () => {
+        currentConfig.combos = currentConfig.combos.filter(c => c.id !== newCombo.id);
+        renderCombosTable();
+        renderMatrix();
+        saveConfigToServer();
+      }
+    });
   });
 
   // JSON Import & Export
@@ -1538,32 +1643,36 @@ function setupEventListeners() {
     reader.onload = (event) => {
       try {
         const parsed = JSON.parse(event.target.result);
-        if (parsed && parsed.layers && Array.isArray(parsed.layers)) {
-          const oldConfig = JSON.parse(JSON.stringify(currentConfig));
-          currentConfig = normalizeConfig(parsed);
-          renderLayerButtons();
-          renderMatrix();
-          renderCombosTable();
-          saveConfigToServer();
-          if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
-            markPendingSync({
-              type: "import",
-              title: "JSON-Konfiguration importiert",
-              description: `${file.name || "Backup"} geladen`,
-              revert: () => {
-                currentConfig = oldConfig;
-                renderLayerButtons();
-                renderMatrix();
-                renderCombosTable();
-                saveConfigToServer();
-              }
-            });
-          } else {
-            showToast("Konfiguration erfolgreich geladen!");
-          }
+        // Vollständig validieren, BEVOR der Zustand ersetzt oder auf dem Server gespeichert wird
+        validateConfigShape(parsed);
+        if (!confirm(`Konfiguration aus "${file.name || "Backup"}" importieren? Die aktuelle Belegung wird ersetzt (Rückgängig über die vorgemerkten Änderungen).`)) {
+          return;
         }
+        const oldConfig = JSON.parse(JSON.stringify(currentConfig));
+        currentConfig = normalizeConfig(parsed);
+        renderLayerButtons();
+        renderMatrix();
+        renderCombosTable();
+        if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+        saveConfigToServer();
+        markPendingSync({
+          type: "import",
+          snapshot: true,
+          title: "JSON-Konfiguration importiert",
+          description: `${file.name || "Backup"} geladen`,
+          revert: () => {
+            currentConfig = oldConfig;
+            renderLayerButtons();
+            renderMatrix();
+            renderCombosTable();
+            if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+            saveConfigToServer();
+          }
+        });
       } catch (err) {
         alert("Ungültige JSON-Datei: " + err.message);
+      } finally {
+        e.target.value = "";
       }
     };
     reader.readAsText(file);
@@ -1582,13 +1691,16 @@ function setupEventListeners() {
   const btnSaveSettings = document.getElementById("btnSaveSettings");
   if (btnSaveSettings) {
     btnSaveSettings.addEventListener("click", async () => {
-      const devName = document.getElementById("deviceNameInput")?.value || "Dactyl Keyboard";
-      const debounce = parseInt(document.getElementById("debounceInput")?.value, 10) || 5;
-      const comboTimeout = parseInt(document.getElementById("comboTimeoutInput")?.value, 10) || 40;
-      const standbyTimeoutVal = parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10);
-      const standbyMinutes = isNaN(standbyTimeoutVal) ? 5 : standbyTimeoutVal;
-      const sleepTimeoutVal = parseInt(document.getElementById("sleepTimeoutSelect")?.value, 10);
-      const sleepMinutes = isNaN(sleepTimeoutVal) ? 60 : sleepTimeoutVal;
+      // Werte auf die Firmware-Bereiche begrenzen (Firmware lehnt Werte außerhalb mit ERR ARGS ab)
+      const devName = sanitizeCommandText(document.getElementById("deviceNameInput")?.value, "Dactyl Keyboard");
+      const debounce = clampSetting("debounceMs", parseInt(document.getElementById("debounceInput")?.value, 10));
+      const comboTimeout = clampSetting("comboTimeoutMs", parseInt(document.getElementById("comboTimeoutInput")?.value, 10));
+      const standbyMinutes = clampSetting("standbyTimeoutMinutes", parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10));
+      const sleepMinutes = clampSetting("sleepTimeoutMinutes", parseInt(document.getElementById("sleepTimeoutSelect")?.value, 10));
+      const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = String(v); };
+      setVal("deviceNameInput", devName);
+      setVal("debounceInput", debounce);
+      setVal("comboTimeoutInput", comboTimeout);
 
       const oldSettings = JSON.parse(JSON.stringify(currentConfig.settings || {}));
 
@@ -1604,32 +1716,33 @@ function setupEventListeners() {
 
       const changeRecord = {
         type: "settings",
+        snapshot: true,
         title: `Einstellungen & Timeouts`,
         description: `Standby: ${standbyMinutes}m, Sleep: ${sleepMinutes}m, Name: "${devName}"`,
         revert: () => {
           currentConfig.settings = oldSettings;
+          applySettingsToInputs(oldSettings);
           saveConfigToServer();
         }
       };
 
-      if (bleConfigChar) {
-        const ok1 = await sendBleCommand(`SET_STANDBY ${standbyMinutes}`);
-        const ok2 = await sendBleCommand(`SET_SLEEP ${sleepMinutes}`);
-        const ok3 = await sendBleCommand(`SET_DEV_NAME ${devName}`);
-        const ok4 = await sendBleCommand(`SET_DEBOUNCE ${debounce}`);
-        const ok5 = await sendBleCommand(`SET_COMBO_TIMEOUT ${comboTimeout}`);
-        if (ok1 && ok2 && ok3 && ok4 && ok5) {
-          showToast("✅ Device-Einstellungen & Timeouts im ESP32 NVS gespeichert!");
+      if (isDeviceConnected()) {
+        const cmds = [
+          `SET_STANDBY ${standbyMinutes}`,
+          `SET_SLEEP ${sleepMinutes}`,
+          `SET_DEV_NAME ${devName}`,
+          `SET_DEBOUNCE ${debounce}`,
+          `SET_COMBO_TIMEOUT ${comboTimeout}`
+        ];
+        let allOk = true;
+        for (const cmd of cmds) {
+          if (!(await sendDeviceCommand(cmd))) { allOk = false; break; }
+        }
+        if (allOk) {
+          showToast("✅ Device-Einstellungen & Timeouts an ESP32 übertragen!");
         } else {
           markPendingSync(changeRecord);
         }
-      } else if (serialPort && serialPort.writable) {
-        await sendSerialCommand(`SET_STANDBY ${standbyMinutes}`);
-        await sendSerialCommand(`SET_SLEEP ${sleepMinutes}`);
-        await sendSerialCommand(`SET_DEV_NAME ${devName}`);
-        await sendSerialCommand(`SET_DEBOUNCE ${debounce}`);
-        await sendSerialCommand(`SET_COMBO_TIMEOUT ${comboTimeout}`);
-        showToast("✅ Device-Einstellungen & Timeouts im ESP32 NVS gespeichert!");
       } else {
         markPendingSync(changeRecord);
       }
@@ -1661,12 +1774,14 @@ async function saveAndFlashToDactyl() {
       body: JSON.stringify(currentConfig)
     });
 
-    const data = await res.json();
+    let data = {};
+    try { data = await res.json(); } catch (_) {}
     if (res.ok && data.success) {
       if (hadSerial) {
         try {
           await new Promise(r => setTimeout(r, 1200)); // ESP32 Reboot nach Flashen abwarten
-          await connectSerial();
+          // Ohne User-Geste ist requestPort() nicht erlaubt: bereits freigegebenen Port wiederverwenden
+          await connectSerial({ reuseGrantedPort: true });
           if (serialPort && serialPort.writable) {
             if (currentConfig.settings) {
               const sb = currentConfig.settings.standbyTimeoutMinutes ?? 5;
@@ -1674,10 +1789,8 @@ async function saveAndFlashToDactyl() {
               await sendSerialCommand(`SET_STANDBY ${sb}`);
               await sendSerialCommand(`SET_SLEEP ${sl}`);
             }
-            if (Array.isArray(currentConfig.layerNames)) {
-              for (let l = 0; l < currentConfig.layerNames.length; l++) {
-                await sendSerialCommand(`SET_NAME ${l} ${currentConfig.layerNames[l]}`);
-              }
+            for (let l = 0; l < currentConfig.layerNames.length; l++) {
+              await sendSerialCommand(`SET_NAME ${l} ${sanitizeCommandText(currentConfig.layerNames[l], DEFAULT_LAYER_NAMES[l])}`);
             }
           }
         } catch (reconnectErr) {
@@ -1709,8 +1822,9 @@ function populateComboKeyDropdowns() {
   s2.innerHTML = "";
 
   const layer = currentConfig.layers[0];
-  for (let r = 0; r < 6; r++) {
-    for (let c = 0; c < 7; c++) {
+  for (let r = 0; r < NUM_ROWS; r++) {
+    for (let c = 0; c < NUM_COLS; c++) {
+      if (!isPhysicalKey(r, c)) continue;
       const k = layer[r] && layer[r][c];
       const lbl = k ? k.label : `R${r}C${c}`;
       const isThumb = (r === 5);
@@ -1822,11 +1936,15 @@ async function checkBluetoothPermission() {
       localStorage.removeItem("dactyl_bt_permission_verified");
       setBtPermissionUIState("denied");
       showToast("❌ macOS verwehrt Bluetooth-Zugriff! Klicke auf 'macOS Bluetooth-Freigabe öffnen'.", 7000);
-    } else {
-      // Chooser was cancelled or scan timed out without finding device, BUT permission to scan IS GRANTED!
+    } else if (err.name === "NotFoundError") {
+      // Scan lief (Berechtigung vorhanden), aber kein Gerät gewählt/gefunden
       localStorage.setItem("dactyl_bt_permission_verified", "true");
       setBtPermissionUIState("granted");
       showToast("✅ Bluetooth-Berechtigung aktiv! 'Bluetooth Live-Sync' ist jetzt bereit.", 4000);
+    } else {
+      // Adapter aus, nicht unterstützt o. ä.: Berechtigung NICHT als erteilt markieren
+      setBtPermissionUIState("unverified");
+      showToast("⚠️ Bluetooth nicht verfügbar: " + (err.message || err.name), 6000);
     }
   }
 }
@@ -2013,24 +2131,31 @@ async function connectBle() {
   }
 }
 
+// Sendet EXIT_CONFIG und trennt. Rückgabe: true, wenn die Tastatur den Befehl bestätigt hat.
 async function disconnectBle() {
   lastBleDisconnectTime = Date.now();
+  let exitConfirmed = false;
   if (bleConfigChar) {
-    try {
-      await sendBleCommand("EXIT_CONFIG");
-      await new Promise(r => setTimeout(r, 60));
-    } catch (e) {
-      console.warn("Error sending EXIT_CONFIG:", e);
-    }
+    exitConfirmed = (await sendBleCommandAwait("EXIT_CONFIG", "EXIT_CONFIG", 1500)) === true;
   }
-  if (bleDevice && bleDevice.gatt.connected) {
-    bleDevice.gatt.disconnect();
+  const dev = bleDevice;
+  if (dev && dev.gatt.connected) {
+    dev.gatt.disconnect(); // löst gattserverdisconnected -> onBleDisconnected aus
   }
   onBleDisconnected();
+  if (!exitConfirmed) {
+    showToast("⚠️ EXIT_CONFIG nicht bestätigt: Die Tastatur kehrt spätestens nach 3 Min automatisch in den Tastaturmodus zurück.", 7000);
+  }
+  return exitConfirmed;
 }
 
 function onBleDisconnected() {
   lastBleDisconnectTime = Date.now();
+  // Idempotent: manuelles Trennen und das gattserverdisconnected-Event rufen diese Funktion beide auf
+  if (!bleDevice && !bleConfigChar && !bleServer) return;
+  if (bleDevice) bleDevice.removeEventListener("gattserverdisconnected", onBleDisconnected);
+  if (bleConfigChar) bleConfigChar.removeEventListener("characteristicvaluechanged", handleBleNotification);
+  rejectAllPendingAcks("Bluetooth-Verbindung getrennt");
   bleConfigChar = null;
   bleServer = null;
   bleDevice = null;
@@ -2104,6 +2229,70 @@ function sendBleCommand(cmd) {
   return p;
 }
 
+// -----------------------------------------------------------------------------
+// Firmware-Bestätigungen (OK <CMD> / ERR ...): Erfolg erst nach Antwort der Tastatur
+// -----------------------------------------------------------------------------
+const pendingAcks = [];
+
+// Wartet auf "OK <okPrefix>" bzw. ein ERR für diesen Befehl. Löst mit true (OK), false (ERR) oder null (Timeout) auf.
+function waitForAck(okPrefix, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    const entry = { okPrefix, resolve, timer: null };
+    entry.timer = setTimeout(() => {
+      const i = pendingAcks.indexOf(entry);
+      if (i !== -1) pendingAcks.splice(i, 1);
+      resolve(null);
+    }, timeoutMs);
+    pendingAcks.push(entry);
+  });
+}
+
+function resolveAcksForLine(line) {
+  if (!line.startsWith("OK ") && !line.startsWith("ERR ")) return;
+  const isOk = line.startsWith("OK ");
+  for (let i = 0; i < pendingAcks.length; i++) {
+    const entry = pendingAcks[i];
+    // OK <CMD> ... bzw. ERR <GRUND> <CMD>... (ERR BUSY/ARGS/NVS/UNKNOWN enthalten den Befehlsnamen)
+    const matches = isOk ? line.startsWith(`OK ${entry.okPrefix}`) : line.includes(entry.okPrefix);
+    if (matches) {
+      clearTimeout(entry.timer);
+      pendingAcks.splice(i, 1);
+      entry.resolve(isOk);
+      return;
+    }
+  }
+}
+
+function rejectAllPendingAcks(reason) {
+  while (pendingAcks.length) {
+    const entry = pendingAcks.shift();
+    clearTimeout(entry.timer);
+    console.warn("Bestätigung verworfen:", entry.okPrefix, reason);
+    entry.resolve(false);
+  }
+}
+
+async function sendBleCommandAwait(cmd, okPrefix, timeoutMs) {
+  const ack = waitForAck(okPrefix, timeoutMs);
+  const sent = await sendBleCommand(cmd);
+  if (!sent) {
+    resolveAcksForLine(`ERR SEND ${okPrefix}`);
+    return false;
+  }
+  return ack;
+}
+
+function isDeviceConnected() {
+  return !!bleConfigChar || !!(serialPort && serialPort.writable);
+}
+
+// Sendet einen Befehl über die aktive Verbindung (BLE bevorzugt). Rückgabe: true bei erfolgreichem Senden.
+async function sendDeviceCommand(cmd) {
+  if (bleConfigChar) return sendBleCommand(cmd);
+  if (serialPort && serialPort.writable) return sendSerialCommand(cmd);
+  return false;
+}
+
 function handleBleNotification(event) {
   const decoder = new TextDecoder();
   const raw = decoder.decode(event.target.value);
@@ -2121,22 +2310,55 @@ function handleBleNotification(event) {
 // WebSerial Communication (Re-engineered: No stream locking bugs!)
 // =============================================================================
 
-async function connectSerial() {
+function onSerialPortDisconnected(event) {
+  if (serialPort && event && event.target === serialPort) {
+    showToast("🔌 USB-Verbindung zum ESP32 getrennt.");
+    disconnectSerial();
+  }
+}
+
+let serialTransition = Promise.resolve();
+
+// connectSerial/disconnectSerial laufen nacheinander, damit ein Verbinden nie in ein laufendes Trennen fällt
+function connectSerial(options = {}) {
+  const run = () => connectSerialNow(options);
+  serialTransition = serialTransition.then(run, run);
+  return serialTransition;
+}
+
+function disconnectSerial() {
+  const run = () => disconnectSerialNow();
+  serialTransition = serialTransition.then(run, run);
+  return serialTransition;
+}
+
+async function connectSerialNow(options = {}) {
   if (!("serial" in navigator)) {
     alert("WebSerial wird von deinem Browser nicht unterstützt. Bitte benutze Google Chrome, Microsoft Edge, Arc oder Opera.");
     return;
   }
+  if (serialPort) return; // bereits verbunden
 
+  let port = null;
   try {
-    serialPort = await navigator.serial.requestPort();
-    await serialPort.open({ baudRate: 115200 });
+    if (options.reuseGrantedPort && typeof navigator.serial.getPorts === "function") {
+      const granted = await navigator.serial.getPorts();
+      port = granted[0] || null;
+      if (!port) throw new Error("Kein bereits freigegebener USB-Port gefunden. Bitte manuell verbinden.");
+    } else {
+      port = await navigator.serial.requestPort();
+    }
+    await port.open({ baudRate: 115200 });
+    // Erst nach erfolgreichem open() als aktive Verbindung übernehmen
+    serialPort = port;
+    serialPort.addEventListener("disconnect", onSerialPortDisconnected);
 
     keepReading = true;
     updateConnectionUI(true, "ESP32 (USB 115200 Baud)");
     showToast("Erfolgreich mit ESP32 verbunden!");
 
     // Start read loop
-    serialReadPromise = startSerialReadLoop();
+    serialReadPromise = startSerialReadLoop(port);
 
     // Query device info
     setTimeout(() => {
@@ -2145,12 +2367,17 @@ async function connectSerial() {
 
   } catch (err) {
     console.error("Serial connection error:", err);
+    if (port && port !== serialPort) {
+      try { await port.close(); } catch (_) {}
+    }
+    serialPort = null;
     updateConnectionUI(false, "Verbindung fehlgeschlagen");
     showToast("Verbindung abgebrochen oder Fehler: " + err.message);
   }
 }
 
-async function disconnectSerial() {
+async function disconnectSerialNow() {
+  if (!serialPort && !serialReadPromise) return;
   keepReading = false;
   if (serialReader) {
     try {
@@ -2164,13 +2391,16 @@ async function disconnectSerial() {
     serialReadPromise = null;
   }
   if (serialPort) {
+    const port = serialPort;
+    serialPort = null;
+    port.removeEventListener("disconnect", onSerialPortDisconnected);
     try {
-      await serialPort.close();
+      await port.close();
     } catch(e) {
       console.warn("Serial close warning:", e);
     }
-    serialPort = null;
   }
+  if (!bleConfigChar) rejectAllPendingAcks("USB-Verbindung getrennt");
   serialReader = null;
   updateConnectionUI(false, "Nicht verbunden");
   showToast("ESP32 getrennt.");
@@ -2211,26 +2441,43 @@ function updateConnectionUI(connected, text) {
   if (btnWrite) btnWrite.disabled = !isOnline;
 }
 
-async function sendSerialCommand(cmd) {
-  if (!serialPort || !serialPort.writable) return;
-  try {
-    const writer = serialPort.writable.getWriter();
-    const encoder = new TextEncoder();
-    await writer.write(encoder.encode(cmd + "\n"));
-    writer.releaseLock();
-  } catch (e) {
-    console.warn("Failed to send command to ESP32:", cmd, e);
-  }
+// Serielle Schreibvorgänge werden serialisiert (nur ein Writer-Lock gleichzeitig). Rückgabe: true bei Erfolg.
+let serialWriteQueue = Promise.resolve();
+function sendSerialCommand(cmd) {
+  const run = async () => {
+    if (!serialPort || !serialPort.writable) return false;
+    let writer = null;
+    try {
+      writer = serialPort.writable.getWriter();
+      await writer.write(new TextEncoder().encode(cmd + "\n"));
+      return true;
+    } catch (e) {
+      console.warn("Failed to send command to ESP32:", cmd, e);
+      return false;
+    } finally {
+      // Lock immer freigeben, sonst schlagen alle späteren Schreibvorgänge fehl
+      if (writer) {
+        try { writer.releaseLock(); } catch (_) {}
+      }
+    }
+  };
+  const p = serialWriteQueue.then(run, run);
+  serialWriteQueue = p.then(() => {}, () => {});
+  return p;
 }
 
-async function startSerialReadLoop() {
+// Der Read-Loop ist an "seinen" Port gebunden: ein späteres connectSerial() kann ihn nicht wiederbeleben,
+// und sein finally gibt nur den eigenen Reader frei.
+async function startSerialReadLoop(port) {
   const decoder = new TextDecoder();
   let buffer = "";
+  let reader = null;
 
   try {
-    serialReader = serialPort.readable.getReader();
-    while (serialPort && keepReading) {
-      const { value, done } = await serialReader.read();
+    reader = port.readable.getReader();
+    serialReader = reader;
+    while (serialPort === port && keepReading) {
+      const { value, done } = await reader.read();
       if (done) break;
       if (value) {
         buffer += decoder.decode(value, { stream: true });
@@ -2246,19 +2493,27 @@ async function startSerialReadLoop() {
       }
     }
   } catch (err) {
-    if (keepReading) {
+    if (keepReading && serialPort === port) {
       console.warn("Serial read loop error:", err);
     }
   } finally {
-    if (serialReader) {
-      try { serialReader.releaseLock(); } catch(e) {}
-      serialReader = null;
+    if (reader) {
+      try { reader.releaseLock(); } catch(e) {}
     }
+    if (serialReader === reader) serialReader = null;
   }
 }
 
 function handleSerialLine(line) {
   if (!line) return;
+
+  // Bestätigungen/Fehler zuerst an wartende Sync-Schritte weiterreichen
+  resolveAcksForLine(line);
+  if (line.startsWith("ERR ")) {
+    console.warn("[ESP32 ERR]", line);
+    if (!isAutoSyncing) showToast(`⚠️ Tastatur meldet Fehler: ${line}`, 6000);
+    return;
+  }
 
   // 0. Konfig-Modus Status-Events
   if (line === "MODE:CONFIG" || line.startsWith("OK ENTER_CONFIG")) {
@@ -2341,10 +2596,12 @@ function handleSerialLine(line) {
   else if (line.startsWith("KEY_PRESS:")) {
     try {
       const evt = JSON.parse(line.substring(10));
-      if (evt.target_layer !== undefined && evt.target_layer !== activeLayerIndex) {
+      if (!isValidIndex(evt.r, NUM_ROWS) || !isValidIndex(evt.c, NUM_COLS)) return;
+      const pressedLayer = isValidIndex(evt.layer, NUM_LAYERS) ? evt.layer : undefined;
+      if (isValidIndex(evt.target_layer, NUM_LAYERS) && evt.target_layer !== activeLayerIndex) {
         switchLayerUI(evt.target_layer);
       }
-      triggerVisualKeyPress(evt.r, evt.c, evt.key, "R", evt.layer);
+      triggerVisualKeyPress(evt.r, evt.c, typeof evt.key === "string" ? evt.key : "", "R", pressedLayer);
     } catch (e) {
       console.warn("Failed to parse KEY_PRESS:", e, line);
     }
@@ -2354,6 +2611,7 @@ function handleSerialLine(line) {
   else if (line.startsWith("KEY_RELEASE:")) {
     try {
       const evt = JSON.parse(line.substring(12));
+      if (!isValidIndex(evt.r, NUM_ROWS) || !isValidIndex(evt.c, NUM_COLS)) return;
       triggerVisualKeyRelease(evt.r, evt.c, "R");
     } catch (e) {
       console.warn("Failed to parse KEY_RELEASE:", e, line);
@@ -2370,27 +2628,33 @@ function handleSerialLine(line) {
   }
 
   // 5. Layer-Daten (Tastenbelegung) von Firmware synchronisieren (GET_CONFIG)
-  else if (line.startsWith("LAYER_DATA:")) {
+  else if (line.startsWith("LAYER_DATA:") || line.startsWith("HOLD_DATA:")) {
+    const isHold = line.startsWith("HOLD_DATA:");
     try {
-      const data = JSON.parse(line.substring(11));
-      if (data.l !== undefined && Array.isArray(data.k)) {
-        if (!currentConfig.layers[data.l]) currentConfig.layers[data.l] = [];
-        for (let r = 0; r < data.k.length; r++) {
-          if (!currentConfig.layers[data.l][r]) currentConfig.layers[data.l][r] = [];
-          for (let c = 0; c < data.k[r].length; c++) {
+      const data = JSON.parse(line.substring(isHold ? 10 : 11));
+      // Gerätedaten nur innerhalb der Matrixgrenzen übernehmen (kein "__proto__", keine Sparse-Arrays)
+      if (isValidIndex(data.l, NUM_LAYERS) && Array.isArray(data.k)) {
+        while (currentConfig.layers.length <= data.l) currentConfig.layers.push([]);
+        const layer = currentConfig.layers[data.l];
+        for (let r = 0; r < Math.min(data.k.length, NUM_ROWS); r++) {
+          if (!Array.isArray(data.k[r])) continue;
+          if (!Array.isArray(layer[r])) layer[r] = [];
+          for (let c = 0; c < Math.min(data.k[r].length, NUM_COLS); c++) {
             const code = data.k[r][c];
+            if (!Number.isInteger(code) || code < 0 || code > 0xFFFF) continue;
             const def = findDefinitionByCode(code);
-            currentConfig.layers[data.l][r][c] = {
-              label: def.label,
-              tap: def.tap,
-              hold: "NONE"
-            };
+            if (isHold) {
+              if (!layer[r][c]) layer[r][c] = { label: "---", tap: "NONE", hold: "NONE" };
+              layer[r][c].hold = code === 0 ? "NONE" : def.tap;
+            } else {
+              layer[r][c] = { label: def.label, tap: def.tap, hold: "NONE" };
+            }
           }
         }
         renderMatrix();
       }
     } catch (e) {
-      console.warn("Failed to parse LAYER_DATA:", e, line);
+      console.warn("Failed to parse LAYER_DATA/HOLD_DATA:", e, line);
     }
   } else if (line.startsWith("CONFIG_SYNC_DONE")) {
     clearPendingSync();
@@ -2403,7 +2667,7 @@ function handleSerialLine(line) {
     try {
       const names = JSON.parse(line.substring(12));
       if (Array.isArray(names) && names.length > 0) {
-        currentConfig.layerNames = names;
+        currentConfig.layerNames = DEFAULT_LAYER_NAMES.map((def, i) => sanitizeCommandText(names[i], def));
         renderLayerButtons();
         saveConfigToServer();
         showToast("Ebenen-Namen von Tastatur synchronisiert!");
@@ -2414,13 +2678,12 @@ function handleSerialLine(line) {
   }
 
   // 7. Bestätigung von Konfigurations-Befehlen
-  else if (line.startsWith("OK SET_KEY") || line.startsWith("OK SAVE_NVS")) {
-    if (line.startsWith("OK SAVE_NVS")) {
-      clearPendingSync();
-      showToast("✅ Alle Änderungen dauerhaft im ESP32 NVS gespeichert!");
-    } else {
-      showToast("✅ Taste im ESP32 NVS gespeichert!");
-    }
+  // Ausstehende Änderungen werden NICHT hier verworfen, sondern erst nach vollständig bestätigtem Sync
+  // (writeConfigToESP32), damit ein Fehler in der Combo-Phase den Änderungsverlauf nicht löscht.
+  else if (line.startsWith("OK SET_KEY")) {
+    if (!isAutoSyncing) showToast("✅ Taste im ESP32 NVS gespeichert!");
+  } else if (line.startsWith("OK SAVE_NVS")) {
+    if (!isAutoSyncing) showToast("✅ Tastenbelegung dauerhaft im ESP32 NVS gespeichert!");
   } else if (line.startsWith("OK SET_NAME")) {
     showToast("✅ Ebenen-Name im ESP32 NVS gespeichert!");
   } else if (line.startsWith("OK SET_STANDBY")) {
@@ -2442,7 +2705,7 @@ function handleSerialLine(line) {
 }
 
 function switchLayerUI(layerIdx) {
-  if (layerIdx === activeLayerIndex || layerIdx < 0 || layerIdx >= currentConfig.layers.length) return;
+  if (!isValidIndex(layerIdx, NUM_LAYERS) || layerIdx === activeLayerIndex) return;
   document.querySelectorAll(".layer-btn").forEach(b => {
     if (parseInt(b.dataset.layer, 10) === layerIdx) {
       b.classList.add("active");
@@ -2784,37 +3047,61 @@ function findLayerTriggerKey(targetLayer) {
   return null;
 }
 
+// Beim keydown aufgelöste Taste je event.code, damit keyup dieselbe Taste loslässt
+// (auch wenn sich die gehaltene Ebene zwischenzeitlich geändert hat)
+const browserHeldKeys = new Map();
+
+function isEditableTarget(target) {
+  if (!target) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+}
+
 function setupBrowserKeyboardHooks() {
+  const releaseHeld = (code) => {
+    const held = browserHeldKeys.get(code);
+    if (!held) return;
+    browserHeldKeys.delete(code);
+    if (held.trigger) {
+      triggerVisualKeyRelease(held.trigger.r, held.trigger.c, "R");
+    }
+    triggerVisualKeyRelease(held.matched.r, held.matched.c, "R");
+  };
+
   window.addEventListener("keydown", (e) => {
-    // If user is editing a label inside an input, do not block typing
-    if (e.target.tagName === "INPUT" && (e.target.id === "keyLabelInput" || e.target.id === "layerNameInput" || e.target.type === "text")) return;
+    // Beim Tippen in Eingabefeldern (Namen, Zahlen) keine Tastenvisualisierung auslösen
+    if (isEditableTarget(e.target)) return;
+    if (e.repeat) return;
+    // Veralteter Eintrag ohne keyup (z. B. nach Cmd-Kombination): erst freigeben, dann neu drücken
+    if (browserHeldKeys.has(e.code)) releaseHeld(e.code);
 
     const matched = resolveKeyFromEvent(e);
     if (matched) {
+      let trigger = null;
       // If key is on another layer, also highlight the MO key on layer 0!
       if (matched.layer !== undefined && matched.layer > 0) {
-        const trigger = findLayerTriggerKey(matched.layer);
+        trigger = findLayerTriggerKey(matched.layer);
         if (trigger) {
           triggerVisualKeyPress(trigger.r, trigger.c, trigger.label, "R", 0);
         }
       }
+      browserHeldKeys.set(e.code, { matched, trigger });
       triggerVisualKeyPress(matched.r, matched.c, matched.label, "R", matched.layer);
     }
   });
 
   window.addEventListener("keyup", (e) => {
-    if (e.target.tagName === "INPUT" && (e.target.id === "keyLabelInput" || e.target.id === "layerNameInput" || e.target.type === "text")) return;
-
-    const matched = resolveKeyFromEvent(e);
-    if (matched) {
-      if (matched.layer !== undefined && matched.layer > 0) {
-        const trigger = findLayerTriggerKey(matched.layer);
-        if (trigger) {
-          triggerVisualKeyRelease(trigger.r, trigger.c, "R", 0);
-        }
-      }
-      triggerVisualKeyRelease(matched.r, matched.c, "R", matched.layer);
+    releaseHeld(e.code);
+    // macOS sendet für Tasten, die bei gehaltener Cmd-Taste losgelassen werden, kein keyup:
+    // beim Loslassen von Cmd alle noch gehaltenen Einträge freigeben
+    if (e.key === "Meta") {
+      for (const code of [...browserHeldKeys.keys()]) releaseHeld(code);
     }
+  });
+
+  // Fokusverlust (z. B. Cmd+Tab): gehaltene Tasten zurücksetzen, sonst bleibt die Anzeige hängen
+  window.addEventListener("blur", () => {
+    for (const code of [...browserHeldKeys.keys()]) releaseHeld(code);
   });
 }
 
@@ -2840,14 +3127,25 @@ async function writeConfigToESP32(options = {}) {
   updateConfigModeUI(bleConfigChar ? true : previousConfigMode, true);
   showToast("🔄 Übertrage Konfiguration an Dactyl ESP32 NVS...");
 
+  // Änderungen, die während des Syncs neu vorgemerkt werden, dürfen am Ende nicht mit verworfen werden
+  const syncedChangeIds = new Set(pendingChanges.map(c => c.id));
+  let syncSucceeded = false;
+  let completedSteps = 0;
+
   try {
+    // Fehler bei SET_K (ungültige Argumente, belegter Mutex) meldet die Firmware asynchron als ERR
+    let batchError = null;
+    const errWatcher = (okPrefix) => waitForAck(okPrefix, 60000).then(ok => { if (ok === false && !batchError) batchError = okPrefix; });
+
     const sendCmd = async (cmd) => {
+      let ok = false;
       if (bleConfigChar) {
-        const ok = await sendBleCommand(cmd);
+        ok = await sendBleCommand(cmd);
         if (!ok) throw new Error(`BLE-Übertragung unterbrochen (${cmd})`);
       } else if (serialPort && serialPort.writable) {
-        await sendSerialCommand(cmd);
-        // Pacing für USB-Serial Übertragung (Finding #2)
+        ok = await sendSerialCommand(cmd);
+        if (!ok) throw new Error(`USB-Übertragung fehlgeschlagen (${cmd})`);
+        // Pacing für USB-Serial Übertragung
         if (completedSteps % 16 === 0) {
           await new Promise(r => setTimeout(r, 4));
         }
@@ -2856,10 +3154,21 @@ async function writeConfigToESP32(options = {}) {
       }
     };
 
-    const totalLayers = currentConfig.layers.length;
+    // Sendet einen Befehl und wartet auf "OK <prefix>" der Firmware (ERR oder Timeout = Fehler)
+    const sendConfirmed = async (cmd, okPrefix, timeoutMs = 3000) => {
+      const ack = waitForAck(okPrefix, timeoutMs);
+      try {
+        await sendCmd(cmd);
+      } catch (e) {
+        resolveAcksForLine(`ERR SEND ${okPrefix}`);
+        throw e;
+      }
+      if ((await ack) !== true) throw new Error(`Tastatur hat ${okPrefix} nicht bestätigt`);
+    };
+
+    const totalLayers = Math.min(currentConfig.layers.length, NUM_LAYERS);
     const totalCombos = Array.isArray(currentConfig.combos) ? currentConfig.combos.length : 0;
-    const totalSteps = (currentConfig.layerNames ? currentConfig.layerNames.length : 0) + (totalLayers * 6 * 7) + totalCombos + 8;
-    let completedSteps = 0;
+    const totalSteps = NUM_LAYERS + (totalLayers * NUM_ROWS * NUM_COLS) + totalCombos + 8;
     const updateProgress = () => {
       completedSteps++;
       if (progressBar) {
@@ -2868,80 +3177,78 @@ async function writeConfigToESP32(options = {}) {
       }
     };
 
-    if (currentConfig.settings) {
-      const sb = currentConfig.settings.standbyTimeoutMinutes ?? 5;
-      const sl = currentConfig.settings.sleepTimeoutMinutes ?? 60;
-      const devName = currentConfig.settings.deviceName || "Dactyl Keyboard";
-      const debounce = currentConfig.settings.debounceMs ?? 5;
-      const comboTimeout = currentConfig.settings.comboTimeoutMs ?? 40;
+    const s = currentConfig.settings || {};
+    await sendConfirmed(`SET_STANDBY ${clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5)}`, "SET_STANDBY");
+    updateProgress();
+    await sendConfirmed(`SET_SLEEP ${clampSetting("sleepTimeoutMinutes", s.sleepTimeoutMinutes ?? 60)}`, "SET_SLEEP");
+    updateProgress();
+    await sendConfirmed(`SET_DEV_NAME ${sanitizeCommandText(s.deviceName, "Dactyl Keyboard")}`, "SET_DEV_NAME");
+    updateProgress();
+    await sendConfirmed(`SET_DEBOUNCE ${clampSetting("debounceMs", s.debounceMs ?? 5)}`, "SET_DEBOUNCE");
+    updateProgress();
+    await sendConfirmed(`SET_COMBO_TIMEOUT ${clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40)}`, "SET_COMBO_TIMEOUT");
+    updateProgress();
 
-      await sendCmd(`SET_STANDBY ${sb}`);
-      updateProgress();
-      await sendCmd(`SET_SLEEP ${sl}`);
-      updateProgress();
-      await sendCmd(`SET_DEV_NAME ${devName}`);
-      updateProgress();
-      await sendCmd(`SET_DEBOUNCE ${debounce}`);
-      updateProgress();
-      await sendCmd(`SET_COMBO_TIMEOUT ${comboTimeout}`);
+    for (let l = 0; l < NUM_LAYERS; l++) {
+      const name = sanitizeCommandText(currentConfig.layerNames[l], DEFAULT_LAYER_NAMES[l]);
+      await sendConfirmed(`SET_NAME ${l} ${name}`, `SET_NAME ${l}`);
       updateProgress();
     }
 
-    if (Array.isArray(currentConfig.layerNames)) {
-      for (let l = 0; l < currentConfig.layerNames.length; l++) {
-        await sendCmd(`SET_NAME ${l} ${currentConfig.layerNames[l]}`);
-        updateProgress();
-      }
-    }
-
-    // Schnelles RAM-Update für alle Tasten via SET_K + einmaliges SAVE_NVS am Ende
+    // Schnelles RAM-Update für alle Tasten via SET_K (ohne OK) + einmaliges, bestätigtes SAVE_NVS
+    const setKErr = errWatcher("SET_K");
     for (let l = 0; l < totalLayers; l++) {
       const layer = currentConfig.layers[l] || [];
-      for (let r = 0; r < 6; r++) {
+      for (let r = 0; r < NUM_ROWS; r++) {
         const row = layer[r] || [];
-        for (let c = 0; c < 7; c++) {
-          const k = row[c];
-          const actionStr = (k && k.tap && k.tap !== "NONE") ? k.tap : ((k && k.hold) ? k.hold : "NONE");
-          const num = actionCodeToNumeric(actionStr);
-          await sendCmd(`SET_K ${l} ${r} ${c} ${num}`);
+        for (let c = 0; c < NUM_COLS; c++) {
+          const { tapCode, holdCode } = keyToNumericActions(row[c]);
+          await sendCmd(`SET_K ${l} ${r} ${c} ${tapCode} ${holdCode}`);
           updateProgress();
         }
       }
     }
 
-    await sendCmd("SAVE_NVS");
+    await sendConfirmed("SAVE_NVS", "SAVE_NVS", 5000);
+    if (batchError) throw new Error("Tastatur hat mindestens ein SET_K abgelehnt");
+    // Watcher für SET_K-Fehler beenden (kein ERR eingetroffen)
+    resolveAcksForLine("OK SET_K");
+    await setKErr;
     updateProgress();
 
-    // Combos synchronisieren (Item 10)
-    await sendCmd("CLEAR_COMBOS");
-    if (Array.isArray(currentConfig.combos)) {
-      for (const cb of currentConfig.combos) {
-        if (!cb.key1 || !cb.key2) continue;
-        const bMap = { "KEY_PRESS": 0, "MODIFIER_HOLD": 1, "LAYER_TOGGLE": 2 };
-        const bCode = bMap[cb.behavior] ?? 0;
-        const actCode = actionCodeToNumeric(cb.action);
-        await sendCmd(`ADD_COMBO ${cb.key1.r} ${cb.key1.c} ${cb.key2.r} ${cb.key2.c} ${bCode} ${actCode}`);
-        updateProgress();
-      }
+    // Combos synchronisieren
+    await sendConfirmed("CLEAR_COMBOS", "CLEAR_COMBOS");
+    const bMap = { "KEY_PRESS": 0, "MODIFIER_HOLD": 1, "LAYER_TOGGLE": 2 };
+    for (const cb of currentConfig.combos.slice(0, MAX_COMBOS)) {
+      const bCode = bMap[cb.behavior] ?? 0;
+      const actCode = actionCodeToNumeric(cb.action);
+      await sendConfirmed(`ADD_COMBO ${cb.key1.r} ${cb.key1.c} ${cb.key2.r} ${cb.key2.c} ${bCode} ${actCode}`, "ADD_COMBO");
+      updateProgress();
     }
-    await sendCmd("SAVE_COMBOS");
+    await sendConfirmed("SAVE_COMBOS", "SAVE_COMBOS", 5000);
     updateProgress();
-    clearPendingSync();
 
-    if (autoDisconnectAfter && bleConfigChar) {
-      await new Promise(r => setTimeout(r, 150));
-      await disconnectBle();
-      showToast("✅ Automatisch synchronisiert & getrennt! Tastatur ist wieder mit deinem Mac verbunden.");
-    } else {
-      updateConfigModeUI(bleConfigChar ? true : previousConfigMode, false);
-      showToast("✅ Vollständige Konfiguration im ESP32 NVS gespeichert!");
-    }
+    // Nur die tatsächlich übertragenen Änderungen verwerfen
+    pendingChanges = pendingChanges.filter(c => !syncedChangeIds.has(c.id));
+    if (pendingChanges.length === 0) clearPendingSync(); else renderPendingSyncUI();
+    syncSucceeded = true;
   } catch (err) {
     console.error("Write config error:", err);
-    updateConfigModeUI(bleConfigChar ? true : previousConfigMode, false);
-    showToast("Fehler beim Übertragen der Konfiguration: " + err.message);
+    rejectAllPendingAcks("Sync abgebrochen");
+    showToast("Fehler beim Übertragen der Konfiguration: " + err.message + " (Änderungen bleiben vorgemerkt)", 7000);
   } finally {
     isAutoSyncing = false;
+    // One-Shot: Tastatur IMMER zurück in den Mac-Modus schicken, auch nach einem Fehler
+    if (autoDisconnectAfter && bleConfigChar) {
+      await new Promise(r => setTimeout(r, 150));
+      const exited = await disconnectBle();
+      if (syncSucceeded && exited) {
+        showToast("✅ Automatisch synchronisiert & getrennt! Tastatur ist wieder mit deinem Mac verbunden.");
+      }
+    } else {
+      updateConfigModeUI(bleConfigChar ? true : previousConfigMode, false);
+      if (syncSucceeded) showToast("✅ Vollständige Konfiguration im ESP32 NVS gespeichert!");
+    }
     setTimeout(() => {
       if (progressWrap) progressWrap.style.display = "none";
       if (progressBar) progressBar.style.width = "0%";
@@ -2961,12 +3268,16 @@ async function readConfigFromESP32() {
   }
 }
 
-function showToast(msg) {
+let toastTimer = null;
+function showToast(msg, durationMs = 2800) {
   const toast = document.getElementById("toastNotification");
   if (!toast) return;
   toast.textContent = msg;
   toast.className = "toast show";
-  setTimeout(() => {
+  // Älteren Timer verwerfen, damit er die neue Meldung nicht vorzeitig ausblendet
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
     toast.className = "toast";
-  }, 2800);
+    toastTimer = null;
+  }, durationMs);
 }

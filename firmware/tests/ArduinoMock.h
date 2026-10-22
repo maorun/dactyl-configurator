@@ -8,6 +8,7 @@
 #include <cstring>
 #include <algorithm>
 #include <sstream>
+#include <cctype>
 
 // Basic Arduino Types & Constants
 #define HIGH 1
@@ -24,7 +25,8 @@ typedef void* SemaphoreHandle_t;
 #define pdMS_TO_TICKS(ms) (ms)
 
 inline SemaphoreHandle_t xSemaphoreCreateMutex() { return (void*)1; }
-inline int xSemaphoreTake(SemaphoreHandle_t, uint32_t) { return pdTRUE; }
+static bool _mock_mutex_busy = false;
+inline int xSemaphoreTake(SemaphoreHandle_t, uint32_t) { return _mock_mutex_busy ? pdFALSE : pdTRUE; }
 inline void xSemaphoreGive(SemaphoreHandle_t) {}
 
 // Mock Time
@@ -145,13 +147,20 @@ public:
   static std::map<std::string, std::string> strStore;
   static std::map<std::string, uint32_t> uintStore;
   static std::map<std::string, std::vector<uint8_t>> bytesStore;
+  static bool failWrites; // Simuliert volle/defekte NVS-Partition
 
   bool begin(const char*, bool) { return true; }
   void end() {}
-  void clear() {
+  bool clear() {
+    if (failWrites) return false;
     strStore.clear();
     uintStore.clear();
     bytesStore.clear();
+    return true;
+  }
+  bool remove(const char* key) {
+    strStore.erase(key); uintStore.erase(key); bytesStore.erase(key);
+    return true;
   }
 
   bool isKey(const char* key) {
@@ -160,31 +169,32 @@ public:
     return (strStore.count(k) > 0 || uintStore.count(k) > 0 || bytesStore.count(k) > 0);
   }
 
-  void putString(const char* key, String val) { strStore[key] = val.c_str(); }
+  size_t putString(const char* key, String val) { if (failWrites) return 0; strStore[key] = val.c_str(); return val.length(); }
   String getString(const char* key, String def = "") {
     if (strStore.count(key)) return String(strStore[key]);
     return def;
   }
 
-  void putUInt(const char* key, uint32_t val) { uintStore[key] = val; }
+  size_t putUInt(const char* key, uint32_t val) { if (failWrites) return 0; uintStore[key] = val; return 4; }
   uint32_t getUInt(const char* key, uint32_t def = 0) {
     if (uintStore.count(key)) return uintStore[key];
     return def;
   }
 
-  void putUChar(const char* key, uint8_t val) { uintStore[key] = val; }
+  size_t putUChar(const char* key, uint8_t val) { if (failWrites) return 0; uintStore[key] = val; return 1; }
   uint8_t getUChar(const char* key, uint8_t def = 0) {
     if (uintStore.count(key)) return (uint8_t)uintStore[key];
     return def;
   }
 
-  void putUShort(const char* key, uint16_t val) { uintStore[key] = val; }
+  size_t putUShort(const char* key, uint16_t val) { if (failWrites) return 0; uintStore[key] = val; return 2; }
   uint16_t getUShort(const char* key, uint16_t def = 0) {
     if (uintStore.count(key)) return (uint16_t)uintStore[key];
     return def;
   }
 
   size_t putBytes(const char* key, const void* buf, size_t len) {
+    if (failWrites) return 0;
     const uint8_t* p = (const uint8_t*)buf;
     bytesStore[key] = std::vector<uint8_t>(p, p + len);
     return len;
@@ -204,6 +214,9 @@ public:
 std::map<std::string, std::string> Preferences::strStore;
 std::map<std::string, uint32_t> Preferences::uintStore;
 std::map<std::string, std::vector<uint8_t>> Preferences::bytesStore;
+bool Preferences::failWrites = false;
+
+enum esp_reset_reason_t { ESP_RST_POWERON = 1, ESP_RST_SW = 3, ESP_RST_DEEPSLEEP = 5 };
 
 // Mock BLE
 #define ESP_MAC_BT 2
@@ -299,11 +312,12 @@ public:
 #define KEY_F13 0xF0
 #define KEY_F24 0xFB
 
-#define KEY_MEDIA_PLAY_PAUSE 0xE8
-#define KEY_MEDIA_MUTE 0xE2
-#define KEY_MEDIA_VOLUME_UP 0xE9
-#define KEY_MEDIA_VOLUME_DOWN 0xEA
-#define KEY_MEDIA_NEXT_TRACK 0xEB
-#define KEY_MEDIA_PREVIOUS_TRACK 0xEC
-#define KEY_MEDIA_STOP 0xED
-#define KEY_MEDIA_GLOBE 0x127
+// Media-Keys als uint16_t, damit write()/press() eindeutig die Media-Überladung wählen
+static const uint16_t KEY_MEDIA_PLAY_PAUSE = 0x0008;
+static const uint16_t KEY_MEDIA_MUTE = 0x0010;
+static const uint16_t KEY_MEDIA_VOLUME_UP = 0x0020;
+static const uint16_t KEY_MEDIA_VOLUME_DOWN = 0x0040;
+static const uint16_t KEY_MEDIA_NEXT_TRACK = 0x0001;
+static const uint16_t KEY_MEDIA_PREVIOUS_TRACK = 0x0002;
+static const uint16_t KEY_MEDIA_STOP = 0x0004;
+static const uint16_t KEY_MEDIA_GLOBE = 0x0400;

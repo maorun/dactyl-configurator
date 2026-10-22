@@ -91,7 +91,7 @@
             <button class="layer-btn" data-layer="7">Layer 7 (Custom)</button>
           </div>
           <div class="layer-rename-group" style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.6rem;">
-            <input type="text" id="layerNameInput" class="form-control" style="width: 140px; padding: 0.25rem 0.5rem; font-size: 0.85rem;" placeholder="Name der Ebene...">
+            <input type="text" id="layerNameInput" class="form-control" maxlength="31" style="width: 140px; padding: 0.25rem 0.5rem; font-size: 0.85rem;" placeholder="Name der Ebene...">
             <button id="btnRenameLayer" class="btn btn-outline btn-sm" title="Aktuelle Ebene umbenennen">✏️ Name speichern</button>
           </div>
         </div>
@@ -249,7 +249,7 @@
                   <option value="MO_7">Halten = Layer 7 (Custom)</option>
                 </optgroup>
               </select>
-              <small class="form-hint">Beispiel: Kurzes Tippen = Space, langes Festhalten = Strg oder Layer 1.</small>
+              <small class="form-hint">Beispiel: Kurzes Tippen = Space, Festhalten (&gt; 200 ms) oder gleichzeitiges Drücken einer weiteren Taste = Strg oder Layer 1.</small>
             </div>
 
             <div class="inspector-actions">
@@ -318,7 +318,7 @@
         
         <div class="form-group">
           <label for="deviceNameInput">Bluetooth Gerätename:</label>
-          <input type="text" id="deviceNameInput" class="form-control" value="Dactyl Keyboard" maxlength="28">
+          <input type="text" id="deviceNameInput" class="form-control" value="Dactyl Keyboard" maxlength="31">
           <small class="form-hint">Wird bei der Bluetooth-Suche auf Mac/PC angezeigt.</small>
         </div>
 
@@ -329,7 +329,7 @@
 
         <div class="form-group">
           <label for="comboTimeoutInput">Combo-Zeitfenster (Millisekunden für gleichzeitiges Drücken):</label>
-          <input type="number" id="comboTimeoutInput" class="form-control" value="40" min="10" max="150">
+          <input type="number" id="comboTimeoutInput" class="form-control" value="40" min="10" max="200">
           <small class="form-hint">Innerhalb dieser Zeitspanne müssen beide Tasten gedrückt werden, um als Combo erkannt zu werden.</small>
         </div>
 
@@ -427,6 +427,6 @@
     <div class="toast" id="toastNotification"></div>
   </div>
 
-  <script src="app.js?v=30"></script>
+  <script src="app.js?v=31"></script>
 </body>
 </html>

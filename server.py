@@ -162,10 +162,63 @@ def code_to_cpp(code):
         return "0"
     return "0"
 
-def generate_keymap_cpp(layers):
+NUM_LAYERS = 8
+NUM_ROWS = 6
+NUM_COLS = 7
+MAX_COMBOS = 16
+MAX_BODY_BYTES = 2 * 1024 * 1024
+COMPILE_TIMEOUT_S = 300
+UPLOAD_TIMEOUT_S = 180
+REQUEST_SOCKET_TIMEOUT_S = 10
+ALLOWED_HOSTS = {"localhost:8088", "127.0.0.1:8088"}
+ALLOWED_ORIGINS = {"http://localhost:8088", "http://127.0.0.1:8088"}
+# Nur diese Web-Assets werden statisch ausgeliefert (kein .git, server.py, Firmware-Quelltext)
+STATIC_ALLOWLIST = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+
+# Wertebereiche identisch zur Firmware (handleConfigCommand)
+SETTINGS_RANGES = {
+    "debounceMs": (1, 50, 5),
+    "comboTimeoutMs": (10, 200, 40),
+    "standbyTimeoutMinutes": (0, 120, 5),
+    "sleepTimeoutMinutes": (0, 240, 60),
+}
+
+
+def sanitize_name(value, default):
+    if not isinstance(value, str):
+        return default
+    # Anführungszeichen, Backslashes und Steuerzeichen entfernen (C++-String-Literal & Serial-Protokoll)
+    cleaned = "".join(ch for ch in value if ch not in '"\\' and ch.isprintable()).strip()[:31]
+    return cleaned or default
+
+
+def validate_int(value, lo, hi, field):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Ungültiger Wert für '{field}': Ganzzahl erwartet.")
+    if not (lo <= value <= hi):
+        raise ValueError(f"Wert für '{field}' außerhalb des Bereichs {lo}..{hi}: {value}")
+    return value
+
+
+def cell_actions(cell):
+    """Liefert (tap, hold) eines Matrix-Eintrags. Hold ohne Tap wirkt wie eine normale Taste."""
+    if isinstance(cell, dict):
+        tap = cell.get("tap", "NONE")
+        hold = cell.get("hold", "NONE")
+        tap = tap if isinstance(tap, str) else "NONE"
+        hold = hold if isinstance(hold, str) else "NONE"
+        if tap in ("", "NONE"):
+            return (hold or "NONE"), "NONE"
+        return tap, hold
+    if isinstance(cell, str):
+        return cell, "NONE"
+    return "NONE", "NONE"
+
+
+def generate_matrix_cpp(layers, marker, var_name, pick):
     lines = [
-        "// [[[START_KEYMAP]]]",
-        "uint16_t KEYMAP[NUM_LAYERS][6][7] = {"
+        f"// [[[START_{marker}]]]",
+        f"uint16_t {var_name}[NUM_LAYERS][6][7] = {{"
     ]
     layer_names = [
         "Layer 0 (Base)",
@@ -178,39 +231,40 @@ def generate_keymap_cpp(layers):
         "Layer 7 (Custom / Gaming)"
     ]
 
-    for l_idx in range(8):
+    for l_idx in range(NUM_LAYERS):
         lines.append(f"  // {layer_names[l_idx]}")
         lines.append("  {")
-        layer_data = layers[l_idx] if l_idx < len(layers) else []
-        for r in range(6):
+        layer_data = layers[l_idx] if l_idx < len(layers) and isinstance(layers[l_idx], list) else []
+        for r in range(NUM_ROWS):
             row_entries = []
-            for c in range(7):
-                val = "0"
-                if r < len(layer_data) and c < len(layer_data[r]):
-                    cell = layer_data[r][c]
-                    if isinstance(cell, dict):
-                        tap_code = cell.get("tap", "NONE")
-                        hold_code = cell.get("hold", "NONE")
-                        effective_code = tap_code if (tap_code and tap_code != "NONE") else (hold_code or "NONE")
-                        val = code_to_cpp(effective_code)
-                    elif isinstance(cell, str):
-                        val = code_to_cpp(cell)
+            row = layer_data[r] if r < len(layer_data) and isinstance(layer_data[r], list) else []
+            for c in range(NUM_COLS):
+                val = code_to_cpp(pick(cell_actions(row[c]))) if c < len(row) else "0"
                 row_entries.append(val.ljust(16 if len(val) < 16 else len(val) + 1))
-            comma = "," if r < 5 else ""
+            comma = "," if r < NUM_ROWS - 1 else ""
             lines.append(f"    {{ {', '.join(row_entries)} }}{comma}")
-        layer_comma = "," if l_idx < len(layer_names) - 1 else ""
+        layer_comma = "," if l_idx < NUM_LAYERS - 1 else ""
         lines.append(f"  }}{layer_comma}\n")
 
     lines.append("};")
-    lines.append("// [[[END_KEYMAP]]]")
+    lines.append(f"// [[[END_{marker}]]]")
     return "\n".join(lines)
 
+
+def generate_holdmap_cpp(layers):
+    return generate_matrix_cpp(layers, "HOLDMAP", "HOLDMAP", lambda a: a[1])
+
+
+def generate_keymap_cpp(layers):
+    return generate_matrix_cpp(layers, "KEYMAP", "KEYMAP", lambda a: a[0])
+
+
 def generate_layer_names_cpp(layer_names):
-    names = list(layer_names)[:8] if layer_names else []
+    names = list(layer_names)[:NUM_LAYERS] if isinstance(layer_names, list) else []
     default_names = ["Base", "Nav & Pfeile", "Symbole", "Numpad", "Function", "Media", "Shortcuts", "Custom"]
-    while len(names) < 8:
+    while len(names) < NUM_LAYERS:
         names.append(default_names[len(names)])
-    escaped = [n.replace('"', '').replace('\\', '')[:31] for n in names]
+    escaped = [sanitize_name(n, default_names[i]) for i, n in enumerate(names)]
     lines = [
         "// [[[START_LAYER_NAMES]]]",
         "String layerNames[NUM_LAYERS] = {",
@@ -221,90 +275,169 @@ def generate_layer_names_cpp(layer_names):
     ]
     return "\n".join(lines)
 
+def validate_combo_key(key, field):
+    if not isinstance(key, dict):
+        raise ValueError(f"Combo-Feld '{field}' fehlt oder ist ungültig.")
+    r = validate_int(key.get("r"), 0, NUM_ROWS - 1, f"{field}.r")
+    c = validate_int(key.get("c"), 0, NUM_COLS - 1, f"{field}.c")
+    return r, c
+
 def generate_combos_cpp(combos):
+    if combos is None:
+        combos = []
+    if not isinstance(combos, list):
+        raise ValueError("Ungültige Combos: Liste erwartet.")
+    if len(combos) > MAX_COMBOS:
+        raise ValueError(f"Zu viele Combos: maximal {MAX_COMBOS} erlaubt.")
+    beh_map = {"KEY_PRESS": 0, "MODIFIER_HOLD": 1, "LAYER_TOGGLE": 2}
+    cb_entries = []
+    for cb in combos:
+        if not isinstance(cb, dict):
+            raise ValueError("Ungültiger Combo-Eintrag.")
+        r1, c1 = validate_combo_key(cb.get("key1"), "key1")
+        r2, c2 = validate_combo_key(cb.get("key2"), "key2")
+        beh = beh_map.get(cb.get("behavior"), 0)
+        action = cb.get("action", "0")
+        act = code_to_cpp(action if isinstance(action, str) else "0")
+        # KeyCombo hat exakt 6 Felder (r1, c1, r2, c2, behavior, action)
+        cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act} }}")
     lines = [
         "// [[[START_COMBOS]]]",
-        f"uint8_t numCombos = {min(len(combos), 16) if combos else 0};",
-        "KeyCombo userCombos[MAX_COMBOS] = {"
+        f"uint8_t numCombos = {len(cb_entries)};",
+        "KeyCombo userCombos[MAX_COMBOS] = {",
+        ",\n".join(cb_entries) if cb_entries else "  { 0, 0, 0, 0, 0, 0 }",
+        "};",
+        "// [[[END_COMBOS]]]"
     ]
-    cb_entries = []
-    if combos:
-        for cb in combos[:16]:
-            k1 = cb.get("key1", {})
-            k2 = cb.get("key2", {})
-            r1, c1 = k1.get("r", 0), k1.get("c", 0)
-            r2, c2 = k2.get("r", 0), k2.get("c", 0)
-            beh_map = {"KEY_PRESS": 0, "MODIFIER_HOLD": 1, "LAYER_TOGGLE": 2}
-            beh = beh_map.get(cb.get("behavior"), 0)
-            act = code_to_cpp(cb.get("action", "0"))
-            cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act}, false }}")
-    lines.append(",\n".join(cb_entries) if cb_entries else "  { 0, 0, 0, 0, 0, 0, false }")
-    lines.append("};")
-    lines.append("// [[[END_COMBOS]]]")
     return "\n".join(lines)
 
 def generate_settings_cpp(settings):
-    if not settings:
+    if settings is None:
         settings = {}
-    dev_name = str(settings.get("deviceName", "Dactyl Keyboard")).replace('"', '').replace('\\', '')[:31]
-    debounce = int(settings.get("debounceMs", 5))
-    combo_to = int(settings.get("comboTimeoutMs", 40))
-    standby = int(settings.get("standbyTimeoutMinutes", 5))
-    sleep = int(settings.get("sleepTimeoutMinutes", 60))
+    if not isinstance(settings, dict):
+        raise ValueError("Ungültige Einstellungen: Objekt erwartet.")
+    dev_name = sanitize_name(settings.get("deviceName", "Dactyl Keyboard"), "Dactyl Keyboard")
+    values = {}
+    for field, (lo, hi, default) in SETTINGS_RANGES.items():
+        values[field] = validate_int(settings.get(field, default), lo, hi, field)
     lines = [
         "// [[[START_SETTINGS]]]",
         f'String deviceName = "{dev_name}";',
-        f'uint8_t debounceMs = {debounce};',
-        f'uint16_t comboTimeoutMs = {combo_to};',
-        f'uint32_t standbyTimeoutMinutes = {standby};',
-        f'uint32_t deepSleepTimeoutMinutes = {sleep};',
+        f'uint8_t debounceMs = {values["debounceMs"]};',
+        f'uint16_t comboTimeoutMs = {values["comboTimeoutMs"]};',
+        f'uint32_t standbyTimeoutMinutes = {values["standbyTimeoutMinutes"]};',
+        f'uint32_t deepSleepTimeoutMinutes = {values["sleepTimeoutMinutes"]};',
         "// [[[END_SETTINGS]]]"
     ]
     return "\n".join(lines)
 
-def update_ino_file(keymap_cpp, layer_names=None, combos=None, settings=None):
-    if not os.path.exists(INO_FILE):
-        raise FileNotFoundError(f"Firmware Datei nicht gefunden: {INO_FILE}")
-
-    with open(INO_FILE, "r", encoding="utf-8") as f:
-        content = f.read()
-
-    pattern = r"// \[\[\[START_KEYMAP\]\]\].*?// \[\[\[END_KEYMAP\]\]\]"
+def replace_marked_block(content, marker, replacement, required=False):
+    pattern = rf"// \[\[\[START_{marker}\]\]\].*?// \[\[\[END_{marker}\]\]\]"
     if not re.search(pattern, content, re.DOTALL):
-        raise ValueError("Markierungen // [[[START_KEYMAP]]] ... // [[[END_KEYMAP]]] fehlen in dactyl_right.ino!")
+        if required:
+            raise ValueError(f"Markierungen // [[[START_{marker}]]] ... // [[[END_{marker}]]] fehlen in dactyl_right.ino!")
+        return content
+    # Lambda statt Ersatz-String: re.sub würde sonst Backslash-Sequenzen ('\\\\' -> '\\') interpretieren
+    return re.sub(pattern, lambda _m: replacement, content, count=1, flags=re.DOTALL)
 
-    new_content = re.sub(pattern, keymap_cpp, content, flags=re.DOTALL)
+def render_ino_content(content, config):
+    """Erzeugt den neuen .ino-Inhalt vollständig im Speicher (wirft ValueError bei ungültiger Konfiguration)."""
+    layers = config.get("layers")
+    content = replace_marked_block(content, "KEYMAP", generate_keymap_cpp(layers), required=True)
+    content = replace_marked_block(content, "HOLDMAP", generate_holdmap_cpp(layers), required=True)
+    if config.get("layerNames"):
+        content = replace_marked_block(content, "LAYER_NAMES", generate_layer_names_cpp(config.get("layerNames")))
+    if "combos" in config:
+        content = replace_marked_block(content, "COMBOS", generate_combos_cpp(config.get("combos")))
+    if "settings" in config:
+        content = replace_marked_block(content, "SETTINGS", generate_settings_cpp(config.get("settings")))
+    return content
 
-    if layer_names:
-        names_pattern = r"// \[\[\[START_LAYER_NAMES\]\]\].*?// \[\[\[END_LAYER_NAMES\]\]\]"
-        if re.search(names_pattern, new_content, re.DOTALL):
-            layer_names_cpp = generate_layer_names_cpp(layer_names)
-            new_content = re.sub(names_pattern, layer_names_cpp, new_content, flags=re.DOTALL)
+def write_temp_file(path, text):
+    """Schreibt text vollständig (fsync) in eine Temp-Datei neben path und gibt deren Namen zurück."""
+    dir_name = os.path.dirname(os.path.abspath(path))
+    fd, temp_name = tempfile.mkstemp(dir=dir_name, prefix=".tmp_", text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as tf:
+            tf.write(text)
+            tf.flush()
+            os.fsync(tf.fileno())
+    except BaseException:
+        remove_quietly(temp_name)
+        raise
+    return temp_name
 
-    if combos is not None:
-        combos_pattern = r"// \[\[\[START_COMBOS\]\]\].*?// \[\[\[END_COMBOS\]\]\]"
-        if re.search(combos_pattern, new_content, re.DOTALL):
-            combos_cpp = generate_combos_cpp(combos)
-            new_content = re.sub(combos_pattern, combos_cpp, new_content, flags=re.DOTALL)
+def remove_quietly(path):
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
 
-    if settings is not None:
-        settings_pattern = r"// \[\[\[START_SETTINGS\]\]\].*?// \[\[\[END_SETTINGS\]\]\]"
-        if re.search(settings_pattern, new_content, re.DOTALL):
-            settings_cpp = generate_settings_cpp(settings)
-            new_content = re.sub(settings_pattern, settings_cpp, new_content, flags=re.DOTALL)
+def write_files_atomic(files):
+    """Schreibt alle Dateien zuerst als Temp-Dateien und ersetzt sie erst danach (kein halbes Update bei Schreibfehlern)."""
+    temps = []
+    try:
+        for path, text in files:
+            temps.append((write_temp_file(path, text), path))
+        # Originale sichern, damit ein Fehler beim zweiten os.replace das erste zurückrollen kann
+        originals = {}
+        for _, path in temps:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    originals[path] = f.read()
+            except FileNotFoundError:
+                originals[path] = None
+        replaced = []
+        try:
+            for temp_name, path in temps:
+                os.replace(temp_name, path)
+                replaced.append(path)
+        except BaseException:
+            # Jeden Rollback-Schritt einzeln absichern, damit der ursprüngliche Fehler erhalten bleibt
+            for path in replaced:
+                rollback_temp = None
+                try:
+                    if originals[path] is None:
+                        remove_quietly(path)
+                    else:
+                        rollback_temp = write_temp_file(path, originals[path])
+                        os.replace(rollback_temp, path)
+                        rollback_temp = None
+                except OSError as rollback_err:
+                    print(f"WARN: Rollback von {path} fehlgeschlagen: {rollback_err}", file=sys.stderr)
+                finally:
+                    if rollback_temp and os.path.exists(rollback_temp):
+                        remove_quietly(rollback_temp)
+            raise
+    finally:
+        for temp_name, _ in temps:
+            if os.path.exists(temp_name):
+                remove_quietly(temp_name)
 
-    with open(INO_FILE, "w", encoding="utf-8") as f:
-        f.write(new_content)
+def write_file_atomic(path, text):
+    write_files_atomic([(path, text)])
+
+def validate_config(config):
+    if not isinstance(config, dict) or not isinstance(config.get("layers"), list) or len(config["layers"]) == 0:
+        raise ValueError("Ungültige Konfiguration: Muss ein Objekt mit einer nicht-leeren 'layers'-Liste sein.")
+    if len(config["layers"]) > NUM_LAYERS:
+        raise ValueError(f"Ungültige Konfiguration: maximal {NUM_LAYERS} Ebenen erlaubt.")
+    # Codegen prüft Combos und Einstellungen vollständig (Bereiche identisch zur Firmware)
+    generate_combos_cpp(config.get("combos"))
+    generate_settings_cpp(config.get("settings"))
 
 def save_config_atomic(config):
-    if not isinstance(config, dict) or "layers" not in config or not isinstance(config["layers"], list) or len(config["layers"]) == 0:
-        raise ValueError("Ungültige Konfiguration: Muss ein Objekt mit einer nicht-leeren 'layers'-Liste sein.")
+    validate_config(config)
+    write_file_atomic(CONFIG_FILE, json.dumps(config, indent=2))
 
-    dir_name = os.path.dirname(os.path.abspath(CONFIG_FILE))
-    with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False, encoding="utf-8") as tf:
-        json.dump(config, tf, indent=2)
-        temp_name = tf.name
-    os.replace(temp_name, CONFIG_FILE)
+def save_config_and_firmware(config):
+    """Validiert und rendert alles im Speicher, bevor eine Datei geschrieben wird."""
+    validate_config(config)
+    if not os.path.exists(INO_FILE):
+        raise FileNotFoundError(f"Firmware Datei nicht gefunden: {INO_FILE}")
+    with open(INO_FILE, "r", encoding="utf-8") as f:
+        new_ino = render_ino_content(f.read(), config)
+    write_files_atomic([(INO_FILE, new_ino), (CONFIG_FILE, json.dumps(config, indent=2))])
 
 def find_arduino_cli():
     cli = shutil.which("arduino-cli")
@@ -342,7 +475,7 @@ def flash_firmware():
         SKETCH_DIR
     ]
     try:
-        proc_comp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False, env=os.environ)
+        proc_comp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False, env=os.environ, timeout=COMPILE_TIMEOUT_S)
         if proc_comp.returncode != 0:
             return {
                 "success": False,
@@ -351,6 +484,8 @@ def flash_firmware():
             }
     except FileNotFoundError:
         return {"success": False, "error": "arduino-cli wurde nicht im System-Pfad gefunden!"}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "stage": "compile", "error": f"Kompilieren abgebrochen (Timeout nach {COMPILE_TIMEOUT_S}s)."}
 
     # 2. Upload
     upload_cmd = [
@@ -360,7 +495,10 @@ def flash_firmware():
         "--upload-property", "upload.speed=115200",
         SKETCH_DIR
     ]
-    proc_up = subprocess.run(upload_cmd, capture_output=True, text=True, check=False, env=os.environ)
+    try:
+        proc_up = subprocess.run(upload_cmd, capture_output=True, text=True, check=False, env=os.environ, timeout=UPLOAD_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return {"success": False, "stage": "upload", "error": f"Upload abgebrochen (Timeout nach {UPLOAD_TIMEOUT_S}s)."}
     if proc_up.returncode != 0:
         return {
             "success": False,
@@ -372,6 +510,10 @@ def flash_firmware():
 
 
 class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
+    # Der Server bleibt bewusst single-threaded (Flash-Vorgänge laufen nie parallel).
+    # Ein Client, der nach den Headern stockt, darf ihn daher nicht dauerhaft blockieren.
+    timeout = REQUEST_SOCKET_TIMEOUT_S
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=DIRECTORY, **kwargs)
 
@@ -381,133 +523,137 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Expires', '0')
         super().end_headers()
 
+    def send_json(self, status, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def check_host(self):
+        # Schutz gegen DNS-Rebinding: nur exakte lokale Host-Header akzeptieren (auch bei GET)
+        if self.headers.get("Host", "") not in ALLOWED_HOSTS:
+            self.send_json(403, {"error": "Forbidden host"})
+            return False
+        return True
+
+    def check_origin(self):
+        # Browser senden Origin bei Cross-Origin-POSTs immer; ein fehlender Origin stammt von lokalen Clients
+        origin = self.headers.get("Origin")
+        if origin is not None and origin not in ALLOWED_ORIGINS:
+            self.send_json(403, {"error": "Forbidden origin"})
+            return False
+        return True
+
+    def read_json_body(self):
+        raw_len = self.headers.get("Content-Length")
+        try:
+            length = int(raw_len)
+        except (TypeError, ValueError):
+            self.send_json(400, {"success": False, "error": "Ungültiger Content-Length-Header."})
+            return None
+        if length < 0:
+            self.send_json(400, {"success": False, "error": "Ungültiger Content-Length-Header."})
+            return None
+        if length > MAX_BODY_BYTES:
+            self.send_json(413, {"success": False, "error": "Anfrage zu groß."})
+            return None
+        try:
+            return json.loads(self.rfile.read(length).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            self.send_json(400, {"success": False, "error": f"Ungültiges JSON: {e}"})
+            return None
+
     def do_GET(self):
-        if self.path == "/api/status":
+        if not self.check_host():
+            return
+        path = self.path.split("?", 1)[0]
+
+        if path == "/api/status":
             ports = glob.glob("/dev/cu.usbserial*") + glob.glob("/dev/cu.wchusbserial*")
-            data = {
+            self.send_json(200, {
                 "status": "ok",
+                "app": "dactyl-configurator",
                 "port": ports[0] if ports else None,
                 "ports": ports,
                 "has_arduino_cli": bool(find_arduino_cli())
-            }
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps(data).encode("utf-8"))
+            })
             return
 
-        if self.path == "/api/config":
-            if os.path.exists(CONFIG_FILE):
-                try:
-                    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(content.encode("utf-8"))
-                    return
-                except Exception as e:
-                    pass
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"exists": False}).encode("utf-8"))
+        if path == "/api/config":
+            try:
+                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                    content = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+                content = {"exists": False}
+            self.send_json(200, content)
             return
 
-        super().do_GET()
+        if path in STATIC_ALLOWLIST:
+            self.path = "/" + STATIC_ALLOWLIST[path]
+            super().do_GET()
+            return
+
+        self.send_error(404)
+
+    def do_HEAD(self):
+        if not self.check_host():
+            return
+        path = self.path.split("?", 1)[0]
+        if path in STATIC_ALLOWLIST:
+            self.path = "/" + STATIC_ALLOWLIST[path]
+            super().do_HEAD()
+            return
+        self.send_error(404)
 
     def do_POST(self):
-        # Validate Host / Origin to prevent CSRF from unauthorized origins
-        host = self.headers.get("Host", "")
-        origin = self.headers.get("Origin", "")
-        allowed_hosts = {"localhost:8088", "127.0.0.1:8088"}
-        if host and host not in allowed_hosts:
-            self.send_response(403)
-            self.end_headers()
-            self.wfile.write(b'{"error": "Forbidden host"}')
-            return
-        allowed_origins = {"http://localhost:8088", "http://127.0.0.1:8088"}
-        if origin and origin not in allowed_origins:
-            self.send_response(403)
-            self.end_headers()
-            self.wfile.write(b'{"error": "Forbidden origin"}')
+        if not self.check_host() or not self.check_origin():
             return
 
         if self.path == "/api/open_bluetooth_settings":
             try:
                 subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth"])
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"success": true}')
-                return
+                self.send_json(200, {"success": True})
             except Exception as e:
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
-                return
+                self.send_json(500, {"success": False, "error": str(e)})
+            return
 
         if self.path == "/api/save_and_flash":
-            content_length = int(self.headers.get("Content-Length", 0))
-            post_data = self.rfile.read(content_length)
-            try:
-                config = json.loads(post_data.decode("utf-8"))
-            except Exception as e:
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": f"Ungültiges JSON: {e}"}).encode("utf-8"))
+            config = self.read_json_body()
+            if config is None:
                 return
-
             try:
-                # 1. Daten validieren & atomar auf Platte schreiben (Finding #9)
-                layers = config.get("layers", []) if isinstance(config, dict) else None
-                if not layers or not isinstance(layers, list):
-                    raise ValueError("Keine Ebenen (layers) in der Konfiguration vorhanden!")
-
-                save_config_atomic(config)
-
-                # 2. C++ Keymap, Layer-Namen, Combos & Settings generieren und in .ino einbetten
-                keymap_cpp = generate_keymap_cpp(layers)
-                update_ino_file(keymap_cpp, config.get("layerNames"), config.get("combos"), config.get("settings"))
-
-                # 3. Flashen
-                result = flash_firmware()
-                status_code = 200 if result.get("success") else 500
-                self.send_response(status_code)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps(result).encode("utf-8"))
+                # 1. Validieren, C++ rendern und erst danach Config & .ino atomar schreiben
+                save_config_and_firmware(config)
+            except ValueError as err:
+                self.send_json(400, {"success": False, "error": str(err)})
                 return
-
             except Exception as err:
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": str(err)}).encode("utf-8"))
+                self.send_json(500, {"success": False, "error": str(err)})
                 return
+
+            # 2. Flashen
+            result = flash_firmware()
+            self.send_json(200 if result.get("success") else 500, result)
+            return
 
         if self.path == "/api/config":
-            content_length = int(self.headers.get("Content-Length", 0))
-            post_data = self.rfile.read(content_length)
+            config = self.read_json_body()
+            if config is None:
+                return
             try:
-                config = json.loads(post_data.decode("utf-8"))
                 save_config_atomic(config)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": True}).encode("utf-8"))
+            except ValueError as e:
+                self.send_json(400, {"success": False, "error": str(e)})
                 return
-            except Exception as e:
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode("utf-8"))
+            except OSError as e:
+                self.send_json(500, {"success": False, "error": str(e)})
                 return
+            self.send_json(200, {"success": True})
+            return
 
-        self.send_response(404)
-        self.end_headers()
+        self.send_json(404, {"error": "Not found"})
 
 
 def main():

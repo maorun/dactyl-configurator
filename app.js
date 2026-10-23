@@ -337,11 +337,24 @@ const ACTION_TO_NUMERIC = {
   "ACT_MOUSE_WHEEL_DOWN": 0x134
 };
 
+// Tastenpaar PAIR_<n>: eine Taste drückt zwei Tasten gleichzeitig (Index in currentConfig.keyPairs)
+const ACT_KEY_PAIR_BASE = 0x140;
+const MAX_KEY_PAIRS = 16;
+
+function pairIndexFromCode(code) {
+  const m = /^PAIR_(\d{1,2})$/.exec(String(code || ""));
+  if (!m) return -1;
+  const idx = Number(m[1]);
+  return idx < MAX_KEY_PAIRS ? idx : -1;
+}
+
 function actionCodeToNumeric(code) {
   if (!code || code === "NONE") return 0;
   if (ACTION_TO_NUMERIC[code] !== undefined) {
     return ACTION_TO_NUMERIC[code];
   }
+  const pairIdx = pairIndexFromCode(code);
+  if (pairIdx >= 0) return ACT_KEY_PAIR_BASE + pairIdx;
   // Single-character ASCII (z.B. 'a', '1', '~', '@')
   if (code.length === 1) {
     const c = code.charCodeAt(0);
@@ -391,6 +404,10 @@ function keyToNumericActions(k) {
 
 function findDefinitionByCode(numericCode) {
   if (!numericCode || numericCode === 0) return { label: "---", tap: "NONE" };
+  if (numericCode >= ACT_KEY_PAIR_BASE && numericCode < ACT_KEY_PAIR_BASE + MAX_KEY_PAIRS) {
+    const idx = numericCode - ACT_KEY_PAIR_BASE;
+    return { label: `Paar ${idx}`, tap: `PAIR_${idx}` };
+  }
   for (const [key, num] of Object.entries(ACTION_TO_NUMERIC)) {
     if (num === numericCode) {
       let lbl = key.replace("KEY_", "").replace("ACT_", "");
@@ -558,6 +575,19 @@ function normalizeKeyCell(cell) {
   };
 }
 
+// Ein Tastenpaar-Mitglied ist eine normale Taste oder ein Modifier (Code 1..255, wie in server.py/Firmware)
+function isKeyPairMember(code) {
+  if (typeof code !== "string" || pairIndexFromCode(code) >= 0) return false;
+  const n = actionCodeToNumeric(code);
+  return n >= 1 && n <= 0xFF;
+}
+
+// Anzeigename eines Tastenpaars, z. B. "Umschalt (Links) + ."
+function keyPairLabel(pair, labelFor) {
+  if (!pair) return "?";
+  return `${labelFor(pair.first)} + ${labelFor(pair.second)}`;
+}
+
 // Prüft eine importierte oder vom Server geladene Konfiguration und wirft bei ungültiger Struktur
 function validateConfigShape(cfg) {
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("Konfiguration muss ein Objekt sein.");
@@ -578,6 +608,16 @@ function validateConfigShape(cfg) {
       if (!ok) throw new Error(`Combo ${i + 1} hat ungültige Tasten (key1/key2).`);
     });
   }
+  if (cfg.keyPairs !== undefined) {
+    if (!Array.isArray(cfg.keyPairs) || cfg.keyPairs.length > MAX_KEY_PAIRS) {
+      throw new Error(`'keyPairs' muss eine Liste mit maximal ${MAX_KEY_PAIRS} Einträgen sein.`);
+    }
+    cfg.keyPairs.forEach((p, i) => {
+      if (!p || typeof p !== "object" || !isKeyPairMember(p.first) || !isKeyPairMember(p.second)) {
+        throw new Error(`Tastenpaar ${i} braucht zwei normale Tasten oder Modifier (first/second).`);
+      }
+    });
+  }
   if (cfg.layerNames !== undefined && !Array.isArray(cfg.layerNames)) throw new Error("'layerNames' muss eine Liste sein.");
   if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");
 }
@@ -594,6 +634,10 @@ function normalizeConfig(cfg) {
     ? cfg.combos.filter(cb => cb && cb.key1 && cb.key2 &&
         isValidIndex(cb.key1.r, NUM_ROWS) && isValidIndex(cb.key1.c, NUM_COLS) &&
         isValidIndex(cb.key2.r, NUM_ROWS) && isValidIndex(cb.key2.c, NUM_COLS)).slice(0, MAX_COMBOS)
+    : [];
+  cfg.keyPairs = Array.isArray(cfg.keyPairs)
+    ? cfg.keyPairs.filter(p => p && isKeyPairMember(p.first) && isKeyPairMember(p.second))
+        .slice(0, MAX_KEY_PAIRS).map(p => ({ first: p.first, second: p.second }))
     : [];
   const names = Array.isArray(cfg.layerNames) ? cfg.layerNames : [];
   cfg.layerNames = DEFAULT_LAYER_NAMES.map((def, i) => sanitizeCommandText(names[i], def));
@@ -653,6 +697,7 @@ document.addEventListener("DOMContentLoaded", () => {
   loadSavedConfigFromServer();
   initModernBleAutoSync();
   initMatrixTestUI();
+  initKeyPairsUI();
 });
 
 function updateConfigModeUI(active, syncing = false) {
@@ -765,6 +810,7 @@ function renderPendingSyncUI() {
           settings: "⚙️",
           combo_add: "⚡",
           combo_del: "🗑️",
+          key_pair: "➕",
           import: "📁"
         };
         const icon = iconMap[chg.type] || "📝";
@@ -1493,6 +1539,8 @@ function updateInspector(r, c) {
 }
 
 function renderCombosTable() {
+  // Tastenpaare liegen im selben Tab und ändern sich bei Laden, Import und Undo zusammen mit den Combos
+  renderKeyPairs();
   const tbody = document.getElementById("combosTableBody");
   const emptyState = document.getElementById("emptyCombosState");
   tbody.innerHTML = "";
@@ -1556,6 +1604,144 @@ function renderCombosTable() {
     tr.appendChild(tdDel);
     tbody.appendChild(tr);
   });
+}
+
+// =============================================================================
+// Tastenpaare (1 Taste = 2 Tasten gleichzeitig)
+// =============================================================================
+
+function keycodeLabel(code) {
+  for (const group of KEYCODES) {
+    const k = group.keys.find(key => key.code === code);
+    if (k) return k.label;
+  }
+  return code;
+}
+
+// Tap- und Halte-Auswahl im Inspektor: Gruppe "Tastenpaare" mit den aktuell definierten Paaren
+function refreshKeyPairOptions() {
+  ["primaryActionSelect", "holdActionSelect"].forEach(id => {
+    const select = document.getElementById(id);
+    if (!select) return;
+    const isHold = id === "holdActionSelect";
+    const previous = select.value;
+    select.querySelectorAll("optgroup[data-key-pairs]").forEach(g => g.remove());
+    const group = document.createElement("optgroup");
+    group.label = "Tastenpaare (2 Tasten gleichzeitig)";
+    group.dataset.keyPairs = "true";
+    currentConfig.keyPairs.forEach((pair, i) => {
+      const opt = document.createElement("option");
+      opt.value = `PAIR_${i}`;
+      const text = `Paar ${i}: ${keyPairLabel(pair, keycodeLabel)}`;
+      opt.textContent = isHold ? `Halten = ${text}` : text;
+      group.appendChild(opt);
+    });
+    if (group.children.length) select.appendChild(group);
+    select.value = previous;
+  });
+}
+
+function renderKeyPairs() {
+  const tbody = document.getElementById("keyPairsTableBody");
+  const empty = document.getElementById("emptyKeyPairsState");
+  if (!tbody || !empty) return;
+  tbody.innerHTML = "";
+  empty.style.display = currentConfig.keyPairs.length ? "none" : "block";
+  currentConfig.keyPairs.forEach((pair, i) => {
+    const tr = document.createElement("tr");
+    const cells = [String(i), keyPairLabel(pair, keycodeLabel), `PAIR_${i}`];
+    cells.forEach(text => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.appendChild(td);
+    });
+    const tdDel = document.createElement("td");
+    // Nur das letzte Paar löschbar: sonst verschieben sich die Indizes, auf die Tasten verweisen
+    if (i === currentConfig.keyPairs.length - 1) {
+      const delBtn = document.createElement("button");
+      delBtn.className = "btn btn-danger btn-sm";
+      delBtn.textContent = "Löschen";
+      delBtn.addEventListener("click", deleteLastKeyPair);
+      tdDel.appendChild(delBtn);
+    }
+    tr.appendChild(tdDel);
+    tbody.appendChild(tr);
+  });
+  refreshKeyPairOptions();
+}
+
+function addKeyPairFromUI() {
+  const first = document.getElementById("keyPairFirstSelect").value;
+  const second = document.getElementById("keyPairSecondSelect").value;
+  if (!isKeyPairMember(first) || !isKeyPairMember(second)) {
+    showToast("Bitte zwei normale Tasten oder Modifier wählen.");
+    return;
+  }
+  if (currentConfig.keyPairs.length >= MAX_KEY_PAIRS) {
+    alert(`Maximal ${MAX_KEY_PAIRS} Tastenpaare werden von der Firmware unterstützt.`);
+    return;
+  }
+  const pair = { first, second };
+  currentConfig.keyPairs.push(pair);
+  const idx = currentConfig.keyPairs.length - 1;
+  renderKeyPairs();
+  saveConfigToServer();
+  markPendingSync({
+    type: "key_pair",
+    title: `Tastenpaar ${idx} hinzugefügt`,
+    description: keyPairLabel(pair, keycodeLabel),
+    revert: () => {
+      if (currentConfig.keyPairs.length === idx + 1) currentConfig.keyPairs.pop();
+      renderKeyPairs();
+      saveConfigToServer();
+    }
+  });
+}
+
+function deleteLastKeyPair() {
+  const idx = currentConfig.keyPairs.length - 1;
+  if (idx < 0) return;
+  const code = `PAIR_${idx}`;
+  const used = currentConfig.layers.some(layer => (layer || []).some(row => (row || []).some(k => k && (k.tap === code || k.hold === code))));
+  if (used && !confirm(`Tastenpaar ${idx} ist noch Tasten zugewiesen. Diese Tasten senden danach nichts. Trotzdem löschen?`)) return;
+  const removed = currentConfig.keyPairs.pop();
+  renderKeyPairs();
+  saveConfigToServer();
+  markPendingSync({
+    type: "key_pair",
+    title: `Tastenpaar ${idx} gelöscht`,
+    description: keyPairLabel(removed, keycodeLabel),
+    revert: () => {
+      if (currentConfig.keyPairs.length === idx) currentConfig.keyPairs.push(removed);
+      renderKeyPairs();
+      saveConfigToServer();
+    }
+  });
+}
+
+function initKeyPairsUI() {
+  const firstSel = document.getElementById("keyPairFirstSelect");
+  const secondSel = document.getElementById("keyPairSecondSelect");
+  if (!firstSel || !secondSel) return;
+  // Nur Tasten mit Code 1..255 (normale Tasten und Modifier)
+  [firstSel, secondSel].forEach(select => {
+    select.innerHTML = "";
+    KEYCODES.forEach(group => {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = group.group;
+      group.keys.filter(k => isKeyPairMember(k.code)).forEach(k => {
+        const opt = document.createElement("option");
+        opt.value = k.code;
+        opt.textContent = `${k.label} (${k.code})`;
+        optgroup.appendChild(opt);
+      });
+      if (optgroup.children.length) select.appendChild(optgroup);
+    });
+  });
+  firstSel.value = "KEY_LEFT_SHIFT";
+  secondSel.value = "KEY_PERIOD";
+  document.getElementById("btnAddKeyPair").addEventListener("click", addKeyPairFromUI);
+  renderKeyPairs();
 }
 
 window.deleteCombo = function(id) {
@@ -3358,7 +3544,7 @@ async function writeConfigToESP32(options = {}) {
 
     const totalLayers = Math.min(currentConfig.layers.length, NUM_LAYERS);
     const totalCombos = Array.isArray(currentConfig.combos) ? currentConfig.combos.length : 0;
-    const totalSteps = NUM_LAYERS + (totalLayers * NUM_ROWS * NUM_COLS) + totalCombos + 8;
+    const totalSteps = NUM_LAYERS + (totalLayers * NUM_ROWS * NUM_COLS) + totalCombos + 9;
     const updateProgress = () => {
       completedSteps++;
       if (progressBar) {
@@ -3416,6 +3602,14 @@ async function writeConfigToESP32(options = {}) {
       updateProgress();
     }
     await sendConfirmed("SAVE_COMBOS", "SAVE_COMBOS", 5000);
+    updateProgress();
+
+    // Tastenpaare synchronisieren (Index = Position in der Liste, PAIR_<n> verweist darauf)
+    await sendConfirmed("CLEAR_PAIRS", "CLEAR_PAIRS");
+    for (const pair of currentConfig.keyPairs.slice(0, MAX_KEY_PAIRS)) {
+      await sendConfirmed(`ADD_PAIR ${actionCodeToNumeric(pair.first)} ${actionCodeToNumeric(pair.second)}`, "ADD_PAIR");
+    }
+    await sendConfirmed("SAVE_PAIRS", "SAVE_PAIRS", 5000);
     updateProgress();
 
     // Nur die tatsächlich übertragenen Änderungen verwerfen

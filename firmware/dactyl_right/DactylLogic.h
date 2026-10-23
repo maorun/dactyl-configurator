@@ -11,6 +11,7 @@
  *   NUM_LAYERS, NUM_ROWS, NUM_COLS, MAX_COMBOS, CONFIG_MODE_MAGIC,
  *   KeyCombo, ComboRuntime, comboRuntime[], userCombos[], numCombos,
  *   KEYMAP[][][], HOLDMAP[][][], layerNames[],
+ *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
  *   momentaryLayers[], toggleLayers[], keyState[][], pressedAction[][],
  *   keyPressTime[][], keySentToHost[][],
  *   isConfigMode, enterConfigRequested, exitConfigRequested, lastActivityTime,
@@ -58,6 +59,46 @@ bool isConfigComboSuppressed(uint8_t r, uint8_t c) {
 
 bool isComboCandidateKey(uint8_t r, uint8_t c);
 bool wasComboRecentlyActive(uint8_t r, uint8_t c);
+
+// -----------------------------------------------------------------------------
+// Tastenpaare (ACT_KEY_PAIR_BASE + Index): eine Taste drückt zwei Tasten gleichzeitig
+// -----------------------------------------------------------------------------
+bool isKeyPairAction(uint16_t action) {
+  return action >= ACT_KEY_PAIR_BASE && action < ACT_KEY_PAIR_BASE + MAX_KEY_PAIRS;
+}
+
+// Liefert das Paar zur Aktion oder nullptr, wenn der Index nicht (mehr) belegt ist
+const KeyPair* keyPairForAction(uint16_t action) {
+  if (!isKeyPairAction(action)) return nullptr;
+  uint8_t idx = action - ACT_KEY_PAIR_BASE;
+  if (idx >= numKeyPairs || userKeyPairs[idx].first == 0 || userKeyPairs[idx].second == 0) return nullptr;
+  return &userKeyPairs[idx];
+}
+
+// Erste Taste zuerst drücken (z. B. Shift vor "."), dann die zweite
+bool pressKeyPair(uint16_t action) {
+  const KeyPair* p = keyPairForAction(action);
+  if (!p) return false;
+  bleKeyboard.press(p->first);
+  bleKeyboard.press(p->second);
+  return true;
+}
+
+// In umgekehrter Reihenfolge loslassen, damit kein Zeichen ohne Modifier ankommt
+void releaseKeyPair(uint16_t action) {
+  const KeyPair* p = keyPairForAction(action);
+  if (!p) return;
+  bleKeyboard.release(p->second);
+  bleKeyboard.release(p->first);
+}
+
+void tapKeyPair(uint16_t action) {
+  if (!pressKeyPair(action)) return;
+  delay(5);
+  releaseKeyPair(action);
+}
+
+void releaseHeldKeyPairs();
 
 // -----------------------------------------------------------------------------
 // Aktionen ausführen (Tastendruck / Loslassen einer aufgelösten Aktion)
@@ -139,6 +180,17 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         keySentToHost[r][c] = true;
       }
     }
+  } else if (isKeyPairAction(action)) {
+    uint8_t idx = action - ACT_KEY_PAIR_BASE;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Paar %d\",\"code\":%d,\"layer\":%d}", r, c, idx, action, currentLayer);
+    sendConfigNotification(String(buf));
+    Serial.printf("Tastenpaar gedrückt: [R%d, C%d] (L%d) -> Paar %d\n", r, c, currentLayer, idx);
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
+        if (pressKeyPair(action)) keySentToHost[r][c] = true;
+      }
+    }
   } else if (action > 0 && action <= 0xFF) {
     String keyLabel = "";
     if (action >= 'a' && action <= 'z') keyLabel = String((char)toupper(action));
@@ -201,6 +253,16 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         else if (action == 0x132) bleKeyboard.mouseClick(MOUSE_BUTTON_MIDDLE);
         else if (action == 0x133) bleKeyboard.mouseScroll(1);
         else if (action == 0x134) bleKeyboard.mouseScroll(-1);
+      }
+    }
+  } else if (isKeyPairAction(action)) {
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      if (keySentToHost[r][c]) {
+        releaseKeyPair(action);
+        keySentToHost[r][c] = false;
+      } else if (!wasComboRecentlyActive(r, c) && !(r == 0 && c == 0) && !(r == 4 && c == 5)) {
+        // Schneller Einzeltipp vor Ablauf des Combo-Timeouts
+        tapKeyPair(action);
       }
     }
   } else if (action > 0 && action <= 0xFF) {
@@ -276,11 +338,28 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
     if (act > 0 && act <= 0xFF) {
       bleKeyboard.press((uint8_t)act);
       keySentToHost[r][c] = true;
+    } else if (isKeyPairAction(act)) {
+      if (pressKeyPair(act)) keySentToHost[r][c] = true;
     } else if (act >= 0x130 && act <= 0x132) {
       if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
       else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
       else bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
       keySentToHost[r][c] = true;
+    }
+  }
+}
+
+// Vor einer Änderung der Paar-Tabelle: an den Host gesendete Paare mit der noch gültigen Tabelle loslassen.
+// Sonst bleibt eine Taste am Host hängen, weil das spätere Release die geänderte Tabelle liest.
+// Die Taste gilt danach als verbraucht: ihr physisches Loslassen sendet nichts mehr.
+void releaseHeldKeyPairs() {
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (!keySentToHost[r][c] || !isKeyPairAction(pressedAction[r][c])) continue;
+      if (bleKeyboard.isConnected()) releaseKeyPair(pressedAction[r][c]);
+      keySentToHost[r][c] = false;
+      pressedAction[r][c] = 0;
+      tapHold[r][c].holdActive = false;
     }
   }
 }
@@ -388,6 +467,8 @@ void processDeferredKeys(unsigned long now) {
             if (act > 0 && act <= 0xFF) {
               bleKeyboard.press((uint8_t)act);
               keySentToHost[r][c] = true;
+            } else if (isKeyPairAction(act)) {
+              if (pressKeyPair(act)) keySentToHost[r][c] = true;
             } else if (act >= 0x130 && act <= 0x134) {
               if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
               else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
@@ -468,6 +549,12 @@ void loadKeymapFromNVS() {
     Serial.printf("NVS: Neue Default-Belegung (0x%08X). Synchronisiere NVS mit Firmware-Defaults.\n", (unsigned)defaultsHash);
     bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
     ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
+    // Neue App-Belegung über einer gespeicherten Keymap: sie verweist auf die einkompilierten Tastenpaare (PAIR_n),
+    // alte Paare aus dem NVS daher verwerfen. Ohne Keymap (erster Start) gibt es nichts zu ersetzen.
+    if (hasKeymap) {
+      preferences.remove("num_pairs");
+      preferences.remove("pairs_data");
+    }
     // Fingerprint zuletzt und nur nach vollständigem Schreiben: sonst beim nächsten Start erneut versuchen
     if (ok) {
       preferences.putUInt("defaults_fp", defaultsHash);
@@ -508,6 +595,18 @@ void loadKeymapFromNVS() {
   }
   if (preferences.isKey("combo_to")) {
     comboTimeoutMs = preferences.getUShort("combo_to", 40);
+  }
+  // Tastenpaare: gespeicherte Liste (auch leer nach CLEAR_PAIRS + SAVE_PAIRS) überschreibt die einkompilierte
+  if (preferences.isKey("num_pairs")) {
+    uint8_t n = preferences.getUChar("num_pairs", 0);
+    if (n == 0) {
+      numKeyPairs = 0;
+    } else if (n <= MAX_KEY_PAIRS && preferences.isKey("pairs_data") &&
+               preferences.getBytesLength("pairs_data") == n * sizeof(KeyPair)) {
+      preferences.getBytes("pairs_data", userKeyPairs, n * sizeof(KeyPair));
+      numKeyPairs = n;
+    }
+    Serial.printf("NVS: %d Tastenpaare geladen.\n", numKeyPairs);
   }
   if (preferences.isKey("num_combos")) {
     uint8_t n = preferences.getUChar("num_combos", 0);
@@ -590,6 +689,21 @@ bool saveCombosToNVS() {
   }
   preferences.end();
   Serial.printf("NVS: %d Combos %s.\n", numCombos, ok ? "gespeichert" : "FEHLER beim Speichern");
+  return ok;
+}
+
+bool saveKeyPairsToNVS() {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("num_pairs", numKeyPairs) > 0;
+  size_t len = numKeyPairs * sizeof(KeyPair);
+  // Leere Liste: putBytes mit Länge 0 meldet 0 Bytes, das ist kein Fehler
+  if (len > 0) {
+    ok = (preferences.putBytes("pairs_data", userKeyPairs, len) == len) && ok;
+  } else {
+    preferences.remove("pairs_data");
+  }
+  preferences.end();
+  Serial.printf("NVS: %d Tastenpaare %s.\n", numKeyPairs, ok ? "gespeichert" : "FEHLER beim Speichern");
   return ok;
 }
 
@@ -775,6 +889,25 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
   } else if (cmd == "SAVE_COMBOS") {
     sendConfigNotification(saveCombosToNVS() ? "OK SAVE_COMBOS" : "ERR NVS SAVE_COMBOS");
+  } else if (cmd == "CLEAR_PAIRS") {
+    releaseHeldKeyPairs();
+    numKeyPairs = 0;
+    sendConfigNotification("OK CLEAR_PAIRS");
+  } else if (cmd.startsWith("ADD_PAIR ")) {
+    // ADD_PAIR <erste> <zweite>: beide Tastatur-Codes 1..255, wird als nächster Index angehängt
+    int first, second;
+    char extra;
+    if (sscanf(cmd.c_str(), "ADD_PAIR %d %d %c", &first, &second, &extra) == 2 &&
+        numKeyPairs < MAX_KEY_PAIRS && first >= 1 && first <= 0xFF && second >= 1 && second <= 0xFF) {
+      userKeyPairs[numKeyPairs].first = (uint8_t)first;
+      userKeyPairs[numKeyPairs].second = (uint8_t)second;
+      numKeyPairs++;
+      sendConfigNotification("OK ADD_PAIR " + String(numKeyPairs - 1));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd == "SAVE_PAIRS") {
+    sendConfigNotification(saveKeyPairsToNVS() ? "OK SAVE_PAIRS" : "ERR NVS SAVE_PAIRS");
   } else if (cmd == "GET_NAMES" || cmd == "GET_CONFIG") {
     String out = "LAYER_NAMES:[";
     for (int i = 0; i < NUM_LAYERS; i++) {

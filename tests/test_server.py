@@ -244,6 +244,39 @@ class TestServerAndCodegen(unittest.TestCase):
     def test_handler_has_socket_timeout(self):
         self.assertGreater(server.ConfiguratorHandler.timeout or 0, 0)
 
+    def test_key_pairs_codegen_and_validation(self):
+        cpp = server.generate_key_pairs_cpp([
+            {"first": "KEY_LEFT_SHIFT", "second": "KEY_PERIOD"},
+            {"first": "KEY_A", "second": "KEY_S"}
+        ])
+        self.assertIn("uint8_t numKeyPairs = 2;", cpp)
+        self.assertIn("{ KEY_LEFT_SHIFT, '.' }", cpp)
+        self.assertIn("{ 'a', 's' }", cpp)
+        self.assertIn("{ 0, 0 }", server.generate_key_pairs_cpp([]))
+        self.assertIn("{ 0, 0 }", server.generate_key_pairs_cpp(None))
+        # Nur normale Tasten und Modifier: keine Layer-, Media-, Maus- oder Paar-Codes
+        self.assertIn("{ 'a', 200 }", server.generate_key_pairs_cpp([{"first": "KEY_A", "second": "KEY_200"}]))
+        self.assertIn("{ ':', 'a' }", server.generate_key_pairs_cpp([{"first": ":", "second": "KEY_A"}]))
+        for bad in ("MO_1", "MEDIA_MUTE", "MOUSE_LEFT", "PAIR_0", "NONE", "", None, 5, "KEY_A; evil",
+                    "KEY_0256", "KEY_256", "KEY_300", "KEY_FOO", "\x01"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_key_pairs_cpp([{"first": "KEY_A", "second": bad}])
+        with self.assertRaises(ValueError):
+            server.generate_key_pairs_cpp([{"first": "KEY_A", "second": "KEY_B"}] * 17)
+        with self.assertRaises(ValueError):
+            server.generate_key_pairs_cpp("kaputt")
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "keyPairs": [{"first": "MO_1", "second": "KEY_A"}]})
+
+    def test_pair_action_code_maps_to_firmware_constant(self):
+        self.assertEqual(server.code_to_cpp("PAIR_0"), "(ACT_KEY_PAIR_BASE + 0)")
+        self.assertEqual(server.code_to_cpp("PAIR_15"), "(ACT_KEY_PAIR_BASE + 15)")
+        self.assertEqual(server.code_to_cpp("PAIR_16"), "0")
+        self.assertEqual(server.code_to_cpp("PAIR_x"), "0")
+        cpp = server.generate_keymap_cpp([[[{"tap": "PAIR_3", "hold": "PAIR_4"}]]])
+        self.assertIn("(ACT_KEY_PAIR_BASE + 3)", cpp)
+        self.assertIn("(ACT_KEY_PAIR_BASE + 4)", server.generate_holdmap_cpp([[[{"tap": "KEY_A", "hold": "PAIR_4"}]]]))
+
     def test_real_ino_renders_with_all_markers(self):
         with open(server.INO_FILE, encoding="utf-8") as f:
             content = f.read()
@@ -252,8 +285,10 @@ class TestServerAndCodegen(unittest.TestCase):
             cfg = json.load(f)
         server.validate_config(cfg)
         out = server.render_ino_content(content, cfg)
-        for marker in ("KEYMAP", "HOLDMAP", "LAYER_NAMES", "COMBOS", "SETTINGS"):
+        for marker in ("KEYMAP", "HOLDMAP", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "SETTINGS"):
             self.assertEqual(out.count(f"// [[[START_{marker}]]]"), 1)
+        out = server.render_ino_content(content, dict(cfg, keyPairs=[{"first": "KEY_LEFT_SHIFT", "second": "KEY_PERIOD"}]))
+        self.assertIn("uint8_t numKeyPairs = 1;", out)
 
     def test_app_flash_sets_new_nonzero_defaults_id(self):
         with tempfile.TemporaryDirectory() as d:

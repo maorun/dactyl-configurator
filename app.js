@@ -582,6 +582,38 @@ function validateConfigShape(cfg) {
   if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");
 }
 
+// Ebenen-Werkzeuge: Kopieren, Tauschen und Leeren ganzer Ebenen (liefert neue Ebenen-Liste, ändert nichts in-place)
+function transparentLayer() {
+  return Array.from({ length: NUM_ROWS }, () =>
+    Array.from({ length: NUM_COLS }, () => ({ label: "---", tap: "NONE", hold: "NONE" })));
+}
+
+function applyLayerOperation(layers, op, source, target) {
+  if (!Array.isArray(layers) || !isValidIndex(source, NUM_LAYERS)) return null;
+  const next = JSON.parse(JSON.stringify(layers));
+  while (next.length < NUM_LAYERS) next.push(transparentLayer());
+  if (op === "clear") {
+    next[source] = transparentLayer();
+    return next;
+  }
+  if (!isValidIndex(target, NUM_LAYERS) || target === source) return null;
+  if (op === "copy") {
+    next[target] = JSON.parse(JSON.stringify(next[source]));
+  } else if (op === "swap") {
+    [next[source], next[target]] = [next[target], next[source]];
+  } else {
+    return null;
+  }
+  return next;
+}
+
+// Ein Snapshot (Preset, Import, Ebenen-Werkzeug) ersetzt ganze Bereiche: ältere Änderungen davor und der
+// Snapshot selbst (falls nicht der jüngste) dürfen nicht einzeln rückgängig gemacht werden.
+function isUndoBlocked(changes, idx) {
+  if (!Array.isArray(changes) || !isValidIndex(idx, changes.length)) return true;
+  return changes.slice(idx + 1).some(c => c && c.snapshot) || (!!changes[idx].snapshot && idx !== changes.length - 1);
+}
+
 // Normalisiert importierte oder vom Server geladene Konfigurationen (nach validateConfigShape)
 function normalizeConfig(cfg) {
   if (!cfg || typeof cfg !== "object") cfg = {};
@@ -761,6 +793,7 @@ function renderPendingSyncUI() {
         const iconMap = {
           key: "⌨️",
           layer_name: "✏️",
+          layer_tool: "🗂️",
           preset: "🎨",
           settings: "⚙️",
           combo_add: "⚡",
@@ -830,9 +863,9 @@ function undoPendingChange(id) {
   const idx = pendingChanges.findIndex(c => c.id === id);
   if (idx === -1) return;
   const change = pendingChanges[idx];
-  // Snapshot-Reverts (Import, Preset, Einstellungen) stellen ganze Bereiche wieder her und würden spätere
-  // Änderungen überschreiben, deren Datensätze dann veraltet wären: nur als jüngste Änderung zulassen.
-  if (change.snapshot && idx !== pendingChanges.length - 1) {
+  // Snapshot-Reverts (Import, Preset, Einstellungen, Ebenen-Werkzeug) stellen ganze Bereiche wieder her und würden
+  // spätere Änderungen überschreiben; ältere Reverts würden in vom Snapshot ersetzte Ebenen schreiben.
+  if (isUndoBlocked(pendingChanges, idx)) {
     showToast("↩️ Bitte zuerst die neueren Änderungen rückgängig machen.", 5000);
     return;
   }
@@ -1005,7 +1038,68 @@ function renderLayerButtons() {
   updateLayerNameInput();
 }
 
+function updateLayerToolTargets() {
+  const opSel = document.getElementById("layerToolOp");
+  const targetSel = document.getElementById("layerToolTarget");
+  if (!opSel || !targetSel) return;
+  const previous = parseInt(targetSel.value, 10);
+  const names = currentConfig.layerNames || DEFAULT_LAYER_NAMES;
+  targetSel.innerHTML = "";
+  for (let i = 0; i < NUM_LAYERS; i++) {
+    if (i === activeLayerIndex) continue;
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = `L${i}: ${names[i] || `Layer ${i}`}`;
+    targetSel.appendChild(opt);
+  }
+  if (isValidIndex(previous, NUM_LAYERS) && previous !== activeLayerIndex) targetSel.value = String(previous);
+  targetSel.style.display = opSel.value === "clear" ? "none" : "";
+}
+
+function applyLayerToolFromUI() {
+  const op = document.getElementById("layerToolOp").value;
+  const source = activeLayerIndex;
+  const target = parseInt(document.getElementById("layerToolTarget").value, 10);
+  const names = currentConfig.layerNames || DEFAULT_LAYER_NAMES;
+  const label = i => `L${i} (${names[i] || `Layer ${i}`})`;
+  const texts = {
+    copy: [`Ebene ${label(source)} nach ${label(target)} kopieren? Die Belegung von ${label(target)} wird ersetzt.`,
+           "Ebene kopiert", `${label(source)} ➔ ${label(target)}`],
+    swap: [`Ebenen ${label(source)} und ${label(target)} tauschen?`,
+           "Ebenen getauscht", `${label(source)} ⇄ ${label(target)}`],
+    clear: [`Alle Tasten von Ebene ${label(source)} auf transparent setzen?`,
+            "Ebene geleert", `${label(source)} ist jetzt transparent`]
+  }[op];
+  if (!texts) return;
+  const next = applyLayerOperation(currentConfig.layers, op, source, target);
+  if (!next) {
+    showToast("Bitte eine andere Ziel-Ebene wählen.");
+    return;
+  }
+  if (!confirm(texts[0])) return;
+
+  const oldLayers = JSON.parse(JSON.stringify(currentConfig.layers));
+  currentConfig.layers = next;
+  renderMatrix();
+  if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+  saveConfigToServer();
+  // Wie Preset/Import: als Snapshot vormerken, Übertragung beim nächsten Sync
+  markPendingSync({
+    type: "layer_tool",
+    snapshot: true,
+    title: texts[1],
+    description: texts[2],
+    revert: () => {
+      currentConfig.layers = oldLayers;
+      renderMatrix();
+      if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+      saveConfigToServer();
+    }
+  });
+}
+
 function updateLayerNameInput() {
+  updateLayerToolTargets();
   const input = document.getElementById("layerNameInput");
   if (!input) return;
   const names = currentConfig.layerNames || DEFAULT_LAYER_NAMES;
@@ -1100,6 +1194,12 @@ function initUI() {
       }
     });
   }
+
+  // Ebenen-Werkzeuge: Kopieren / Tauschen / Leeren der angezeigten Ebene
+  const layerToolOp = document.getElementById("layerToolOp");
+  const btnLayerTool = document.getElementById("btnApplyLayerTool");
+  if (layerToolOp) layerToolOp.addEventListener("change", updateLayerToolTargets);
+  if (btnLayerTool) btnLayerTool.addEventListener("click", applyLayerToolFromUI);
 
   // Connect Serial Button (USB Monitor)
   const btnConnect = document.getElementById("btnConnect");

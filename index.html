@@ -97,6 +97,15 @@
             <input type="text" id="layerNameInput" class="form-control" maxlength="31" style="width: 140px; padding: 0.25rem 0.5rem; font-size: 0.85rem;" placeholder="Name der Ebene...">
             <button id="btnRenameLayer" class="btn btn-outline btn-sm" title="Aktuelle Ebene umbenennen">✏️ Name speichern</button>
           </div>
+          <div class="layer-tools-group" style="display: inline-flex; align-items: center; gap: 0.35rem; margin-left: 0.6rem;">
+            <select id="layerToolOp" class="form-control" style="width: auto; padding: 0.25rem 0.5rem; font-size: 0.85rem;" title="Aktion für die aktuell angezeigte Ebene">
+              <option value="copy">Ebene kopieren nach</option>
+              <option value="swap">Ebene tauschen mit</option>
+              <option value="clear">Ebene leeren (transparent)</option>
+            </select>
+            <select id="layerToolTarget" class="form-control" style="width: auto; padding: 0.25rem 0.5rem; font-size: 0.85rem;" title="Ziel-Ebene"></select>
+            <button id="btnApplyLayerTool" class="btn btn-outline btn-sm" title="Aktion ausführen (wird vorgemerkt und ist rückgängig machbar)">Ausführen</button>
+          </div>
         </div>
 
         <div class="preset-section">

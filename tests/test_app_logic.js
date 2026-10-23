@@ -18,7 +18,7 @@ function section(startMarker, endMarker) {
 const code = [
   section("const DEFAULT_LAYER_NAMES", "// BLE GATT"),
   section("const ACTION_TO_NUMERIC", "// Standard-Konfiguration"),
-  section("// Matrix- und Firmware-Grenzen", "// State"),
+  section("// Matrix- und Firmware-Grenzen", "// State\n"),
   section("// Alte Configs speichern Modifier-Halte-Aktionen", "function fillKeycodeSelect")
 ].join("\n");
 
@@ -28,8 +28,10 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
+             createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest,
              MATRIX_ROW_WIRES, MATRIX_COL_WIRES,
+             applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel };`, ctx);
 const api = ctx.api;
 
@@ -140,6 +142,66 @@ test("Physische Tasten: R4C0 und R5C5 existieren nicht", () => {
   assert.ok(api.isPhysicalKey(0, 0));
 });
 
+test("Heatmap: nur physische Tasten der Matrix werden gezählt", () => {
+  const s = api.createTypingStats(null);
+  assert.strictEqual(api.recordKeyPress(s, 2, 1, 0), true);
+  assert.strictEqual(api.recordKeyPress(s, 2, 1, 10), true);
+  assert.strictEqual(api.recordKeyPress(s, 4, 0, 20), false); // R4C0 existiert nicht
+  assert.strictEqual(api.recordKeyPress(s, 5, 5, 20), false); // R5C5 existiert nicht
+  assert.strictEqual(api.recordKeyPress(s, 6, 0, 20), false);
+  assert.strictEqual(api.recordKeyPress(s, "2", 1, 20), false);
+  assert.deepStrictEqual({ ...s.counts }, { "2_1": 2 });
+  assert.strictEqual(s.total, 2);
+});
+
+test("Heatmap: gespeicherte Zähler werden validiert", () => {
+  // JSON.parse erzeugt "__proto__" als eigenen Schlüssel (wie localStorage-Daten)
+  const s = api.createTypingStats(JSON.parse('{"0_0": 3, "4_0": 9, "9_9": 1, "1_1": -2, "2_2": 1.5, "__proto__": 4, "x": 1, "5_6": 2}'));
+  assert.deepStrictEqual({ ...s.counts }, { "0_0": 3, "5_6": 2 });
+  assert.ok(!Object.prototype.hasOwnProperty.call(s.counts, "__proto__"));
+  assert.strictEqual(typeof Object.getPrototypeOf(s.counts).hasOwnProperty, "function");
+  assert.strictEqual(s.total, 5);
+  assert.strictEqual(api.createTypingStats("kaputt").total, 0);
+  assert.strictEqual(api.createTypingStats([1, 2]).total, 0);
+});
+
+test("WPM: gleitendes 60-s-Fenster mit 5 Anschlägen pro Wort", () => {
+  const s = api.createTypingStats(null);
+  for (let i = 0; i < 50; i++) api.recordKeyPress(s, 0, 1, i * 100);
+  assert.strictEqual(api.computeWpm(s, 5000), 10);
+  // Anschläge älter als das Fenster fallen heraus
+  assert.strictEqual(api.computeWpm(s, api.WPM_WINDOW_MS + 2400), 5);
+  assert.strictEqual(api.computeWpm(s, api.WPM_WINDOW_MS + 10000), 0);
+  // Gesamtzähler bleibt unabhängig vom Fenster
+  assert.strictEqual(s.total, 50);
+});
+
+test("WPM: Fenstergrenze und Zeitstempel in falscher Reihenfolge", () => {
+  const s = api.createTypingStats(null);
+  for (let i = 0; i < 5; i++) api.recordKeyPress(s, 1, 1, 1000);
+  // Genau WPM_WINDOW_MS alt: Anschlag liegt außerhalb des Fensters
+  assert.strictEqual(api.computeWpm(s, 1000 + api.WPM_WINDOW_MS - 1), 1);
+  assert.strictEqual(api.computeWpm(s, 1000 + api.WPM_WINDOW_MS), 0);
+  assert.strictEqual(s.recent.length, 0);
+  // Ein älterer Zeitstempel verwirft keine neueren Anschläge
+  for (let i = 0; i < 5; i++) api.recordKeyPress(s, 1, 1, 200000);
+  assert.strictEqual(api.computeWpm(s, 150000), 1);
+  // recordKeyPress kürzt das Fenster selbst
+  api.recordKeyPress(s, 1, 1, 200000 + api.WPM_WINDOW_MS);
+  assert.strictEqual(s.recent.length, 1);
+});
+
+test("Heatmap: Stufen skalieren relativ zur häufigsten Taste", () => {
+  assert.strictEqual(api.heatLevel(0, 10), 0);
+  assert.strictEqual(api.heatLevel(5, 0), 0);
+  assert.strictEqual(api.heatLevel(1, 100), 1);
+  assert.strictEqual(api.heatLevel(50, 100), 3);
+  assert.strictEqual(api.heatLevel(100, 100), api.HEAT_LEVELS);
+  const s = api.createTypingStats({ "0_0": 3, "1_1": 7 });
+  assert.strictEqual(api.maxKeyCount(s), 7);
+  assert.strictEqual(api.maxKeyCount(api.createTypingStats(null)), 0);
+});
+
 test("Matrix-Test: 35 verlötete Schalter (29 Finger + 6 Daumen ohne R4C0/R5C5)", () => {
   let n = 0;
   for (let r = 0; r < 6; r++) for (let c = 0; c < 7; c++) if (api.isWiredSwitch(r, c)) n++;
@@ -225,6 +287,67 @@ test("Tastenpaar: Codebereich ist in App, Server und Firmware identisch", () => 
   assert.strictEqual(Number(/^MAX_KEY_PAIRS = (\d+)/m.exec(py)[1]), api.MAX_KEY_PAIRS);
   // Der Paarbereich überschneidet sich nicht mit Maus-Aktionen (0x130..0x134)
   assert.ok(api.ACT_KEY_PAIR_BASE > 0x134);
+});
+
+function sampleLayers() {
+  return Array.from({ length: 8 }, (_, l) => [[{ label: `L${l}`, tap: `KEY_${l}`, hold: "NONE" }]]);
+}
+
+test("Ebenen-Werkzeug: Kopieren ersetzt nur das Ziel und teilt keine Objekte", () => {
+  const layers = sampleLayers();
+  const next = api.applyLayerOperation(layers, "copy", 1, 3);
+  assert.strictEqual(next[3][0][0].tap, "KEY_1");
+  assert.strictEqual(next[1][0][0].tap, "KEY_1");
+  assert.strictEqual(next[2][0][0].tap, "KEY_2");
+  next[3][0][0].tap = "KEY_X";
+  assert.strictEqual(next[1][0][0].tap, "KEY_1");
+  // Eingabe bleibt unverändert
+  assert.strictEqual(layers[3][0][0].tap, "KEY_3");
+});
+
+test("Ebenen-Werkzeug: Tauschen und Leeren", () => {
+  const layers = sampleLayers();
+  const swapped = api.applyLayerOperation(layers, "swap", 0, 7);
+  assert.strictEqual(swapped[0][0][0].tap, "KEY_7");
+  assert.strictEqual(swapped[7][0][0].tap, "KEY_0");
+  const cleared = api.applyLayerOperation(layers, "clear", 2);
+  assert.strictEqual(cleared[2].length, 6);
+  assert.ok(cleared[2].every(row => row.length === 7 && row.every(k => k.tap === "NONE" && k.hold === "NONE")));
+  assert.strictEqual(cleared[1][0][0].tap, "KEY_1");
+  assert.strictEqual(layers[2][0][0].tap, "KEY_2");
+});
+
+test("Ebenen-Werkzeug: ungültige Aufrufe ändern nichts", () => {
+  const layers = sampleLayers();
+  assert.strictEqual(api.applyLayerOperation(layers, "copy", 1, 1), null);
+  assert.strictEqual(api.applyLayerOperation(layers, "copy", 1, 8), null);
+  assert.strictEqual(api.applyLayerOperation(layers, "swap", -1, 2), null);
+  assert.strictEqual(api.applyLayerOperation(layers, "move", 1, 2), null);
+  assert.strictEqual(api.applyLayerOperation(null, "clear", 1), null);
+  // Fehlende Ebenen werden transparent ergänzt
+  const short = api.applyLayerOperation([[[{ tap: "KEY_A" }]]], "copy", 0, 5);
+  assert.strictEqual(short.length, 8);
+  assert.strictEqual(short[5][0][0].tap, "KEY_A");
+  assert.strictEqual(short[3][0][0].tap, "NONE");
+});
+
+test("Rückgängig: Änderungen vor einem neueren Snapshot sind gesperrt", () => {
+  const key = { snapshot: false }, snap = { snapshot: true };
+  // Taste geändert, danach Ebene getauscht: die Tastenänderung darf nicht mehr einzeln zurück
+  assert.strictEqual(api.isUndoBlocked([key, snap], 0), true);
+  assert.strictEqual(api.isUndoBlocked([key, snap], 1), false);
+  // Snapshot mit neueren Änderungen ist gesperrt, neuere Tastenänderung nicht
+  assert.strictEqual(api.isUndoBlocked([snap, key], 0), true);
+  assert.strictEqual(api.isUndoBlocked([snap, key], 1), false);
+  // Ohne Snapshot ist jede Änderung einzeln rückgängig machbar
+  assert.strictEqual(api.isUndoBlocked([key, key, key], 0), false);
+  assert.strictEqual(api.isUndoBlocked([key], 5), true);
+  // Ebene tauschen: Rückgängig stellt den Stand vor dem Tausch exakt wieder her
+  const layers = sampleLayers();
+  const before = JSON.stringify(layers);
+  const swapped = api.applyLayerOperation(layers, "swap", 2, 5);
+  assert.strictEqual(JSON.stringify(layers), before);
+  assert.notStrictEqual(JSON.stringify(swapped), before);
 });
 
 console.log(`\n${passed} app.js-Tests bestanden.`);

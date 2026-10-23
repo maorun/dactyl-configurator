@@ -180,6 +180,15 @@
           </div>
         </div>
 
+        <div class="typing-stats" id="typingStats">
+          <span class="live-label">WPM:</span>
+          <span class="stat-badge" id="liveWpm" title="Wörter pro Minute über die letzten 60 Sekunden (5 Anschläge = 1 Wort; zählt alle Tastendrücke inkl. Modifier, Layer- und Maus-Tasten)">0</span>
+          <span class="live-label">Anschläge:</span>
+          <span class="stat-badge" id="liveKeyTotal" title="Gezählte Tastendrücke der rechten Hand seit dem letzten Zurücksetzen">0</span>
+          <button id="btnToggleHeatmap" class="hand-btn" type="button" title="Tasten nach Nutzungshäufigkeit einfärben">🔥 Heatmap</button>
+          <button id="btnResetHeatmap" class="hand-btn" type="button" title="Heatmap und Anschlagzähler zurücksetzen">↺</button>
+        </div>
+
         <div class="combo-active-alert" id="comboActiveAlert" style="display: none;">
           <span class="combo-pulse">⚡</span>
           <span id="comboActiveText">COMBO AKTIV: J + K ➔ Escape</span>

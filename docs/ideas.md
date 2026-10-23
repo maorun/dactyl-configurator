@@ -4,31 +4,28 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Umgesetzt
 
+- **Tasten-Heatmap & WPM-Anzeige** im Live-Monitor — PR #2.
 - **Matrix-Test (Löt- und Dioden-Tester)** als eigener Tab — PR #3.
-- **Ebenen-Werkzeuge:** Ebene kopieren, tauschen, leeren (als Snapshot vorgemerkt, rückgängig machbar) — Pull Request dieses Backlogs.
+- **Ebenen-Werkzeuge:** Ebene kopieren, tauschen, leeren (als Snapshot vorgemerkt, rückgängig machbar) — PR #4.
 
 ## In Review (noch nicht in `master`)
 
-- **Tasten-Heatmap & WPM-Anzeige** im Live-Monitor — PR #2.
-
-Punkte mit „(baut auf PR #2 auf)“ setzen den Merge von PR #2 voraus.
+- **Tastenpaare (Zwei-Tasten-Aktion):** eine Taste drückt zwei frei wählbare Tasten gleichzeitig (z. B. `Shift` + `.` = `:` auf deutschem macOS) — PR #5.
 
 ## Als Nächstes geplant (Reihenfolge laut Nutzer)
 
-1. **Zwei-Tasten-Aktion:** eine Taste drückt zwei frei wählbare Tasten gleichzeitig (z. B. `Shift` + `.` = `:` auf deutschem macOS, oder `A` + `S`). Braucht einen neuen Aktionscode-Bereich in Firmware, `server.py`-Codegen und App.
-2. **Tap-Dance / Doppel-Tippen:** zweimal schnell tippen löst eine zweite Aktion aus.
+1. **Tap-Dance / Doppel-Tippen:** zweimal schnell tippen löst eine zweite Aktion aus.
 
 ## App (Configurator)
 
-- **Besserer Keycode-Picker:** im Dropdown fehlen Zeichen wie `:` und `+` (deutsches Layout braucht dafür Shift-Kombinationen). Statt eines langen `<select>` eine durchsuchbare Auswahl oder eine Bildschirm-Tastatur; hängt mit der Zwei-Tasten-Aktion zusammen.
-
+- **Besserer Keycode-Picker:** im Dropdown fehlen Zeichen wie `:` und `+` (deutsches Layout braucht dafür Shift-Kombinationen). Statt eines langen `<select>` eine durchsuchbare Auswahl oder eine Bildschirm-Tastatur; hängt mit den Tastenpaaren (PR #5) zusammen.
 - **Makro-Engine (App-Seite):** Editor für Tastenfolgen mit Verzögerung; braucht Firmware-Aktionscodes und NVS-Speicher.
 - **Profilverwaltung:** mehrere benannte Layouts lokal speichern und umschalten (heute nur ein `current_config.json` plus JSON-Export/Import).
 - **Layout-Diff vor dem Sync:** pro Taste anzeigen, was sich gegenüber dem Gerät ändert (`GET_CONFIG` mit lokalem Stand vergleichen).
 - **Ebenen-Übersicht:** alle 8 Ebenen verkleinert nebeneinander, damit transparente Tasten und Konflikte sichtbar werden.
 - **Tastatur-Bedienung im Editor:** Pfeiltasten zum Wechseln der ausgewählten Taste, Suchfeld im Keycode-Dropdown.
-- **Heatmap pro Ebene** (baut auf PR #2 auf): Zähler zusätzlich nach `layer` aus dem `KEY_PRESS`-Event trennen.
-- **Heatmap-Export** (baut auf PR #2 auf): Zähler als CSV/JSON exportieren, z. B. für Layout-Optimierung.
+- **Heatmap pro Ebene:** Zähler zusätzlich nach `layer` aus dem `KEY_PRESS`-Event trennen.
+- **Heatmap-Export:** Zähler als CSV/JSON exportieren, z. B. für Layout-Optimierung.
 - **Matrix-Test für leere Tasten:** im Test-Modus Ebene 0 erzwingen oder das reine Matrix-Event der Firmware nutzen.
 - **Flash-Port-Auswahl:** `server.py` nimmt heute den ersten `/dev/cu.usbserial*`-Port; bei mehreren Geräten den Port in der App wählen lassen.
 - **Fortschritt beim Flashen:** `arduino-cli`-Ausgabe live an die App streamen statt nur am Ende melden.

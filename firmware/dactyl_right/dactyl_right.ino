@@ -470,6 +470,11 @@ uint16_t KEYMAP[NUM_LAYERS][6][7] = {
 uint16_t HOLDMAP[NUM_LAYERS][6][7] = {};
 // [[[END_HOLDMAP]]]
 
+// Doppel-Tipp-Aktionen (Tap-Dance): 0 = keine, sonst Aktion bei zwei Tipps innerhalb von TAPPING_TERM_MS
+// [[[START_DTAPMAP]]]
+uint16_t DTAPMAP[NUM_LAYERS][6][7] = {};
+// [[[END_DTAPMAP]]]
+
 bool keyState[6][7] = {false};
 uint16_t pressedAction[6][7] = {0};
 unsigned long keyPressTime[6][7] = {0};

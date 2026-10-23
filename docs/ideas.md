@@ -8,10 +8,7 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 - **Matrix-Test (Löt- und Dioden-Tester)** als eigener Tab — PR #3.
 - **Ebenen-Werkzeuge:** Ebene kopieren, tauschen, leeren (als Snapshot vorgemerkt, rückgängig machbar) — PR #4.
 - **Tastenpaare (Zwei-Tasten-Aktion):** eine Taste drückt zwei frei wählbare Tasten gleichzeitig (z. B. `Shift` + `.` = `:` auf deutschem macOS) — PR #5.
-
-## Als Nächstes geplant (Reihenfolge laut Nutzer)
-
-1. **Tap-Dance / Doppel-Tippen:** zweimal schnell tippen löst eine zweite Aktion aus.
+- **Tap-Dance / Doppel-Tippen:** dritte Aktion pro Taste; zwei Tipps innerhalb von 200 ms lösen sie aus.
 
 ## App (Configurator)
 

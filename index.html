@@ -257,6 +257,14 @@
               <small class="form-hint">Beispiel: Kurzes Tippen = A, Festhalten (&gt; 200 ms) oder gleichzeitiges Drücken einer weiteren Taste = B, Strg oder Layer 1.</small>
             </div>
 
+            <div class="form-group">
+              <label for="dtapActionSelect">Doppel-Tipp-Aktion / Tap-Dance (Optional):</label>
+              <select id="dtapActionSelect" class="form-control">
+                <!-- Wird von app.js mit allen Aktionen befüllt -->
+              </select>
+              <small class="form-hint">Zwei Tipps innerhalb von 200 ms lösen diese Aktion aus. Ein einzelner Tipp dieser Taste wird dann erst nach 200 ms gesendet. Wirkt nur mit einer Tap-Aktion.</small>
+            </div>
+
             <div class="inspector-actions">
               <button id="btnApplyKey" class="btn btn-primary btn-sm">Änderung übernehmen</button>
             </div>

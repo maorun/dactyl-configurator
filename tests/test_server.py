@@ -76,7 +76,7 @@ class TestServerAndCodegen(unittest.TestCase):
     def test_code_to_cpp_backslash_survives_ino_substitution(self):
         # Regression: re.sub-Ersatztext darf '\\\\' nicht zu '\\' (ungültiges C++ '\') machen
         layers = [[[{"tap": "KEY_BACKSLASH", "hold": "NONE"}]]]
-        content = "a\n// [[[START_KEYMAP]]]\nold\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\nb"
+        content = "a\n// [[[START_KEYMAP]]]\nold\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n// [[[START_DTAPMAP]]]\n// [[[END_DTAPMAP]]]\nb"
         out = server.render_ino_content(content, {"layers": layers})
         self.assertIn("'\\\\'", out)
         self.assertNotIn("'\\'", out.replace("'\\\\'", ""))
@@ -95,6 +95,26 @@ class TestServerAndCodegen(unittest.TestCase):
         # Hold ohne Tap wirkt wie eine normale Taste und landet in KEYMAP
         self.assertIn("ACT_MO_1", keymap)
         self.assertNotIn("ACT_MO_1", holdmap)
+
+    def test_dtapmap_codegen(self):
+        layers = [[[{"tap": "KEY_J", "hold": "MOD_LCTRL", "dtap": "KEY_ESC"},
+                    {"tap": "NONE", "hold": "NONE", "dtap": "KEY_TAB"},
+                    {"tap": "KEY_K", "dtap": 5},
+                    "KEY_L"]]]
+        dtapmap = server.generate_dtapmap_cpp(layers)
+        self.assertIn("uint16_t DTAPMAP[NUM_LAYERS][6][7]", dtapmap)
+        self.assertIn("KEY_ESC", dtapmap)
+        # Doppel-Tipp ohne Tap-Aktion bleibt ohne Wirkung, ungültige Typen werden 0
+        self.assertNotIn("KEY_TAB", dtapmap)
+        self.assertEqual(server.cell_actions({"tap": "KEY_K", "dtap": 5}), ("KEY_K", "NONE", "NONE"))
+        self.assertEqual(server.cell_actions("KEY_L"), ("KEY_L", "NONE", "NONE"))
+        self.assertNotIn("KEY_ESC", server.generate_keymap_cpp(layers))
+        self.assertNotIn("KEY_ESC", server.generate_holdmap_cpp(layers))
+
+    def test_render_ino_requires_dtapmap_marker(self):
+        content = "// [[[START_KEYMAP]]]\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]"
+        with self.assertRaises(ValueError):
+            server.render_ino_content(content, {"layers": [[]]})
 
     def test_combo_injection_rejected(self):
         bad = [{"key1": {"r": "0}; system(\"x\"); //", "c": 1}, "key2": {"r": 2, "c": 2}, "action": "KEY_ESC"}]
@@ -124,7 +144,7 @@ class TestServerAndCodegen(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cfg_path = os.path.join(d, "current_config.json")
             ino_path = os.path.join(d, "dactyl_right.ino")
-            original_ino = "// [[[START_KEYMAP]]]\nx\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n// [[[START_DEFAULTS_ID]]]\n// [[[END_DEFAULTS_ID]]]\n"
+            original_ino = "// [[[START_KEYMAP]]]\nx\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n// [[[START_DTAPMAP]]]\n// [[[END_DTAPMAP]]]\n// [[[START_DEFAULTS_ID]]]\n// [[[END_DEFAULTS_ID]]]\n"
             with open(ino_path, "w") as f:
                 f.write(original_ino)
             with open(cfg_path, "w") as f:
@@ -149,7 +169,7 @@ class TestServerAndCodegen(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cfg_path = os.path.join(d, "current_config.json")
             ino_path = os.path.join(d, "dactyl_right.ino")
-            original_ino = "// [[[START_KEYMAP]]]\nx\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n// [[[START_DEFAULTS_ID]]]\n// [[[END_DEFAULTS_ID]]]\n"
+            original_ino = "// [[[START_KEYMAP]]]\nx\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n// [[[START_DTAPMAP]]]\n// [[[END_DTAPMAP]]]\n// [[[START_DEFAULTS_ID]]]\n// [[[END_DEFAULTS_ID]]]\n"
             with open(ino_path, "w") as f:
                 f.write(original_ino)
             with open(cfg_path, "w") as f:
@@ -285,7 +305,7 @@ class TestServerAndCodegen(unittest.TestCase):
             cfg = json.load(f)
         server.validate_config(cfg)
         out = server.render_ino_content(content, cfg)
-        for marker in ("KEYMAP", "HOLDMAP", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "SETTINGS"):
+        for marker in ("KEYMAP", "HOLDMAP", "DTAPMAP", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "SETTINGS"):
             self.assertEqual(out.count(f"// [[[START_{marker}]]]"), 1)
         out = server.render_ino_content(content, dict(cfg, keyPairs=[{"first": "KEY_LEFT_SHIFT", "second": "KEY_PERIOD"}]))
         self.assertIn("uint8_t numKeyPairs = 1;", out)

@@ -42,6 +42,7 @@ static ComboRuntime comboRuntime[MAX_COMBOS];
 
 static uint16_t KEYMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t HOLDMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+static uint16_t DTAPMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static String layerNames[NUM_LAYERS] = {
   "Base", "Nav & Pfeile", "Symbole", "Numpad",
   "Function", "Media", "Shortcuts", "Custom"
@@ -124,8 +125,9 @@ void resetState() {
   }
   for (int l = 0; l < NUM_LAYERS; l++)
     for (int r = 0; r < NUM_ROWS; r++)
-      for (int c = 0; c < NUM_COLS; c++) HOLDMAP[l][r][c] = 0;
+      for (int c = 0; c < NUM_COLS; c++) { HOLDMAP[l][r][c] = 0; DTAPMAP[l][r][c] = 0; }
   resetTapHold();
+  resetDoubleTap();
   numCombos = 0;
   numKeyPairs = 0;
   for (int i = 0; i < MAX_KEY_PAIRS; i++) userKeyPairs[i] = { 0, 0 };
@@ -1408,6 +1410,287 @@ TEST(test_app_flash_discards_stored_key_pairs) {
   userKeyPairs[0] = { 131, 97 };
   loadKeymapFromNVS();
   assert(userKeyPairs[0].first == 128 && userKeyPairs[0].second == 99);
+}
+
+// -----------------------------------------------------------------------------
+// Doppel-Tipp (Tap-Dance): Hilfsfunktionen
+// -----------------------------------------------------------------------------
+static void tapKeyAt(uint8_t r, uint8_t c, unsigned long downAt, unsigned long upAt) {
+  setMillis(downAt);
+  keyState[r][c] = true;
+  onMatrixKeyChange(r, c, true);
+  setMillis(upAt);
+  keyState[r][c] = false;
+  onMatrixKeyChange(r, c, false);
+}
+
+static size_t countPresses(uint8_t key) {
+  size_t n = 0;
+  for (uint8_t k : bleKeyboard.pressHistory) if (k == key) n++;
+  return n;
+}
+
+// -----------------------------------------------------------------------------
+// Test 40: Einzel-Tipp einer Doppel-Tipp-Taste wird erst nach dem Tapping-Term gesendet
+// -----------------------------------------------------------------------------
+TEST(test_double_tap_single_tap_sent_after_window) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 177", false); // J: Tap = j, Doppel-Tipp = Esc
+  assert(DTAPMAP[0][2][1] == KEY_ESC);
+  tapKeyAt(2, 1, 1000, 1050);
+  assert(bleKeyboard.pressHistory.empty());            // wartet auf zweiten Tipp
+  setMillis(1050 + TAPPING_TERM_MS - 1);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressHistory.empty());
+  setMillis(1050 + TAPPING_TERM_MS);
+  processDeferredKeys(millis());
+  assert(countPresses('j') == 1);
+  assert(countPresses(KEY_ESC) == 0);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(!doubleTap[2][1].waiting);
+}
+
+// -----------------------------------------------------------------------------
+// Test 41: Zwei Tipps innerhalb des Tapping-Terms senden nur die Doppel-Tipp-Aktion
+// -----------------------------------------------------------------------------
+TEST(test_double_tap_sends_dtap_action) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 177", false);
+  tapKeyAt(2, 1, 1000, 1050);
+  setMillis(1100);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == KEY_ESC); // gehalten
+  setMillis(1500);
+  processDeferredKeys(millis());                       // langes Halten wird nicht zu Hold oder Tap
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+  setMillis(2000);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_ESC) == 1);
+  assert(countPresses('j') == 0);
+  assert(!doubleTap[2][1].active && !doubleTap[2][1].waiting);
+}
+
+// -----------------------------------------------------------------------------
+// Test 42: Eine andere Taste sendet den wartenden Tipp vorher (Zeichenreihenfolge bleibt)
+// -----------------------------------------------------------------------------
+TEST(test_double_tap_flushed_before_other_key) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 177", false);
+  KEYMAP[0][2][0] = 'h';
+  tapKeyAt(2, 1, 1000, 1050);
+  tapKeyAt(2, 0, 1080, 1120);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'j');
+  assert(bleKeyboard.pressHistory[1] == 'h');
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 43: Zweiter Druck nach Ablauf des Fensters, aber vor dem Tick: zwei Einzel-Tipps
+// -----------------------------------------------------------------------------
+TEST(test_double_tap_late_second_press_is_two_taps) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 177", false);
+  tapKeyAt(2, 1, 1000, 1050);
+  tapKeyAt(2, 1, 1050 + TAPPING_TERM_MS, 1050 + TAPPING_TERM_MS + 40);
+  assert(countPresses('j') == 1);                      // erster Tipp nachgeholt, zweiter wartet
+  assert(doubleTap[2][1].waiting);
+  setMillis(2000);
+  processDeferredKeys(millis());
+  assert(countPresses('j') == 2);
+  assert(countPresses(KEY_ESC) == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 44: Tap, Halten und Doppel-Tipp auf derselben Taste
+// -----------------------------------------------------------------------------
+TEST(test_double_tap_with_hold_action) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 128 177", false); // J: Tap j, Hold Ctrl, Doppel-Tipp Esc
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1000 + TAPPING_TERM_MS);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == KEY_LEFT_CTRL);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(!doubleTap[2][1].waiting);                    // Hold startet kein Doppel-Tipp-Fenster
+  setMillis(2000);
+  processDeferredKeys(millis());
+  assert(countPresses('j') == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 45: Doppel-Tipp-Taste ohne Halte-Aktion verhält sich beim Halten wie eine normale Taste
+// -----------------------------------------------------------------------------
+TEST(test_double_tap_without_hold_holds_tap_action) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 177", false);
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1000 + TAPPING_TERM_MS);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'j');
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(!doubleTap[2][1].waiting);
+}
+
+// -----------------------------------------------------------------------------
+// Test 46: Doppel-Tipp ohne Tap-Aktion bleibt wirkungslos, Transparenz berücksichtigt alle drei Aktionen
+// -----------------------------------------------------------------------------
+TEST(test_double_tap_resolve_actions) {
+  resetState();
+  uint16_t tap, hold, dtap;
+  DTAPMAP[1][2][1] = KEY_ESC;                          // Layer 1: nur Doppel-Tipp, kein Tap
+  KEYMAP[0][2][1] = 'j';
+  resolveKeyActions(1, 2, 1, tap, hold, dtap);
+  assert(tap == 0 && hold == 0 && dtap == 0);          // nicht transparent, ohne Wirkung
+  HOLDMAP[1][2][1] = KEY_LEFT_CTRL;                    // Hold ohne Tap: normale Taste, kein Doppel-Tipp
+  resolveKeyActions(1, 2, 1, tap, hold, dtap);
+  assert(tap == KEY_LEFT_CTRL && hold == 0 && dtap == 0);
+  DTAPMAP[0][2][1] = KEY_TAB;
+  resolveKeyActions(2, 2, 1, tap, hold, dtap);         // Layer 2 leer: Fallback auf Layer 0
+  assert(tap == 'j' && hold == 0 && dtap == KEY_TAB);
+}
+
+// -----------------------------------------------------------------------------
+// Test 47: Taste ohne Doppel-Tipp-Aktion sendet weiterhin sofort
+// -----------------------------------------------------------------------------
+TEST(test_key_without_double_tap_is_immediate) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 0", false);
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'j');
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(!doubleTap[2][1].waiting);
+}
+
+// -----------------------------------------------------------------------------
+// Test 48: Combo aus zwei Doppel-Tipp-Tasten sendet weder Einzel- noch Doppel-Tipp
+// -----------------------------------------------------------------------------
+TEST(test_combo_cancels_double_tap_keys) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  handleConfigCommand("SET_K 0 2 1 106 0 9", false);     // J: Doppel-Tipp Tab
+  handleConfigCommand("SET_K 0 2 2 107 0 9", false);     // K: Doppel-Tipp Tab
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1010);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  setMillis(1050);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  keyState[2][2] = false;
+  onMatrixKeyChange(2, 2, false);
+  checkUserCombos();
+  setMillis(1600);
+  processDeferredKeys(millis());
+  assert(countPresses('j') == 0 && countPresses('k') == 0 && countPresses(KEY_TAB) == 0);
+  assert(!doubleTap[2][1].waiting && !doubleTap[2][2].waiting);
+}
+
+// -----------------------------------------------------------------------------
+// Test 48b: Combo nimmt eine aktive (zweiter Tipp, gehalten) Doppel-Tipp-Aktion zurück
+// -----------------------------------------------------------------------------
+TEST(test_combo_cancels_active_double_tap) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 120", false); // J + K -> x
+  handleConfigCommand("SET_K 0 2 1 106 0 257", false);   // J: Doppel-Tipp MO_1
+  KEYMAP[0][2][2] = 'k';
+  tapKeyAt(2, 1, 1000, 1050);
+  setMillis(1100);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);            // zweiter Tipp: MO_1 aktiv
+  assert(doubleTap[2][1].active);
+  assert(getActiveLayer() == 1);
+  setMillis(1110);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);
+  checkUserCombos();                        // J + K innerhalb 40 ms -> Combo gewinnt
+  assert(comboRuntime[0].active);
+  assert(!doubleTap[2][1].active);
+  assert(getActiveLayer() == 0);            // MO_1 zurückgenommen
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(getActiveLayer() == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 49: SET_KEY / GET_CONFIG übertragen die Doppel-Tipp-Aktion, SAVE_NVS speichert sie
+// -----------------------------------------------------------------------------
+TEST(test_double_tap_commands_and_persistence) {
+  resetState();
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 1 2 1 106 128 177", false);
+  assert(mockChar.value == "OK SET_KEY 1 2 1 106 128 177");
+  assert(DTAPMAP[1][2][1] == KEY_ESC);
+  handleConfigCommand("SET_KEY 1 2 1 106 128", false); // ohne dtap: Doppel-Tipp wird gelöscht
+  assert(DTAPMAP[1][2][1] == 0);
+  handleConfigCommand("SET_K 1 2 1 106 128 177 5", false);
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);    // zu viele Argumente
+  handleConfigCommand("SET_K 1 2 1 106 128 65536", false);
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("SET_K 1 2 1 106 128 177", false);
+  handleConfigCommand("SAVE_NVS", false);
+  assert(mockChar.value == "OK SAVE_NVS");
+
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool foundDtap = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n.rfind("DTAP_DATA:{\"l\":1,", 0) == 0 && n.find("[0,177,0,0,0,0,0]") != std::string::npos) foundDtap = true;
+  }
+  assert(foundDtap);
+  assert(mockChar.notifications.back() == "CONFIG_SYNC_DONE");
+
+  KEYMAP[1][2][1] = 0;                                  // Neustart: einkompilierte Defaults im RAM
+  HOLDMAP[1][2][1] = 0;
+  DTAPMAP[1][2][1] = 0;
+  loadKeymapFromNVS();                                  // gleiche Defaults: NVS-Belegung bleibt
+  assert(DTAPMAP[1][2][1] == KEY_ESC);
+}
+
+// -----------------------------------------------------------------------------
+// Test 50: Update von Firmware ohne Doppel-Tipp behält die Belegung und ergänzt die dtapmap
+// -----------------------------------------------------------------------------
+TEST(test_update_without_dtapmap_keeps_keymap) {
+  resetState();
+  // Zustand der Vorgänger-Firmware: keymap + holdmap + defaults_fp über KEYMAP, HOLDMAP und ID
+  uint16_t userMap[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+  userMap[0][2][2] = 'q';
+  preferences.putBytes("keymap", userMap, sizeof(userMap));
+  preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP));
+  uint32_t h = 2166136261u;
+  const uint32_t id = 0;
+  const uint8_t* parts[3] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, (const uint8_t*)&id };
+  const size_t sizes[3] = { sizeof(KEYMAP), sizeof(HOLDMAP), sizeof(id) };
+  for (int p = 0; p < 3; p++)
+    for (size_t i = 0; i < sizes[p]; i++) { h ^= parts[p][i]; h *= 16777619u; }
+  preferences.putUInt("defaults_fp", h);
+
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][2][2] == 'q');                      // Belegung des Nutzers bleibt erhalten
+  assert(preferences.getBytesLength("dtapmap") == sizeof(DTAPMAP));
+  assert(Preferences::uintStore["defaults_fp"] == h);
+
+  // Eine belegte DTAPMAP verändert den Fingerprint: neue App-Defaults werden übernommen
+  DTAPMAP[0][2][2] = KEY_ESC;
+  assert(keymapDefaultsFingerprint() != h);
 }
 
 int main() {

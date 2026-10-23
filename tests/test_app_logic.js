@@ -18,7 +18,7 @@ function section(startMarker, endMarker) {
 const code = [
   section("const DEFAULT_LAYER_NAMES", "// BLE GATT"),
   section("const ACTION_TO_NUMERIC", "// Standard-Konfiguration"),
-  section("// Matrix- und Firmware-Grenzen", "// State"),
+  section("// Matrix- und Firmware-Grenzen", "// State\n"),
   section("// Alte Configs speichern Modifier-Halte-Aktionen", "function fillKeycodeSelect")
 ].join("\n");
 
@@ -28,6 +28,7 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
+             createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest,
              MATRIX_ROW_WIRES, MATRIX_COL_WIRES,
              applyLayerOperation, transparentLayer, isUndoBlocked };`, ctx);
@@ -138,6 +139,66 @@ test("Physische Tasten: R4C0 und R5C5 existieren nicht", () => {
   assert.ok(!api.isPhysicalKey(5, 5));
   assert.ok(api.isPhysicalKey(5, 6));
   assert.ok(api.isPhysicalKey(0, 0));
+});
+
+test("Heatmap: nur physische Tasten der Matrix werden gezählt", () => {
+  const s = api.createTypingStats(null);
+  assert.strictEqual(api.recordKeyPress(s, 2, 1, 0), true);
+  assert.strictEqual(api.recordKeyPress(s, 2, 1, 10), true);
+  assert.strictEqual(api.recordKeyPress(s, 4, 0, 20), false); // R4C0 existiert nicht
+  assert.strictEqual(api.recordKeyPress(s, 5, 5, 20), false); // R5C5 existiert nicht
+  assert.strictEqual(api.recordKeyPress(s, 6, 0, 20), false);
+  assert.strictEqual(api.recordKeyPress(s, "2", 1, 20), false);
+  assert.deepStrictEqual({ ...s.counts }, { "2_1": 2 });
+  assert.strictEqual(s.total, 2);
+});
+
+test("Heatmap: gespeicherte Zähler werden validiert", () => {
+  // JSON.parse erzeugt "__proto__" als eigenen Schlüssel (wie localStorage-Daten)
+  const s = api.createTypingStats(JSON.parse('{"0_0": 3, "4_0": 9, "9_9": 1, "1_1": -2, "2_2": 1.5, "__proto__": 4, "x": 1, "5_6": 2}'));
+  assert.deepStrictEqual({ ...s.counts }, { "0_0": 3, "5_6": 2 });
+  assert.ok(!Object.prototype.hasOwnProperty.call(s.counts, "__proto__"));
+  assert.strictEqual(typeof Object.getPrototypeOf(s.counts).hasOwnProperty, "function");
+  assert.strictEqual(s.total, 5);
+  assert.strictEqual(api.createTypingStats("kaputt").total, 0);
+  assert.strictEqual(api.createTypingStats([1, 2]).total, 0);
+});
+
+test("WPM: gleitendes 60-s-Fenster mit 5 Anschlägen pro Wort", () => {
+  const s = api.createTypingStats(null);
+  for (let i = 0; i < 50; i++) api.recordKeyPress(s, 0, 1, i * 100);
+  assert.strictEqual(api.computeWpm(s, 5000), 10);
+  // Anschläge älter als das Fenster fallen heraus
+  assert.strictEqual(api.computeWpm(s, api.WPM_WINDOW_MS + 2400), 5);
+  assert.strictEqual(api.computeWpm(s, api.WPM_WINDOW_MS + 10000), 0);
+  // Gesamtzähler bleibt unabhängig vom Fenster
+  assert.strictEqual(s.total, 50);
+});
+
+test("WPM: Fenstergrenze und Zeitstempel in falscher Reihenfolge", () => {
+  const s = api.createTypingStats(null);
+  for (let i = 0; i < 5; i++) api.recordKeyPress(s, 1, 1, 1000);
+  // Genau WPM_WINDOW_MS alt: Anschlag liegt außerhalb des Fensters
+  assert.strictEqual(api.computeWpm(s, 1000 + api.WPM_WINDOW_MS - 1), 1);
+  assert.strictEqual(api.computeWpm(s, 1000 + api.WPM_WINDOW_MS), 0);
+  assert.strictEqual(s.recent.length, 0);
+  // Ein älterer Zeitstempel verwirft keine neueren Anschläge
+  for (let i = 0; i < 5; i++) api.recordKeyPress(s, 1, 1, 200000);
+  assert.strictEqual(api.computeWpm(s, 150000), 1);
+  // recordKeyPress kürzt das Fenster selbst
+  api.recordKeyPress(s, 1, 1, 200000 + api.WPM_WINDOW_MS);
+  assert.strictEqual(s.recent.length, 1);
+});
+
+test("Heatmap: Stufen skalieren relativ zur häufigsten Taste", () => {
+  assert.strictEqual(api.heatLevel(0, 10), 0);
+  assert.strictEqual(api.heatLevel(5, 0), 0);
+  assert.strictEqual(api.heatLevel(1, 100), 1);
+  assert.strictEqual(api.heatLevel(50, 100), 3);
+  assert.strictEqual(api.heatLevel(100, 100), api.HEAT_LEVELS);
+  const s = api.createTypingStats({ "0_0": 3, "1_1": 7 });
+  assert.strictEqual(api.maxKeyCount(s), 7);
+  assert.strictEqual(api.maxKeyCount(api.createTypingStats(null)), 0);
 });
 
 test("Matrix-Test: 35 verlötete Schalter (29 Finger + 6 Daumen ohne R4C0/R5C5)", () => {

@@ -32,7 +32,8 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest,
              MATRIX_ROW_WIRES, MATRIX_COL_WIRES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
-             ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel };`, ctx);
+             ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
+             applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell };`, ctx);
 const api = ctx.api;
 
 let passed = 0;
@@ -43,15 +44,15 @@ function test(name, fn) {
 }
 
 test("Mod-Tap: Tap und Hold werden als Zahlencodes gesendet", () => {
-  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_SPACE", hold: "MOD_LCTRL" }) }, { tapCode: 32, holdCode: 0x80 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_SPACE", hold: "MOD_LCTRL" }) }, { tapCode: 32, holdCode: 0x80, dtapCode: 0 });
   // Hold ohne Tap wirkt wie eine normale Taste
-  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "NONE", hold: "MO_1" }) }, { tapCode: 0x101, holdCode: 0 });
-  assert.deepStrictEqual({ ...api.keyToNumericActions(undefined) }, { tapCode: 0, holdCode: 0 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "NONE", hold: "MO_1" }) }, { tapCode: 0x101, holdCode: 0, dtapCode: 0 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions(undefined) }, { tapCode: 0, holdCode: 0, dtapCode: 0 });
   // Beliebige Halte-Aktion: Tap A / Halten B, Media, Maus, Toggle-Layer
-  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "KEY_B" }) }, { tapCode: 97, holdCode: 98 });
-  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "MEDIA_MUTE" }) }, { tapCode: 97, holdCode: 0x121 });
-  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "MOUSE_LEFT" }) }, { tapCode: 97, holdCode: 0x130 });
-  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "TG_2" }) }, { tapCode: 97, holdCode: 0x112 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "KEY_B" }) }, { tapCode: 97, holdCode: 98, dtapCode: 0 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "MEDIA_MUTE" }) }, { tapCode: 97, holdCode: 0x121, dtapCode: 0 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "MOUSE_LEFT" }) }, { tapCode: 97, holdCode: 0x130, dtapCode: 0 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "TG_2" }) }, { tapCode: 97, holdCode: 0x112, dtapCode: 0 });
 });
 
 test("Halte-Dropdown: alte MOD_*-Werte entsprechen den KEY_*-Modifiern", () => {
@@ -254,8 +255,8 @@ test("Tastenpaar: PAIR_<n> wird zu ACT_KEY_PAIR_BASE + n und zurück", () => {
   assert.strictEqual(api.findDefinitionByCode(0x143).tap, "PAIR_3");
   assert.strictEqual(api.findDefinitionByCode(0x143).label, "Paar 3");
   // Als Tap- und als Halte-Aktion für SET_K
-  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "PAIR_2", hold: "PAIR_5" }) }, { tapCode: 0x142, holdCode: 0x145 });
-  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "PAIR_1" }) }, { tapCode: 97, holdCode: 0x141 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "PAIR_2", hold: "PAIR_5" }) }, { tapCode: 0x142, holdCode: 0x145, dtapCode: 0 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "PAIR_1" }) }, { tapCode: 97, holdCode: 0x141, dtapCode: 0 });
 });
 
 test("Tastenpaar: nur normale Tasten und Modifier sind erlaubt", () => {
@@ -348,6 +349,48 @@ test("Rückgängig: Änderungen vor einem neueren Snapshot sind gesperrt", () =>
   const swapped = api.applyLayerOperation(layers, "swap", 2, 5);
   assert.strictEqual(JSON.stringify(layers), before);
   assert.notStrictEqual(JSON.stringify(swapped), before);
+});
+
+test("Doppel-Tipp: Code wird mitgesendet, ohne Tap-Aktion ist er 0", () => {
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_J", hold: "KEY_LEFT_CTRL", dtap: "KEY_ESC" }) },
+    { tapCode: 106, holdCode: 0x80, dtapCode: 0xB1 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_J", hold: "NONE", dtap: "PAIR_3" }) },
+    { tapCode: 106, holdCode: 0, dtapCode: 0x143 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "NONE", hold: "NONE", dtap: "KEY_ESC" }) },
+    { tapCode: 0, holdCode: 0, dtapCode: 0 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "NONE", hold: "MO_1", dtap: "KEY_ESC" }) },
+    { tapCode: 0x101, holdCode: 0, dtapCode: 0 });
+});
+
+test("Doppel-Tipp: normalizeKeyCell und transparentLayer führen das Feld dtap", () => {
+  assert.strictEqual(api.normalizeKeyCell({ tap: "KEY_J", dtap: "KEY_ESC" }).dtap, "KEY_ESC");
+  assert.strictEqual(api.normalizeKeyCell({ tap: "KEY_J", dtap: 5 }).dtap, "NONE");
+  assert.strictEqual(api.normalizeKeyCell({ tap: "KEY_J" }).dtap, "NONE");
+  assert.strictEqual(api.normalizeKeyCell(null).dtap, "NONE");
+  assert.strictEqual(api.transparentLayer()[0][0].dtap, "NONE");
+  const n = api.normalizeConfig({ layers: [[[{ label: "J", tap: "KEY_J", hold: "NONE", dtap: "KEY_ESC" }]]] });
+  assert.strictEqual(n.layers[0][0][0].dtap, "KEY_ESC");
+});
+
+test("Doppel-Tipp: GET_CONFIG-Matrizen setzen Tap, Halten und Doppel-Tipp", () => {
+  const layers = [];
+  const row = (v) => [v, 0, 0, 0, 0, 0, 0];
+  assert.ok(api.applyMatrixData(layers, api.MATRIX_DATA_FIELDS["LAYER_DATA:"], { l: 1, k: [row(106)] }));
+  assert.ok(api.applyMatrixData(layers, api.MATRIX_DATA_FIELDS["HOLD_DATA:"], { l: 1, k: [row(0x80)] }));
+  assert.ok(api.applyMatrixData(layers, api.MATRIX_DATA_FIELDS["DTAP_DATA:"], { l: 1, k: [row(0xB1)] }));
+  const key = layers[1][0][0];
+  assert.strictEqual(key.tap, "KEY_J");
+  assert.strictEqual(api.actionCodeToNumeric(key.hold), 0x80);
+  assert.strictEqual(key.dtap, "KEY_ESC");
+  assert.strictEqual(layers[1][0][1].dtap, "NONE");
+  // Neues LAYER_DATA setzt Halten und Doppel-Tipp zurück (sie folgen danach erneut)
+  api.applyMatrixData(layers, "tap", { l: 1, k: [row(107)] });
+  assert.strictEqual(layers[1][0][0].dtap, "NONE");
+  // Ungültige Daten werden abgelehnt
+  assert.strictEqual(api.applyMatrixData(layers, "dtap", { l: 8, k: [] }), false);
+  assert.strictEqual(api.applyMatrixData(layers, undefined, { l: 0, k: [] }), false);
+  api.applyMatrixData(layers, "dtap", { l: 1, k: [[70000, -1, 1.5]] });
+  assert.strictEqual(layers[1][0][0].dtap, "NONE");
 });
 
 console.log(`\n${passed} app.js-Tests bestanden.`);

@@ -10,7 +10,7 @@
  * Die einbindende Übersetzungseinheit muss VOR dem #include deklarieren:
  *   NUM_LAYERS, NUM_ROWS, NUM_COLS, MAX_COMBOS, CONFIG_MODE_MAGIC,
  *   KeyCombo, ComboRuntime, comboRuntime[], userCombos[], numCombos,
- *   KEYMAP[][][], HOLDMAP[][][], layerNames[],
+ *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], layerNames[],
  *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
  *   momentaryLayers[], toggleLayers[], keyState[][], pressedAction[][],
  *   keyPressTime[][], keySentToHost[][],
@@ -37,19 +37,28 @@ uint8_t getActiveLayer() {
   return 0;
 }
 
-// Ermittelt Tap- und Halte-Aktion einer Taste inkl. transparentem Fallback auf Layer 0.
-// Eine Taste nur mit Halte-Aktion (Tap = 0) verhält sich wie eine normale Taste.
-void resolveKeyActions(uint8_t layer, uint8_t r, uint8_t c, uint16_t &tapAct, uint16_t &holdAct) {
+// Ermittelt Tap-, Halte- und Doppel-Tipp-Aktion einer Taste inkl. transparentem Fallback auf Layer 0.
+// Transparent ist eine Taste nur, wenn alle drei Aktionen 0 sind. Eine Taste nur mit Halte-Aktion
+// (Tap = 0) verhält sich wie eine normale Taste. Doppel-Tipp ohne Tap-Aktion bleibt ohne Wirkung.
+void resolveKeyActions(uint8_t layer, uint8_t r, uint8_t c, uint16_t &tapAct, uint16_t &holdAct, uint16_t &dtapAct) {
   tapAct = KEYMAP[layer][r][c];
   holdAct = HOLDMAP[layer][r][c];
-  if (tapAct == 0 && holdAct == 0) {
+  dtapAct = DTAPMAP[layer][r][c];
+  if (tapAct == 0 && holdAct == 0 && dtapAct == 0) {
     tapAct = KEYMAP[0][r][c];
     holdAct = HOLDMAP[0][r][c];
+    dtapAct = DTAPMAP[0][r][c];
   }
+  if (tapAct == 0) dtapAct = 0;
   if (tapAct == 0 && holdAct != 0) {
     tapAct = holdAct;
     holdAct = 0;
   }
+}
+
+void resolveKeyActions(uint8_t layer, uint8_t r, uint8_t c, uint16_t &tapAct, uint16_t &holdAct) {
+  uint16_t dtapAct;
+  resolveKeyActions(layer, r, c, tapAct, holdAct, dtapAct);
 }
 
 // Solange beide Config-Combo-Tasten gehalten werden, senden diese beiden Tasten nichts an den Host
@@ -306,6 +315,76 @@ void tapHoldOnPress(uint8_t r, uint8_t c, uint16_t tapAct, uint16_t holdAct, uin
   tapHold[r][c] = { true, false, tapAct, holdAct, layer, now };
 }
 
+// -----------------------------------------------------------------------------
+// Doppel-Tipp (Tap-Dance): zweiter Tipp innerhalb von TAPPING_TERM_MS nach dem ersten Loslassen
+// -----------------------------------------------------------------------------
+// Ein erster Tipp einer Taste mit Doppel-Tipp-Aktion wird zurückgehalten (waiting). Kommt der zweite
+// Druck rechtzeitig, löst er die Doppel-Tipp-Aktion aus (active, solange gehalten). Sonst wird der
+// erste Tipp nachträglich als normaler Tipp gesendet: nach Ablauf des Fensters oder sofort, wenn eine
+// andere Taste gedrückt wird (Reihenfolge der Zeichen bleibt erhalten).
+struct DoubleTapKey {
+  bool waiting;          // Erster Tipp losgelassen, wartet auf zweiten Druck
+  bool active;           // Doppel-Tipp-Aktion ist gedrückt
+  uint16_t tapAction;    // Aufgeschobener Einzel-Tipp
+  uint16_t dtapAction;
+  uint8_t layer;
+  unsigned long pressTime;     // Anschlag des ersten Tipps (für die Combo-Grace-Prüfung beim Nachholen)
+  unsigned long releaseTime;
+};
+DoubleTapKey doubleTap[NUM_ROWS][NUM_COLS];
+// Beim Anschlag aufgelöste Doppel-Tipp-Aktion (ein Layer-Wechsel während des Haltens ändert sie nicht)
+uint16_t tapHoldDtap[NUM_ROWS][NUM_COLS];
+
+void resetDoubleTap() {
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      doubleTap[r][c] = { false, false, 0, 0, 0, 0, 0 };
+      tapHoldDtap[r][c] = 0;
+    }
+  }
+}
+
+void sendKeyReleaseNotification(uint8_t r, uint8_t c) {
+  char buf[64];
+  snprintf(buf, sizeof(buf), "KEY_RELEASE:{\"r\":%d,\"c\":%d}", r, c);
+  sendConfigNotification(String(buf));
+}
+
+// Wartenden Einzel-Tipp jetzt als normalen Tipp senden
+void flushDoubleTap(uint8_t r, uint8_t c) {
+  DoubleTapKey &d = doubleTap[r][c];
+  if (!d.waiting) return;
+  d.waiting = false;
+  // Der Tipp gehört zum ersten Anschlag: dessen Zeitstempel für wasComboRecentlyActive() herstellen
+  unsigned long savedPressTime = keyPressTime[r][c];
+  keyPressTime[r][c] = d.pressTime;
+  dispatchPress(r, c, d.tapAction, d.layer);
+  dispatchRelease(r, c, d.tapAction);
+  keyPressTime[r][c] = savedPressTime;
+  // Die UI hat KEY_RELEASE schon beim Loslassen erhalten; nach dem späten KEY_PRESS erneut senden
+  sendKeyReleaseNotification(r, c);
+}
+
+// Eine andere Taste wird gedrückt: wartende Einzel-Tipps vorher senden
+void flushDoubleTapsExcept(uint8_t exceptR, uint8_t exceptC) {
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (r == exceptR && c == exceptC) continue;
+      flushDoubleTap(r, c);
+    }
+  }
+}
+
+void doubleTapTick(unsigned long now) {
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (doubleTap[r][c].waiting && (unsigned long)(now - doubleTap[r][c].releaseTime) >= TAPPING_TERM_MS) {
+        flushDoubleTap(r, c);
+      }
+    }
+  }
+}
+
 // true, wenn (r, c) mit einer bereits gedrückten Partnertaste innerhalb von comboTimeoutMs eine Combo bildet.
 // Diese Combo wird im selben Scan von checkUserCombos() ausgelöst.
 bool hasPressedComboPartnerInWindow(uint8_t r, uint8_t c) {
@@ -327,6 +406,8 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
   if (!k.pending) return;
   k.pending = false;
   k.holdActive = true;
+  // Taste nur mit Doppel-Tipp-Aktion (ohne Halte-Aktion): Halten drückt die Tap-Aktion wie eine normale Taste
+  if (k.holdAction == 0) k.holdAction = k.tapAction;
   dispatchPress(r, c, k.holdAction, k.layer);
   // Die Hold-Entscheidung ist endgültig: eine als Combo-Kandidat gepufferte Halte-Aktion
   // (z. B. Ctrl) sofort an den Host senden, damit sie VOR der abhängigen Taste ankommt.
@@ -360,6 +441,7 @@ void releaseHeldKeyPairs() {
       keySentToHost[r][c] = false;
       pressedAction[r][c] = 0;
       tapHold[r][c].holdActive = false;
+      doubleTap[r][c].active = false;
     }
   }
 }
@@ -375,6 +457,12 @@ void cancelTapHoldForCombo(uint8_t r, uint8_t c) {
     dispatchRelease(r, c, k.holdAction);
   }
   k.pending = false;
+  DoubleTapKey &d = doubleTap[r][c];
+  if (d.active) {
+    d.active = false;
+    keySentToHost[r][c] = false;
+    dispatchRelease(r, c, d.dtapAction);
+  }
 }
 
 // Eine andere Taste wurde gedrückt, während Mod-Tap-Tasten noch unentschieden sind:
@@ -388,8 +476,9 @@ void resolvePendingTapHoldsAsHold(uint8_t exceptR, uint8_t exceptC) {
   }
 }
 
-// Gibt true zurück, wenn die Taste vom Tap-Hold-Automaten behandelt wurde
-bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now) {
+// Gibt true zurück, wenn die Taste vom Tap-Hold-Automaten behandelt wurde.
+// dtapAct != 0: ein Tipp wird nicht sofort gesendet, sondern wartet auf einen möglichen zweiten Tipp.
+bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct = 0) {
   TapHoldKey &k = tapHold[r][c];
   // Release wird vor dem Tick verarbeitet: Tapping-Term hier erneut prüfen,
   // sonst würde ein Halten über TAPPING_TERM_MS noch als Tap gewertet.
@@ -398,6 +487,10 @@ bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now) {
   }
   if (k.pending) {
     k.pending = false;
+    if (dtapAct != 0) {
+      doubleTap[r][c] = { true, false, k.tapAction, dtapAct, k.layer, k.pressTime, now };
+      return true;
+    }
     dispatchPress(r, c, k.tapAction, k.layer);
     dispatchRelease(r, c, k.tapAction);
     return true;
@@ -426,26 +519,42 @@ void tapHoldTick(unsigned long now) {
 void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
   unsigned long now = millis();
   if (isPressed) {
+    // Wartende Einzel-Tipps anderer Tasten zuerst senden, damit die Reihenfolge der Zeichen stimmt
+    flushDoubleTapsExcept(r, c);
+    DoubleTapKey &d = doubleTap[r][c];
+    bool isSecondTap = d.waiting && (unsigned long)(now - d.releaseTime) < TAPPING_TERM_MS;
+    // Fenster abgelaufen, aber noch kein Tick: ersten Tipp vor dem neuen Anschlag nachholen
+    if (!isSecondTap) flushDoubleTap(r, c);
     keyPressTime[r][c] = now;
     keySentToHost[r][c] = false;
     // Ein weiterer Tastendruck entscheidet offene Mod-Tap-Tasten sofort als Hold
     resolvePendingTapHoldsAsHold(r, c);
     uint8_t layer = getActiveLayer();
-    uint16_t tapAct, holdAct;
-    resolveKeyActions(layer, r, c, tapAct, holdAct);
-    if (holdAct != 0) {
+    if (isSecondTap) {
+      d.waiting = false;
+      d.active = true;
+      dispatchPress(r, c, d.dtapAction, layer);
+      return;
+    }
+    uint16_t tapAct, holdAct, dtapAct;
+    resolveKeyActions(layer, r, c, tapAct, holdAct, dtapAct);
+    if (holdAct != 0 || dtapAct != 0) {
       tapHoldOnPress(r, c, tapAct, holdAct, layer, now);
+      tapHoldDtap[r][c] = dtapAct;
     } else {
       dispatchPress(r, c, tapAct, layer);
     }
   } else {
-    if (!tapHoldOnRelease(r, c, now)) {
+    DoubleTapKey &d = doubleTap[r][c];
+    if (d.active) {
+      d.active = false;
+      dispatchRelease(r, c, d.dtapAction);
+    } else if (!tapHoldOnRelease(r, c, now, tapHoldDtap[r][c])) {
       dispatchRelease(r, c, pressedAction[r][c]);
     }
+    tapHoldDtap[r][c] = 0;
     // KEY_RELEASE erst nach einem eventuellen Tap-KEY_PRESS senden, damit die UI nicht hängen bleibt
-    char buf[64];
-    snprintf(buf, sizeof(buf), "KEY_RELEASE:{\"r\":%d,\"c\":%d}", r, c);
-    sendConfigNotification(String(buf));
+    sendKeyReleaseNotification(r, c);
 
     // keyPressTime erst NACH wasComboRecentlyActive auf 0 setzen,
     // damit der echte Anschlag-Zeitstempel für den Grace-Period-Check erhalten bleibt!
@@ -456,6 +565,7 @@ void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
 // Zeitgesteuerte Entscheidungen: Mod-Tap Tapping-Term und gepufferte Combo-Kandidaten
 void processDeferredKeys(unsigned long now) {
   tapHoldTick(now);
+  doubleTapTick(now);
 
   // Gepufferte Combo-Kandidaten senden, falls Zeitfenster (comboTimeoutMs) ohne zweiten Tastendruck abgelaufen ist
   if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -511,6 +621,7 @@ bool saveKeymapToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
   bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
   ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
+  ok = (preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP)) && ok;
   preferences.end();
   Serial.println(ok ? "NVS: Keymap gespeichert." : "NVS: FEHLER beim Speichern der Keymap!");
   return ok;
@@ -520,12 +631,19 @@ bool saveKeymapToNVS() {
 // KEYMAP_DEFAULTS_ID. Die ID ist im Repository 0; "Auf Dactyl flashen" (server.py) setzt bei jedem Flash
 // aus der App eine neue ID. Ein Flash aus der App übernimmt so immer die App-Belegung, ein reiner
 // Firmware-Flash aus dem Repository (gleiche Defaults, gleiche ID) behält die Belegung im NVS.
+// DTAPMAP zählt nur mit, wenn sie belegt ist: eine leere DTAPMAP ergibt den Fingerprint älterer Firmware,
+// sonst würde das erste Update auf diese Firmware die gespeicherte Belegung überschreiben.
 uint32_t keymapDefaultsFingerprint() {
   uint32_t h = 2166136261u;
   const uint32_t id = KEYMAP_DEFAULTS_ID;
-  const uint8_t* parts[3] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, (const uint8_t*)&id };
-  const size_t sizes[3] = { sizeof(KEYMAP), sizeof(HOLDMAP), sizeof(id) };
-  for (int p = 0; p < 3; p++) {
+  bool hasDtap = false;
+  const uint8_t* dtapBytes = (const uint8_t*)DTAPMAP;
+  for (size_t i = 0; i < sizeof(DTAPMAP); i++) {
+    if (dtapBytes[i] != 0) { hasDtap = true; break; }
+  }
+  const uint8_t* parts[4] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, dtapBytes, (const uint8_t*)&id };
+  const size_t sizes[4] = { sizeof(KEYMAP), sizeof(HOLDMAP), hasDtap ? sizeof(DTAPMAP) : 0, sizeof(id) };
+  for (int p = 0; p < 4; p++) {
     for (size_t i = 0; i < sizes[p]; i++) {
       h ^= parts[p][i];
       h *= 16777619u;
@@ -549,6 +667,7 @@ void loadKeymapFromNVS() {
     Serial.printf("NVS: Neue Default-Belegung (0x%08X). Synchronisiere NVS mit Firmware-Defaults.\n", (unsigned)defaultsHash);
     bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
     ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
+    ok = (preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP)) && ok;
     // Neue App-Belegung über einer gespeicherten Keymap: sie verweist auf die einkompilierten Tastenpaare (PAIR_n),
     // alte Paare aus dem NVS daher verwerfen. Ohne Keymap (erster Start) gibt es nichts zu ersetzen.
     if (hasKeymap) {
@@ -568,7 +687,10 @@ void loadKeymapFromNVS() {
     bool hasHoldmap = preferences.isKey("holdmap") && preferences.getBytesLength("holdmap") == sizeof(HOLDMAP);
     // Fehlende Holdmap (älteres Schema oder abgebrochenes Schreiben) mit den einkompilierten Defaults ergänzen
     bool holdmapOk = hasHoldmap || preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP);
-    if (!hasStoredHash && holdmapOk) {
+    // Fehlende Doppel-Tipp-Belegung (Firmware vor Tap-Dance) ebenso mit den einkompilierten Defaults ergänzen
+    bool hasDtapmap = preferences.isKey("dtapmap") && preferences.getBytesLength("dtapmap") == sizeof(DTAPMAP);
+    bool dtapmapOk = hasDtapmap || preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP);
+    if (!hasStoredHash && holdmapOk && dtapmapOk) {
       preferences.putUInt("defaults_fp", defaultsHash);
       preferences.remove("fw_build");
     }
@@ -576,6 +698,9 @@ void loadKeymapFromNVS() {
     Serial.println("NVS: Gespeicherte Keymap geladen.");
     if (hasHoldmap) {
       preferences.getBytes("holdmap", HOLDMAP, sizeof(HOLDMAP));
+    }
+    if (hasDtapmap) {
+      preferences.getBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP));
     }
   }
   for (int i = 0; i < NUM_LAYERS; i++) {
@@ -760,13 +885,16 @@ void sendMatrixData(const char* prefix, uint16_t (*matrix)[NUM_ROWS][NUM_COLS], 
   sendConfigNotification(out, true);
 }
 
-// Parst "<CMD> l r c tap [hold]". Fehlt hold, wird es auf 0 gesetzt.
-bool parseKeyCommand(const String &cmd, const char *fmt, int &l, int &r, int &c, int &tap, int &hold) {
+// Parst "<CMD> l r c tap [hold [dtap]]". Fehlende Werte werden auf 0 gesetzt, überzählige abgelehnt.
+// fmt endet mit " %c", damit ein siebter Wert erkannt wird.
+bool parseKeyCommand(const String &cmd, const char *fmt, int &l, int &r, int &c, int &tap, int &hold, int &dtap) {
   hold = 0;
-  int n = sscanf(cmd.c_str(), fmt, &l, &r, &c, &tap, &hold);
-  if (n != 4 && n != 5) return false;
+  dtap = 0;
+  char extra;
+  int n = sscanf(cmd.c_str(), fmt, &l, &r, &c, &tap, &hold, &dtap, &extra);
+  if (n < 4 || n > 6) return false;
   return l >= 0 && l < NUM_LAYERS && r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS &&
-         tap >= 0 && tap <= 0xFFFF && hold >= 0 && hold <= 0xFFFF;
+         tap >= 0 && tap <= 0xFFFF && hold >= 0 && hold <= 0xFFFF && dtap >= 0 && dtap <= 0xFFFF;
 }
 
 void handleConfigCommand(String cmd, bool fromBle) {
@@ -793,12 +921,13 @@ void handleConfigCommand(String cmd, bool fromBle) {
   }
 
   if (cmd.startsWith("SET_KEY ")) {
-    int l, r, c, val, hold;
-    if (parseKeyCommand(cmd, "SET_KEY %d %d %d %d %d", l, r, c, val, hold)) {
+    int l, r, c, val, hold, dtap;
+    if (parseKeyCommand(cmd, "SET_KEY %d %d %d %d %d %d %c", l, r, c, val, hold, dtap)) {
       KEYMAP[l][r][c] = (uint16_t)val;
       HOLDMAP[l][r][c] = (uint16_t)hold;
+      DTAPMAP[l][r][c] = (uint16_t)dtap;
       if (saveKeymapToNVS()) {
-        sendConfigNotification("OK SET_KEY " + String(l) + " " + String(r) + " " + String(c) + " " + String(val) + " " + String(hold));
+        sendConfigNotification("OK SET_KEY " + String(l) + " " + String(r) + " " + String(c) + " " + String(val) + " " + String(hold) + " " + String(dtap));
       } else {
         sendConfigNotification("ERR NVS SET_KEY");
       }
@@ -807,10 +936,11 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
   } else if (cmd.startsWith("SET_K ")) {
     // Schnelles RAM-Update für Batch-Sync (NVS wird am Ende einmalig mit SAVE_NVS geschrieben)
-    int l, r, c, val, hold;
-    if (parseKeyCommand(cmd, "SET_K %d %d %d %d %d", l, r, c, val, hold)) {
+    int l, r, c, val, hold, dtap;
+    if (parseKeyCommand(cmd, "SET_K %d %d %d %d %d %d %c", l, r, c, val, hold, dtap)) {
       KEYMAP[l][r][c] = (uint16_t)val;
       HOLDMAP[l][r][c] = (uint16_t)hold;
+      DTAPMAP[l][r][c] = (uint16_t)dtap;
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
@@ -921,6 +1051,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
       for (int l = 0; l < NUM_LAYERS; l++) {
         sendMatrixData("LAYER_DATA:", KEYMAP, l);
         sendMatrixData("HOLD_DATA:", HOLDMAP, l);
+        sendMatrixData("DTAP_DATA:", DTAPMAP, l);
       }
       sendConfigNotification("CONFIG_SYNC_DONE", true);
     }

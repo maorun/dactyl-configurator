@@ -394,12 +394,42 @@ function actionCodeToNumeric(code) {
 }
 const actionToNumeric = actionCodeToNumeric;
 
-// Tap- und Halte-Code einer Taste für SET_K/SET_KEY. Hold ohne Tap wirkt wie eine normale Taste.
+// Tap-, Halte- und Doppel-Tipp-Code einer Taste für SET_K/SET_KEY. Hold ohne Tap wirkt wie eine normale
+// Taste, Doppel-Tipp ohne Tap bleibt ohne Wirkung (wie in Firmware und server.py).
 function keyToNumericActions(k) {
   const tap = (k && k.tap && k.tap !== "NONE") ? k.tap : "NONE";
   const hold = (k && k.hold && k.hold !== "NONE") ? k.hold : "NONE";
-  if (tap === "NONE") return { tapCode: actionCodeToNumeric(hold), holdCode: 0 };
-  return { tapCode: actionCodeToNumeric(tap), holdCode: actionCodeToNumeric(hold) };
+  const dtap = (k && k.dtap && k.dtap !== "NONE") ? k.dtap : "NONE";
+  if (tap === "NONE") return { tapCode: actionCodeToNumeric(hold), holdCode: 0, dtapCode: 0 };
+  return { tapCode: actionCodeToNumeric(tap), holdCode: actionCodeToNumeric(hold), dtapCode: actionCodeToNumeric(dtap) };
+}
+
+// GET_CONFIG sendet pro Ebene LAYER_DATA (Tap), HOLD_DATA (Halten) und DTAP_DATA (Doppel-Tipp)
+const MATRIX_DATA_FIELDS = { "LAYER_DATA:": "tap", "HOLD_DATA:": "hold", "DTAP_DATA:": "dtap" };
+
+// Übernimmt eine Matrix aus GET_CONFIG in layers. LAYER_DATA setzt die Taste neu (Halten und
+// Doppel-Tipp folgen danach), HOLD_DATA/DTAP_DATA setzen nur ihr Feld. Gerätedaten nur innerhalb der
+// Matrixgrenzen übernehmen (kein "__proto__", keine Sparse-Arrays). Gibt true zurück, wenn übernommen.
+function applyMatrixData(layers, field, data) {
+  if (!field || !data || !isValidIndex(data.l, NUM_LAYERS) || !Array.isArray(data.k)) return false;
+  while (layers.length <= data.l) layers.push([]);
+  const layer = layers[data.l];
+  for (let r = 0; r < Math.min(data.k.length, NUM_ROWS); r++) {
+    if (!Array.isArray(data.k[r])) continue;
+    if (!Array.isArray(layer[r])) layer[r] = [];
+    for (let c = 0; c < Math.min(data.k[r].length, NUM_COLS); c++) {
+      const code = data.k[r][c];
+      if (!Number.isInteger(code) || code < 0 || code > 0xFFFF) continue;
+      const def = findDefinitionByCode(code);
+      if (field === "tap") {
+        layer[r][c] = { label: def.label, tap: def.tap, hold: "NONE", dtap: "NONE" };
+      } else {
+        if (!layer[r][c]) layer[r][c] = { label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" };
+        layer[r][c][field] = code === 0 ? "NONE" : def.tap;
+      }
+    }
+  }
+  return true;
 }
 
 function findDefinitionByCode(numericCode) {
@@ -567,11 +597,12 @@ function clampSetting(field, value) {
 }
 
 function normalizeKeyCell(cell) {
-  if (!cell || typeof cell !== "object") return { label: "---", tap: "NONE", hold: "NONE" };
+  if (!cell || typeof cell !== "object") return { label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" };
   return {
     label: typeof cell.label === "string" ? cell.label.slice(0, 16) : "",
     tap: typeof cell.tap === "string" ? cell.tap : "NONE",
-    hold: typeof cell.hold === "string" ? cell.hold : "NONE"
+    hold: typeof cell.hold === "string" ? cell.hold : "NONE",
+    dtap: typeof cell.dtap === "string" ? cell.dtap : "NONE"
   };
 }
 
@@ -625,7 +656,7 @@ function validateConfigShape(cfg) {
 // Ebenen-Werkzeuge: Kopieren, Tauschen und Leeren ganzer Ebenen (liefert neue Ebenen-Liste, ändert nichts in-place)
 function transparentLayer() {
   return Array.from({ length: NUM_ROWS }, () =>
-    Array.from({ length: NUM_COLS }, () => ({ label: "---", tap: "NONE", hold: "NONE" })));
+    Array.from({ length: NUM_COLS }, () => ({ label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" })));
 }
 
 function applyLayerOperation(layers, op, source, target) {
@@ -1416,10 +1447,13 @@ function holdSublabel(code) {
   return c.replace(/^(KEY_|MEDIA_|MOUSE_)/, "").slice(0, 6);
 }
 
-function fillKeycodeSelect(select, { holdMode = false } = {}) {
+// Präfix der Optionen in den Auswahllisten für Halte- und Doppel-Tipp-Aktion
+const OPTIONAL_ACTION_PREFIX = { holdActionSelect: "Halten = ", dtapActionSelect: "2× Tippen = " };
+
+function fillKeycodeSelect(select, { holdMode = false, prefix = "Halten = " } = {}) {
   select.innerHTML = "";
   if (holdMode) {
-    // Halte-Aktion: jede Aktion ist erlaubt (Tap A / Halten B, Modifier, Layer, Media, Maus)
+    // Halte- bzw. Doppel-Tipp-Aktion: jede Aktion ist erlaubt (Modifier, Layer, Media, Maus)
     const none = document.createElement("option");
     none.value = "NONE";
     none.textContent = "-- Keine (Nur Einzeltaste) --";
@@ -1432,7 +1466,7 @@ function fillKeycodeSelect(select, { holdMode = false } = {}) {
       if (holdMode && k.code === "NONE") return; // "Keine" steht bereits oben
       const opt = document.createElement("option");
       opt.value = k.code;
-      opt.textContent = holdMode ? `Halten = ${k.label} (${k.code})` : `${k.label} (${k.code})`;
+      opt.textContent = holdMode ? `${prefix}${k.label} (${k.code})` : `${k.label} (${k.code})`;
       optgroup.appendChild(opt);
     });
     select.appendChild(optgroup);
@@ -1443,6 +1477,7 @@ function populateKeycodeSelects() {
   fillKeycodeSelect(document.getElementById("primaryActionSelect"));
   fillKeycodeSelect(document.getElementById("comboActionSelect"));
   fillKeycodeSelect(document.getElementById("holdActionSelect"), { holdMode: true });
+  fillKeycodeSelect(document.getElementById("dtapActionSelect"), { holdMode: true, prefix: OPTIONAL_ACTION_PREFIX.dtapActionSelect });
 }
 
 const LEFT_HAND_DEFAULT = [
@@ -1621,6 +1656,14 @@ function createKeycapElement(r, c, side, keyData, isThumb = false) {
     keyEl.appendChild(sublabelEl);
   }
 
+  if (keyData.dtap && keyData.dtap !== "NONE") {
+    const dtapEl = document.createElement("span");
+    dtapEl.className = "key-sublabel";
+    dtapEl.textContent = `2× ${holdSublabel(keyData.dtap)}`;
+    dtapEl.title = `2× Tippen = ${keyData.dtap}`;
+    keyEl.appendChild(dtapEl);
+  }
+
   const posEl = document.createElement("span");
   posEl.className = "key-pos";
   posEl.textContent = `${side} R${r}C${c}`;
@@ -1686,17 +1729,24 @@ function updateInspector(r, c) {
 
   labelInput.value = keyData.label || "";
   primarySelect.value = keyData.tap || "KEY_SPACE";
+  setOptionalActionSelect(holdSelect, normalizeHoldCode(keyData.hold));
+  setOptionalActionSelect(document.getElementById("dtapActionSelect"), normalizeHoldCode(keyData.dtap));
+}
+
+// Setzt eine Halte- oder Doppel-Tipp-Auswahl. Ein unbekannter Code (z. B. aus einem Import) fällt nicht
+// still auf "Keine" zurück, sondern erscheint als eigene Option.
+function setOptionalActionSelect(select, code) {
+  if (!select) return;
   // Zuvor angehängte Optionen für unbekannte Codes entfernen (sonst sammeln sie sich pro Tastenwahl an)
-  holdSelect.querySelectorAll("option[data-unknown-hold]").forEach(o => o.remove());
-  holdSelect.value = normalizeHoldCode(keyData.hold);
-  // Unbekannter Code (z. B. aus einem Import): nicht still auf "Keine" fallen, sondern anzeigen
-  if (holdSelect.value !== normalizeHoldCode(keyData.hold)) {
+  select.querySelectorAll("option[data-unknown-hold]").forEach(o => o.remove());
+  select.value = code;
+  if (select.value !== code) {
     const opt = document.createElement("option");
     opt.dataset.unknownHold = "true";
-    opt.value = keyData.hold;
-    opt.textContent = `Halten = ${keyData.hold}`;
-    holdSelect.appendChild(opt);
-    holdSelect.value = keyData.hold;
+    opt.value = code;
+    opt.textContent = `${OPTIONAL_ACTION_PREFIX[select.id] || ""}${code}`;
+    select.appendChild(opt);
+    select.value = code;
   }
 }
 
@@ -1782,10 +1832,10 @@ function keycodeLabel(code) {
 
 // Tap- und Halte-Auswahl im Inspektor: Gruppe "Tastenpaare" mit den aktuell definierten Paaren
 function refreshKeyPairOptions() {
-  ["primaryActionSelect", "holdActionSelect"].forEach(id => {
+  ["primaryActionSelect", "holdActionSelect", "dtapActionSelect"].forEach(id => {
     const select = document.getElementById(id);
     if (!select) return;
-    const isHold = id === "holdActionSelect";
+    const prefix = OPTIONAL_ACTION_PREFIX[id] || "";
     const previous = select.value;
     select.querySelectorAll("optgroup[data-key-pairs]").forEach(g => g.remove());
     const group = document.createElement("optgroup");
@@ -1795,7 +1845,7 @@ function refreshKeyPairOptions() {
       const opt = document.createElement("option");
       opt.value = `PAIR_${i}`;
       const text = `Paar ${i}: ${keyPairLabel(pair, keycodeLabel)}`;
-      opt.textContent = isHold ? `Halten = ${text}` : text;
+      opt.textContent = `${prefix}${text}`;
       group.appendChild(opt);
     });
     if (group.children.length) select.appendChild(group);
@@ -1864,7 +1914,7 @@ function deleteLastKeyPair() {
   const idx = currentConfig.keyPairs.length - 1;
   if (idx < 0) return;
   const code = `PAIR_${idx}`;
-  const used = currentConfig.layers.some(layer => (layer || []).some(row => (row || []).some(k => k && (k.tap === code || k.hold === code))));
+  const used = currentConfig.layers.some(layer => (layer || []).some(row => (row || []).some(k => k && (k.tap === code || k.hold === code || k.dtap === code))));
   if (used && !confirm(`Tastenpaar ${idx} ist noch Tasten zugewiesen. Diese Tasten senden danach nichts. Trotzdem löschen?`)) return;
   const removed = currentConfig.keyPairs.pop();
   renderKeyPairs();
@@ -1957,6 +2007,7 @@ function setupEventListeners() {
     const label = labelInput.value.trim() || primarySelect.options[primarySelect.selectedIndex].text.split(" ")[0];
     const tap = primarySelect.value;
     const hold = holdSelect.value;
+    const dtap = document.getElementById("dtapActionSelect").value;
     if (!isPhysicalKey(r, c)) {
       showToast(`R${r}C${c} existiert physisch nicht.`);
       return;
@@ -1967,10 +2018,10 @@ function setupEventListeners() {
     const oldDesc = oldKey.label || (oldKey.tap && oldKey.tap !== "NONE" ? oldKey.tap : "---");
     const newDesc = label || (tap && tap !== "NONE" ? tap : (hold || "---"));
 
-    layer[r][c] = { label, tap, hold };
+    layer[r][c] = { label, tap, hold, dtap };
     renderMatrix();
 
-    const { tapCode, holdCode } = keyToNumericActions(layer[r][c]);
+    const { tapCode, holdCode, dtapCode } = keyToNumericActions(layer[r][c]);
 
     const changeRecord = {
       type: "key",
@@ -1988,8 +2039,8 @@ function setupEventListeners() {
       }
     };
 
-    // SET_KEY <l> <r> <c> <tap> <hold>: Firmware antwortet mit OK SET_KEY bzw. ERR (Toast im Notification-Handler)
-    const sent = await sendDeviceCommand(`SET_KEY ${targetLayer} ${r} ${c} ${tapCode} ${holdCode}`);
+    // SET_KEY <l> <r> <c> <tap> <hold> <dtap>: Firmware antwortet mit OK SET_KEY bzw. ERR (Toast im Notification-Handler)
+    const sent = await sendDeviceCommand(`SET_KEY ${targetLayer} ${r} ${c} ${tapCode} ${holdCode} ${dtapCode}`);
     if (sent) {
       showToast(`⚡ An Dactyl übertragen: [R${r}, C${c}] = ${label}`);
     } else {
@@ -3090,33 +3141,13 @@ function handleSerialLine(line) {
   }
 
   // 5. Layer-Daten (Tastenbelegung) von Firmware synchronisieren (GET_CONFIG)
-  else if (line.startsWith("LAYER_DATA:") || line.startsWith("HOLD_DATA:")) {
-    const isHold = line.startsWith("HOLD_DATA:");
+  else if (line.startsWith("LAYER_DATA:") || line.startsWith("HOLD_DATA:") || line.startsWith("DTAP_DATA:")) {
+    const prefix = line.substring(0, line.indexOf(":") + 1);
     try {
-      const data = JSON.parse(line.substring(isHold ? 10 : 11));
-      // Gerätedaten nur innerhalb der Matrixgrenzen übernehmen (kein "__proto__", keine Sparse-Arrays)
-      if (isValidIndex(data.l, NUM_LAYERS) && Array.isArray(data.k)) {
-        while (currentConfig.layers.length <= data.l) currentConfig.layers.push([]);
-        const layer = currentConfig.layers[data.l];
-        for (let r = 0; r < Math.min(data.k.length, NUM_ROWS); r++) {
-          if (!Array.isArray(data.k[r])) continue;
-          if (!Array.isArray(layer[r])) layer[r] = [];
-          for (let c = 0; c < Math.min(data.k[r].length, NUM_COLS); c++) {
-            const code = data.k[r][c];
-            if (!Number.isInteger(code) || code < 0 || code > 0xFFFF) continue;
-            const def = findDefinitionByCode(code);
-            if (isHold) {
-              if (!layer[r][c]) layer[r][c] = { label: "---", tap: "NONE", hold: "NONE" };
-              layer[r][c].hold = code === 0 ? "NONE" : def.tap;
-            } else {
-              layer[r][c] = { label: def.label, tap: def.tap, hold: "NONE" };
-            }
-          }
-        }
-        renderMatrix();
-      }
+      const data = JSON.parse(line.substring(prefix.length));
+      if (applyMatrixData(currentConfig.layers, MATRIX_DATA_FIELDS[prefix], data)) renderMatrix();
     } catch (e) {
-      console.warn("Failed to parse LAYER_DATA/HOLD_DATA:", e, line);
+      console.warn("Failed to parse LAYER_DATA/HOLD_DATA/DTAP_DATA:", e, line);
     }
   } else if (line.startsWith("CONFIG_SYNC_DONE")) {
     clearPendingSync();
@@ -3668,7 +3699,7 @@ function findLayerTriggerKey(targetLayer) {
   for (let r = 0; r < 6; r++) {
     for (let c = 0; c < 7; c++) {
       const k = base[r] && base[r][c];
-      if (k && (k.tap === moCode || k.hold === moCode || k.tap === tgCode || k.hold === tgCode)) {
+      if (k && [k.tap, k.hold, k.dtap].some(a => a === moCode || a === tgCode)) {
         return { r, c, label: k.label || moCode };
       }
     }
@@ -3831,8 +3862,8 @@ async function writeConfigToESP32(options = {}) {
       for (let r = 0; r < NUM_ROWS; r++) {
         const row = layer[r] || [];
         for (let c = 0; c < NUM_COLS; c++) {
-          const { tapCode, holdCode } = keyToNumericActions(row[c]);
-          await sendCmd(`SET_K ${l} ${r} ${c} ${tapCode} ${holdCode}`);
+          const { tapCode, holdCode, dtapCode } = keyToNumericActions(row[c]);
+          await sendCmd(`SET_K ${l} ${r} ${c} ${tapCode} ${holdCode} ${dtapCode}`);
           updateProgress();
         }
       }

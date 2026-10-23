@@ -209,18 +209,21 @@ def validate_int(value, lo, hi, field):
 
 
 def cell_actions(cell):
-    """Liefert (tap, hold) eines Matrix-Eintrags. Hold ohne Tap wirkt wie eine normale Taste."""
+    """Liefert (tap, hold, dtap) eines Matrix-Eintrags. Hold ohne Tap wirkt wie eine normale Taste,
+    Doppel-Tipp ohne Tap bleibt ohne Wirkung (wie in der Firmware)."""
     if isinstance(cell, dict):
         tap = cell.get("tap", "NONE")
         hold = cell.get("hold", "NONE")
+        dtap = cell.get("dtap", "NONE")
         tap = tap if isinstance(tap, str) else "NONE"
         hold = hold if isinstance(hold, str) else "NONE"
+        dtap = dtap if isinstance(dtap, str) else "NONE"
         if tap in ("", "NONE"):
-            return (hold or "NONE"), "NONE"
-        return tap, hold
+            return (hold or "NONE"), "NONE", "NONE"
+        return tap, hold, dtap
     if isinstance(cell, str):
-        return cell, "NONE"
-    return "NONE", "NONE"
+        return cell, "NONE", "NONE"
+    return "NONE", "NONE", "NONE"
 
 
 def generate_matrix_cpp(layers, marker, var_name, pick):
@@ -261,6 +264,10 @@ def generate_matrix_cpp(layers, marker, var_name, pick):
 
 def generate_holdmap_cpp(layers):
     return generate_matrix_cpp(layers, "HOLDMAP", "HOLDMAP", lambda a: a[1])
+
+
+def generate_dtapmap_cpp(layers):
+    return generate_matrix_cpp(layers, "DTAPMAP", "DTAPMAP", lambda a: a[2])
 
 
 def generate_keymap_cpp(layers):
@@ -404,6 +411,7 @@ def render_ino_content(content, config, defaults_id=None):
     layers = config.get("layers")
     content = replace_marked_block(content, "KEYMAP", generate_keymap_cpp(layers), required=True)
     content = replace_marked_block(content, "HOLDMAP", generate_holdmap_cpp(layers), required=True)
+    content = replace_marked_block(content, "DTAPMAP", generate_dtapmap_cpp(layers), required=True)
     if defaults_id is not None:
         content = replace_marked_block(content, "DEFAULTS_ID", generate_defaults_id_cpp(defaults_id), required=True)
     if config.get("layerNames"):

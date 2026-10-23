@@ -90,6 +90,16 @@ Die Kabel sind im Diagramm und in der folgenden Tabelle exakt nach der **linken 
 
 
 
+### ⬅️ Linke Hälfte (eigene Keymap, ESP-NOW zum Master)
+
+> [!NOTE]
+> - Die linke Hälfte (`firmware/dactyl_left`) hat eine eigene Keymap mit 8 Layern, Tap-Hold, Double-Tap, Combos und NVS. Sie nutzt dieselbe Logik wie rechts (`DactylLogic.h`).
+> - Die linke Hälfte sendet die fertigen Tastendrücke per ESP-NOW an die rechte Hälfte. Am Mac erscheint nur **ein** Bluetooth-Gerät.
+> - Den Config Mode der linken Hälfte startest du mit **`R0C5 + R4C0`** (0,5 s). Sie meldet sich dann als `Dactyl Config L`.
+> - Wähle in der App oben **Linke Hand**. Die App bearbeitet dann die linke Belegung. Sie überträgt sie wie rechts per Combo-Auto-Sync über Bluetooth, per USB oder mit „Auf Dactyl flashen“. Beim Flashen wählt der Server automatisch den USB-Port der linken Hälfte.
+> - Auf der linken Hälfte sitzen die **Dioden an den Spalten** (schwarzer Ring zum Spaltendraht). Die Spalten liegen auf RTC-Pins, damit jede Taste aus dem Deep Sleep weckt. Die Löttabelle steht in `AGENTS.md` („Left Half Firmware“).
+> - Beide Hälften brauchen das Partitionsschema `min_spiffs`. Der Flash aus der App setzt es automatisch.
+
 ## 🚀 Schnellstart
 
 ### 1. Voraussetzungen

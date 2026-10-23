@@ -21,6 +21,26 @@
  *   void sendConfigNotification(String, bool = false);
  */
 
+// Physische Config-Mode-Combo (500 ms halten). Rechts: R0C0 + R4C5; links gespiegelt: R0C5 + R4C0
+#ifndef CONFIG_COMBO_R1
+#define CONFIG_COMBO_R1 0
+#define CONFIG_COMBO_C1 0
+#define CONFIG_COMBO_R2 4
+#define CONFIG_COMBO_C2 5
+#endif
+
+// Gerätename ohne NVS-Eintrag und BLE-Name im Config Mode
+#ifndef DEFAULT_DEVICE_NAME
+#define DEFAULT_DEVICE_NAME "Dactyl Keyboard"
+#endif
+#ifndef CONFIG_BLE_NAME
+#define CONFIG_BLE_NAME "Dactyl Config"
+#endif
+// Hälfte in DEVICE_INFO ("R" oder "L"): App und Server erkennen damit das Board am Port
+#ifndef DEVICE_SIDE
+#define DEVICE_SIDE "R"
+#endif
+
 // Maximale Haltezeit für ein Tap bei Mod-Tap-Tasten (Tap-Aktion + Halte-Aktion)
 #ifndef TAPPING_TERM_MS
 #define TAPPING_TERM_MS 200
@@ -61,9 +81,15 @@ void resolveKeyActions(uint8_t layer, uint8_t r, uint8_t c, uint16_t &tapAct, ui
   resolveKeyActions(layer, r, c, tapAct, holdAct, dtapAct);
 }
 
+// Eine der beiden Tasten der physischen Config-Combo (rechts R0C0/R4C5, links R0C5/R4C0)
+bool isConfigComboKey(uint8_t r, uint8_t c) {
+  return (r == CONFIG_COMBO_R1 && c == CONFIG_COMBO_C1) || (r == CONFIG_COMBO_R2 && c == CONFIG_COMBO_C2);
+}
+
 // Solange beide Config-Combo-Tasten gehalten werden, senden diese beiden Tasten nichts an den Host
 bool isConfigComboSuppressed(uint8_t r, uint8_t c) {
-  return keyState[0][0] && keyState[4][5] && ((r == 0 && c == 0) || (r == 4 && c == 5));
+  return keyState[CONFIG_COMBO_R1][CONFIG_COMBO_C1] && keyState[CONFIG_COMBO_R2][CONFIG_COMBO_C2] &&
+    ((r == CONFIG_COMBO_R1 && c == CONFIG_COMBO_C1) || (r == CONFIG_COMBO_R2 && c == CONFIG_COMBO_C2));
 }
 
 bool isComboCandidateKey(uint8_t r, uint8_t c);
@@ -255,7 +281,7 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         else if (action == 0x131) bleKeyboard.mouseRelease(MOUSE_BUTTON_RIGHT);
         else if (action == 0x132) bleKeyboard.mouseRelease(MOUSE_BUTTON_MIDDLE);
         keySentToHost[r][c] = false;
-      } else if (!wasComboRecentlyActive(r, c) && !(r == 0 && c == 0) && !(r == 4 && c == 5)) {
+      } else if (!wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
         // Wenn die Taste vor Ablauf des Combo-Timeouts losgelassen wurde (schneller Einzeltipp)
         if (action == 0x130) bleKeyboard.mouseClick(MOUSE_BUTTON_LEFT);
         else if (action == 0x131) bleKeyboard.mouseClick(MOUSE_BUTTON_RIGHT);
@@ -269,7 +295,7 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
       if (keySentToHost[r][c]) {
         releaseKeyPair(action);
         keySentToHost[r][c] = false;
-      } else if (!wasComboRecentlyActive(r, c) && !(r == 0 && c == 0) && !(r == 4 && c == 5)) {
+      } else if (!wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
         // Schneller Einzeltipp vor Ablauf des Combo-Timeouts
         tapKeyPair(action);
       }
@@ -279,7 +305,7 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
       if (keySentToHost[r][c]) {
         bleKeyboard.release((uint8_t)action);
         keySentToHost[r][c] = false;
-      } else if (!wasComboRecentlyActive(r, c) && !(r == 0 && c == 0) && !(r == 4 && c == 5)) {
+      } else if (!wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
         // Wenn die Taste vor Ablauf des Combo-Timeouts losgelassen wurde (schneller Einzeltipp)
         // UND nicht gerade Teil einer ausgelösten Combo war:
         bleKeyboard.press((uint8_t)action);
@@ -713,7 +739,7 @@ void loadKeymapFromNVS() {
   standbyTimeoutMinutes = preferences.isKey("standby_timeout") ? preferences.getUInt("standby_timeout", 5) : 5;
   deepSleepTimeoutMinutes = preferences.isKey("sleep_timeout") ? preferences.getUInt("sleep_timeout", 60) : 60;
   if (preferences.isKey("dev_name")) {
-    deviceName = preferences.getString("dev_name", "Dactyl Keyboard");
+    deviceName = preferences.getString("dev_name", DEFAULT_DEVICE_NAME);
   }
   if (preferences.isKey("debounce")) {
     debounceMs = preferences.getUChar("debounce", 5);
@@ -902,7 +928,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
   if (cmd.length() == 0) return;
 
   // Über BLE ist im normalen Tastaturmodus nur GET_INFO erlaubt. Der Config-Modus wird ausschließlich
-  // physisch (R4C5 + R0C0) oder per USB-Serial (ENTER_CONFIG) aktiviert.
+  // physisch (Config-Combo CONFIG_COMBO_*) oder per USB-Serial (ENTER_CONFIG) aktiviert.
   if (fromBle && !isConfigMode && cmd != "GET_INFO") {
     Serial.println("WARN: BLE-Befehl abgelehnt (nicht im Config-Modus): " + cmd);
     return;
@@ -1059,8 +1085,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
     char buf[288];
-    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"config_mode\":%s}",
-      isConfigMode ? "Dactyl Config" : deviceName.c_str(),
+    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"config_mode\":%s}",
+      isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(),
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs,

@@ -15,7 +15,12 @@ function section(startMarker, endMarker) {
   return src.slice(start, end);
 }
 
+// Seitenprofile werden wie im Browser vor app.js geladen (index.html)
+const sideModules = ["side-profiles.js", "side-state.js"]
+  .map(f => fs.readFileSync(path.join(__dirname, "..", "js", f), "utf8"));
+
 const code = [
+  ...sideModules,
   section("const DEFAULT_LAYER_NAMES", "// BLE GATT"),
   section("const ACTION_TO_NUMERIC", "// Standard-Konfiguration"),
   section("// Matrix- und Firmware-Grenzen", "// State\n"),
@@ -30,11 +35,13 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest,
-             MATRIX_ROW_WIRES, MATRIX_COL_WIRES,
+             SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell };`, ctx);
 const api = ctx.api;
+const R = api.SIDE_PROFILES.R;
+const L = api.SIDE_PROFILES.L;
 
 let passed = 0;
 function test(name, fn) {
@@ -125,7 +132,7 @@ test("Config-Normalisierung: Namen, Einstellungen und Zellen werden bereinigt", 
     layerNames: ["A\nB"],
     settings: { debounceMs: 0, deviceName: "Dac\"tyl" },
     combos: [{ key1: { r: 9, c: 0 }, key2: { r: 0, c: 0 } }]
-  });
+  }, R);
   assert.strictEqual(n.layerNames.length, 8);
   assert.strictEqual(n.layerNames[0], "AB");
   assert.strictEqual(n.layerNames[1], "Nav & Pfeile");
@@ -137,14 +144,26 @@ test("Config-Normalisierung: Namen, Einstellungen und Zellen werden bereinigt", 
 });
 
 test("Physische Tasten: R4C0 und R5C5 existieren nicht", () => {
-  assert.ok(!api.isPhysicalKey(4, 0));
-  assert.ok(!api.isPhysicalKey(5, 5));
-  assert.ok(api.isPhysicalKey(5, 6));
-  assert.ok(api.isPhysicalKey(0, 0));
+  assert.ok(!api.isPhysicalKey(4, 0, R));
+  assert.ok(!api.isPhysicalKey(5, 5, R));
+  assert.ok(api.isPhysicalKey(5, 6, R));
+  assert.ok(api.isPhysicalKey(0, 0, R));
+});
+
+test("Physische Tasten links: R4C5 und R5C0 existieren nicht (gespiegelt)", () => {
+  assert.ok(!api.isPhysicalKey(4, 5, L));
+  assert.ok(!api.isPhysicalKey(5, 0, L));
+  assert.ok(api.isPhysicalKey(4, 0, L));
+  assert.ok(api.isPhysicalKey(5, 5, L));
+});
+
+test("Gerätename ohne Eintrag hängt von der Hälfte ab", () => {
+  assert.strictEqual(api.normalizeConfig({ layers: [[]] }, R).settings.deviceName, "Dactyl Keyboard");
+  assert.strictEqual(api.normalizeConfig({ layers: [[]] }, L).settings.deviceName, "Dactyl Links");
 });
 
 test("Heatmap: nur physische Tasten der Matrix werden gezählt", () => {
-  const s = api.createTypingStats(null);
+  const s = api.createTypingStats(null, R);
   assert.strictEqual(api.recordKeyPress(s, 2, 1, 0), true);
   assert.strictEqual(api.recordKeyPress(s, 2, 1, 10), true);
   assert.strictEqual(api.recordKeyPress(s, 4, 0, 20), false); // R4C0 existiert nicht
@@ -157,17 +176,25 @@ test("Heatmap: nur physische Tasten der Matrix werden gezählt", () => {
 
 test("Heatmap: gespeicherte Zähler werden validiert", () => {
   // JSON.parse erzeugt "__proto__" als eigenen Schlüssel (wie localStorage-Daten)
-  const s = api.createTypingStats(JSON.parse('{"0_0": 3, "4_0": 9, "9_9": 1, "1_1": -2, "2_2": 1.5, "__proto__": 4, "x": 1, "5_6": 2}'));
+  const s = api.createTypingStats(JSON.parse('{"0_0": 3, "4_0": 9, "9_9": 1, "1_1": -2, "2_2": 1.5, "__proto__": 4, "x": 1, "5_6": 2}'), R);
   assert.deepStrictEqual({ ...s.counts }, { "0_0": 3, "5_6": 2 });
   assert.ok(!Object.prototype.hasOwnProperty.call(s.counts, "__proto__"));
   assert.strictEqual(typeof Object.getPrototypeOf(s.counts).hasOwnProperty, "function");
   assert.strictEqual(s.total, 5);
-  assert.strictEqual(api.createTypingStats("kaputt").total, 0);
-  assert.strictEqual(api.createTypingStats([1, 2]).total, 0);
+  assert.strictEqual(api.createTypingStats("kaputt", R).total, 0);
+  assert.strictEqual(api.createTypingStats([1, 2], R).total, 0);
+});
+
+test("Heatmap links: R4C0 zählt, R4C5 und R5C0 zählen nicht", () => {
+  const s = api.createTypingStats(JSON.parse('{"4_0": 2, "4_5": 9, "5_0": 4}'), L);
+  assert.deepStrictEqual({ ...s.counts }, { "4_0": 2 });
+  assert.strictEqual(api.recordKeyPress(s, 4, 5, 0), false);
+  assert.strictEqual(api.recordKeyPress(s, 5, 0, 0), false);
+  assert.strictEqual(api.recordKeyPress(s, 5, 5, 0), true);
 });
 
 test("WPM: gleitendes 60-s-Fenster mit 5 Anschlägen pro Wort", () => {
-  const s = api.createTypingStats(null);
+  const s = api.createTypingStats(null, R);
   for (let i = 0; i < 50; i++) api.recordKeyPress(s, 0, 1, i * 100);
   assert.strictEqual(api.computeWpm(s, 5000), 10);
   // Anschläge älter als das Fenster fallen heraus
@@ -178,7 +205,7 @@ test("WPM: gleitendes 60-s-Fenster mit 5 Anschlägen pro Wort", () => {
 });
 
 test("WPM: Fenstergrenze und Zeitstempel in falscher Reihenfolge", () => {
-  const s = api.createTypingStats(null);
+  const s = api.createTypingStats(null, R);
   for (let i = 0; i < 5; i++) api.recordKeyPress(s, 1, 1, 1000);
   // Genau WPM_WINDOW_MS alt: Anschlag liegt außerhalb des Fensters
   assert.strictEqual(api.computeWpm(s, 1000 + api.WPM_WINDOW_MS - 1), 1);
@@ -198,24 +225,37 @@ test("Heatmap: Stufen skalieren relativ zur häufigsten Taste", () => {
   assert.strictEqual(api.heatLevel(1, 100), 1);
   assert.strictEqual(api.heatLevel(50, 100), 3);
   assert.strictEqual(api.heatLevel(100, 100), api.HEAT_LEVELS);
-  const s = api.createTypingStats({ "0_0": 3, "1_1": 7 });
+  const s = api.createTypingStats({ "0_0": 3, "1_1": 7 }, R);
   assert.strictEqual(api.maxKeyCount(s), 7);
-  assert.strictEqual(api.maxKeyCount(api.createTypingStats(null)), 0);
+  assert.strictEqual(api.maxKeyCount(api.createTypingStats(null, R)), 0);
 });
 
 test("Matrix-Test: 35 verlötete Schalter (29 Finger + 6 Daumen ohne R4C0/R5C5)", () => {
   let n = 0;
-  for (let r = 0; r < 6; r++) for (let c = 0; c < 7; c++) if (api.isWiredSwitch(r, c)) n++;
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 7; c++) if (api.isWiredSwitch(r, c, R)) n++;
   assert.strictEqual(n, 35);
-  assert.ok(!api.isWiredSwitch(4, 0));
-  assert.ok(!api.isWiredSwitch(5, 5));
-  assert.ok(!api.isWiredSwitch(0, 6)); // Col 6 nur im Daumen-Cluster
-  assert.ok(api.isWiredSwitch(5, 6));
-  assert.strictEqual(api.summarizeMatrixTest(api.createMatrixTest()).total, 35);
+  assert.ok(!api.isWiredSwitch(4, 0, R));
+  assert.ok(!api.isWiredSwitch(5, 5, R));
+  assert.ok(!api.isWiredSwitch(0, 6, R)); // Col 6 nur im Daumen-Cluster
+  assert.ok(api.isWiredSwitch(5, 6, R));
+  assert.strictEqual(api.summarizeMatrixTest(api.createMatrixTest(R)).total, 35);
+});
+
+test("Matrix-Test links: 35 Schalter ohne R4C5/R5C0", () => {
+  let n = 0;
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 7; c++) if (api.isWiredSwitch(r, c, L)) n++;
+  assert.strictEqual(n, 35);
+  assert.ok(!api.isWiredSwitch(4, 5, L));
+  assert.ok(!api.isWiredSwitch(5, 0, L));
+  assert.ok(api.isWiredSwitch(4, 0, L));
+  assert.ok(api.isWiredSwitch(5, 5, L));
+  const t = api.createMatrixTest(L);
+  assert.strictEqual(api.markMatrixKeyTested(t, 4, 0), true);
+  assert.strictEqual(api.markMatrixKeyTested(t, 4, 5), false);
 });
 
 test("Matrix-Test: Tasten werden einmalig und nur innerhalb der Matrix gezählt", () => {
-  const t = api.createMatrixTest();
+  const t = api.createMatrixTest(R);
   assert.strictEqual(api.markMatrixKeyTested(t, 2, 1), true);
   assert.strictEqual(api.markMatrixKeyTested(t, 2, 1), false);
   assert.strictEqual(api.markMatrixKeyTested(t, 4, 0), false);
@@ -225,7 +265,7 @@ test("Matrix-Test: Tasten werden einmalig und nur innerhalb der Matrix gezählt"
 });
 
 test("Matrix-Test: Zeilen und Spalten ohne Treffer gelten als verdächtig", () => {
-  const t = api.createMatrixTest();
+  const t = api.createMatrixTest(R);
   // Ohne Tastendruck keine Verdachtsmeldung
   assert.deepStrictEqual([...api.summarizeMatrixTest(t).suspectRows], []);
   // Alle Tasten außer Row 3 drücken
@@ -235,7 +275,7 @@ test("Matrix-Test: Zeilen und Spalten ohne Treffer gelten als verdächtig", () =
   assert.deepStrictEqual([...s.suspectCols], []);
   assert.strictEqual(s.tested, 35 - 6);
   // Fehlende Spalte 6 (nur R5C6) wird erkannt
-  const t2 = api.createMatrixTest();
+  const t2 = api.createMatrixTest(R);
   for (let r = 0; r < 6; r++) for (let c = 0; c < 6; c++) api.markMatrixKeyTested(t2, r, c);
   assert.deepStrictEqual([...api.summarizeMatrixTest(t2).suspectCols], [6]);
 });
@@ -243,8 +283,8 @@ test("Matrix-Test: Zeilen und Spalten ohne Treffer gelten als verdächtig", () =
 test("Matrix-Test: Leitungsliste entspricht ROW_PINS/COL_PINS der Firmware", () => {
   const ino = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "dactyl_right.ino"), "utf8");
   const pins = name => ino.match(new RegExp(name + "\\s*\\[[^\\]]*\\]\\s*=\\s*\\{([^}]*)\\}"))[1].split(",").map(v => Number(v.trim()));
-  assert.deepStrictEqual([...api.MATRIX_ROW_WIRES.map(w => w.gpio)], pins("ROW_PINS"));
-  assert.deepStrictEqual([...api.MATRIX_COL_WIRES.map(w => w.gpio)], pins("COL_PINS"));
+  assert.deepStrictEqual([...R.rowWires.map(w => w.gpio)], pins("ROW_PINS"));
+  assert.deepStrictEqual([...R.colWires.map(w => w.gpio)], pins("COL_PINS"));
 });
 
 test("Tastenpaar: PAIR_<n> wird zu ACT_KEY_PAIR_BASE + n und zurück", () => {
@@ -275,16 +315,17 @@ test("Tastenpaar: Config-Validierung und Normalisierung", () => {
   assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: "x" }));
   assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: [{ first: "MO_1", second: "KEY_A" }] }));
   assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: new Array(17).fill({ first: "KEY_A", second: "KEY_B" }) }));
-  const n = api.normalizeConfig({ layers: [[]], keyPairs: [{ first: "KEY_A", second: "KEY_B", extra: 1 }, { first: "MO_1", second: "KEY_A" }, null] });
+  const n = api.normalizeConfig({ layers: [[]], keyPairs: [{ first: "KEY_A", second: "KEY_B", extra: 1 }, { first: "MO_1", second: "KEY_A" }, null] }, R);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(n.keyPairs)), [{ first: "KEY_A", second: "KEY_B" }]);
-  assert.deepStrictEqual([...api.normalizeConfig({ layers: [[]] }).keyPairs], []);
+  assert.deepStrictEqual([...api.normalizeConfig({ layers: [[]] }, R).keyPairs], []);
 });
 
 test("Tastenpaar: Codebereich ist in App, Server und Firmware identisch", () => {
-  const ino = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "dactyl_right.ino"), "utf8");
+  // Aktionscodes und Key-Pair-Typen gelten für beide Hälften und stehen in DactylCommon.h
+  const common = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylCommon.h"), "utf8");
   const py = fs.readFileSync(path.join(__dirname, "..", "server.py"), "utf8");
-  assert.strictEqual(Number(/#define ACT_KEY_PAIR_BASE\s+(0x[0-9A-Fa-f]+)/.exec(ino)[1]), api.ACT_KEY_PAIR_BASE);
-  assert.strictEqual(Number(/#define MAX_KEY_PAIRS\s+(\d+)/.exec(ino)[1]), api.MAX_KEY_PAIRS);
+  assert.strictEqual(Number(/#define ACT_KEY_PAIR_BASE\s+(0x[0-9A-Fa-f]+)/.exec(common)[1]), api.ACT_KEY_PAIR_BASE);
+  assert.strictEqual(Number(/#define MAX_KEY_PAIRS\s+(\d+)/.exec(common)[1]), api.MAX_KEY_PAIRS);
   assert.strictEqual(Number(/^MAX_KEY_PAIRS = (\d+)/m.exec(py)[1]), api.MAX_KEY_PAIRS);
   // Der Paarbereich überschneidet sich nicht mit Maus-Aktionen (0x130..0x134)
   assert.ok(api.ACT_KEY_PAIR_BASE > 0x134);
@@ -368,7 +409,7 @@ test("Doppel-Tipp: normalizeKeyCell und transparentLayer führen das Feld dtap",
   assert.strictEqual(api.normalizeKeyCell({ tap: "KEY_J" }).dtap, "NONE");
   assert.strictEqual(api.normalizeKeyCell(null).dtap, "NONE");
   assert.strictEqual(api.transparentLayer()[0][0].dtap, "NONE");
-  const n = api.normalizeConfig({ layers: [[[{ label: "J", tap: "KEY_J", hold: "NONE", dtap: "KEY_ESC" }]]] });
+  const n = api.normalizeConfig({ layers: [[[{ label: "J", tap: "KEY_J", hold: "NONE", dtap: "KEY_ESC" }]]] }, R);
   assert.strictEqual(n.layers[0][0][0].dtap, "KEY_ESC");
 });
 

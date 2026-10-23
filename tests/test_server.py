@@ -372,13 +372,176 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("current_config.json", ignored)
         self.assertTrue(os.path.exists(os.path.join(root, "default_config.json")))
 
+    def test_flash_uses_min_spiffs_partition_for_compile_and_upload(self):
+        calls = []
+
+        class Done:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return Done()
+
+        old = (server.find_arduino_cli, server.find_serial_port, server.subprocess.run)
+        server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
+        server.find_serial_port = lambda side="R": "/dev/cu.usbserial-test"
+        server.subprocess.run = fake_run
+        try:
+            server.flash_firmware()
+        finally:
+            server.find_arduino_cli, server.find_serial_port, server.subprocess.run = old
+        self.assertEqual([c[1] for c in calls], ["compile", "upload"])
+        for cmd in calls:
+            self.assertEqual(cmd[cmd.index("--fqbn") + 1], "esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs")
+
+    def run_flash(self, side, port_for):
+        """Führt flash_firmware(side) mit gefälschtem arduino-cli aus; port_for(side) ersetzt die Port-Erkennung."""
+        calls = []
+
+        class Done:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return Done()
+
+        old = (server.find_arduino_cli, server.find_serial_port, server.subprocess.run)
+        server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
+        server.find_serial_port = port_for
+        server.subprocess.run = fake_run
+        try:
+            result = server.flash_firmware(side)
+        finally:
+            server.find_arduino_cli, server.find_serial_port, server.subprocess.run = old
+        return result, calls
+
+    def test_flash_uses_sketch_and_port_of_the_side(self):
+        ports = {"L": "/dev/cu.usbserial-left", "R": "/dev/cu.usbserial-right"}
+        for side, sketch in (("L", server.LEFT_SKETCH_DIR), ("R", server.SKETCH_DIR)):
+            result, calls = self.run_flash(side, lambda s: ports[s])
+            self.assertTrue(result["success"])
+            self.assertEqual(result["side"], side)
+            self.assertEqual([c[-1] for c in calls], [sketch, sketch])
+            self.assertEqual(calls[1][calls[1].index("-p") + 1], ports[side])
+
+    def test_flash_without_matching_side_does_not_compile_or_upload(self):
+        result, calls = self.run_flash("L", lambda s: None)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["stage"], "port")
+        self.assertIn("linke", result["error"])
+        self.assertEqual(calls, [])
+
+    def test_find_serial_port_picks_only_the_reporting_side(self):
+        old = (server.list_serial_ports, server.query_device_side)
+        answers = {"/dev/cu.usbserial-a": "R", "/dev/cu.usbserial-b": "L", "/dev/cu.usbserial-c": None}
+        server.list_serial_ports = lambda: list(answers)
+        server.query_device_side = lambda port: answers[port]
+        try:
+            self.assertEqual(server.find_serial_port("L"), "/dev/cu.usbserial-b")
+            self.assertEqual(server.find_serial_port("R"), "/dev/cu.usbserial-a")
+            answers["/dev/cu.usbserial-b"] = None
+            self.assertIsNone(server.find_serial_port("L"))       # nie auf die rechte Hälfte ausweichen
+            server.list_serial_ports = lambda: []
+            self.assertIsNone(server.find_serial_port("R"))
+        finally:
+            server.list_serial_ports, server.query_device_side = old
+
+    def test_parse_device_side(self):
+        info = 'DEVICE_INFO:{"name":"Dactyl Links","side":"L","mac":"x"}\n'
+        self.assertEqual(server.parse_device_side("boot\n" + info), "L")
+        self.assertEqual(server.parse_device_side('DEVICE_INFO:{"name":"Dactyl Keyboard"}\n'), "R")  # alte Firmware
+        self.assertIsNone(server.parse_device_side('DEVICE_INFO:{"side":"X"}\n'))
+        self.assertIsNone(server.parse_device_side(info[:-1]))                                     # Zeile unvollständig
+        self.assertIsNone(server.parse_device_side('DEVICE_INFO:{kaputt\n'))
+        self.assertIsNone(server.parse_device_side('DEVICE_INFO:["L"]\n'))
+        self.assertIsNone(server.parse_device_side("STATUS: ok\n"))
+
+    def test_parse_side(self):
+        self.assertEqual(server.parse_side("/api/config"), "R")
+        self.assertEqual(server.parse_side("/api/config?side=L"), "L")
+        self.assertEqual(server.parse_side("/api/config?side=R"), "R")
+        self.assertIsNone(server.parse_side("/api/config?side=X"))
+        self.assertIsNone(server.parse_side("/api/config?side=l"))
+        self.assertIsNone(server.parse_side("/api/config?side=L&side=R"))
+
+    def test_left_absent_keys_and_combos_are_rejected(self):
+        for r, c in ((4, 5), (5, 0)):
+            layer = [[{"tap": "NONE"}] * 7 for _ in range(6)]
+            layer[r] = list(layer[r])
+            layer[r][c] = {"tap": "KEY_A"}
+            with self.assertRaises(ValueError):
+                server.validate_config({"layers": [layer]}, "L")
+            server.validate_config({"layers": [layer]}, "R")  # rechts existiert die Taste
+        combo = {"key1": {"r": 0, "c": 0}, "key2": {"r": 4, "c": 5}, "behavior": "KEY_PRESS", "action": "KEY_ESC"}
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "combos": [combo]}, "L")
+        combo_r = dict(combo, key2={"r": 4, "c": 0})
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "combos": [combo_r]}, "R")
+        server.validate_config({"layers": [[]], "combos": [combo_r]}, "L")
+
+    def test_left_default_name_in_settings(self):
+        self.assertIn('String deviceName = "Dactyl Links";', server.generate_settings_cpp({}, "L"))
+        self.assertIn('String deviceName = "Dactyl Keyboard";', server.generate_settings_cpp({}, "R"))
+
+    def test_real_left_ino_renders_with_all_markers(self):
+        with open(server.LEFT_INO_FILE, encoding="utf-8") as f:
+            content = f.read()
+        with open(server.LEFT_DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        server.validate_config(cfg, "L")
+        out = server.render_ino_content(content, cfg, defaults_id=7, side="L")
+        for marker in ("KEYMAP", "HOLDMAP", "DTAPMAP", "DEFAULTS_ID", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "SETTINGS"):
+            self.assertEqual(out.count(f"// [[[START_{marker}]]]"), 1, marker)
+        self.assertIn("#define KEYMAP_DEFAULTS_ID 7UL", out)
+        self.assertIn('#define DEVICE_SIDE "L"', out)  # außerhalb der Marker, bleibt erhalten
+        self.assertIn("'q'", out)
+
+    def test_left_flash_writes_only_left_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            paths = {name: os.path.join(d, name) for name in
+                     ("current_config.json", "dactyl_right.ino", "current_config_left.json", "dactyl_left.ino")}
+            with open(server.LEFT_INO_FILE, encoding="utf-8") as f:
+                left_ino = f.read()
+            with open(paths["dactyl_left.ino"], "w", encoding="utf-8") as f:
+                f.write(left_ino)
+            with open(paths["dactyl_right.ino"], "w", encoding="utf-8") as f:
+                f.write("rechts unverändert")
+            old = (server.CONFIG_FILE, server.INO_FILE, server.LEFT_CONFIG_FILE, server.LEFT_INO_FILE)
+            server.CONFIG_FILE, server.INO_FILE = paths["current_config.json"], paths["dactyl_right.ino"]
+            server.LEFT_CONFIG_FILE, server.LEFT_INO_FILE = paths["current_config_left.json"], paths["dactyl_left.ino"]
+            try:
+                server.save_config_and_firmware({"layers": [[[{"tap": "KEY_Z"}]]]}, "L")
+                with open(paths["dactyl_left.ino"], encoding="utf-8") as f:
+                    rendered = f.read()
+                self.assertIn("'z'", rendered)
+                self.assertNotIn("#define KEYMAP_DEFAULTS_ID 0UL", rendered)
+                with open(paths["dactyl_right.ino"], encoding="utf-8") as f:
+                    self.assertEqual(f.read(), "rechts unverändert")
+                self.assertFalse(os.path.exists(paths["current_config.json"]))
+                self.assertTrue(os.path.exists(paths["current_config_left.json"]))
+            finally:
+                server.CONFIG_FILE, server.INO_FILE, server.LEFT_CONFIG_FILE, server.LEFT_INO_FILE = old
+
+    def test_left_user_config_is_not_versioned(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with open(os.path.join(root, ".gitignore"), encoding="utf-8") as f:
+            ignored = [line.strip() for line in f]
+        self.assertIn("current_config_left.json", ignored)
+        self.assertTrue(os.path.exists(os.path.join(root, "default_config_left.json")))
+
 
 class TestServerHttp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        cls.old_cfg = server.CONFIG_FILE
+        cls.old_cfg = (server.CONFIG_FILE, server.LEFT_CONFIG_FILE)
         server.CONFIG_FILE = os.path.join(cls.tmp.name, "current_config.json")
+        server.LEFT_CONFIG_FILE = os.path.join(cls.tmp.name, "current_config_left.json")
         cls.httpd = socketserver.TCPServer(("127.0.0.1", 0), server.ConfiguratorHandler)
         cls.port = cls.httpd.server_address[1]
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
@@ -388,7 +551,7 @@ class TestServerHttp(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
-        server.CONFIG_FILE = cls.old_cfg
+        server.CONFIG_FILE, server.LEFT_CONFIG_FILE = cls.old_cfg
         cls.tmp.cleanup()
 
     def request(self, method, path, body=None, headers=None):
@@ -411,6 +574,26 @@ class TestServerHttp(unittest.TestCase):
         self.assertEqual(self.request("GET", "/server.py")[0], 404)
         self.assertEqual(self.request("GET", "/.git/config")[0], 404)
         self.assertEqual(self.request("GET", "/firmware/dactyl_right/dactyl_right.ino")[0], 404)
+        self.assertEqual(self.request("GET", "/js/side-profiles.js?v=1")[0], 200)
+        self.assertEqual(self.request("GET", "/js/side-state.js")[0], 200)
+        self.assertEqual(self.request("GET", "/js/")[0], 404)
+        self.assertEqual(self.request("GET", "/js/../server.py")[0], 404)
+
+    def test_config_per_side_roundtrip_and_invalid_side(self):
+        origin = {"Origin": "http://localhost:8088"}
+        left = {"layers": [[[{"tap": "KEY_Q"}]]]}
+        right = {"layers": [[[{"tap": "KEY_P"}]]]}
+        self.assertEqual(self.request("POST", "/api/config?side=L", body=json.dumps(left), headers=origin)[0], 200)
+        self.assertEqual(self.request("POST", "/api/config?side=R", body=json.dumps(right), headers=origin)[0], 200)
+        self.assertEqual(json.loads(self.request("GET", "/api/config?side=L")[1]), dict(left, source="user"))
+        self.assertEqual(json.loads(self.request("GET", "/api/config?side=R")[1]), dict(right, source="user"))
+        self.assertEqual(json.loads(self.request("GET", "/api/config")[1]), dict(right, source="user"))  # ohne side = rechts
+        for method, path in (("GET", "/api/config?side=X"), ("POST", "/api/config?side=X"), ("POST", "/api/save_and_flash?side=X")):
+            status, data = self.request(method, path, body=json.dumps(left) if method == "POST" else None, headers=origin)
+            self.assertEqual(status, 400, path)
+            self.assertFalse(json.loads(data)["success"])
+        bad_left = {"layers": [[[], [], [], [], [], [{"tap": "KEY_A"}]]]}  # R5C0 existiert links nicht
+        self.assertEqual(self.request("POST", "/api/config?side=L", body=json.dumps(bad_left), headers=origin)[0], 400)
 
     def test_post_rejects_foreign_origin_and_missing_host(self):
         body = json.dumps({"layers": [[]]})

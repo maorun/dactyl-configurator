@@ -230,6 +230,7 @@ TEST(test_security_ble_command_rejection) {
   handleConfigCommand("GET_INFO", true);
   assert(!mockChar.notifications.empty());
   assert(mockChar.value.find("DEVICE_INFO:") != std::string::npos);
+  assert(mockChar.value.find("\"side\":\"R\"") != std::string::npos);
 
   // ENTER_CONFIG über BLE ist im Tastaturmodus abgelehnt: Config-Modus nur physisch oder per USB
   handleConfigCommand("ENTER_CONFIG", true);

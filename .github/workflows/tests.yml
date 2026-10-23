@@ -33,11 +33,14 @@ jobs:
         run: |
           node --check app.js
           node --check main.js
+          node --check js/side-profiles.js
+          node --check js/side-state.js
           python3 -m py_compile server.py
 
       - name: Run Configurator Logic Unit Tests (Node)
         run: |
           node tests/test_app_logic.js
+          node tests/test_side_profiles.js
 
       - name: Run Firmware C++ Unit Tests
         run: |
@@ -63,4 +66,10 @@ jobs:
       # Keine externe BleKeyboard-Bibliothek: Keycodes & HID-Report-Typen liegen in DactylKeycodes.h
       - name: Compile Dactyl Firmware
         run: |
-          arduino-cli compile --fqbn esp32:esp32:lolin32-lite firmware/dactyl_right
+          # min_spiffs: BLE + ESP-NOW-Empfang passt nicht in die Standard-App-Partition
+          arduino-cli compile --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs firmware/dactyl_right
+
+      - name: Compile Dactyl Left Firmware
+        run: |
+          # Linke Hälfte bindet DactylLogic.h & Co. aus ../dactyl_right ein (BLE-Config + ESP-NOW -> min_spiffs)
+          arduino-cli compile --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs firmware/dactyl_left

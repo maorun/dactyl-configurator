@@ -16,6 +16,11 @@ import secrets
 import shutil
 import subprocess
 import tempfile
+import fcntl
+import select
+import time
+import termios
+from urllib.parse import parse_qs, urlsplit
 
 # Sicherstellen, dass Standard-Binärpfade (Homebrew unter macOS Apple Silicon / Intel) im PATH vorhanden sind
 EXTRA_PATHS = [
@@ -33,11 +38,36 @@ os.environ["PATH"] = os.pathsep.join(_current_paths)
 
 PORT = 8088
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
-# current_config.json ist lokaler Laufzeitzustand der App (in .gitignore); default_config.json die versionierte Vorlage
+# current_config*.json ist lokaler Laufzeitzustand der App (in .gitignore); default_config*.json die versionierte Vorlage.
+# Jede Tastaturhälfte hat eigene Dateien und einen eigenen Sketch. Die Tests ersetzen diese Pfade.
 CONFIG_FILE = os.path.join(DIRECTORY, "current_config.json")
 DEFAULT_CONFIG_FILE = os.path.join(DIRECTORY, "default_config.json")
 INO_FILE = os.path.join(DIRECTORY, "firmware", "dactyl_right", "dactyl_right.ino")
 SKETCH_DIR = os.path.join(DIRECTORY, "firmware", "dactyl_right")
+LEFT_CONFIG_FILE = os.path.join(DIRECTORY, "current_config_left.json")
+LEFT_DEFAULT_CONFIG_FILE = os.path.join(DIRECTORY, "default_config_left.json")
+LEFT_INO_FILE = os.path.join(DIRECTORY, "firmware", "dactyl_left", "dactyl_left.ino")
+LEFT_SKETCH_DIR = os.path.join(DIRECTORY, "firmware", "dactyl_left")
+
+SIDES = ("R", "L")
+# Physisch nicht vorhandene Tasten (rechts R4C0/R5C5, links gespiegelt R4C5/R5C0): dort darf keine Aktion liegen
+ABSENT_KEYS = {"R": {(4, 0), (5, 5)}, "L": {(4, 5), (5, 0)}}
+DEFAULT_DEVICE_NAMES = {"R": "Dactyl Keyboard", "L": "Dactyl Links"}
+
+
+def side_paths(side):
+    """Dateien einer Hälfte. Liest die Modulvariablen bei jedem Aufruf (Tests ersetzen sie)."""
+    if side == "L":
+        return {"config": LEFT_CONFIG_FILE, "default": LEFT_DEFAULT_CONFIG_FILE, "ino": LEFT_INO_FILE, "sketch": LEFT_SKETCH_DIR}
+    return {"config": CONFIG_FILE, "default": DEFAULT_CONFIG_FILE, "ino": INO_FILE, "sketch": SKETCH_DIR}
+
+
+def parse_side(path):
+    """Liest ?side=L|R aus dem Pfad. Ohne Parameter gilt R (ältere App-Versionen); ein anderer Wert ergibt None."""
+    values = parse_qs(urlsplit(path).query).get("side")
+    if not values:
+        return "R"
+    return values[0] if len(values) == 1 and values[0] in SIDES else None
 
 KEY_TO_CPP = {
     "KEY_A": "'a'", "KEY_B": "'b'", "KEY_C": "'c'", "KEY_D": "'d'",
@@ -181,7 +211,10 @@ REQUEST_SOCKET_TIMEOUT_S = 10
 ALLOWED_HOSTS = {"localhost:8088", "127.0.0.1:8088"}
 ALLOWED_ORIGINS = {"http://localhost:8088", "http://127.0.0.1:8088"}
 # Nur diese Web-Assets werden statisch ausgeliefert (kein .git, server.py, Firmware-Quelltext)
-STATIC_ALLOWLIST = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+STATIC_ALLOWLIST = {
+    "/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css",
+    "/js/side-profiles.js": "js/side-profiles.js", "/js/side-state.js": "js/side-state.js",
+}
 
 # Wertebereiche identisch zur Firmware (handleConfigCommand)
 SETTINGS_RANGES = {
@@ -366,12 +399,13 @@ def generate_key_pairs_cpp(pairs):
     ]
     return "\n".join(lines)
 
-def generate_settings_cpp(settings):
+def generate_settings_cpp(settings, side="R"):
     if settings is None:
         settings = {}
     if not isinstance(settings, dict):
         raise ValueError("Ungültige Einstellungen: Objekt erwartet.")
-    dev_name = sanitize_name(settings.get("deviceName", "Dactyl Keyboard"), "Dactyl Keyboard")
+    default_name = DEFAULT_DEVICE_NAMES[side]
+    dev_name = sanitize_name(settings.get("deviceName", default_name), default_name)
     values = {}
     for field, (lo, hi, default) in SETTINGS_RANGES.items():
         values[field] = validate_int(settings.get(field, default), lo, hi, field)
@@ -390,7 +424,7 @@ def replace_marked_block(content, marker, replacement, required=False):
     pattern = rf"// \[\[\[START_{marker}\]\]\].*?// \[\[\[END_{marker}\]\]\]"
     if not re.search(pattern, content, re.DOTALL):
         if required:
-            raise ValueError(f"Markierungen // [[[START_{marker}]]] ... // [[[END_{marker}]]] fehlen in dactyl_right.ino!")
+            raise ValueError(f"Markierungen // [[[START_{marker}]]] ... // [[[END_{marker}]]] fehlen in der Firmware-Datei!")
         return content
     # Lambda statt Ersatz-String: re.sub würde sonst Backslash-Sequenzen ('\\\\' -> '\\') interpretieren
     return re.sub(pattern, lambda _m: replacement, content, count=1, flags=re.DOTALL)
@@ -406,7 +440,7 @@ def new_defaults_id():
     """Neue, nie 0 werdende Kennung pro Flash aus der App (0 ist für den Repository-Stand reserviert)."""
     return secrets.randbelow(0xFFFFFFFF) + 1
 
-def render_ino_content(content, config, defaults_id=None):
+def render_ino_content(content, config, defaults_id=None, side="R"):
     """Erzeugt den neuen .ino-Inhalt vollständig im Speicher (wirft ValueError bei ungültiger Konfiguration)."""
     layers = config.get("layers")
     content = replace_marked_block(content, "KEYMAP", generate_keymap_cpp(layers), required=True)
@@ -421,7 +455,7 @@ def render_ino_content(content, config, defaults_id=None):
     if "keyPairs" in config:
         content = replace_marked_block(content, "KEY_PAIRS", generate_key_pairs_cpp(config.get("keyPairs")))
     if "settings" in config:
-        content = replace_marked_block(content, "SETTINGS", generate_settings_cpp(config.get("settings")))
+        content = replace_marked_block(content, "SETTINGS", generate_settings_cpp(config.get("settings"), side))
     return content
 
 def write_temp_file(path, text):
@@ -488,7 +522,7 @@ def write_files_atomic(files):
 def write_file_atomic(path, text):
     write_files_atomic([(path, text)])
 
-def validate_config(config):
+def validate_config(config, side="R"):
     if not isinstance(config, dict) or not isinstance(config.get("layers"), list) or len(config["layers"]) == 0:
         raise ValueError("Ungültige Konfiguration: Muss ein Objekt mit einer nicht-leeren 'layers'-Liste sein.")
     if len(config["layers"]) > NUM_LAYERS:
@@ -504,14 +538,23 @@ def validate_config(config):
             for c_idx, cell in enumerate(row):
                 if not isinstance(cell, (dict, str)):
                     raise ValueError(f"Ungültige Taste R{r_idx}C{c_idx} in Ebene {l_idx}: Objekt oder Code erwartet.")
+                # Linke Hälfte: fehlende Tasten tragen keine Aktion (die rechte Vorlage hat dort historisch Werte)
+                if side == "L" and (r_idx, c_idx) in ABSENT_KEYS["L"] and any(a not in ("", "NONE", "0") for a in cell_actions(cell)):
+                    raise ValueError(f"Taste R{r_idx}C{c_idx} existiert auf der linken Hälfte nicht (Ebene {l_idx}).")
     # Codegen prüft Combos und Einstellungen vollständig (Bereiche identisch zur Firmware)
     generate_combos_cpp(config.get("combos"))
     generate_key_pairs_cpp(config.get("keyPairs"))
-    generate_settings_cpp(config.get("settings"))
+    generate_settings_cpp(config.get("settings"), side)
+    for cb in config.get("combos") or []:
+        for field in ("key1", "key2"):
+            key = (cb[field]["r"], cb[field]["c"])
+            if key in ABSENT_KEYS[side]:
+                raise ValueError(f"Combo-Taste R{key[0]}C{key[1]} existiert auf dieser Hälfte nicht.")
 
-def load_config_for_app():
+def load_config_for_app(side="R"):
     """Lokale Nutzer-Config (nicht versioniert) oder, falls nicht vorhanden, die versionierte Vorlage."""
-    for path, source in ((CONFIG_FILE, "user"), (DEFAULT_CONFIG_FILE, "default")):
+    paths = side_paths(side)
+    for path, source in ((paths["config"], "user"), (paths["default"], "default")):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 config = json.load(f)
@@ -532,21 +575,22 @@ def strip_response_metadata(config):
         config = {k: v for k, v in config.items() if k != "source"}
     return config
 
-def save_config_atomic(config):
+def save_config_atomic(config, side="R"):
     config = strip_response_metadata(config)
-    validate_config(config)
-    write_file_atomic(CONFIG_FILE, json.dumps(config, indent=2))
+    validate_config(config, side)
+    write_file_atomic(side_paths(side)["config"], json.dumps(config, indent=2))
 
-def save_config_and_firmware(config):
+def save_config_and_firmware(config, side="R"):
     """Validiert und rendert alles im Speicher, bevor eine Datei geschrieben wird."""
     config = strip_response_metadata(config)
-    validate_config(config)
-    if not os.path.exists(INO_FILE):
-        raise FileNotFoundError(f"Firmware Datei nicht gefunden: {INO_FILE}")
-    with open(INO_FILE, "r", encoding="utf-8") as f:
+    validate_config(config, side)
+    paths = side_paths(side)
+    if not os.path.exists(paths["ino"]):
+        raise FileNotFoundError(f"Firmware Datei nicht gefunden: {paths['ino']}")
+    with open(paths["ino"], "r", encoding="utf-8") as f:
         # Neue Kennung: ein Flash aus der App überschreibt die Belegung auf der Tastatur immer
-        new_ino = render_ino_content(f.read(), config, defaults_id=new_defaults_id())
-    write_files_atomic([(INO_FILE, new_ino), (CONFIG_FILE, json.dumps(config, indent=2))])
+        new_ino = render_ino_content(f.read(), config, defaults_id=new_defaults_id(), side=side)
+    write_files_atomic([(paths["ino"], new_ino), (paths["config"], json.dumps(config, indent=2))])
 
 def find_arduino_cli():
     cli = shutil.which("arduino-cli")
@@ -564,24 +608,108 @@ def find_arduino_cli():
             return c
     return None
 
-def find_serial_port():
-    ports = glob.glob("/dev/cu.usbserial*") + glob.glob("/dev/cu.wchusbserial*")
-    return ports[0] if ports else None
+def list_serial_ports():
+    return sorted(glob.glob("/dev/cu.usbserial*") + glob.glob("/dev/cu.wchusbserial*"))
 
-def flash_firmware():
+
+DEVICE_INFO_TIMEOUT_S = 5.0
+DEVICE_INFO_RETRY_S = 0.5
+
+
+def query_device_side(port, timeout_s=DEVICE_INFO_TIMEOUT_S):
+    """Sendet GET_INFO und liefert DEVICE_INFO.side ("R" ohne Feld = Firmware vor der Erkennung), sonst None.
+    DTR und RTS werden gelöscht: auf dem LOLIN32 Lite lösen sie sonst Reset bzw. Bootloader aus."""
+    try:
+        fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        # Rohmodus wie pyserial: blockierender Deskriptor, VMIN/VTIME 0, gelesen wird nur nach select()
+        fcntl.fcntl(fd, fcntl.F_SETFL, 0)
+        attrs = termios.tcgetattr(fd)
+        attrs[0] &= ~(termios.IGNBRK | termios.BRKINT | termios.PARMRK | termios.ISTRIP | termios.INLCR
+                      | termios.IGNCR | termios.ICRNL | termios.IXON | termios.IXOFF | termios.IXANY | termios.INPCK)
+        attrs[1] &= ~termios.OPOST
+        attrs[2] &= ~(termios.CSIZE | termios.PARENB | termios.CSTOPB | termios.CRTSCTS)
+        attrs[2] |= termios.CS8 | termios.CREAD | termios.CLOCAL
+        attrs[3] &= ~(termios.ECHO | termios.ECHONL | termios.ICANON | termios.ISIG | termios.IEXTEN)
+        attrs[4] = attrs[5] = termios.B115200
+        attrs[6][termios.VMIN] = 0
+        attrs[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        fcntl.ioctl(fd, termios.TIOCMBIC, (termios.TIOCM_DTR | termios.TIOCM_RTS).to_bytes(4, "little"))
+        time.sleep(0.3)
+        termios.tcflush(fd, termios.TCIFLUSH)
+        # Das Öffnen des Ports kann das Board neu starten (der Master braucht für BLE über 1 s bis loop()):
+        # GET_INFO wiederholen, bis DEVICE_INFO kommt
+        buf = b""
+        next_send = 0.0
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if time.monotonic() >= next_send:
+                os.write(fd, b"GET_INFO\n")
+                next_send = time.monotonic() + DEVICE_INFO_RETRY_S
+            ready, _, _ = select.select([fd], [], [], 0.05)
+            if not ready:
+                continue
+            buf += os.read(fd, 512)
+            side = parse_device_side(buf.decode("utf-8", "replace"))
+            if side is not None:
+                return side
+        return None
+    except (OSError, termios.error):
+        return None
+    finally:
+        os.close(fd)
+
+
+def parse_device_side(text):
+    """Hälfte aus der ersten vollständigen DEVICE_INFO-Zeile, None ohne solche Zeile oder bei unbekanntem Wert."""
+    # Nur vollständige Zeilen auswerten: die letzte Zeile ohne Zeilenende kann noch abgeschnitten sein
+    complete = text.split("\n")[:-1]
+    for line in complete:
+        line = line.strip()
+        if not line.startswith("DEVICE_INFO:"):
+            continue
+        try:
+            info = json.loads(line[len("DEVICE_INFO:"):])
+        except ValueError:
+            continue
+        if not isinstance(info, dict):
+            continue
+        side = info.get("side", "R")
+        return side if side in SIDES else None
+    return None
+
+
+def find_serial_port(side="R"):
+    """Port, dessen Board sich per DEVICE_INFO als diese Hälfte meldet. Nie raten: kein Treffer ergibt None."""
+    for port in list_serial_ports():
+        if query_device_side(port) == side:
+            return port
+    return None
+
+# BLE + ESP-NOW (Split-Empfang) passen nicht in die Standard-App-Partition (1,25 MB).
+# min_spiffs: 1,875 MB App, NVS-Offset unverändert (0x9000), damit Keymap und macOS-Bond erhalten bleiben.
+FIRMWARE_FQBN = "esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs"
+
+
+def flash_firmware(side="R"):
     arduino_cli = find_arduino_cli()
     if not arduino_cli:
         return {"success": False, "error": "arduino-cli wurde nicht im System-Pfad gefunden! Bitte über 'brew install arduino-cli' installieren."}
 
-    port = find_serial_port()
+    label = "linke" if side == "L" else "rechte"
+    port = find_serial_port(side)
     if not port:
-        return {"success": False, "error": "Kein ESP32 USB-Port gefunden (/dev/cu.usbserial*). Bitte sicherstellen, dass die Tastatur per USB angeschlossen ist."}
+        return {"success": False, "stage": "port", "error": f"Keine {label} Hälfte am USB gefunden. Bitte die {label} Hälfte per USB anschließen (andere Programme mit offenem USB-Monitor schließen)."}
+    sketch = side_paths(side)["sketch"]
 
     # 1. Compile
     compile_cmd = [
         arduino_cli, "compile",
-        "--fqbn", "esp32:esp32:lolin32-lite",
-        SKETCH_DIR
+        "--fqbn", FIRMWARE_FQBN,
+        sketch
     ]
     try:
         proc_comp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False, env=os.environ, timeout=COMPILE_TIMEOUT_S)
@@ -600,9 +728,9 @@ def flash_firmware():
     upload_cmd = [
         arduino_cli, "upload",
         "-p", port,
-        "--fqbn", "esp32:esp32:lolin32-lite",
+        "--fqbn", FIRMWARE_FQBN,
         "--upload-property", "upload.speed=115200",
-        SKETCH_DIR
+        sketch
     ]
     try:
         proc_up = subprocess.run(upload_cmd, capture_output=True, text=True, check=False, env=os.environ, timeout=UPLOAD_TIMEOUT_S)
@@ -615,7 +743,7 @@ def flash_firmware():
             "error": proc_up.stderr or proc_up.stdout
         }
 
-    return {"success": True, "port": port, "message": "Firmware erfolgreich kompiliert und geflasht!"}
+    return {"success": True, "port": port, "side": side, "message": "Firmware erfolgreich kompiliert und geflasht!"}
 
 
 class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
@@ -685,7 +813,7 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
 
         if path == "/api/status":
-            ports = glob.glob("/dev/cu.usbserial*") + glob.glob("/dev/cu.wchusbserial*")
+            ports = list_serial_ports()
             self.send_json(200, {
                 "status": "ok",
                 "app": "dactyl-configurator",
@@ -696,7 +824,11 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if path == "/api/config":
-            self.send_json(200, load_config_for_app())
+            side = parse_side(self.path)
+            if side is None:
+                self.send_json(400, {"success": False, "error": "Ungültiger Parameter 'side' (L oder R)."})
+                return
+            self.send_json(200, load_config_for_app(side))
             return
 
         if path in STATIC_ALLOWLIST:
@@ -719,8 +851,15 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if not self.check_host() or not self.check_origin():
             return
+        path = urlsplit(self.path).path
 
-        if self.path == "/api/open_bluetooth_settings":
+        if path in ("/api/save_and_flash", "/api/config"):
+            side = parse_side(self.path)
+            if side is None:
+                self.send_json(400, {"success": False, "error": "Ungültiger Parameter 'side' (L oder R)."})
+                return
+
+        if path == "/api/open_bluetooth_settings":
             try:
                 subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Bluetooth"])
                 self.send_json(200, {"success": True})
@@ -728,13 +867,13 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(500, {"success": False, "error": str(e)})
             return
 
-        if self.path == "/api/save_and_flash":
+        if path == "/api/save_and_flash":
             config = self.read_json_body()
             if config is None:
                 return
             try:
-                # 1. Validieren, C++ rendern und erst danach Config & .ino atomar schreiben
-                save_config_and_firmware(config)
+                # 1. Validieren, C++ rendern und erst danach Config & .ino der Hälfte atomar schreiben
+                save_config_and_firmware(config, side)
             except ValueError as err:
                 self.send_json(400, {"success": False, "error": str(err)})
                 return
@@ -742,17 +881,17 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(500, {"success": False, "error": str(err)})
                 return
 
-            # 2. Flashen
-            result = flash_firmware()
+            # 2. Flashen (nur auf den Port, der sich als diese Hälfte meldet)
+            result = flash_firmware(side)
             self.send_json(200 if result.get("success") else 500, result)
             return
 
-        if self.path == "/api/config":
+        if path == "/api/config":
             config = self.read_json_body()
             if config is None:
                 return
             try:
-                save_config_atomic(config)
+                save_config_atomic(config, side)
             except ValueError as e:
                 self.send_json(400, {"success": False, "error": str(e)})
                 return

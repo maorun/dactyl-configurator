@@ -497,6 +497,14 @@ body {
 .finger-matrix .matrix-row .key-cap[data-col="4"] { margin-top: 6px; }
 .finger-matrix .matrix-row .key-cap[data-col="5"] { margin-top: 12px; }
 
+/* Linke Hand gespiegelt: C0 ist außen (kleiner Finger), C5 innen (Zeigefinger) */
+.left-half .finger-matrix .matrix-row .key-cap[data-col="0"] { margin-top: 12px; }
+.left-half .finger-matrix .matrix-row .key-cap[data-col="1"] { margin-top: 6px; }
+.left-half .finger-matrix .matrix-row .key-cap[data-col="2"] { margin-top: -3px; }
+.left-half .finger-matrix .matrix-row .key-cap[data-col="3"] { margin-top: -8px; }
+.left-half .finger-matrix .matrix-row .key-cap[data-col="4"] { margin-top: 0px; }
+.left-half .finger-matrix .matrix-row .key-cap[data-col="5"] { margin-top: 4px; }
+
 /* Dedicated Daumen-Cluster Card (Quadratisch!) */
 .thumb-cluster-card {
   background: rgba(30, 41, 59, 0.7);

@@ -16,6 +16,9 @@
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
 #include <driver/gpio.h>
+#include <WiFi.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
 
 /*
  * =============================================================================
@@ -29,6 +32,8 @@
 #define CONFIG_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define CONFIG_MODE_MAGIC          0xDAC7CF60UL
 
+#include "DactylCommon.h"
+
 // Überlebt ESP.restart() im RTC-Slow-Memory, wird aber beim Kaltstart ignoriert
 RTC_NOINIT_ATTR uint32_t rtcConfigModeMagic;
 
@@ -40,26 +45,9 @@ volatile bool isBleTransitioning = false;
 volatile bool exitConfigRequested = false;
 volatile bool enterConfigRequested = false;
 
-class ConfigCallbacks : public BLECharacteristicCallbacks {
-  void onWrite(BLECharacteristic *pChar) override {
-    String val = pChar->getValue().c_str();
-    handleConfigCommand(val, true);
-  }
-};
-
-class ConfigServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer *pServer) override {
-    Serial.println("[CONFIG BLE] Web-App verbunden!");
-  }
-  void onDisconnect(BLEServer *pServer) override {
-    Serial.println("[CONFIG BLE] Web-App getrennt.");
-    if (!isBleTransitioning && !exitConfigRequested) {
-      pServer->getAdvertising()->start();
-    }
-  }
-};
-
+#include "DactylConfigBleCallbacks.h"
 #include "DactylBleComposite.h"
+#include "DactylSplitHid.h"
 
 class DactylBleKeyboard : public DactylBleComposite {
 public:
@@ -99,7 +87,8 @@ protected:
   }
 };
 
-DactylBleKeyboard bleKeyboard("Dactyl Keyboard", "Dactyl DIY", 100);
+// Gemeinsamer HID-Report beider Hälften mit Besitz pro Hälfte (DactylSplitHid.h)
+SplitArbitratedKeyboard<DactylBleKeyboard> bleKeyboard("Dactyl Keyboard", "Dactyl DIY", 100);
 
 // 6 Zeilen (Rows)
 const int ROW_PINS[6] = {13, 14, 27, 26, 33, 32};
@@ -112,48 +101,6 @@ const int NUM_COLS = 7;
 // QWERTY / QWERTZ Basis-Belegung für die rechte Hand (Dactyl Manuform)
 // Finger: 6 Spalten (Col 0..5), R4C0 existiert nicht
 // Daumen: R5C0 (T1+T2), R2C6 (Mitte links), R5C4 (Unten links), R5C3 (2U Mitte), R5C2 (2U Rechts)
-// Layer Action Codes (Values >= 0x100)
-#define ACT_MO_BASE 0x100
-#define ACT_MO_0  0x100
-#define ACT_MO_1  0x101
-#define ACT_MO_2  0x102
-#define ACT_MO_3  0x103
-#define ACT_MO_4  0x104
-#define ACT_MO_5  0x105
-#define ACT_MO_6  0x106
-#define ACT_MO_7  0x107
-
-#define ACT_TG_BASE 0x110
-#define ACT_TG_0  0x110
-#define ACT_TG_1  0x111
-#define ACT_TG_2  0x112
-#define ACT_TG_3  0x113
-#define ACT_TG_4  0x114
-#define ACT_TG_5  0x115
-#define ACT_TG_6  0x116
-#define ACT_TG_7  0x117
-#define ACT_LAYER_UP   0x118
-#define ACT_LAYER_DOWN 0x119
-
-#define ACT_MEDIA_PLAY_PAUSE     0x120
-#define ACT_MEDIA_MUTE           0x121
-#define ACT_MEDIA_VOLUME_UP      0x122
-#define ACT_MEDIA_VOLUME_DOWN    0x123
-#define ACT_MEDIA_NEXT_TRACK     0x124
-#define ACT_MEDIA_PREVIOUS_TRACK 0x125
-#define ACT_MEDIA_STOP           0x126
-#define ACT_MAC_GLOBE            0x127
-
-#define ACT_MOUSE_LEFT           0x130
-#define ACT_MOUSE_RIGHT          0x131
-#define ACT_MOUSE_MIDDLE         0x132
-#define ACT_MOUSE_WHEEL_UP       0x133
-#define ACT_MOUSE_WHEEL_DOWN     0x134
-
-// Tastenpaar: eine Taste drückt zwei Tasten gleichzeitig (z. B. Shift + .); Index in userKeyPairs[]
-#define ACT_KEY_PAIR_BASE        0x140
-
-#define NUM_LAYERS 8
 
 // [[[START_SETTINGS]]]
 String deviceName = "Dactyl Keyboard";
@@ -163,21 +110,6 @@ uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, ge
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
 // [[[END_SETTINGS]]]
 
-#define MAX_COMBOS 16
-
-// Reine NVS-persistierte Combo-Definition (exakt 6 Bytes, kompatibel mit bisherigen NVS-Daten)
-struct KeyCombo {
-  uint8_t r1, c1;
-  uint8_t r2, c2;
-  uint8_t behavior; // 0 = KEY_PRESS, 1 = MODIFIER_HOLD, 2 = LAYER_TOGGLE
-  uint16_t action;
-};
-
-// Separater flüchtiger Runtime-Zustand für Tasten-Chording
-struct ComboRuntime {
-  bool active;
-  unsigned long lastReleaseTime;
-};
 ComboRuntime comboRuntime[MAX_COMBOS];
 
 // [[[START_COMBOS]]]
@@ -188,13 +120,6 @@ KeyCombo userCombos[MAX_COMBOS] = {
 };
 // [[[END_COMBOS]]]
 
-#define MAX_KEY_PAIRS 16
-
-// Tastenpaar (exakt 2 Bytes): beide Tasten sind Tastatur-Codes 0x01..0xFF (ASCII, Modifier, Sondertasten)
-struct KeyPair {
-  uint8_t first;
-  uint8_t second;
-};
 
 // [[[START_KEY_PAIRS]]]
 uint8_t numKeyPairs = 0;
@@ -483,68 +408,62 @@ bool momentaryLayers[NUM_LAYERS] = {false};
 bool toggleLayers[NUM_LAYERS] = {false};
 
 #include "DactylLogic.h"
+#include "DactylConfigBle.h"
 
-void startConfigModeBle() {
-  Serial.println("=============================================");
-  Serial.println("  [CONFIG MODE] Isolierter BLE-Config-Server");
-  Serial.println("  Name: 'Dactyl Config' (Ohne HID / Ohne SMP)");
-  Serial.println("=============================================");
+// ESP-NOW-Empfang der linken Hälfte: fertige HID-Operationen, ausgeführt auf bleKeyboard
+// (SplitArbitratedKeyboard: Besitz pro Hälfte im gemeinsamen HID-Report)
+static SplitRxQueue splitRxQueue;
+static bool splitRxReady = false;
+static uint32_t splitRxDroppedSeen = 0;
+static bool splitHostWasReady = false;
 
-  BLEDevice::init("Dactyl Config");
+// Läuft auf dem Wi-Fi-Task: nur prüfen und einreihen, kein Serial, kein BLE
+static void onSplitDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  SplitHidEvent ev;
+  if (info == nullptr || !parseSplitHidPacket(info->src_addr, data, len, ev)) return;
+  splitRxPush(splitRxQueue, ev);
+}
 
-  // Wichtig: Keine Verschlüsselung/Bonding im Config-Modus erzwingen!
-  // Da bleKeyboard.begin() nicht aufgerufen wurde, ist m_securityEnabled ohnehin false;
-  // zusätzlich deaktivieren wir ForceAuthentication explizit, damit der gespeicherte
-  // macOS HID-Bond in Bluedroid unangetastet bleibt.
-  BLESecurity *pSecurity = new BLESecurity();
-  pSecurity->setForceAuthentication(false);
-  delete pSecurity;
+// Muss nach esp_base_mac_addr_set() laufen, damit die Wi-Fi-STA-MAC 2E:BC:BB:81:61:A6 ist
+void setupSplitReceiver() {
+  splitRxReset(splitRxQueue);
+  splitHeldReset(bleKeyboard.splitLeft);
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  esp_wifi_set_channel(SPLIT_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("[SPLIT] ERR ESPNOW_INIT");
+    return;
+  }
+  if (esp_now_register_recv_cb(onSplitDataRecv) != ESP_OK) {
+    Serial.println("[SPLIT] ERR ESPNOW_RECV_CB");
+    return;
+  }
+  splitRxReady = true;
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  Serial.printf("[SPLIT] ESP-NOW-Empfang bereit (Kanal %d, Wi-Fi-STA-MAC %02X:%02X:%02X:%02X:%02X:%02X)\n",
+    SPLIT_ESPNOW_CHANNEL, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
 
-  esp_bd_addr_t randAddr;
-  esp_read_mac(randAddr, ESP_MAC_BT);
-  randAddr[0] |= 0xC0;
-  randAddr[5] |= 0xC0;
-  randAddr[4] ^= 0x55;
+static void onSplitApplied(const SplitHidEvent &ev) {
+  Serial.printf("SPLIT_HID:{\"op\":%u,\"code\":%u,\"arg\":%d}\n", ev.op, ev.code, ev.arg);
+}
 
-  esp_err_t errSet = esp_ble_gap_set_rand_addr(randAddr);
-  Serial.printf("[CONFIG BLE] Random-MAC: %02X:%02X:%02X:%02X:%02X:%02X (rc=%d)\n",
-    randAddr[0], randAddr[1], randAddr[2], randAddr[3], randAddr[4], randAddr[5], errSet);
-
-  BLEServer *pServer = BLEDevice::createServer();
-  pServer->setCallbacks(new ConfigServerCallbacks());
-
-  BLEService *pConfigService = pServer->createService(CONFIG_SERVICE_UUID);
-  pConfigCharacteristic = pConfigService->createCharacteristic(
-    CONFIG_CHARACTERISTIC_UUID,
-    BLECharacteristic::PROPERTY_READ |
-    BLECharacteristic::PROPERTY_WRITE |
-    BLECharacteristic::PROPERTY_NOTIFY
-  );
-  pConfigCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE);
-  pConfigCharacteristic->setCallbacks(new ConfigCallbacks());
-  pConfigCharacteristic->addDescriptor(new BLE2902());
-  pConfigService->start();
-
-  BLEAdvertising *pAdv = pServer->getAdvertising();
-  pAdv->setDeviceAddress(randAddr, BLE_ADDR_TYPE_RANDOM);
-  esp_ble_gap_set_device_name("Dactyl Config");
-
-  BLEAdvertisementData advData;
-  advData.setFlags(0x06);
-  advData.setName("Dactyl Config");
-
-  BLEAdvertisementData scanData;
-  scanData.setCompleteServices(BLEUUID(CONFIG_SERVICE_UUID));
-
-  pAdv->setAppearance(0x0000);
-  pAdv->setAdvertisementData(advData);
-  pAdv->setScanResponseData(scanData);
-  pAdv->setScanResponse(true);
-  pAdv->start();
-
-  Serial.println("MODE:CONFIG");
-  Serial.println("[CONFIG BLE] Advertising als 'Dactyl Config' aktiv!");
-  Serial.flush();
+// Ereignisse der linken Hälfte aus loop() ausführen (Logik: splitProcessRx in DactylSplitHid.h)
+void processSplitEvents() {
+  if (!splitRxReady) return;
+  unsigned long now = millis();
+  bool hostReady = !isConfigMode && bleKeyboard.isConnected();
+  SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
+                                     hostReady, now, onSplitApplied);
+  if (rep.applied) {
+    lastActivityTime = now;
+    exitStandby();
+  }
+  if (rep.hostLost) Serial.println("[SPLIT] Mac getrennt -> alle gehaltenen Eingaben gelöst");
+  if (rep.overflow) Serial.println("[SPLIT] WARN: Empfangspuffer voll -> gehaltene Eingaben der linken Hälfte gelöst");
+  if (rep.linkLost) Serial.println("[SPLIT] WARN: Linke Hälfte nicht erreichbar -> gehaltene Eingaben gelöst");
 }
 
 void setup() {
@@ -632,6 +551,8 @@ void setup() {
     bleKeyboard.begin();
     Serial.println("MODE:KEYBOARD");
     Serial.println("Bluetooth aktiv! Advertising läuft."); Serial.flush();
+    // ESP-NOW nur im Tastaturmodus; der zeitlich begrenzte Config Mode bleibt reines BLE
+    setupSplitReceiver();
   }
 }
 
@@ -743,6 +664,9 @@ void loop() {
       scanMutexTaken = false;
     }
   }
+
+  // Ereignisse der linken Hälfte (ESP-NOW) anzeigen
+  processSplitEvents();
 
   // Deferriertes Starten/Beenden des Config-Modus aus loopTask
   if (enterConfigRequested) {

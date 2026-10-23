@@ -42,6 +42,11 @@ protected:
   std::string         deviceManufacturer;
   uint8_t             batteryLevel;
   bool                connected;
+  // Report-Batching: während eines Batches werden Reports nur gesammelt und am Ende einmal gesendet
+  bool                batching = false;
+  bool                pendingKeyboard = false;
+  bool                pendingMedia = false;
+  bool                pendingMouse = false;
 
   uint16_t vid;
   uint16_t pid;
@@ -127,7 +132,23 @@ public:
     }
   }
 
+  // Sammelt alle folgenden Reports bis endReportBatch() (z. B. releaseAll + erneutes Drücken gehaltener
+  // Tasten der anderen Hälfte), damit der Host keinen Zwischenstand sieht
+  void beginReportBatch() {
+    batching = true;
+    pendingKeyboard = pendingMedia = pendingMouse = false;
+  }
+
+  void endReportBatch() {
+    batching = false;
+    if (pendingKeyboard) sendReport(&_keyReport);
+    if (pendingMedia) sendReport(&_mediaKeyReport);
+    if (pendingMouse) sendMouseReport(_mouseButtons, 0, 0, 0);
+    pendingKeyboard = pendingMedia = pendingMouse = false;
+  }
+
   void sendReport(KeyReport* keys) {
+    if (batching) { pendingKeyboard = true; return; }
     if (this->isConnected() && inputKeyboard != nullptr) {
       inputKeyboard->setValue((uint8_t*)keys, sizeof(KeyReport));
       inputKeyboard->notify();
@@ -135,6 +156,7 @@ public:
   }
 
   void sendReport(MediaKeyReport* keys) {
+    if (batching) { pendingMedia = true; return; }
     if (this->isConnected() && inputMediaKeys != nullptr) {
       inputMediaKeys->setValue((uint8_t*)keys, sizeof(MediaKeyReport));
       inputMediaKeys->notify();
@@ -142,6 +164,8 @@ public:
   }
 
   void sendMouseReport(uint8_t buttons, int8_t x, int8_t y, int8_t wheel) {
+    // Bewegung/Scrollen wird nie gesammelt; im Batch zählt nur der Button-Zustand
+    if (batching && x == 0 && y == 0 && wheel == 0) { pendingMouse = true; return; }
     if (this->isConnected() && inputMouse != nullptr) {
       uint8_t m[4] = { buttons, (uint8_t)x, (uint8_t)y, (uint8_t)wheel };
       inputMouse->setValue(m, sizeof(m));

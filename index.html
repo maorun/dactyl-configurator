@@ -125,7 +125,7 @@
           <div class="config-guide-title" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
             <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
               <strong>Drahtloser Konfig-Modus &amp; Combo Auto-Sync</strong>
-              <span class="badge" style="background: rgba(59,130,246,0.25); color: #93c5fd; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px;">Combo: R4C5 + R0C0 (0,5s)</span>
+              <span class="badge" id="configComboBadge" style="background: rgba(59,130,246,0.25); color: #93c5fd; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px;">Rechte Hand · Combo: R4C5 + R0C0 (0,5s)</span>
               <span class="config-state-badge state-normal" id="configModeStateBadge">⌨️ Mac-Tastaturmodus aktiv</span>
               <span class="pending-sync-badge synced" id="pendingSyncBadge" title="Alle Einstellungen sind synchron">✓ Alle Einstellungen synchron</span>
               <button id="btnTogglePendingDrawer" class="btn-pending-toggle" style="display: none;" title="Vorgemerkte Änderungen anzeigen oder ausblenden">
@@ -209,7 +209,7 @@
         <div class="keyboard-preview-container">
           <div class="keyboard-header">
             <div class="hand-switcher">
-              <button class="hand-btn active" data-hand="right">Rechte Hand (Aktiv)</button>
+              <button class="hand-btn active" data-hand="right">Rechte Hand</button>
               <button class="hand-btn" data-hand="left">Linke Hand</button>
               <button class="hand-btn" data-hand="both">Beide Hände (Split)</button>
             </div>
@@ -353,7 +353,8 @@
     <main class="tab-content" id="matrix-test-tab">
       <div class="settings-card matrix-test-card">
         <h3>Matrix-Test (Löt- und Dioden-Tester)</h3>
-        <p class="form-hint">Verbinde den USB Live-Monitor und drücke jede Taste einmal. Erkannte Tasten werden grün. Zeilen oder Spalten ohne erkannte Taste zeigen eine verdächtige Leitung (Lötstelle, Diode oder Kabel). Tasten ohne Belegung auf der aktiven Ebene meldet die Firmware nicht; teste auf Ebene 0.</p>
+        <p class="form-hint" id="matrixTestSideHint">Rechte Hand · Dioden: Kathode zur Zeile</p>
+        <p class="form-hint">Wähle oben die Hälfte. Verbinde sie per USB Live-Monitor oder Bluetooth im Konfig-Modus und drücke jede Taste einmal. Erkannte Tasten werden grün. Zeilen oder Spalten ohne erkannte Taste zeigen eine verdächtige Leitung (Lötstelle, Diode oder Kabel). Tasten ohne Belegung auf der aktiven Ebene meldet die Firmware nicht; teste auf Ebene 0.</p>
         <div class="matrix-test-progress">
           <span class="live-label">Getestet:</span>
           <span class="matrix-test-badge" id="matrixTestProgress">0 / 0</span>
@@ -480,6 +481,8 @@
     <div class="toast" id="toastNotification"></div>
   </div>
 
-  <script src="app.js?v=34"></script>
+  <script src="js/side-profiles.js?v=1"></script>
+  <script src="js/side-state.js?v=1"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

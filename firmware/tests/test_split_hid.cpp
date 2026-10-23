@@ -1,0 +1,236 @@
+#include <cassert>
+#include <iostream>
+#include <string>
+#include <vector>
+
+// Getestete Logik unverändert aus firmware/dactyl_right/DactylSplitHid.h (beide Hälften)
+#include "../dactyl_right/DactylSplitHid.h"
+
+static int testsRun = 0;
+static int testsPassed = 0;
+
+// Protokolliert jede HID-Ausgabe des Masters
+struct RecordingSink : SplitHidSink {
+  std::vector<std::string> log;
+  void leftKeyPress(uint8_t c) override { log.push_back("kp" + std::to_string(c)); }
+  void leftKeyRelease(uint8_t c) override { log.push_back("kr" + std::to_string(c)); }
+  void leftMediaPress(uint16_t b) override { log.push_back("mp" + std::to_string(b)); }
+  void leftMediaRelease(uint16_t b) override { log.push_back("mr" + std::to_string(b)); }
+  void leftMousePress(uint8_t b) override { log.push_back("bp" + std::to_string(b)); }
+  void leftMouseRelease(uint8_t b) override { log.push_back("br" + std::to_string(b)); }
+  void leftMouseClick(uint8_t b) override { log.push_back("bc" + std::to_string(b)); }
+  void leftMouseScroll(int8_t s) override { log.push_back("sc" + std::to_string(s)); }
+};
+
+static SplitLeftHeld held;
+static RecordingSink sink;
+static SplitRxQueue rxq;
+
+#define TEST(name) void name(); \
+  struct Runner_##name { Runner_##name() { \
+    testsRun++; \
+    std::cout << "[ RUN      ] " << #name << std::endl; \
+    splitHeldReset(held); \
+    sink.log.clear(); \
+    splitRxReset(rxq); \
+    name(); \
+    testsPassed++; \
+    std::cout << "[       OK ] " << #name << std::endl; \
+  } } instance_##name; \
+  void name()
+
+static bool parse(const uint8_t *mac, SplitHidEvent ev, SplitHidEvent &out) {
+  return parseSplitHidPacket(mac, reinterpret_cast<const uint8_t *>(&ev), sizeof(ev), out);
+}
+
+static bool apply(uint8_t op, uint16_t code = 0, int8_t arg = 0, unsigned long now = 0) {
+  return splitApplyHidEvent(held, makeSplitHidEvent(op, code, arg), now, sink);
+}
+
+static const std::vector<std::string> &L() { return sink.log; }
+
+// -----------------------------------------------------------------------------
+// Paketprüfung
+// -----------------------------------------------------------------------------
+TEST(test_layout_is_4_bytes_little_endian) {
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_MEDIA_PRESS, 0x0400, 0);
+  const uint8_t *b = reinterpret_cast<const uint8_t *>(&ev);
+  assert(sizeof(ev) == 4);
+  assert(b[0] == SPLIT_OP_MEDIA_PRESS && b[1] == 0 && b[2] == 0x00 && b[3] == 0x04);
+}
+
+TEST(test_valid_event_per_op) {
+  SplitHidEvent out;
+  const SplitHidEvent ok[] = {
+    makeSplitHidEvent(SPLIT_OP_HEARTBEAT),
+    makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'),
+    makeSplitHidEvent(SPLIT_OP_KEY_RELEASE, 0xFF),
+    makeSplitHidEvent(SPLIT_OP_KEY_WRITE, 1),
+    makeSplitHidEvent(SPLIT_OP_RELEASE_ALL),
+    makeSplitHidEvent(SPLIT_OP_MEDIA_PRESS, 0x0400),
+    makeSplitHidEvent(SPLIT_OP_MEDIA_RELEASE, 0x0400),
+    makeSplitHidEvent(SPLIT_OP_MEDIA_WRITE, 8),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 1),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_RELEASE, 7),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_CLICK, 4),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, -1),
+  };
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT);
+  for (const SplitHidEvent &ev : ok) assert(parse(SPLIT_LEFT_MAC, ev, out) && out.op == ev.op);
+}
+
+TEST(test_invalid_values_are_rejected) {
+  SplitHidEvent out;
+  const SplitHidEvent bad[] = {
+    makeSplitHidEvent(SPLIT_OP_HEARTBEAT, 1),
+    makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 0),
+    makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 0x100),
+    makeSplitHidEvent(SPLIT_OP_KEY_RELEASE, 'a', 1),
+    makeSplitHidEvent(SPLIT_OP_RELEASE_ALL, 0, 1),
+    makeSplitHidEvent(SPLIT_OP_MEDIA_PRESS, 0),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 0),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_CLICK, 8),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, 0),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 1, 1),
+    makeSplitHidEvent(SPLIT_OP_COUNT),
+    makeSplitHidEvent(0xFF),
+  };
+  for (const SplitHidEvent &ev : bad) assert(!parse(SPLIT_LEFT_MAC, ev, out));
+}
+
+TEST(test_foreign_sender_and_length_are_rejected) {
+  SplitHidEvent out;
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a');
+  assert(!parse(SPLIT_MASTER_MAC, ev, out));
+  assert(!parse(nullptr, ev, out));
+  const uint8_t *data = reinterpret_cast<const uint8_t *>(&ev);
+  assert(!parseSplitHidPacket(SPLIT_LEFT_MAC, data, 3, out));
+  assert(!parseSplitHidPacket(SPLIT_LEFT_MAC, data, 5, out));
+  assert(!parseSplitHidPacket(SPLIT_LEFT_MAC, data, -1, out));
+  assert(!parseSplitHidPacket(SPLIT_LEFT_MAC, nullptr, 4, out));
+}
+
+TEST(test_media_report_roundtrip) {
+  const uint8_t globe[2] = {0, 4};
+  assert(splitMediaBits(globe) == 0x0400);
+  uint8_t r[2];
+  splitMediaReport(0x0408, r);
+  assert(r[0] == 0x08 && r[1] == 0x04);
+}
+
+// -----------------------------------------------------------------------------
+// Master: Zustand, Duplikate, Timeout
+// -----------------------------------------------------------------------------
+TEST(test_press_release_is_idempotent) {
+  assert(apply(SPLIT_OP_KEY_PRESS, 0x81));
+  assert(!apply(SPLIT_OP_KEY_PRESS, 0x81)); // Retry-Duplikat
+  assert(splitHeldKey(held, 0x81));
+  assert(apply(SPLIT_OP_KEY_RELEASE, 0x81));
+  assert(!apply(SPLIT_OP_KEY_RELEASE, 0x81));
+  assert((L() == std::vector<std::string>{"kp129", "kr129"}));
+}
+
+TEST(test_release_without_press_sends_nothing) {
+  assert(!apply(SPLIT_OP_KEY_RELEASE, 'a'));
+  assert(!apply(SPLIT_OP_MEDIA_RELEASE, 8));
+  assert(!apply(SPLIT_OP_MOUSE_RELEASE, 1));
+  assert(L().empty());
+}
+
+TEST(test_write_does_not_release_held_key) {
+  apply(SPLIT_OP_KEY_PRESS, 'a');
+  assert(!apply(SPLIT_OP_KEY_WRITE, 'a'));
+  assert(apply(SPLIT_OP_KEY_WRITE, 'b'));
+  assert((L() == std::vector<std::string>{"kp97", "kp98", "kr98"}));
+  assert(splitHeldKey(held, 'a'));
+}
+
+TEST(test_media_and_mouse_tracking) {
+  assert(apply(SPLIT_OP_MEDIA_PRESS, 0x0400));
+  assert(!apply(SPLIT_OP_MEDIA_PRESS, 0x0400));
+  assert(apply(SPLIT_OP_MEDIA_WRITE, 0x0008));
+  assert(!apply(SPLIT_OP_MEDIA_WRITE, 0x0400));
+  assert(apply(SPLIT_OP_MOUSE_PRESS, 1));
+  assert(!apply(SPLIT_OP_MOUSE_CLICK, 1));
+  assert(apply(SPLIT_OP_MOUSE_CLICK, 2));
+  assert(apply(SPLIT_OP_MOUSE_SCROLL, 0, -3));
+  assert(apply(SPLIT_OP_MOUSE_SCROLL, 0, -3)); // Scrollen ist eine Bewegung, kein Zustand
+  assert((L() == std::vector<std::string>{"mp1024", "mp8", "mr8", "bp1", "bc2", "sc-3", "sc-3"}));
+  assert(held.set.media == 0x0400 && held.set.mouse == 1);
+}
+
+TEST(test_release_all_releases_only_left_held_inputs) {
+  apply(SPLIT_OP_KEY_PRESS, 0x81);
+  apply(SPLIT_OP_KEY_PRESS, 'q');
+  apply(SPLIT_OP_MEDIA_PRESS, 0x0400);
+  apply(SPLIT_OP_MOUSE_PRESS, 4);
+  sink.log.clear();
+  assert(apply(SPLIT_OP_RELEASE_ALL));
+  assert((L() == std::vector<std::string>{"kr113", "kr129", "mr1024", "br4"}));
+  assert(!splitHeldAny(held));
+  assert(!apply(SPLIT_OP_RELEASE_ALL)); // nichts mehr gehalten
+}
+
+TEST(test_heartbeat_keeps_link_without_output) {
+  assert(!apply(SPLIT_OP_HEARTBEAT, 0, 0, 500));
+  assert(L().empty());
+  assert(held.linkUp && held.lastRxMs == 500);
+}
+
+TEST(test_link_timeout_releases_held_inputs_once) {
+  apply(SPLIT_OP_KEY_PRESS, 0x81, 0, 1000);
+  sink.log.clear();
+  assert(!splitCheckLinkTimeout(held, 1000 + SPLIT_LINK_TIMEOUT_MS - 1, sink));
+  assert(splitCheckLinkTimeout(held, 1000 + SPLIT_LINK_TIMEOUT_MS, sink));
+  assert((L() == std::vector<std::string>{"kr129"}));
+  assert(!held.linkUp);
+  assert(!splitCheckLinkTimeout(held, 1000 + 2 * SPLIT_LINK_TIMEOUT_MS, sink));
+  assert(L().size() == 1);
+}
+
+TEST(test_heartbeat_prevents_timeout) {
+  apply(SPLIT_OP_KEY_PRESS, 'a', 0, 0);
+  for (unsigned long t = 1000; t <= 10000; t += 1000) {
+    apply(SPLIT_OP_HEARTBEAT, 0, 0, t);
+    assert(!splitCheckLinkTimeout(held, t + 500, sink));
+  }
+  assert(splitHeldKey(held, 'a'));
+}
+
+TEST(test_link_timeout_across_millis_wrap) {
+  const unsigned long nearWrap = ~0UL - 100;
+  apply(SPLIT_OP_KEY_PRESS, 'a', 0, nearWrap);
+  assert(!splitCheckLinkTimeout(held, nearWrap + 200, sink));
+  assert(splitCheckLinkTimeout(held, nearWrap + SPLIT_LINK_TIMEOUT_MS, sink));
+}
+
+TEST(test_no_timeout_before_first_packet) {
+  assert(!splitCheckLinkTimeout(held, 100000, sink));
+  assert(L().empty());
+}
+
+// -----------------------------------------------------------------------------
+// Empfangsring
+// -----------------------------------------------------------------------------
+TEST(test_rx_queue_fifo_full_and_wrap) {
+  SplitHidEvent out;
+  assert(!splitRxPop(rxq, out));
+  for (int i = 0; i < SPLIT_RX_QUEUE_SIZE; i++) assert(splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 1 + i)));
+  assert(!splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 200)));
+  assert(rxq.dropped == 1);
+  for (int i = 0; i < SPLIT_RX_QUEUE_SIZE; i++) assert(splitRxPop(rxq, out) && out.code == 1 + i);
+  rxq.head = rxq.tail = 0xFFFFFFF0u;
+  for (int i = 0; i < 40; i++) {
+    assert(splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 1 + i)));
+    assert(splitRxPop(rxq, out) && out.code == 1 + i);
+  }
+}
+
+int main() {
+  std::cout << "==================================================" << std::endl;
+  std::cout << "  Dactyl Split HID Protocol Test Suite" << std::endl;
+  std::cout << "==================================================" << std::endl;
+
+  std::cout << "\nRan " << testsRun << " tests. All " << testsPassed << " passed successfully!" << std::endl;
+  return (testsRun == testsPassed) ? 0 : 1;
+}

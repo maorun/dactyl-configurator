@@ -9,6 +9,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 1. **Firmware (`firmware/dactyl_right/dactyl_right.ino`):**
    - Target Board: WEMOS LOLIN32 Lite (`esp32:esp32:lolin32-lite`, `ESP32-D0WDQ6-V3`).
    - Core Features: Composite BLE HID Keyboard (own implementation in `DactylBleComposite.h` and `DactylKeycodes.h`; no external `ESP32-BLE-Keyboard` library, which does not build against ESP32 Arduino Core 3.x), custom BLE GATT Configuration Service (`4fafc201-1fb5-459e-8fcc-c5c9c331914b`), persistent Non-Volatile Storage (NVS) via ESP32 `Preferences`, two-stage power management (Standby + Deep Sleep), and real-time USB Serial monitor/command interface (`115200` baud).
+   - Split receiver: executes the `SplitHidEvent`s of the left half (ESP-NOW, `DactylSplitHid.h`) on its BLE HID connection; see "Left Half Firmware".
    - Matrix scanning: 6 Rows (`ROW_PINS = {13, 14, 27, 26, 33, 32}`) x 7 Columns (`COL_PINS = {23, 19, 18, 17, 16, 4, 25}`). Hand-wired matrix using 1N4148 diodes (Cathode/black ring to Row wire, Anode to switch pin 1, Columns soldered directly to switch pin 2 on active-low `INPUT_PULLUP`).
 
 2. **Web Configurator (`index.html`, `style.css`, `app.js`):**
@@ -21,12 +22,12 @@ This repository versions the firmware, web-based configurator, macOS desktop app
    - Automatically checks and starts the local Python backend server (`server.py`) upon launch and opens Chrome in `--app=http://localhost:8088` mode with `--enable-features=WebBluetoothNewPermissionsBackend` and `--enable-experimental-web-platform-features` so `navigator.bluetooth.getDevices()` and `device.watchAdvertisements()` work out-of-the-box.
 
 4. **Local REST Server (`server.py`):**
-   - Python HTTP server bound strictly to `127.0.0.1:8088`. Every request requires an exact `Host` header (`localhost:8088` / `127.0.0.1:8088`, DNS-rebinding protection); POST requests with a foreign `Origin` are rejected. Static serving is limited to an allowlist (`index.html`, `app.js`, `style.css`).
+   - Python HTTP server bound strictly to `127.0.0.1:8088`. Every request requires an exact `Host` header (`localhost:8088` / `127.0.0.1:8088`, DNS-rebinding protection); POST requests with a foreign `Origin` are rejected. Static serving is limited to an allowlist (`index.html`, `app.js`, `style.css`, `js/side-profiles.js`, `js/side-state.js`).
    - Configs are validated (each layer at most 6 rows x 7 keys, key cells object or code string, combo coordinates, firmware setting ranges; JSON `null` bodies return HTTP 400) and the `.ino` is rendered in memory before `current_config.json` and `dactyl_right.ino` are written atomically.
    - Ensures Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) are in `PATH` even when launched from macOS Finder/Dock.
    - Serves configurator web assets with no-cache headers.
-   - Provides `/api/save_and_flash` to compile C++ defaults into `dactyl_right.ino` and flash the board via `arduino-cli` at `upload.speed=115200`.
-   - Provides `/api/config` to read and write `current_config.json` (falls back to `default_config.json` when no local config exists).
+   - Provides `/api/save_and_flash?side=L|R` to compile C++ defaults into the `.ino` of that half (`dactyl_right.ino` / `dactyl_left.ino`) and flash it via `arduino-cli` (`FIRMWARE_FQBN` with `PartitionScheme=min_spiffs`) at `upload.speed=115200`. The upload port is the `usbserial` port whose board answers `GET_INFO` with the matching `DEVICE_INFO.side`; without a match nothing is compiled or flashed.
+   - Provides `/api/config?side=L|R` to read and write the config of a half: `current_config.json` / `current_config_left.json` (fallback `default_config.json` / `default_config_left.json`). Without `side` the right half applies; another value returns HTTP 400. On the left half, the missing keys `R4C5` / `R5C0` must not carry an action, and combos must not use them.
 
 5. **Wiring Diagrams (`docs/lolin32_lite_wiring.svg`, `docs/lolin32_lite_wiring.png`):**
    - Physical Left-Side (Pins 1–13) and Right-Side (Pins 1–13) board pinout and wire color assignment for the WEMOS LOLIN32 Lite.
@@ -80,6 +81,78 @@ This repository versions the firmware, web-based configurator, macOS desktop app
   - `R5C2`: Right 2U Tall (Col 2 = `GPIO 18`, Default: `Enter`)
 - Note: `R5C5` does not physically exist on the 6-key thumb cluster and must not be rendered in `thumbDefs`.
 - In the UI, the thumb cluster is ergonomically positioned **to the left** of the finger cluster for the right hand.
+
+---
+
+## Left Half Firmware (`firmware/dactyl_left/`)
+
+### Architecture
+- The left half is a standalone keyboard brain: own 8-layer keymap (tap/hold/double-tap), combos, key pairs, NVS and config mode. It runs the **same** `firmware/dactyl_right/DactylLogic.h` (included via `../dactyl_right/`; `arduino-cli` resolves relative includes). Never copy logic into `dactyl_left.ino`.
+- Layers and combos do not span both halves. A left `MO_1` only changes the left layer.
+- The left half has no HID service. `DactylSplitKeyboard` (`firmware/dactyl_left/DactylSplitKeyboard.h`) is its `bleKeyboard`: it offers the methods `DactylLogic.h` calls and queues each call as a `SplitHidEvent` to the master. The master executes it on its BLE HID connection. macOS sees one keyboard.
+- `isConnected()` on the left is true only if a send callback succeeded within `SPLIT_LINK_DOWN_MS` (2 s). The left half sends `SPLIT_OP_HEARTBEAT` every second, so the link state stays current without key presses. Like a disconnected Mac, a missing master makes `DactylLogic.h` send nothing.
+- Shared headers in `firmware/dactyl_right/`: `DactylCommon.h` (action codes, `KeyCombo`, `KeyPair`), `DactylConfigBleCallbacks.h` + `DactylConfigBle.h` (isolated config-mode BLE server, name from `CONFIG_BLE_NAME`), `DactylSplitHid.h` (protocol). `DactylLogic.h` takes `CONFIG_COMBO_R1/C1/R2/C2`, `DEFAULT_DEVICE_NAME` and `CONFIG_BLE_NAME` as overridable macros; the right half uses the defaults.
+
+### Split HID protocol (`DactylSplitHid.h`)
+- `SplitHidEvent { uint8_t op; int8_t arg; uint16_t code; }`, 4 bytes, packed, little endian. ESP-NOW channel 1, unencrypted, left `2E:BC:BB:81:61:B0` -> master `2E:BC:BB:81:61:A6`.
+- Ops: `HEARTBEAT`, `KEY_PRESS/RELEASE/WRITE` (code 1..255), `RELEASE_ALL`, `MEDIA_PRESS/RELEASE/WRITE` (16-bit media mask, `MediaKeyReport` low = `[0]`), `MOUSE_PRESS/RELEASE/CLICK` (mask 1..7), `MOUSE_SCROLL` (`arg` != 0). Append new ops only; never renumber.
+- `parseSplitHidPacket()` checks sender MAC, length and the value range of each op. The master runs it in the Wi-Fi task callback and only queues valid events (64-entry SPSC ring, `SplitRxQueue`); `loop()` executes them.
+- The master's `bleKeyboard` is `SplitArbitratedKeyboard<DactylBleKeyboard>`: it tracks what each half holds in the shared HID report. An input is released in the report only when neither half holds it, so a right Shift release keeps a left Shift held. A right `releaseAll()` (combos, config combo) clears only right inputs and re-presses left ones inside one batched report (`beginReportBatch` / `endReportBatch` in `DactylBleComposite.h`).
+- Left-side tracking (`SplitLeftHeld`): press only sets, release only clears, so retry duplicates are harmless. `KEY_WRITE` of a held code and `MOUSE_CLICK` of a held button are ignored. `RELEASE_ALL`, the link timeout (`SPLIT_LINK_TIMEOUT_MS`, 3 s without packets) and a receive-ring overflow release **only** the inputs held by the left half.
+- `splitProcessRx()` holds the gating: without a Mac connection or in config mode the master executes nothing but keeps the link alive. On the transition to "no host" it clears both halves and the report, so no key is stuck after the Mac reconnects; physically held keys must be pressed again.
+- The left half sends `RELEASE_ALL` right after ESP-NOW starts (boot, wake, return from config mode). Its acknowledgement also marks the link as up without waiting for the first heartbeat.
+- The master prints each executed event as `SPLIT_HID:{"op":..,"code":..,"arg":..}`; the app ignores unknown serial lines.
+
+### Send queue (`DactylLeftLogic.h`)
+- 64-entry queue, one packet in flight. A failed send (callback status, `esp_now_send` error or 200 ms callback timeout) is retried up to 3 times after `ESPNOW_RETRY_DELAY_MS` (30 ms); the order is kept.
+- The send callback is matched by a callback counter: each send expects "counter before send + 1" (`queueMarkSent` / `queueCallbackIsCurrent`). Only a callback that arrives more than 230 ms late, after the retry was sent, is credited to the retry.
+- A full queue drops the new event (`ESPNOW_QUEUE_FULL`). While the link is up, a dropped release stays held until the next `RELEASE_ALL` (config mode entry, deep sleep or reboot of the left half).
+
+### Config mode, NVS, power
+- Config mode: hold **`R0C5 + R4C0`** (mirrored: inner top + outer bottom) for 500 ms, or USB serial `ENTER_CONFIG`. The left half sends `RELEASE_ALL`, reboots into an isolated BLE server `Dactyl Config L` (static random address, no HID, no bonding) and returns via `ESP.restart()` or after 3 min inactivity. In config mode ESP-NOW is off.
+- NVS: same `loadKeymapFromNVS()` / `saveKeymapToNVS()` / `handleConfigCommand()` as the right half, on the left chip. `KEYMAP_DEFAULTS_ID 0` in the repository.
+- `DEVICE_INFO` contains `"side":"L"` (macro `DEVICE_SIDE`, default `"R"` in `DactylLogic.h`). App and server identify the half at a USB port with it; firmware without the field counts as right.
+- Power: standby after 5 min (80 MHz, slower scan), deep sleep after 60 min. Before deep sleep: `RELEASE_ALL`, ESP-NOW off, rows held `HIGH` (`gpio_hold_en`), columns as RTC inputs with pull-down, Ext1 `ANY_HIGH` on the columns. A key press drives row -> switch -> diode -> column high.
+- Known limit: sleeps are not synchronized. A left key wakes only the left half; a sleeping master receives nothing until a right key wakes it.
+- Default layout: QWERTZ left hand (US-ASCII codes like the right half; macOS German layout maps `'y'`/`'z'`). `R4C5` and `R5C0` do not exist physically.
+
+### Wiring (diodes on columns, columns on RTC pins)
+- **Diodes are on the columns** (cathode/black ring to the column wire). The scan drives one column `LOW` and reads the rows with `INPUT_PULLUP`. All columns must be RTC GPIOs for the Ext1 wakeup (`test_columns_are_rtc_wakeup_capable`).
+- `esp_base_mac_addr_set(LEFT_BASE_MAC)` runs before Wi-Fi/BLE start. Without it, the board uses its eFuse MAC.
+
+| Wire | Left function | GPIO | Board pin |
+|---|---|---|---|
+| 🟡 Yellow (row) | Row 0 (top) | 23 | Right 3 |
+| 🟠 Orange (row) | Row 1 | 19 | Right 1 |
+| 🟢 Green (row) | Row 2 | 18 | Left 13 |
+| 🟤 Brown (row) | Row 3 | 17 | Left 12 |
+| 🔵 Blue (row) | Row 4 | 16 | Left 11 |
+| 🟣 Purple (row) | Row 5 (thumbs) | 4 | Left 5 |
+| 🟣 Purple (col) | Col 0 (outer left) | 13 | Left 8 |
+| 🟤 Brown (col) | Col 1, thumb bottom right | 14 | Left 9 |
+| 🟢 Green (col) | Col 2, thumb bottom center | 27 | Right 6 |
+| 🟠 Orange (col) | Col 3, thumb far left | 26 | Right 5 |
+| 🟡 Yellow (col) | Col 4, thumb center right | 33 | Right 8 |
+| 🔴 Red (col) | Col 5 (inner right), thumb top center | 32 | Right 7 |
+| 🔵 Blue (col) | Col 6 (thumb only), thumb top right | 25 | Right 4 |
+| ⚪ Gray | BAT_SENSE (not used yet) | 35 | Right 11 |
+
+### Build & flash (both halves use `min_spiffs`)
+- BLE + ESP-NOW do not fit into the default 1.25 MB app partition (`text section exceeds available space`). Both halves use `PartitionScheme=min_spiffs` (1.875 MB app, NVS offset `0x9000` unchanged, so keymaps and the macOS bond survive the switch). `server.py` (`FIRMWARE_FQBN`) and CI use the same FQBN.
+- Identify each board by its boot log before flashing; the USB port names change between plug-ins.
+
+```bash
+/opt/homebrew/bin/arduino-cli compile --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs firmware/dactyl_left
+/opt/homebrew/bin/arduino-cli upload -p /dev/cu.usbserial-XXXX --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs,UploadSpeed=115200 firmware/dactyl_left
+```
+
+### App support for both halves (`js/side-profiles.js`, `js/side-state.js`)
+- Everything that differs between the halves lives in `SIDE_PROFILES` (`js/side-profiles.js`): BLE config name, default device name, config combo, missing keys, thumb cluster layout, row/column wires, diode hint, heatmap storage key, left default config. Do not add side-specific logic to `app.js`; the right half will move out of `app.js` into the same structure later.
+- The hand switcher selects the edited half. `currentConfig` and `pendingChanges` in `app.js` always belong to it; the other half is kept in `sideStore` (`js/side-state.js`). Heatmap counters and the matrix test exist per half. The displayed layer is shared.
+- The left half gets changes on the same paths as the right half: BLE one-shot auto-sync after `R0C5 + R4C0` (`Dactyl Config L`), BLE live editing in config mode, USB serial sync and "Auf Dactyl flashen".
+- Every connection knows its half: BLE from the config name (`Dactyl.sideFromBleName`, confirmed by `DEVICE_INFO`), USB from `DEVICE_INFO.side`. `sendDeviceCommand(cmd, side)` sends only to a connection of that half; otherwise the change stays pending for that half. `writeConfigToESP32` syncs the half of the connection, not the displayed half. Acks carry the half, so a reply from the other half never confirms a command.
+- Revert closures of pending changes write to `currentConfig`; a change recorded for the non-edited half has no revert.
+- `tests/test_side_profiles.js` checks the profiles against the firmware sources (combo, names, pins, `KEYMAP` of `dactyl_left.ino`, `default_config_left.json`).
 
 ---
 
@@ -160,22 +233,23 @@ Keys in the matrix use `uint16_t` action codes:
 
 ### 1. Compile Firmware
 ```bash
-/opt/homebrew/bin/arduino-cli compile --fqbn esp32:esp32:lolin32-lite firmware/dactyl_right/dactyl_right.ino
+/opt/homebrew/bin/arduino-cli compile --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs firmware/dactyl_right/dactyl_right.ino
 ```
 
 ### 2. Upload Firmware (USB)
 > **Important:** The CH340 USB-serial bridge on the WEMOS LOLIN32 Lite can fail stub verification at the default `921600` baud on macOS. Always specify `UploadSpeed=115200` (or `--upload-property upload.speed=115200`).
 ```bash
-/opt/homebrew/bin/arduino-cli upload -p /dev/cu.usbserial-21320 --fqbn esp32:esp32:lolin32-lite:UploadSpeed=115200 firmware/dactyl_right/dactyl_right.ino
+/opt/homebrew/bin/arduino-cli upload -p /dev/cu.usbserial-21320 --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs,UploadSpeed=115200 firmware/dactyl_right/dactyl_right.ino
 ```
 
 ### 3. Tests, Syntax & XML Verification
 ```bash
 python3 tests/test_server.py          # Codegen, validation, HTTP host/origin/static allowlist
 node tests/test_app_logic.js          # app.js action codes, sanitizing, config validation
-bash firmware/tests/run_tests.sh      # Firmware logic (DactylLogic.h) against ArduinoMock.h
+node tests/test_side_profiles.js      # side profiles vs. firmware sources, per-half state
+bash firmware/tests/run_tests.sh      # DactylLogic.h, DactylLeftLogic.h, DactylSplitHid.h, left proxy
 python3 -m py_compile server.py
-node --check app.js && node --check main.js
+node --check app.js && node --check main.js && node --check js/side-profiles.js && node --check js/side-state.js
 xmllint --noout docs/lolin32_lite_wiring.svg
 ```
 
@@ -200,6 +274,7 @@ python3 server.py
 
 2a. **BLE Command Authorization:**
    - In keyboard mode, BLE accepts only `GET_INFO`. Config mode is entered only through the physical `R4C5 + R0C0` combo or USB serial `ENTER_CONFIG`. The config characteristic is intentionally unauthenticated during the time-limited (3 min) config mode; this risk was explicitly accepted to preserve the macOS bonding design.
+   - ESP-NOW between the halves is unencrypted (accepted design for latency). The master executes HID operations from any sender with the left MAC `2E:BC:BB:81:61:B0`; a nearby transmitter that spoofs this MAC can inject keystrokes. `parseSplitHidPacket()` limits the impact to valid HID operations; ESP-NOW never carries config commands.
 
 3. **NVS Synchronization upon Flashing:**
    - A persisted combo count of `0` (after `CLEAR_COMBOS` + `SAVE_COMBOS`) overrides the compiled-in combos at boot.

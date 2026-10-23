@@ -137,10 +137,11 @@ function createWindow() {
     logElectron(`select-bluetooth-device fired with ${deviceList.length} devices: ` + JSON.stringify(deviceList));
     activeBluetoothCallback = callback;
 
-    let dactyl = deviceList.find(d => {
-      const name = (d.deviceName || '').toLowerCase();
-      return name.includes('dactyl') || name.includes('config');
-    });
+    // Eine Hälfte im Config Mode ("Dactyl Config" rechts, "Dactyl Config L" links) hat Vorrang vor der
+    // Tastatur im Mac-Modus. Die App erkennt die Hälfte anschließend am Namen und an DEVICE_INFO.
+    const nameOf = d => (d.deviceName || '').toLowerCase();
+    let dactyl = deviceList.find(d => nameOf(d).startsWith('dactyl config'))
+      || deviceList.find(d => nameOf(d).includes('dactyl') || nameOf(d).includes('config'));
 
     if (dactyl) {
       logElectron(`Auto-selecting Dactyl: ${dactyl.deviceName || '(unnamed)'} (${dactyl.deviceId})`);
@@ -169,6 +170,8 @@ function createWindow() {
   ses.on('select-bluetooth-device', handleBluetoothSelect);
   logElectron('Registered select-bluetooth-device handler on mainWindow.webContents and session.');
 
+  // Bei zwei angeschlossenen Hälften wählt dies den ersten USB-Port. Die App erkennt die Hälfte danach
+  // über DEVICE_INFO.side und sendet Befehle nur an die passende Hälfte (siehe sendDeviceCommand in app.js).
   ses.on('select-serial-port', (event, portList, webContents, callback) => {
     event.preventDefault();
     const espPort = portList.find(p => p.portName && (p.portName.includes('usbserial') || p.portName.includes('wchusb')));

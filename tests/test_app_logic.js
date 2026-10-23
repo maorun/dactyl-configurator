@@ -30,7 +30,8 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest,
-             MATRIX_ROW_WIRES, MATRIX_COL_WIRES };`, ctx);
+             MATRIX_ROW_WIRES, MATRIX_COL_WIRES,
+             applyLayerOperation, transparentLayer, isUndoBlocked };`, ctx);
 const api = ctx.api;
 
 let passed = 0;
@@ -242,6 +243,67 @@ test("Matrix-Test: Leitungsliste entspricht ROW_PINS/COL_PINS der Firmware", () 
   const pins = name => ino.match(new RegExp(name + "\\s*\\[[^\\]]*\\]\\s*=\\s*\\{([^}]*)\\}"))[1].split(",").map(v => Number(v.trim()));
   assert.deepStrictEqual([...api.MATRIX_ROW_WIRES.map(w => w.gpio)], pins("ROW_PINS"));
   assert.deepStrictEqual([...api.MATRIX_COL_WIRES.map(w => w.gpio)], pins("COL_PINS"));
+});
+
+function sampleLayers() {
+  return Array.from({ length: 8 }, (_, l) => [[{ label: `L${l}`, tap: `KEY_${l}`, hold: "NONE" }]]);
+}
+
+test("Ebenen-Werkzeug: Kopieren ersetzt nur das Ziel und teilt keine Objekte", () => {
+  const layers = sampleLayers();
+  const next = api.applyLayerOperation(layers, "copy", 1, 3);
+  assert.strictEqual(next[3][0][0].tap, "KEY_1");
+  assert.strictEqual(next[1][0][0].tap, "KEY_1");
+  assert.strictEqual(next[2][0][0].tap, "KEY_2");
+  next[3][0][0].tap = "KEY_X";
+  assert.strictEqual(next[1][0][0].tap, "KEY_1");
+  // Eingabe bleibt unverändert
+  assert.strictEqual(layers[3][0][0].tap, "KEY_3");
+});
+
+test("Ebenen-Werkzeug: Tauschen und Leeren", () => {
+  const layers = sampleLayers();
+  const swapped = api.applyLayerOperation(layers, "swap", 0, 7);
+  assert.strictEqual(swapped[0][0][0].tap, "KEY_7");
+  assert.strictEqual(swapped[7][0][0].tap, "KEY_0");
+  const cleared = api.applyLayerOperation(layers, "clear", 2);
+  assert.strictEqual(cleared[2].length, 6);
+  assert.ok(cleared[2].every(row => row.length === 7 && row.every(k => k.tap === "NONE" && k.hold === "NONE")));
+  assert.strictEqual(cleared[1][0][0].tap, "KEY_1");
+  assert.strictEqual(layers[2][0][0].tap, "KEY_2");
+});
+
+test("Ebenen-Werkzeug: ungültige Aufrufe ändern nichts", () => {
+  const layers = sampleLayers();
+  assert.strictEqual(api.applyLayerOperation(layers, "copy", 1, 1), null);
+  assert.strictEqual(api.applyLayerOperation(layers, "copy", 1, 8), null);
+  assert.strictEqual(api.applyLayerOperation(layers, "swap", -1, 2), null);
+  assert.strictEqual(api.applyLayerOperation(layers, "move", 1, 2), null);
+  assert.strictEqual(api.applyLayerOperation(null, "clear", 1), null);
+  // Fehlende Ebenen werden transparent ergänzt
+  const short = api.applyLayerOperation([[[{ tap: "KEY_A" }]]], "copy", 0, 5);
+  assert.strictEqual(short.length, 8);
+  assert.strictEqual(short[5][0][0].tap, "KEY_A");
+  assert.strictEqual(short[3][0][0].tap, "NONE");
+});
+
+test("Rückgängig: Änderungen vor einem neueren Snapshot sind gesperrt", () => {
+  const key = { snapshot: false }, snap = { snapshot: true };
+  // Taste geändert, danach Ebene getauscht: die Tastenänderung darf nicht mehr einzeln zurück
+  assert.strictEqual(api.isUndoBlocked([key, snap], 0), true);
+  assert.strictEqual(api.isUndoBlocked([key, snap], 1), false);
+  // Snapshot mit neueren Änderungen ist gesperrt, neuere Tastenänderung nicht
+  assert.strictEqual(api.isUndoBlocked([snap, key], 0), true);
+  assert.strictEqual(api.isUndoBlocked([snap, key], 1), false);
+  // Ohne Snapshot ist jede Änderung einzeln rückgängig machbar
+  assert.strictEqual(api.isUndoBlocked([key, key, key], 0), false);
+  assert.strictEqual(api.isUndoBlocked([key], 5), true);
+  // Ebene tauschen: Rückgängig stellt den Stand vor dem Tausch exakt wieder her
+  const layers = sampleLayers();
+  const before = JSON.stringify(layers);
+  const swapped = api.applyLayerOperation(layers, "swap", 2, 5);
+  assert.strictEqual(JSON.stringify(layers), before);
+  assert.notStrictEqual(JSON.stringify(swapped), before);
 });
 
 console.log(`\n${passed} app.js-Tests bestanden.`);

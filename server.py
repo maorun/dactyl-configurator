@@ -143,6 +143,10 @@ def code_to_cpp(code):
         return "0"
     if code in KEY_TO_CPP:
         return KEY_TO_CPP[code]
+    # Tastenpaar PAIR_<n> -> ACT_KEY_PAIR_BASE + n (Index in userKeyPairs)
+    m = re.match(r"^PAIR_(\d{1,2})$", code)
+    if m and int(m.group(1)) < MAX_KEY_PAIRS:
+        return f"(ACT_KEY_PAIR_BASE + {int(m.group(1))})"
     if code.startswith("KEY_"):
         m = re.match(r"^KEY_(\d+)$", code)
         if m:
@@ -169,6 +173,7 @@ NUM_LAYERS = 8
 NUM_ROWS = 6
 NUM_COLS = 7
 MAX_COMBOS = 16
+MAX_KEY_PAIRS = 16
 MAX_BODY_BYTES = 2 * 1024 * 1024
 COMPILE_TIMEOUT_S = 300
 UPLOAD_TIMEOUT_S = 180
@@ -314,6 +319,46 @@ def generate_combos_cpp(combos):
     ]
     return "\n".join(lines)
 
+def key_pair_member_cpp(code, field):
+    """Ein Tastenpaar-Mitglied muss ein Tastatur-Code 1..255 sein (kein Layer-, Media-, Maus- oder Paar-Code)."""
+    if not isinstance(code, str) or code in ("", "NONE", "0"):
+        raise ValueError(f"Tastenpaar-Feld '{field}' fehlt.")
+    invalid = ValueError(f"Tastenpaar-Feld '{field}' muss eine normale Taste oder ein Modifier sein.")
+    # Nur bekannte Namen, ein druckbares Zeichen oder KEY_<n> mit n in 1..255 (uint8_t in KeyPair)
+    m = re.match(r"^KEY_(\d+)$", code)
+    if m:
+        if not 1 <= int(m.group(1)) <= 0xFF:
+            raise invalid
+        return m.group(1)
+    if code not in KEY_TO_CPP and len(code) != 1:
+        raise invalid
+    cpp = code_to_cpp(code)
+    if cpp == "0" or cpp.startswith("ACT_") or cpp.startswith("(ACT_"):
+        raise invalid
+    return cpp
+
+def generate_key_pairs_cpp(pairs):
+    if pairs is None:
+        pairs = []
+    if not isinstance(pairs, list):
+        raise ValueError("Ungültige Tastenpaare: Liste erwartet.")
+    if len(pairs) > MAX_KEY_PAIRS:
+        raise ValueError(f"Zu viele Tastenpaare: maximal {MAX_KEY_PAIRS} erlaubt.")
+    entries = []
+    for p in pairs:
+        if not isinstance(p, dict):
+            raise ValueError("Ungültiger Tastenpaar-Eintrag.")
+        entries.append(f"  {{ {key_pair_member_cpp(p.get('first'), 'first')}, {key_pair_member_cpp(p.get('second'), 'second')} }}")
+    lines = [
+        "// [[[START_KEY_PAIRS]]]",
+        f"uint8_t numKeyPairs = {len(entries)};",
+        "KeyPair userKeyPairs[MAX_KEY_PAIRS] = {",
+        ",\n".join(entries) if entries else "  { 0, 0 }",
+        "};",
+        "// [[[END_KEY_PAIRS]]]"
+    ]
+    return "\n".join(lines)
+
 def generate_settings_cpp(settings):
     if settings is None:
         settings = {}
@@ -365,6 +410,8 @@ def render_ino_content(content, config, defaults_id=None):
         content = replace_marked_block(content, "LAYER_NAMES", generate_layer_names_cpp(config.get("layerNames")))
     if "combos" in config:
         content = replace_marked_block(content, "COMBOS", generate_combos_cpp(config.get("combos")))
+    if "keyPairs" in config:
+        content = replace_marked_block(content, "KEY_PAIRS", generate_key_pairs_cpp(config.get("keyPairs")))
     if "settings" in config:
         content = replace_marked_block(content, "SETTINGS", generate_settings_cpp(config.get("settings")))
     return content
@@ -451,6 +498,7 @@ def validate_config(config):
                     raise ValueError(f"Ungültige Taste R{r_idx}C{c_idx} in Ebene {l_idx}: Objekt oder Code erwartet.")
     # Codegen prüft Combos und Einstellungen vollständig (Bereiche identisch zur Firmware)
     generate_combos_cpp(config.get("combos"))
+    generate_key_pairs_cpp(config.get("keyPairs"))
     generate_settings_cpp(config.get("settings"))
 
 def load_config_for_app():

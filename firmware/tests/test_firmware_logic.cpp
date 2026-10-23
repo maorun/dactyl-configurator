@@ -67,6 +67,15 @@ static uint32_t deepSleepTimeoutMinutes = 60;
 static uint8_t numCombos = 0;
 static KeyCombo userCombos[MAX_COMBOS];
 
+#define ACT_KEY_PAIR_BASE 0x140
+#define MAX_KEY_PAIRS 16
+struct KeyPair {
+  uint8_t first;
+  uint8_t second;
+};
+static uint8_t numKeyPairs = 0;
+static KeyPair userKeyPairs[MAX_KEY_PAIRS];
+
 static SemaphoreHandle_t configMutex = xSemaphoreCreateMutex();
 static Preferences preferences;
 static BLECharacteristic mockChar;
@@ -118,6 +127,8 @@ void resetState() {
       for (int c = 0; c < NUM_COLS; c++) HOLDMAP[l][r][c] = 0;
   resetTapHold();
   numCombos = 0;
+  numKeyPairs = 0;
+  for (int i = 0; i < MAX_KEY_PAIRS; i++) userKeyPairs[i] = { 0, 0 };
   // Globale Settings und NVS-Mock zurücksetzen, damit Tests unabhängig von ihrer Reihenfolge sind
   comboTimeoutMs = 40;
   debounceMs = 5;
@@ -1211,6 +1222,192 @@ TEST(test_migration_with_app_flash_uses_new_defaults) {
   loadKeymapFromNVS();
   assert(KEYMAP[0][2][2] == 'k');
   assert(!preferences.isKey("fw_build"));
+}
+
+// -----------------------------------------------------------------------------
+// Test 28: Tastenpaar drückt beide Tasten in Reihenfolge und lässt sie umgekehrt los
+// -----------------------------------------------------------------------------
+TEST(test_key_pair_press_and_release_order) {
+  resetState();
+  handleConfigCommand("ADD_PAIR 129 46", false);      // Shift + "."
+  assert(mockChar.value == "OK ADD_PAIR 0");
+  KEYMAP[0][2][1] = ACT_KEY_PAIR_BASE + 0;
+
+  setMillis(1000);
+  onMatrixKeyChange(2, 1, true);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 129 && bleKeyboard.pressHistory[1] == 46);
+  assert(bleKeyboard.pressedKeys.size() == 2);
+  assert(keySentToHost[2][1]);
+
+  setMillis(1100);
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(!keySentToHost[2][1]);
+}
+
+// -----------------------------------------------------------------------------
+// Test 28b: Tastenpaar als Halte-Aktion (Mod-Tap) und nicht belegter Index
+// -----------------------------------------------------------------------------
+TEST(test_key_pair_as_hold_action_and_unknown_index) {
+  resetState();
+  handleConfigCommand("ADD_PAIR 128 99", false);      // Ctrl + "c"
+  KEYMAP[0][2][2] = 'k';
+  HOLDMAP[0][2][2] = ACT_KEY_PAIR_BASE + 0;
+
+  setMillis(1000);
+  onMatrixKeyChange(2, 2, true);
+  setMillis(1000 + TAPPING_TERM_MS);
+  processDeferredKeys(1000 + TAPPING_TERM_MS);
+  assert(bleKeyboard.pressedKeys.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 128 && bleKeyboard.pressHistory[1] == 99);
+  setMillis(1300);
+  onMatrixKeyChange(2, 2, false);
+  assert(bleKeyboard.pressedKeys.empty());
+
+  // Index 5 ist nicht belegt: kein Tastendruck, kein Absturz
+  resetState();
+  KEYMAP[0][1][1] = ACT_KEY_PAIR_BASE + 5;
+  setMillis(2000);
+  onMatrixKeyChange(1, 1, true);
+  setMillis(2050);
+  onMatrixKeyChange(1, 1, false);
+  assert(bleKeyboard.pressHistory.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 28c: ADD_PAIR validiert Argumente und die Obergrenze
+// -----------------------------------------------------------------------------
+TEST(test_add_pair_validation) {
+  resetState();
+  handleConfigCommand("ADD_PAIR 0 46", false);
+  assert(mockChar.value == "ERR ARGS ADD_PAIR 0 46");
+  handleConfigCommand("ADD_PAIR 129 256", false);
+  assert(mockChar.value == "ERR ARGS ADD_PAIR 129 256");
+  handleConfigCommand("ADD_PAIR 129", false);
+  assert(mockChar.value == "ERR ARGS ADD_PAIR 129");
+  handleConfigCommand("ADD_PAIR 129 46 7", false);
+  assert(mockChar.value == "ERR ARGS ADD_PAIR 129 46 7");
+  assert(numKeyPairs == 0);
+  for (int i = 0; i < MAX_KEY_PAIRS; i++) handleConfigCommand("ADD_PAIR 129 46", false);
+  assert(numKeyPairs == MAX_KEY_PAIRS);
+  handleConfigCommand("ADD_PAIR 129 46", false);
+  assert(mockChar.value == "ERR ARGS ADD_PAIR 129 46");
+  handleConfigCommand("CLEAR_PAIRS", false);
+  assert(mockChar.value == "OK CLEAR_PAIRS" && numKeyPairs == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 28d: SAVE_PAIRS persistiert die Liste, auch eine leere Liste überschreibt die Defaults
+// -----------------------------------------------------------------------------
+TEST(test_key_pairs_persist_in_nvs) {
+  resetState();
+  handleConfigCommand("ADD_PAIR 129 46", false);
+  handleConfigCommand("ADD_PAIR 131 52", false);
+  handleConfigCommand("SAVE_PAIRS", false);
+  assert(mockChar.value == "OK SAVE_PAIRS");
+
+  // Neustart: RAM leer, NVS lädt die Paare
+  numKeyPairs = 0;
+  userKeyPairs[0] = { 0, 0 };
+  userKeyPairs[1] = { 0, 0 };
+  loadKeymapFromNVS();
+  assert(numKeyPairs == 2);
+  assert(userKeyPairs[1].first == 131 && userKeyPairs[1].second == 52);
+
+  // Leere Liste gespeichert: einkompilierte Paare gelten beim nächsten Start nicht mehr
+  handleConfigCommand("CLEAR_PAIRS", false);
+  handleConfigCommand("SAVE_PAIRS", false);
+  assert(mockChar.value == "OK SAVE_PAIRS");
+  numKeyPairs = 1;
+  userKeyPairs[0] = { 129, 46 };
+  loadKeymapFromNVS();
+  assert(numKeyPairs == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 28e: Tastenpaar als Combo-Kandidat (schneller Tipp und verzögertes Senden)
+// -----------------------------------------------------------------------------
+TEST(test_key_pair_as_combo_candidate) {
+  resetState();
+  handleConfigCommand("ADD_PAIR 129 46", false);
+  KEYMAP[0][2][1] = ACT_KEY_PAIR_BASE + 0;
+  KEYMAP[0][2][2] = 'k';
+  numCombos = 1;
+  userCombos[0] = { 2, 1, 2, 2, 0, KEY_ESC };
+
+  // Schneller Tipp innerhalb des Combo-Fensters: Paar wird beim Loslassen getippt
+  setMillis(1000);
+  onMatrixKeyChange(2, 1, true);
+  assert(bleKeyboard.pressHistory.empty());
+  setMillis(1010);
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 129 && bleKeyboard.pressHistory[1] == 46);
+  assert(bleKeyboard.pressedKeys.empty());
+
+  // Halten über das Combo-Fenster hinaus: processDeferredKeys drückt das Paar, Loslassen gibt es frei
+  bleKeyboard.pressHistory.clear();
+  setMillis(3000);
+  keyState[2][1] = true;                         // wie der Matrix-Scan in loop()
+  onMatrixKeyChange(2, 1, true);
+  setMillis(3000 + comboTimeoutMs);
+  processDeferredKeys(3000 + comboTimeoutMs);
+  assert(bleKeyboard.pressedKeys.size() == 2);
+  assert(keySentToHost[2][1]);
+  setMillis(3200);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 28f: CLEAR_PAIRS während ein Paar gehalten wird lässt keine Taste hängen
+// -----------------------------------------------------------------------------
+TEST(test_clear_pairs_releases_held_pair) {
+  resetState();
+  handleConfigCommand("ADD_PAIR 129 46", false);
+  KEYMAP[0][2][1] = ACT_KEY_PAIR_BASE + 0;
+  setMillis(1000);
+  onMatrixKeyChange(2, 1, true);
+  assert(bleKeyboard.pressedKeys.size() == 2);
+
+  handleConfigCommand("CLEAR_PAIRS", false);
+  handleConfigCommand("ADD_PAIR 131 97", false);   // neues Paar 0 mit anderen Tasten
+  assert(bleKeyboard.pressedKeys.empty());
+
+  bleKeyboard.pressHistory.clear();
+  setMillis(1100);
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(bleKeyboard.pressHistory.empty());         // kein nachträglicher Tipp mit dem neuen Paar
+}
+
+// -----------------------------------------------------------------------------
+// Test 28g: Neue App-Belegung verwirft alte Tastenpaare aus dem NVS
+// -----------------------------------------------------------------------------
+TEST(test_app_flash_discards_stored_key_pairs) {
+  resetState();
+  handleConfigCommand("ADD_PAIR 129 46", false);
+  handleConfigCommand("SAVE_PAIRS", false);
+  loadKeymapFromNVS();                              // Fingerprint der aktuellen Defaults speichern
+
+  // Flash aus der App: neue Defaults-ID, neue einkompilierte Paare
+  testDefaultsId = 0xBEEF;
+  numKeyPairs = 1;
+  userKeyPairs[0] = { 131, 97 };
+  loadKeymapFromNVS();
+  assert(numKeyPairs == 1);
+  assert(userKeyPairs[0].first == 131 && userKeyPairs[0].second == 97);
+  assert(!preferences.isKey("num_pairs"));
+
+  // Reiner Firmware-Flash (gleiche Defaults): gespeicherte Paare bleiben erhalten
+  handleConfigCommand("CLEAR_PAIRS", false);
+  handleConfigCommand("ADD_PAIR 128 99", false);
+  handleConfigCommand("SAVE_PAIRS", false);
+  userKeyPairs[0] = { 131, 97 };
+  loadKeymapFromNVS();
+  assert(userKeyPairs[0].first == 128 && userKeyPairs[0].second == 99);
 }
 
 int main() {

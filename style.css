@@ -1612,3 +1612,21 @@ body {
   padding-left: 1.25rem;
   margin-top: 0.4rem;
 }
+
+/* Tastenpaare (1 Taste = 2 Tasten) */
+.key-pairs-header {
+  margin-top: 1.5rem;
+}
+
+.key-pair-form {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.key-pair-form select {
+  width: auto;
+  max-width: 100%;
+}

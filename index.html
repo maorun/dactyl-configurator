@@ -313,6 +313,31 @@
             <li><strong>U + I zusammen gedrückt</strong> ➔ <code>Backspace</code></li>
           </ul>
         </div>
+
+        <!-- Tastenpaare: eine Taste drückt zwei Tasten gleichzeitig -->
+        <div class="combos-header key-pairs-header">
+          <div>
+            <h3>Tastenpaare (1 Taste = 2 Tasten gleichzeitig)</h3>
+            <p class="subtitle">Ein Tastenpaar drückt zwei Tasten zugleich, z. B. <code>Umschalt + .</code> für „:“ auf deutschem macOS. Weise es danach im Tasten-Inspektor einer Taste als Tap- oder Halte-Aktion zu.</p>
+          </div>
+        </div>
+        <div class="combos-list-card" id="keyPairsCard">
+          <div class="key-pair-form">
+            <select id="keyPairFirstSelect" class="form-control" title="Erste Taste (wird zuerst gedrückt, z. B. Umschalt)"></select>
+            <strong>+</strong>
+            <select id="keyPairSecondSelect" class="form-control" title="Zweite Taste"></select>
+            <button id="btnAddKeyPair" class="btn btn-primary btn-sm" type="button">+ Tastenpaar hinzufügen</button>
+          </div>
+          <table class="combos-table">
+            <thead>
+              <tr><th>Nr.</th><th>Tastenpaar</th><th>Code</th><th>Aktionen</th></tr>
+            </thead>
+            <tbody id="keyPairsTableBody"></tbody>
+          </table>
+          <div class="empty-state" id="emptyKeyPairsState" style="display: none;">
+            <p>Noch keine Tastenpaare definiert.</p>
+          </div>
+        </div>
       </div>
     </main>
 

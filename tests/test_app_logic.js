@@ -31,7 +31,8 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest,
              MATRIX_ROW_WIRES, MATRIX_COL_WIRES,
-             applyLayerOperation, transparentLayer, isUndoBlocked };`, ctx);
+             applyLayerOperation, transparentLayer, isUndoBlocked,
+             ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel };`, ctx);
 const api = ctx.api;
 
 let passed = 0;
@@ -243,6 +244,49 @@ test("Matrix-Test: Leitungsliste entspricht ROW_PINS/COL_PINS der Firmware", () 
   const pins = name => ino.match(new RegExp(name + "\\s*\\[[^\\]]*\\]\\s*=\\s*\\{([^}]*)\\}"))[1].split(",").map(v => Number(v.trim()));
   assert.deepStrictEqual([...api.MATRIX_ROW_WIRES.map(w => w.gpio)], pins("ROW_PINS"));
   assert.deepStrictEqual([...api.MATRIX_COL_WIRES.map(w => w.gpio)], pins("COL_PINS"));
+});
+
+test("Tastenpaar: PAIR_<n> wird zu ACT_KEY_PAIR_BASE + n und zurück", () => {
+  assert.strictEqual(api.actionCodeToNumeric("PAIR_0"), 0x140);
+  assert.strictEqual(api.actionCodeToNumeric("PAIR_15"), 0x14F);
+  assert.strictEqual(api.actionCodeToNumeric("PAIR_16"), 0);
+  assert.strictEqual(api.pairIndexFromCode("PAIR_x"), -1);
+  assert.strictEqual(api.findDefinitionByCode(0x143).tap, "PAIR_3");
+  assert.strictEqual(api.findDefinitionByCode(0x143).label, "Paar 3");
+  // Als Tap- und als Halte-Aktion für SET_K
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "PAIR_2", hold: "PAIR_5" }) }, { tapCode: 0x142, holdCode: 0x145 });
+  assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "PAIR_1" }) }, { tapCode: 97, holdCode: 0x141 });
+});
+
+test("Tastenpaar: nur normale Tasten und Modifier sind erlaubt", () => {
+  for (const ok of ["KEY_LEFT_SHIFT", "KEY_PERIOD", "KEY_A", "KEY_F13", "KEY_RETURN", "KEY_RIGHT_GUI"]) {
+    assert.ok(api.isKeyPairMember(ok), ok);
+  }
+  for (const bad of ["NONE", "", undefined, 5, "MO_1", "TG_2", "MEDIA_MUTE", "MAC_GLOBE", "MOUSE_LEFT", "PAIR_0", "LAYER_UP"]) {
+    assert.ok(!api.isKeyPairMember(bad), String(bad));
+  }
+  assert.strictEqual(api.keyPairLabel({ first: "A", second: "B" }, c => c.toLowerCase()), "a + b");
+});
+
+test("Tastenpaar: Config-Validierung und Normalisierung", () => {
+  const good = { layers: [[]], keyPairs: [{ first: "KEY_LEFT_SHIFT", second: "KEY_PERIOD" }] };
+  api.validateConfigShape(good);
+  assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: "x" }));
+  assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: [{ first: "MO_1", second: "KEY_A" }] }));
+  assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: new Array(17).fill({ first: "KEY_A", second: "KEY_B" }) }));
+  const n = api.normalizeConfig({ layers: [[]], keyPairs: [{ first: "KEY_A", second: "KEY_B", extra: 1 }, { first: "MO_1", second: "KEY_A" }, null] });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(n.keyPairs)), [{ first: "KEY_A", second: "KEY_B" }]);
+  assert.deepStrictEqual([...api.normalizeConfig({ layers: [[]] }).keyPairs], []);
+});
+
+test("Tastenpaar: Codebereich ist in App, Server und Firmware identisch", () => {
+  const ino = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "dactyl_right.ino"), "utf8");
+  const py = fs.readFileSync(path.join(__dirname, "..", "server.py"), "utf8");
+  assert.strictEqual(Number(/#define ACT_KEY_PAIR_BASE\s+(0x[0-9A-Fa-f]+)/.exec(ino)[1]), api.ACT_KEY_PAIR_BASE);
+  assert.strictEqual(Number(/#define MAX_KEY_PAIRS\s+(\d+)/.exec(ino)[1]), api.MAX_KEY_PAIRS);
+  assert.strictEqual(Number(/^MAX_KEY_PAIRS = (\d+)/m.exec(py)[1]), api.MAX_KEY_PAIRS);
+  // Der Paarbereich überschneidet sich nicht mit Maus-Aktionen (0x130..0x134)
+  assert.ok(api.ACT_KEY_PAIR_BASE > 0x134);
 });
 
 function sampleLayers() {

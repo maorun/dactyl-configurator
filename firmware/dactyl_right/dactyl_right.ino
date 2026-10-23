@@ -150,6 +150,9 @@ const int NUM_COLS = 7;
 #define ACT_MOUSE_WHEEL_UP       0x133
 #define ACT_MOUSE_WHEEL_DOWN     0x134
 
+// Tastenpaar: eine Taste drückt zwei Tasten gleichzeitig (z. B. Shift + .); Index in userKeyPairs[]
+#define ACT_KEY_PAIR_BASE        0x140
+
 #define NUM_LAYERS 8
 
 // [[[START_SETTINGS]]]
@@ -184,6 +187,21 @@ KeyCombo userCombos[MAX_COMBOS] = {
   { 2, 1, 2, 3, 1, KEY_LEFT_CTRL }  // J + L -> Ctrl
 };
 // [[[END_COMBOS]]]
+
+#define MAX_KEY_PAIRS 16
+
+// Tastenpaar (exakt 2 Bytes): beide Tasten sind Tastatur-Codes 0x01..0xFF (ASCII, Modifier, Sondertasten)
+struct KeyPair {
+  uint8_t first;
+  uint8_t second;
+};
+
+// [[[START_KEY_PAIRS]]]
+uint8_t numKeyPairs = 0;
+KeyPair userKeyPairs[MAX_KEY_PAIRS] = {
+  { 0, 0 }
+};
+// [[[END_KEY_PAIRS]]]
 
 unsigned long lastActivityTime = 0;
 bool isStandby = false;

@@ -7,9 +7,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 - **Tasten-Heatmap & WPM-Anzeige** im Live-Monitor — PR #2.
 - **Matrix-Test (Löt- und Dioden-Tester)** als eigener Tab — PR #3.
 - **Ebenen-Werkzeuge:** Ebene kopieren, tauschen, leeren (als Snapshot vorgemerkt, rückgängig machbar) — PR #4.
-
-## In Review (noch nicht in `master`)
-
 - **Tastenpaare (Zwei-Tasten-Aktion):** eine Taste drückt zwei frei wählbare Tasten gleichzeitig (z. B. `Shift` + `.` = `:` auf deutschem macOS) — PR #5.
 
 ## Als Nächstes geplant (Reihenfolge laut Nutzer)
@@ -18,7 +15,7 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## App (Configurator)
 
-- **Besserer Keycode-Picker:** im Dropdown fehlen Zeichen wie `:` und `+` (deutsches Layout braucht dafür Shift-Kombinationen). Statt eines langen `<select>` eine durchsuchbare Auswahl oder eine Bildschirm-Tastatur; hängt mit den Tastenpaaren (PR #5) zusammen.
+- **Besserer Keycode-Picker:** im Dropdown fehlen Zeichen wie `:` und `+` (deutsches Layout braucht dafür Shift-Kombinationen). Statt eines langen `<select>` eine durchsuchbare Auswahl oder eine Bildschirm-Tastatur; Tastenpaare decken die Zeichen heute schon ab, der Picker würde sie direkt anbieten (z. B. `:` legt automatisch das Paar `Shift` + `.` an).
 - **Makro-Engine (App-Seite):** Editor für Tastenfolgen mit Verzögerung; braucht Firmware-Aktionscodes und NVS-Speicher.
 - **Profilverwaltung:** mehrere benannte Layouts lokal speichern und umschalten (heute nur ein `current_config.json` plus JSON-Export/Import).
 - **Layout-Diff vor dem Sync:** pro Taste anzeigen, was sich gegenüber dem Gerät ändert (`GET_CONFIG` mit lokalem Stand vergleichen).

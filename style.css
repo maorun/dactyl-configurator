@@ -1540,3 +1540,75 @@ body {
 .matrix-grid.heatmap-on .key-cap.heat-5[data-heat-count]::before {
   color: #fef2f2;
 }
+
+/* Matrix-Test (Löt-Tester) */
+.matrix-test-card {
+  max-width: 760px;
+}
+
+.matrix-test-progress {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 1rem 0;
+}
+
+.matrix-test-badge {
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-family: monospace;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  color: var(--text-main);
+}
+
+.matrix-test-grid {
+  display: grid;
+  grid-template-columns: 2.5rem repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  max-width: 100%;
+}
+
+.matrix-test-head {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-align: center;
+  align-self: center;
+  cursor: help;
+}
+
+.matrix-test-cell {
+  font-size: 0.72rem;
+  font-family: monospace;
+  text-align: center;
+  padding: 0.55rem 0;
+  border-radius: 6px;
+  border: 1px solid var(--key-border);
+  background: var(--key-bg);
+  color: var(--text-muted);
+}
+
+.matrix-test-cell.is-ok {
+  background: var(--success);
+  border-color: #34d399;
+  color: #fff;
+}
+
+.matrix-test-cell.is-absent {
+  border-style: dashed;
+  opacity: 0.25;
+}
+
+.matrix-test-suspects {
+  margin-top: 1rem;
+  font-size: 0.88rem;
+  color: var(--warning);
+}
+
+.matrix-test-suspects ul {
+  padding-left: 1.25rem;
+  margin-top: 0.4rem;
+}

@@ -28,7 +28,9 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
-             createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS };`, ctx);
+             createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
+             isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest,
+             MATRIX_ROW_WIRES, MATRIX_COL_WIRES };`, ctx);
 const api = ctx.api;
 
 let passed = 0;
@@ -196,6 +198,50 @@ test("Heatmap: Stufen skalieren relativ zur häufigsten Taste", () => {
   const s = api.createTypingStats({ "0_0": 3, "1_1": 7 });
   assert.strictEqual(api.maxKeyCount(s), 7);
   assert.strictEqual(api.maxKeyCount(api.createTypingStats(null)), 0);
+});
+
+test("Matrix-Test: 35 verlötete Schalter (29 Finger + 6 Daumen ohne R4C0/R5C5)", () => {
+  let n = 0;
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 7; c++) if (api.isWiredSwitch(r, c)) n++;
+  assert.strictEqual(n, 35);
+  assert.ok(!api.isWiredSwitch(4, 0));
+  assert.ok(!api.isWiredSwitch(5, 5));
+  assert.ok(!api.isWiredSwitch(0, 6)); // Col 6 nur im Daumen-Cluster
+  assert.ok(api.isWiredSwitch(5, 6));
+  assert.strictEqual(api.summarizeMatrixTest(api.createMatrixTest()).total, 35);
+});
+
+test("Matrix-Test: Tasten werden einmalig und nur innerhalb der Matrix gezählt", () => {
+  const t = api.createMatrixTest();
+  assert.strictEqual(api.markMatrixKeyTested(t, 2, 1), true);
+  assert.strictEqual(api.markMatrixKeyTested(t, 2, 1), false);
+  assert.strictEqual(api.markMatrixKeyTested(t, 4, 0), false);
+  assert.strictEqual(api.markMatrixKeyTested(t, 6, 0), false);
+  assert.strictEqual(api.markMatrixKeyTested(t, 1, "1"), false);
+  assert.strictEqual(api.summarizeMatrixTest(t).tested, 1);
+});
+
+test("Matrix-Test: Zeilen und Spalten ohne Treffer gelten als verdächtig", () => {
+  const t = api.createMatrixTest();
+  // Ohne Tastendruck keine Verdachtsmeldung
+  assert.deepStrictEqual([...api.summarizeMatrixTest(t).suspectRows], []);
+  // Alle Tasten außer Row 3 drücken
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 7; c++) if (r !== 3) api.markMatrixKeyTested(t, r, c);
+  const s = api.summarizeMatrixTest(t);
+  assert.deepStrictEqual([...s.suspectRows], [3]);
+  assert.deepStrictEqual([...s.suspectCols], []);
+  assert.strictEqual(s.tested, 35 - 6);
+  // Fehlende Spalte 6 (nur R5C6) wird erkannt
+  const t2 = api.createMatrixTest();
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 6; c++) api.markMatrixKeyTested(t2, r, c);
+  assert.deepStrictEqual([...api.summarizeMatrixTest(t2).suspectCols], [6]);
+});
+
+test("Matrix-Test: Leitungsliste entspricht ROW_PINS/COL_PINS der Firmware", () => {
+  const ino = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "dactyl_right.ino"), "utf8");
+  const pins = name => ino.match(new RegExp(name + "\\s*\\[[^\\]]*\\]\\s*=\\s*\\{([^}]*)\\}"))[1].split(",").map(v => Number(v.trim()));
+  assert.deepStrictEqual([...api.MATRIX_ROW_WIRES.map(w => w.gpio)], pins("ROW_PINS"));
+  assert.deepStrictEqual([...api.MATRIX_COL_WIRES.map(w => w.gpio)], pins("COL_PINS"));
 });
 
 console.log(`\n${passed} app.js-Tests bestanden.`);

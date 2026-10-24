@@ -35,6 +35,7 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Split / Hardware
 
+<<<<<<< Updated upstream
 - **Linke Tasten im Live-Monitor über den Master:** `SPLIT_HID`-Zeilen tragen keine Matrix-Position. Heute zeigt die App linke Tasten nur über eine direkte Verbindung zur linken Hälfte (BLE im Config Mode oder USB).
 - **Batteriestand der linken Hand:** als eigene `SplitHidEvent`-Operation an den Master senden.
 - **Synchronisierter Sleep:** eine linke Taste weckt heute nur die linke Hälfte.
@@ -44,9 +45,13 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 Kleine Befunde aus dem Review der linken Hälfte, bewusst auf später verschoben. Jeder Punkt braucht beim Umsetzen einen Regressionstest.
 
 - (noch keine)
+=======
+- **Linke Hand per ESP-NOW:** Empfang von `SplitKeyEvent` im Master, Spalten-Mapping und Darstellung der linken Hand im Live-Monitor (UI zeigt die linke Hand heute nur statisch).
+- ESP-NOW härten bzw. encrypten die Übertragung
+- **Batteriestand der linken Hand:** im `flags`-Byte des Split-Events mitsenden.
+>>>>>>> Stashed changes
 
 ## Tooling & Qualität
 
-- **DOM-Tests für die App:** z. B. mit jsdom für Rendering, Pending-Changes und Undo (heute nur DOM-freie Logik getestet).
 - **Gemeinsame Matrix-Konstanten:** Pins, Größen und nicht vorhandene Tasten einmal definieren und in `app.js`, `server.py` und Firmware prüfen.
 - **`app.js` aufteilen:** Datei hat über 3.000 Zeilen; Module für BLE, Serial, Editor und Live-Monitor.

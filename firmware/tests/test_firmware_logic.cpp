@@ -892,6 +892,9 @@ TEST(test_keyboard_descriptor_covers_f13_to_f24) {
   assert(usageMax >= highestUsage);
   // Auch alle anderen Sondertasten bis 0xFB liegen im Bereich
   assert(KEY_F13 - 136 == 0x68);
+  // ISO-Taste (< > auf deutschem macOS): 0xEC -> Usage 0x64
+  assert(KEY_NON_US_BACKSLASH - 136 == 0x64);
+  assert(logicalMax >= KEY_NON_US_BACKSLASH - 136);
 }
 
 // -----------------------------------------------------------------------------

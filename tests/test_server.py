@@ -31,6 +31,7 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertEqual(server.code_to_cpp("~"), "'~'")
         self.assertEqual(server.code_to_cpp("'"), "'\\''")
         self.assertEqual(server.code_to_cpp("\\"), "'\\\\'")
+        self.assertEqual(server.code_to_cpp("KEY_NON_US_BACKSLASH"), "KEY_NON_US_BACKSLASH")
         self.assertEqual(server.code_to_cpp("NONE"), "0")
         self.assertEqual(server.code_to_cpp(""), "0")
 
@@ -277,6 +278,8 @@ class TestServerAndCodegen(unittest.TestCase):
         # Nur normale Tasten und Modifier: keine Layer-, Media-, Maus- oder Paar-Codes
         self.assertIn("{ 'a', 200 }", server.generate_key_pairs_cpp([{"first": "KEY_A", "second": "KEY_200"}]))
         self.assertIn("{ ':', 'a' }", server.generate_key_pairs_cpp([{"first": ":", "second": "KEY_A"}]))
+        self.assertIn("{ KEY_LEFT_SHIFT, KEY_NON_US_BACKSLASH }",
+                      server.generate_key_pairs_cpp([{"first": "KEY_LEFT_SHIFT", "second": "KEY_NON_US_BACKSLASH"}]))
         for bad in ("MO_1", "MEDIA_MUTE", "MOUSE_LEFT", "PAIR_0", "NONE", "", None, 5, "KEY_A; evil",
                     "KEY_0256", "KEY_256", "KEY_300", "KEY_FOO", "\x01"):
             with self.assertRaises(ValueError, msg=repr(bad)):

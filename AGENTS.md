@@ -169,6 +169,7 @@ Keys in the matrix use `uint16_t` action codes:
 | `0x20` .. `0x7E` | ASCII Characters | Printable keys (`'a'`, `'1'`, `'-'`, `' '`) |
 | `0x80` .. `0x87` | Modifiers | `KEY_LEFT_CTRL` (0x80), `KEY_LEFT_SHIFT` (0x81), `KEY_LEFT_ALT` (0x82), `KEY_LEFT_GUI` (0x83), etc. |
 | `0xB0` .. `0xEB` | Navigation / System | `KEY_RETURN` (0xB0), `KEY_ESC` (0xB1), `KEY_BACKSPACE` (0xB2), `KEY_TAB` (0xB3), `KEY_DELETE` (0xD4), Arrows (0xD7..0xDA), CapsLock (0xC1), Insert (0xD1), PrtSc (0xCE), Numpad (0xDC..0xEB) |
+| `0xEC` | ISO Key (`KEY_NON_US_BACKSLASH`) | HID usage `0x64` between left Shift and Z; `<` / `>` on German macOS with keyboard type ISO |
 | `0xC2` .. `0xCD` | Function Keys F1..F12 | `KEY_F1` (0xC2) to `KEY_F12` (0xCD) |
 | `0xF0` .. `0xFB` | Function Keys F13..F24 | `KEY_F13` (0xF0) to `KEY_F24` (0xFB) |
 | `0x100` .. `0x107` | Momentary Layer (`MO_0`..`MO_7`) | Activates target layer while held; `MO_0` forces temporary return to Base Layer 0 |
@@ -190,6 +191,7 @@ Keys in the matrix use `uint16_t` action codes:
 
 ### German macOS characters in the picker (`DE_MAC_CHARS`)
 - The firmware sends US HID codes; macOS translates them with the German layout. `DE_MAC_CHARS` in `app.js` lists German characters with the US code that produces them, e.g. `:` = US `>` (Shift implicit via `dactylAsciiToHid`). These entries store the plain ASCII code; firmware and `server.py` need no change.
+- `<` uses the ISO key `KEY_NON_US_BACKSLASH` (`0xEC`, HID `0x64`); `>` is the key pair `Shift` + ISO key. `^` = US `` ` ``, `°` = US `~`, `´` = US `=`, `` ` `` = US `+` (`^`, `´`, `` ` `` are dead keys). This mapping assumes the macOS keyboard type ISO. With ANSI, macOS swaps HID `0x35` and `0x64`, so `<`/`>` and `^`/`°` change places.
 - Option characters (`@ € [ ] { } | ~ \`) need a key pair (`Alt` + key). Their select value `CHAR_PAIR_<i>` is never stored: on "Änderung übernehmen", `resolveCharPairActions` reuses an equal pair or appends one (pending change) and writes `PAIR_<n>`. With 16 pairs a new one is rejected. A key with a new pair is only staged, because the device knows the pair only after the next sync.
 - Combo actions show only the single-code characters (combos do not support pairs). A search field above each action select filters its options (`applySelectFilter`).
 

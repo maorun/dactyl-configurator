@@ -240,6 +240,7 @@ Keys in the matrix use `uint16_t` action codes:
 
 - Do not fix `LOW` findings from code reviews directly. Record each one in `docs/ideas.md`, section "Offene LOW-Befunde aus Code-Reviews".
 - Write each entry with file and line, the problem, the consequence and the recommended correction. A later dedicated run fixes these entries together, each with a regression test.
+- Record `LOW` findings without a separate verification against the code. The later dedicated run verifies each entry. Verify `BLOCKER`, `HIGH` and `MEDIUM` findings against the code before you change it.
 - Fix `BLOCKER`, `HIGH` and `MEDIUM` findings in the current work as usual.
 - A review cycle counts as clean when no `BLOCKER`, `HIGH` or `MEDIUM` finding remains.
 

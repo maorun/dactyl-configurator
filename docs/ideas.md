@@ -9,6 +9,8 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 - **Ebenen-Werkzeuge:** Ebene kopieren, tauschen, leeren (als Snapshot vorgemerkt, rückgängig machbar) — PR #4.
 - **Tastenpaare (Zwei-Tasten-Aktion):** eine Taste drückt zwei frei wählbare Tasten gleichzeitig (z. B. `Shift` + `.` = `:` auf deutschem macOS) — PR #5.
 - **Tap-Dance / Doppel-Tippen:** dritte Aktion pro Taste; zwei Tipps innerhalb von 200 ms lösen sie aus.
+- **Linke Hälfte:** eigene Firmware (Keymap, NVS, Config-BLE, Power Management) mit ESP-NOW zum Master; die App bearbeitet, synchronisiert und flasht beide Hälften.
+- **Flash-Port-Auswahl:** `server.py` flasht nur den Port, dessen Board sich per `DEVICE_INFO.side` als die gewählte Hälfte meldet.
 
 ## App (Configurator)
 
@@ -21,7 +23,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 - **Heatmap pro Ebene:** Zähler zusätzlich nach `layer` aus dem `KEY_PRESS`-Event trennen.
 - **Heatmap-Export:** Zähler als CSV/JSON exportieren, z. B. für Layout-Optimierung.
 - **Matrix-Test für leere Tasten:** im Test-Modus Ebene 0 erzwingen oder das reine Matrix-Event der Firmware nutzen.
-- **Flash-Port-Auswahl:** `server.py` nimmt heute den ersten `/dev/cu.usbserial*`-Port; bei mehreren Geräten den Port in der App wählen lassen.
 - **Fortschritt beim Flashen:** `arduino-cli`-Ausgabe live an die App streamen statt nur am Ende melden.
 
 ## Firmware
@@ -34,8 +35,15 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Split / Hardware
 
-- **Linke Hand per ESP-NOW:** Empfang von `SplitKeyEvent` im Master, Spalten-Mapping und Darstellung der linken Hand im Live-Monitor (UI zeigt die linke Hand heute nur statisch).
-- **Batteriestand der linken Hand:** im `flags`-Byte des Split-Events mitsenden.
+- **Linke Tasten im Live-Monitor über den Master:** `SPLIT_HID`-Zeilen tragen keine Matrix-Position. Heute zeigt die App linke Tasten nur über eine direkte Verbindung zur linken Hälfte (BLE im Config Mode oder USB).
+- **Batteriestand der linken Hand:** als eigene `SplitHidEvent`-Operation an den Master senden.
+- **Synchronisierter Sleep:** eine linke Taste weckt heute nur die linke Hälfte.
+
+## Offene LOW-Befunde aus Code-Reviews
+
+Kleine Befunde aus dem Review der linken Hälfte, bewusst auf später verschoben. Jeder Punkt braucht beim Umsetzen einen Regressionstest.
+
+- (noch keine)
 
 ## Tooling & Qualität
 

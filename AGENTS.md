@@ -22,7 +22,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
    - Automatically checks and starts the local Python backend server (`server.py`) upon launch and opens Chrome in `--app=http://localhost:8088` mode with `--enable-features=WebBluetoothNewPermissionsBackend` and `--enable-experimental-web-platform-features` so `navigator.bluetooth.getDevices()` and `device.watchAdvertisements()` work out-of-the-box.
 
 4. **Local REST Server (`server.py`):**
-   - Python HTTP server bound strictly to `127.0.0.1:8088`. Every request requires an exact `Host` header (`localhost:8088` / `127.0.0.1:8088`, DNS-rebinding protection); POST requests with a foreign `Origin` are rejected. Static serving is limited to an allowlist (`index.html`, `app.js`, `style.css`, `js/side-profiles.js`, `js/side-state.js`).
+   - Python HTTP server bound strictly to `127.0.0.1:8088`. Every request requires an exact `Host` header (`localhost:8088` / `127.0.0.1:8088`, DNS-rebinding protection); POST requests with a foreign `Origin` are rejected. Static serving is limited to an allowlist (`index.html`, `app.js`, `style.css`, `js/side-profiles.js`, `js/side-state.js`, `js/side-routing.js`).
    - Configs are validated (each layer at most 6 rows x 7 keys, key cells object or code string, combo coordinates, firmware setting ranges; JSON `null` bodies return HTTP 400) and the `.ino` is rendered in memory before `current_config.json` and `dactyl_right.ino` are written atomically.
    - Ensures Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) are in `PATH` even when launched from macOS Finder/Dock.
    - Serves configurator web assets with no-cache headers.
@@ -90,15 +90,15 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 - The left half is a standalone keyboard brain: own 8-layer keymap (tap/hold/double-tap), combos, key pairs, NVS and config mode. It runs the **same** `firmware/dactyl_right/DactylLogic.h` (included via `../dactyl_right/`; `arduino-cli` resolves relative includes). Never copy logic into `dactyl_left.ino`.
 - Layers and combos do not span both halves. A left `MO_1` only changes the left layer.
 - The left half has no HID service. `DactylSplitKeyboard` (`firmware/dactyl_left/DactylSplitKeyboard.h`) is its `bleKeyboard`: it offers the methods `DactylLogic.h` calls and queues each call as a `SplitHidEvent` to the master. The master executes it on its BLE HID connection. macOS sees one keyboard.
-- `isConnected()` on the left is true only if a send callback succeeded within `SPLIT_LINK_DOWN_MS` (2 s). The left half sends `SPLIT_OP_HEARTBEAT` every second, so the link state stays current without key presses. Like a disconnected Mac, a missing master makes `DactylLogic.h` send nothing.
+- `isConnected()` on the left is true only if a send callback succeeded within `SPLIT_LINK_DOWN_MS` (2 s). The left half sends `SPLIT_OP_HEARTBEAT` every second, so the link state stays current without key presses. Like a disconnected Mac, a missing master makes `DactylLogic.h` send nothing, also no releases. The master releases left inputs only after `SPLIT_LINK_TIMEOUT_MS` (3 s); when the link returns inside that gap, `DactylSplitKeyboard::onSendResult` queues `RELEASE_ALL` so no released key stays held.
 - Shared headers in `firmware/dactyl_right/`: `DactylCommon.h` (action codes, `KeyCombo`, `KeyPair`), `DactylConfigBleCallbacks.h` + `DactylConfigBle.h` (isolated config-mode BLE server, name from `CONFIG_BLE_NAME`), `DactylSplitHid.h` (protocol). `DactylLogic.h` takes `CONFIG_COMBO_R1/C1/R2/C2`, `DEFAULT_DEVICE_NAME` and `CONFIG_BLE_NAME` as overridable macros; the right half uses the defaults.
 
 ### Split HID protocol (`DactylSplitHid.h`)
 - `SplitHidEvent { uint8_t op; int8_t arg; uint16_t code; }`, 4 bytes, packed, little endian. ESP-NOW channel 1, unencrypted, left `2E:BC:BB:81:61:B0` -> master `2E:BC:BB:81:61:A6`.
 - Ops: `HEARTBEAT`, `KEY_PRESS/RELEASE/WRITE` (code 1..255), `RELEASE_ALL`, `MEDIA_PRESS/RELEASE/WRITE` (16-bit media mask, `MediaKeyReport` low = `[0]`), `MOUSE_PRESS/RELEASE/CLICK` (mask 1..7), `MOUSE_SCROLL` (`arg` != 0). Append new ops only; never renumber.
 - `parseSplitHidPacket()` checks sender MAC, length and the value range of each op. The master runs it in the Wi-Fi task callback and only queues valid events (64-entry SPSC ring, `SplitRxQueue`); `loop()` executes them.
-- The master's `bleKeyboard` is `SplitArbitratedKeyboard<DactylBleKeyboard>`: it tracks what each half holds in the shared HID report. An input is released in the report only when neither half holds it, so a right Shift release keeps a left Shift held. A right `releaseAll()` (combos, config combo) clears only right inputs and re-presses left ones inside one batched report (`beginReportBatch` / `endReportBatch` in `DactylBleComposite.h`).
-- Left-side tracking (`SplitLeftHeld`): press only sets, release only clears, so retry duplicates are harmless. `KEY_WRITE` of a held code and `MOUSE_CLICK` of a held button are ignored. `RELEASE_ALL`, the link timeout (`SPLIT_LINK_TIMEOUT_MS`, 3 s without packets) and a receive-ring overflow release **only** the inputs held by the left half.
+- The master's `bleKeyboard` is `SplitArbitratedKeyboard<DactylBleKeyboard>`: it tracks what each half holds in the shared HID report. An input is released in the report only when neither half holds it, so a right Shift release keeps a left Shift held. Uppercase and shifted ASCII codes (`'A'`, `'!'`) press Shift implicitly, and their release clears the Shift bit in the report; when the other half still needs Shift (it holds `KEY_LEFT_SHIFT` or a shifted code), the arbiter re-presses Shift in the same batched report. A release of `KEY_LEFT_SHIFT` keeps Shift in the report while the other half holds a shifted code. A right `releaseAll()` (combos, config combo) clears only right inputs and re-presses left ones inside one batched report (`beginReportBatch` / `endReportBatch` in `DactylBleComposite.h`).
+- Left-side tracking (`SplitLeftHeld`): press only sets, release only clears, so retry duplicates of `*_PRESS` / `*_RELEASE` / `RELEASE_ALL` are harmless. `KEY_WRITE`, `MEDIA_WRITE` and `MOUSE_CLICK` are not idempotent: the left half therefore sends `write()` and `mouseClick()` as `PRESS` + `RELEASE` and skips a one-shot action on an input it holds itself. `MOUSE_SCROLL` is never retried (`splitEventRetryable`); a lost scroll step is better than a doubled one. The master still accepts the `*_WRITE` / `MOUSE_CLICK` ops (append-only protocol); `KEY_WRITE` of a held code and `MOUSE_CLICK` of a held button are ignored. `RELEASE_ALL`, the link timeout (`SPLIT_LINK_TIMEOUT_MS`, 3 s without packets) and a receive-ring overflow release **only** the inputs held by the left half. On an overflow, `splitProcessRx` first drains the ring and releases afterwards, so a press queued before the dropped release cannot stay held.
 - `splitProcessRx()` holds the gating: without a Mac connection or in config mode the master executes nothing but keeps the link alive. On the transition to "no host" it clears both halves and the report, so no key is stuck after the Mac reconnects; physically held keys must be pressed again.
 - The left half sends `RELEASE_ALL` right after ESP-NOW starts (boot, wake, return from config mode). Its acknowledgement also marks the link as up without waiting for the first heartbeat.
 - The master prints each executed event as `SPLIT_HID:{"op":..,"code":..,"arg":..}`; the app ignores unknown serial lines.
@@ -150,8 +150,11 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 - Everything that differs between the halves lives in `SIDE_PROFILES` (`js/side-profiles.js`): BLE config name, default device name, config combo, missing keys, thumb cluster layout, row/column wires, diode hint, heatmap storage key, left default config. Do not add side-specific logic to `app.js`; the right half will move out of `app.js` into the same structure later.
 - The hand switcher selects the edited half. `currentConfig` and `pendingChanges` in `app.js` always belong to it; the other half is kept in `sideStore` (`js/side-state.js`). Heatmap counters and the matrix test exist per half. The displayed layer is shared.
 - The left half gets changes on the same paths as the right half: BLE one-shot auto-sync after `R0C5 + R4C0` (`Dactyl Config L`), BLE live editing in config mode, USB serial sync and "Auf Dactyl flashen".
-- Every connection knows its half: BLE from the config name (`Dactyl.sideFromBleName`, confirmed by `DEVICE_INFO`), USB from `DEVICE_INFO.side`. `sendDeviceCommand(cmd, side)` sends only to a connection of that half; otherwise the change stays pending for that half. `writeConfigToESP32` syncs the half of the connection, not the displayed half. Acks carry the half, so a reply from the other half never confirms a command.
+- Every connection knows its half: BLE from the config name (`Dactyl.sideFromBleName`, confirmed by `DEVICE_INFO`), USB from `DEVICE_INFO.side`. After opening the USB port the app repeats `GET_INFO` every 500 ms (max. 5 s), because opening the port resets the board. `sendDeviceCommand(cmd, side)` sends only to a connection of that half; otherwise the change stays pending for that half. `writeConfigToESP32` syncs the half of the connection, not the displayed half. Acks carry the half, so a reply from the other half never confirms a command; unplugging USB does not cancel a running BLE sync of the same half.
+- `js/side-routing.js` holds this routing as pure functions (`routeCommand`, `connectedSide`, `usbDisconnectAckScope`, `createAckRegistry`, `retryUntil`); `app.js` passes its connection state. `tests/test_side_profiles.js` tests them.
+- `flash_firmware` checks the port side again right before the upload; a port that changed during the compile is not flashed.
 - Revert closures of pending changes write to `currentConfig`; a change recorded for the non-edited half has no revert.
+- `validateConfigShape(cfg, profile)` applies the absent-key rules of `server.py` before an import or a loaded config replaces the state (`Dactyl.absentKeyViolations`): left keys `R4C5`/`R5C0` must not carry an action, no combo may use an absent key. Layout presets (`PRESETS`) are right-hand layouts; the profile flag `presets: false` disables them for the left half.
 - `tests/test_side_profiles.js` checks the profiles against the firmware sources (combo, names, pins, `KEYMAP` of `dactyl_left.ino`, `default_config_left.json`).
 
 ---
@@ -223,6 +226,13 @@ Keys in the matrix use `uint16_t` action codes:
 
 ---
 
+## Code Review Rule: LOW Findings
+
+- Do not fix `LOW` findings from code reviews directly. Record each one in `docs/ideas.md`, section "Offene LOW-Befunde aus Code-Reviews".
+- Write each entry with file and line, the problem, the consequence and the recommended correction. A later dedicated run fixes these entries together, each with a regression test.
+- Fix `BLOCKER`, `HIGH` and `MEDIUM` findings in the current work as usual.
+- A review cycle counts as clean when no `BLOCKER`, `HIGH` or `MEDIUM` finding remains.
+
 ## Development & Build Commands
 
 ### 0. Firmware Code Layout
@@ -246,12 +256,19 @@ Keys in the matrix use `uint16_t` action codes:
 ```bash
 python3 tests/test_server.py          # Codegen, validation, HTTP host/origin/static allowlist
 node tests/test_app_logic.js          # app.js action codes, sanitizing, config validation
-node tests/test_side_profiles.js      # side profiles vs. firmware sources, per-half state
+node tests/test_side_profiles.js      # side profiles vs. firmware sources, per-half state, side routing and acks
 bash firmware/tests/run_tests.sh      # DactylLogic.h, DactylLeftLogic.h, DactylSplitHid.h, left proxy
 python3 -m py_compile server.py
-node --check app.js && node --check main.js && node --check js/side-profiles.js && node --check js/side-state.js
+node --check app.js && node --check main.js && node --check js/side-profiles.js && node --check js/side-state.js && node --check js/side-routing.js
 xmllint --noout docs/lolin32_lite_wiring.svg
 ```
+
+### 3a. Rebuild the Desktop App
+```bash
+npm run build:app   # copies main.js + package.json into ~/Applications/Dactyl Configurator.app and re-signs it ad hoc
+```
+- The installed Electron bundle keeps its own copy of `main.js` (BLE/serial device selection, server start). Run `build:app` after every change to `main.js`; quit the app first (the script refuses while it runs). `DACTYL_APP=<path>` selects another bundle.
+- The web UI (`index.html`, `app.js`, `js/`) and `server.py` are not in the bundle; the app loads them from the main checkout at runtime. After a change to `server.py`, stop the running server process so the app starts the new one.
 
 ### 4. Run Local Server
 ```bash
@@ -319,5 +336,5 @@ python3 server.py
      - Base MAC: `2E:BC:BB:81:61:B0`
      - Wi-Fi STA MAC: `2E:BC:BB:81:61:B0`
      - Fixed ESP-NOW Target Peer: `2E:BC:BB:81:61:A6` (Kanal 1, unverschlüsselt für <2 ms Airtime).
-   - **Split Payload:** 4-Byte Struct `SplitKeyEvent { uint8_t row; uint8_t col; bool pressed; uint8_t flags; }`.
-   - **Master Merging:** Der rechte Master empfängt das Event im `onDataRecv`-Callback, mappt `col` auf den linken Bereich (Spalten 0..6 Links) und führt es synchron mit den lokalen Zeilen-/Spaltenereignissen in die gemeinsame Tastatur-State-Machine und den BLE HID Stream ein.
+   - **Split Payload:** 4-Byte Struct `SplitHidEvent { uint8_t op; int8_t arg; uint16_t code; }` mit einer fertig aufgelösten HID-Operation. Die linke Hälfte löst Layer, Tap-Hold und Combos selbst auf; sie sendet keine Matrix-Positionen.
+   - **Master Merging:** Der rechte Master prüft das Paket im Wi-Fi-Callback (`parseSplitHidPacket`), legt es in den Empfangsring und führt es in `loop()` über `splitProcessRx` auf seiner BLE-HID-Verbindung aus. `SplitArbitratedKeyboard` verfolgt, welche Hälfte welche Eingabe hält. Details: „Split HID protocol" unter „Left Half Firmware".

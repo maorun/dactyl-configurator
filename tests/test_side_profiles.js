@@ -12,6 +12,7 @@ const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(read("js/side-profiles.js"), ctx);
 vm.runInContext(read("js/side-state.js"), ctx);
+vm.runInContext(read("js/side-routing.js"), ctx);
 const D = ctx.Dactyl;
 const { L, R } = D.SIDE_PROFILES;
 
@@ -20,11 +21,19 @@ const leftLogic = read("firmware/dactyl_left/DactylLeftLogic.h");
 const rightIno = read("firmware/dactyl_right/dactyl_right.ino");
 const logic = read("firmware/dactyl_right/DactylLogic.h");
 
+// Tests laufen nacheinander; async-Tests werden abgewartet, ein Fehler beendet den Lauf mit Exit-Code 1
 let passed = 0;
+const queue = [];
 function test(name, fn) {
-  fn();
-  passed++;
-  console.log(`[       OK ] ${name}`);
+  queue.push({ name, fn });
+}
+async function runAll() {
+  for (const { name, fn } of queue) {
+    await fn();
+    passed++;
+    console.log(`[       OK ] ${name}`);
+  }
+  console.log(`\n${passed} Seitenprofil-Tests bestanden.`);
 }
 
 const define = (src, name) => {
@@ -166,6 +175,54 @@ test("default_config_left.json entspricht der linken Standard-Belegung im Profil
   assert.strictEqual(file.settings.deviceName, L.deviceName);
 });
 
+test("Fehlende Tasten: links verboten (wie server.py), rechts nur für Combos", () => {
+  const layer = () => Array.from({ length: 6 }, () => Array.from({ length: 7 }, () => ({ tap: "NONE", hold: "NONE", dtap: "NONE" })));
+  const l = layer();
+  l[5][0] = { tap: "KEY_LEFT_GUI", hold: "NONE", dtap: "NONE" };
+  assert.deepStrictEqual([...D.absentKeyViolations(L, { layers: [l] })], ["R5C0 (Ebene 0)"]);
+  const h = layer();
+  h[4][5] = { tap: "NONE", hold: "MO_1", dtap: "NONE" };
+  assert.deepStrictEqual([...D.absentKeyViolations(L, { layers: [layer(), h] })], ["R4C5 (Ebene 1)"]);
+  assert.deepStrictEqual([...D.absentKeyViolations(L, { layers: [[[], [], [], [], [], ["KEY_A"]]] })], ["R5C0 (Ebene 0)"]);
+  // Rechte Vorlage: Aktion auf R5C5 bleibt erlaubt, wie validate_config für side=R
+  const r = layer();
+  r[5][5] = { tap: "KEY_BACKSPACE", hold: "NONE", dtap: "NONE" };
+  assert.strictEqual(D.absentKeyViolations(R, { layers: [r] }).length, 0);
+  const combo = (a, b) => ({ key1: a, key2: b });
+  assert.deepStrictEqual([...D.absentKeyViolations(L, { layers: [], combos: [combo({ r: 0, c: 0 }, { r: 4, c: 5 })] })], ["Combo 1 (R4C5)"]);
+  assert.deepStrictEqual([...D.absentKeyViolations(R, { layers: [], combos: [combo({ r: 4, c: 0 }, { r: 0, c: 0 })] })], ["Combo 1 (R4C0)"]);
+  assert.strictEqual(D.absentKeyViolations(L, { layers: [], combos: [combo({ r: 4, c: 0 }, { r: 0, c: 0 })] }).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, JSON.parse(read("default_config_left.json"))).length, 0);
+  assert.strictEqual(D.absentKeyViolations(R, JSON.parse(read("default_config.json"))).length, 0);
+  assert.strictEqual(D.absentKeyViolations(null, { layers: [l] }).length, 0);
+});
+
+test("Fehlende Tasten: gleiche Zellregeln wie cell_actions in server.py", () => {
+  // Doppel-Tipp ohne Tap hat keine Wirkung (server.py: cell_actions gibt dann nur hold weiter)
+  const at = cell => { const l = Array.from({ length: 6 }, () => Array(7).fill({ tap: "NONE" })); l[5] = [...l[5]]; l[5][0] = cell; return { layers: [l] }; };
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "NONE", hold: "NONE", dtap: "KEY_A" })).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "", dtap: "KEY_A" })).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "NONE", hold: "MO_1", dtap: "KEY_A" })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "KEY_A", hold: "NONE", dtap: "NONE" })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "KEY_A", dtap: 5 })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: 7, hold: "NONE" })).length, 0); // kein String = keine Aktion
+  assert.strictEqual(D.absentKeyViolations(L, at("0")).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, at("KEY_A")).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at(null)).length, 0);
+  // Tap "0" ist in server.py ein Tap: dann zählen hold und dtap
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "0", dtap: "KEY_A" })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "0", hold: "MO_1" })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "0" })).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, at({ hold: "KEY_A" })).length, 1); // fehlender Tap = "NONE"
+  // Gegenprobe gegen den Server-Test: dieselben Fälle in tests/test_server.py (test_absent_key_cell_rules_match_app)
+  assert.ok(read("tests/test_server.py").includes("test_absent_key_cell_rules_match_app"));
+});
+
+test("Layout-Presets nur für die rechte Hand", () => {
+  assert.strictEqual(R.presets, true);
+  assert.strictEqual(L.presets, false);
+});
+
 test("Zustand pro Hälfte: getrennte Configs und Änderungen, nur bekannte Felder", () => {
   const store = D.createSideStore(["R", "L"], side => ({ config: { side } }));
   assert.strictEqual(store.get("L").config.side, "L");
@@ -180,4 +237,108 @@ test("Zustand pro Hälfte: getrennte Configs und Änderungen, nur bekannte Felde
   assert.throws(() => store.get("X"), /Unbekannte Tastaturhälfte/);
 });
 
-console.log(`\n${passed} Seitenprofil-Tests bestanden.`);
+// -----------------------------------------------------------------------------
+// js/side-routing.js: Befehle und Bestätigungen gehören zu einer Hälfte
+// -----------------------------------------------------------------------------
+const conn = (o) => Object.assign({ bleUp: false, bleSide: null, serialUp: false, serialSide: null }, o);
+
+test("Routing: Befehle gehen nur an eine Verbindung der passenden Hälfte, BLE zuerst", () => {
+  assert.strictEqual(D.routeCommand("L", conn({ bleUp: true, bleSide: "L" })), "ble");
+  assert.strictEqual(D.routeCommand("R", conn({ bleUp: true, bleSide: "L" })), null);
+  assert.strictEqual(D.routeCommand("L", conn({ serialUp: true, serialSide: "L" })), "usb");
+  assert.strictEqual(D.routeCommand("L", conn({ serialUp: true, serialSide: null })), null); // Hälfte unbekannt
+  assert.strictEqual(D.routeCommand("R", conn({ bleUp: true, bleSide: "L", serialUp: true, serialSide: "R" })), "usb");
+  assert.strictEqual(D.routeCommand("L", conn({ bleUp: true, bleSide: "L", serialUp: true, serialSide: "L" })), "ble");
+  assert.strictEqual(D.routeCommand(null, conn({ bleUp: true, bleSide: "L" })), null);
+  assert.strictEqual(D.routeCommand("L", conn({ serialUp: false, serialSide: "L" })), null);
+});
+
+test("Routing: verbundene Hälfte bevorzugt BLE", () => {
+  assert.strictEqual(D.connectedSide(conn({})), null);
+  assert.strictEqual(D.connectedSide(conn({ bleUp: true, bleSide: "L", serialUp: true, serialSide: "R" })), "L");
+  assert.strictEqual(D.connectedSide(conn({ serialUp: true, serialSide: "R" })), "R");
+  assert.strictEqual(D.connectedSide(conn({ serialUp: true })), null);
+});
+
+test("USB trennen: ein laufender BLE-Sync derselben Hälfte bleibt bestehen", () => {
+  assert.deepStrictEqual({ ...D.usbDisconnectAckScope(conn({ serialSide: "L" })) }, { reject: true, side: "L" });
+  assert.deepStrictEqual({ ...D.usbDisconnectAckScope(conn({ serialSide: null })) }, { reject: true, side: null });
+  assert.deepStrictEqual({ ...D.usbDisconnectAckScope(conn({ bleUp: true, bleSide: "L", serialSide: "L" })) }, { reject: false });
+  assert.deepStrictEqual({ ...D.usbDisconnectAckScope(conn({ bleUp: true, bleSide: "L", serialSide: null })) }, { reject: false });
+  assert.deepStrictEqual({ ...D.usbDisconnectAckScope(conn({ bleUp: true, bleSide: "L", serialSide: "R" })) }, { reject: true, side: "R" });
+});
+
+// Steuerbare Timer für die Bestätigungen
+function fakeTimers() {
+  let id = 0;
+  const pending = new Map();
+  return {
+    set: (fn, ms) => { pending.set(++id, fn); return id; },
+    clear: (i) => { pending.delete(i); },
+    fireAll: () => { const fns = [...pending.values()]; pending.clear(); fns.forEach(f => f()); },
+    count: () => pending.size
+  };
+}
+
+test("Bestätigungen: Antwort der anderen Hälfte bestätigt nichts", async () => {
+  const t = fakeTimers();
+  const acks = D.createAckRegistry(t);
+  const left = acks.wait("SAVE_NVS", 1000, "L");
+  acks.resolveLine("OK SAVE_NVS", "R");          // rechte Hälfte über USB
+  assert.strictEqual(acks.size(), 1);
+  acks.resolveLine("OK SAVE_NVS", "L");
+  assert.strictEqual(await left, true);
+  assert.strictEqual(t.count(), 0);
+  const any = acks.wait("SET_NAME 3", 1000, null);
+  acks.resolveLine("ERR NVS SET_NAME 3", "R");   // Bestätigung ohne Hälfte nimmt jede Antwort
+  assert.strictEqual(await any, false);
+  const unknownLine = acks.wait("ADD_PAIR", 1000, "L");
+  acks.resolveLine("OK ADD_PAIR 0", null);       // Zeile ohne bekannte Hälfte (USB vor DEVICE_INFO)
+  assert.strictEqual(await unknownLine, true);
+  acks.resolveLine("STATUS: ok", "L");           // keine OK/ERR-Zeile
+});
+
+test("Bestätigungen: Verwerfen pro Hälfte und Timeout", async () => {
+  const t = fakeTimers();
+  const acks = D.createAckRegistry(t);
+  const l = acks.wait("SAVE_NVS", 1000, "L");
+  const r = acks.wait("SAVE_NVS", 1000, "R");
+  const n = acks.wait("EXIT_CONFIG", 1000, null);
+  acks.reject("USB getrennt", "R");
+  assert.strictEqual(await r, false);
+  assert.strictEqual(await n, false);            // ohne Hälfte: wird mit verworfen
+  assert.strictEqual(acks.size(), 1);
+  t.fireAll();
+  assert.strictEqual(await l, null);             // Timeout
+  assert.strictEqual(acks.size(), 0);
+});
+
+test("GET_INFO-Wiederholung: bis die Hälfte bekannt ist, höchstens bis zum Timeout", () => {
+  const t = fakeTimers();
+  let sent = 0;
+  let side = null;
+  D.retryUntil(() => side !== null, () => sent++, 500, 5000, t);
+  assert.strictEqual(sent, 1);                   // erster Versuch sofort
+  t.fireAll();
+  t.fireAll();
+  assert.strictEqual(sent, 3);
+  side = "L";
+  t.fireAll();
+  assert.strictEqual(sent, 3);                   // DEVICE_INFO kam: keine weitere Anfrage
+  assert.strictEqual(t.count(), 0);
+  sent = 0;
+  D.retryUntil(() => false, () => sent++, 500, 5000, t);
+  for (let i = 0; i < 20; i++) t.fireAll();
+  assert.strictEqual(sent, 11);                  // 0 .. 5000 ms in 500-ms-Schritten
+  sent = 0;
+  const stop = D.retryUntil(() => false, () => sent++, 500, 5000, t);
+  stop();
+  t.fireAll();
+  assert.strictEqual(sent, 1);
+  assert.strictEqual(t.count(), 0);
+});
+
+runAll().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

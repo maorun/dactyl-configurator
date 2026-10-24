@@ -139,7 +139,7 @@ bool queueTimedOut(const SplitSendQueue &q, unsigned long nowMs) {
 SendOutcome queueOnSendResult(SplitSendQueue &q, bool success, unsigned long nowMs) {
   if (!q.inFlight || q.count == 0) return SEND_DELIVERED;
   q.inFlight = false;
-  if (!success && q.attempts < ESPNOW_MAX_RETRIES) {
+  if (!success && q.attempts < ESPNOW_MAX_RETRIES && splitEventRetryable(q.items[q.head])) {
     q.attempts++;
     q.retryAtMs = nowMs + ESPNOW_RETRY_DELAY_MS;
     return SEND_RETRY;

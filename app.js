@@ -611,8 +611,9 @@ function keyPairLabel(pair, labelFor) {
   return `${labelFor(pair.first)} + ${labelFor(pair.second)}`;
 }
 
-// Prüft eine importierte oder vom Server geladene Konfiguration und wirft bei ungültiger Struktur
-function validateConfigShape(cfg) {
+// Prüft eine importierte oder vom Server geladene Konfiguration und wirft bei ungültiger Struktur.
+// profile: Hälfte, für die die Config bestimmt ist (fehlende Tasten und Combos, wie server.py)
+function validateConfigShape(cfg, profile) {
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("Konfiguration muss ein Objekt sein.");
   if (!Array.isArray(cfg.layers) || cfg.layers.length === 0 || cfg.layers.length > NUM_LAYERS) {
     throw new Error(`'layers' muss 1..${NUM_LAYERS} Ebenen enthalten.`);
@@ -643,6 +644,8 @@ function validateConfigShape(cfg) {
   }
   if (cfg.layerNames !== undefined && !Array.isArray(cfg.layerNames)) throw new Error("'layerNames' muss eine Liste sein.");
   if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");
+  const absent = Dactyl.absentKeyViolations(profile, cfg);
+  if (absent.length) throw new Error(`Diese Tasten gibt es auf der ${profile.label} nicht: ${absent.join(", ")}`);
 }
 
 // Ebenen-Werkzeuge: Kopieren, Tauschen und Leeren ganzer Ebenen (liefert neue Ebenen-Liste, ändert nichts in-place)
@@ -820,6 +823,8 @@ let keepReading = true;
 
 // Hälfte am USB-Port: kommt aus DEVICE_INFO.side (null bis zur ersten Antwort auf GET_INFO)
 let serialSide = null;
+// Bricht die GET_INFO-Wiederholung nach dem Öffnen des USB-Ports ab
+let stopSerialInfoRetry = null;
 
 // Web Bluetooth & Auto-Sync State
 let bleDevice = null;
@@ -1156,7 +1161,7 @@ async function loadSavedConfigFromServer() {
       const data = await res.json();
       if (!data || !data.layers || data.layers.length === 0) continue;
       try {
-        validateConfigShape(data);
+        validateConfigShape(data, profile);
       } catch (validationErr) {
         showToast(`⚠️ Gespeicherte Konfiguration der ${profile.label} ungültig (${validationErr.message}). Standard wird verwendet.`, 7000);
         continue;
@@ -1379,6 +1384,11 @@ function initUI() {
   if (btnPreset) {
     btnPreset.addEventListener("click", () => {
       const presetKey = document.getElementById("layoutPresetSelect").value;
+      // Presets sind Belegungen der rechten Hand; auf links belegten sie fehlende Tasten (R5C0)
+      if (!activeProfile().presets) {
+        showToast(`Layout-Presets gibt es nur für die rechte Hand, nicht für die ${activeProfile().label}.`, 5000);
+        return;
+      }
       if (PRESETS[presetKey]) {
         const oldLayer0 = JSON.parse(JSON.stringify(currentConfig.layers[0]));
         currentConfig.layers[0] = JSON.parse(JSON.stringify(PRESETS[presetKey].layers[0]));
@@ -1583,6 +1593,11 @@ function updateSideLabels() {
   if (diode) diode.textContent = `${profile.label} · ${profile.diodeHint}`;
   const flashBtn = document.getElementById("btnSaveToDactyl");
   if (flashBtn) flashBtn.title = `Tastenbelegung der ${profile.label} kompilieren und per USB auf diese Hälfte flashen`;
+  const presetBtn = document.getElementById("btnApplyPreset");
+  if (presetBtn) {
+    presetBtn.disabled = !profile.presets;
+    presetBtn.title = profile.presets ? "" : "Layout-Presets gibt es nur für die rechte Hand";
+  }
 }
 
 function renderMatrix() {
@@ -2230,7 +2245,7 @@ function setupEventListeners() {
       try {
         const parsed = JSON.parse(event.target.result);
         // Vollständig validieren, BEVOR der Zustand ersetzt oder auf dem Server gespeichert wird
-        validateConfigShape(parsed);
+        validateConfigShape(parsed, activeProfile());
         if (!confirm(`Konfiguration aus "${file.name || "Backup"}" importieren? Die aktuelle Belegung wird ersetzt (Rückgängig über die vorgemerkten Änderungen).`)) {
           return;
         }
@@ -2867,50 +2882,19 @@ function sendBleCommand(cmd) {
 // -----------------------------------------------------------------------------
 // Firmware-Bestätigungen (OK <CMD> / ERR ...): Erfolg erst nach Antwort der Tastatur
 // -----------------------------------------------------------------------------
-const pendingAcks = [];
+// Wartende Bestätigungen tragen die Hälfte, von der die Antwort kommen muss (js/side-routing.js)
+const ackRegistry = Dactyl.createAckRegistry();
+// Löst mit true (OK), false (ERR) oder null (Timeout) auf. side: erwartete Hälfte (null = jede Hälfte).
+const waitForAck = (okPrefix, timeoutMs = 2500, side = null) => ackRegistry.wait(okPrefix, timeoutMs, side);
+const resolveAcksForLine = (line, side = null) => ackRegistry.resolveLine(line, side);
+const rejectAllPendingAcks = (reason, side = null) => ackRegistry.reject(reason, side);
 
-// Wartet auf "OK <okPrefix>" bzw. ein ERR für diesen Befehl. Löst mit true (OK), false (ERR) oder null (Timeout) auf.
-// side: Hälfte, von der die Antwort kommen muss (null = jede Hälfte).
-function waitForAck(okPrefix, timeoutMs = 2500, side = null) {
-  return new Promise((resolve) => {
-    const entry = { okPrefix, resolve, timer: null, side };
-    entry.timer = setTimeout(() => {
-      const i = pendingAcks.indexOf(entry);
-      if (i !== -1) pendingAcks.splice(i, 1);
-      resolve(null);
-    }, timeoutMs);
-    pendingAcks.push(entry);
-  });
-}
-
-function resolveAcksForLine(line, side = null) {
-  if (!line.startsWith("OK ") && !line.startsWith("ERR ")) return;
-  const isOk = line.startsWith("OK ");
-  for (let i = 0; i < pendingAcks.length; i++) {
-    const entry = pendingAcks[i];
-    // Eine Antwort der anderen Hälfte (BLE und USB gleichzeitig) bestätigt keinen Befehl dieser Hälfte
-    if (side && entry.side && entry.side !== side) continue;
-    // OK <CMD> ... bzw. ERR <GRUND> <CMD>... (ERR BUSY/ARGS/NVS/UNKNOWN enthalten den Befehlsnamen)
-    const matches = isOk ? line.startsWith(`OK ${entry.okPrefix}`) : line.includes(entry.okPrefix);
-    if (matches) {
-      clearTimeout(entry.timer);
-      pendingAcks.splice(i, 1);
-      entry.resolve(isOk);
-      return;
-    }
-  }
-}
-
-// Verwirft wartende Bestätigungen; mit side nur die dieser Hälfte (und die ohne Hälfte)
-function rejectAllPendingAcks(reason, side = null) {
-  for (let i = pendingAcks.length - 1; i >= 0; i--) {
-    const entry = pendingAcks[i];
-    if (side && entry.side && entry.side !== side) continue;
-    pendingAcks.splice(i, 1);
-    clearTimeout(entry.timer);
-    console.warn("Bestätigung verworfen:", entry.okPrefix, reason);
-    entry.resolve(false);
-  }
+// Verbindungszustand für die reinen Routing-Funktionen in js/side-routing.js
+function connectionState() {
+  return {
+    bleUp: !!bleConfigChar, bleSide,
+    serialUp: !!(serialPort && serialPort.writable), serialSide
+  };
 }
 
 async function sendBleCommandAwait(cmd, okPrefix, timeoutMs) {
@@ -2926,21 +2910,20 @@ async function sendBleCommandAwait(cmd, okPrefix, timeoutMs) {
 
 // Verbindung zu einer bestimmten Hälfte (BLE im Config Mode oder USB mit erkannter Hälfte)
 function isDeviceConnected(side = editSide) {
-  return (!!bleConfigChar && bleSide === side) || (!!(serialPort && serialPort.writable) && serialSide === side);
+  return Dactyl.routeCommand(side, connectionState()) !== null;
 }
 
 // Hälfte der aktiven Verbindung (BLE bevorzugt), null ohne Verbindung oder bei unbekannter USB-Hälfte
 function connectedSide() {
-  if (bleConfigChar) return bleSide;
-  if (serialPort && serialPort.writable) return serialSide;
-  return null;
+  return Dactyl.connectedSide(connectionState());
 }
 
 // Sendet einen Befehl an eine Hälfte (BLE bevorzugt). Rückgabe: true bei erfolgreichem Senden.
 // Ohne Verbindung zu dieser Hälfte wird nichts gesendet: die Änderung bleibt für deren nächsten Sync vorgemerkt.
 async function sendDeviceCommand(cmd, side = editSide) {
-  if (bleConfigChar && bleSide === side) return sendBleCommand(cmd);
-  if (serialPort && serialPort.writable && serialSide === side) return sendSerialCommand(cmd);
+  const route = Dactyl.routeCommand(side, connectionState());
+  if (route === "ble") return sendBleCommand(cmd);
+  if (route === "usb") return sendSerialCommand(cmd);
   return false;
 }
 
@@ -3023,9 +3006,13 @@ async function connectSerialNow(options = {}) {
     // Start read loop
     serialReadPromise = startSerialReadLoop(port);
 
-    // Query device info
+    // Hälfte abfragen: das Öffnen startet das Board neu, eine einzelne Anfrage ginge dann verloren.
+    // GET_INFO alle 500 ms wiederholen, bis DEVICE_INFO die Hälfte meldet (höchstens 5 s).
+    if (stopSerialInfoRetry) stopSerialInfoRetry();
     setTimeout(() => {
-      sendSerialCommand("GET_INFO");
+      if (serialPort !== port) return;
+      stopSerialInfoRetry = Dactyl.retryUntil(() => serialPort !== port || serialSide !== null,
+        () => sendSerialCommand("GET_INFO"), 500, 5000);
     }, 300);
 
   } catch (err) {
@@ -3063,7 +3050,13 @@ async function disconnectSerialNow() {
       console.warn("Serial close warning:", e);
     }
   }
-  rejectAllPendingAcks("USB-Verbindung getrennt", serialSide);
+  if (stopSerialInfoRetry) {
+    stopSerialInfoRetry();
+    stopSerialInfoRetry = null;
+  }
+  // Ein laufender BLE-Sync derselben Hälfte bleibt bestehen (js/side-routing.js)
+  const scope = Dactyl.usbDisconnectAckScope({ ...connectionState(), serialUp: false });
+  if (scope.reject) rejectAllPendingAcks("USB-Verbindung getrennt", scope.side);
   serialSide = null;
   serialReader = null;
   updateConnectionUI(false, "Nicht verbunden");

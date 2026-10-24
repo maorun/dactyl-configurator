@@ -123,7 +123,17 @@ test("Config-Validierung: ungültige Struktur wird abgelehnt", () => {
   assert.doesNotThrow(() => api.validateConfigShape({
     layers: [[[{ tap: "KEY_A" }]]],
     combos: [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 } }]
-  }));
+  }, R));
+});
+
+test("Config-Validierung: Import einer rechten Config in die linke Hälfte wird abgelehnt", () => {
+  const rightCfg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "default_config.json"), "utf8"));
+  assert.doesNotThrow(() => api.validateConfigShape(rightCfg, R));
+  // Die rechte Belegung legt auf R5C0 und R4C5 Aktionen, die links nicht existieren
+  assert.throws(() => api.validateConfigShape(rightCfg, L), /R5C0 \(Ebene 0\)/);
+  const leftCfg = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "default_config_left.json"), "utf8"));
+  assert.doesNotThrow(() => api.validateConfigShape(leftCfg, L));
+  assert.throws(() => api.validateConfigShape({ layers: [[]], combos: [{ key1: { r: 4, c: 5 }, key2: { r: 0, c: 0 } }] }, L), /Combo 1/);
 });
 
 test("Config-Normalisierung: Namen, Einstellungen und Zellen werden bereinigt", () => {

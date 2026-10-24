@@ -214,6 +214,7 @@ ALLOWED_ORIGINS = {"http://localhost:8088", "http://127.0.0.1:8088"}
 STATIC_ALLOWLIST = {
     "/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css",
     "/js/side-profiles.js": "js/side-profiles.js", "/js/side-state.js": "js/side-state.js",
+    "/js/side-routing.js": "js/side-routing.js",
 }
 
 # Wertebereiche identisch zur Firmware (handleConfigCommand)
@@ -724,7 +725,10 @@ def flash_firmware(side="R"):
     except subprocess.TimeoutExpired:
         return {"success": False, "stage": "compile", "error": f"Kompilieren abgebrochen (Timeout nach {COMPILE_TIMEOUT_S}s)."}
 
-    # 2. Upload
+    # 2. Upload: Das Kompilieren dauert bis zu 300 s. Wurde in der Zeit umgesteckt, kann der Port jetzt die
+    # andere Hälfte sein. Deshalb direkt vor dem Upload erneut prüfen.
+    if query_device_side(port) != side:
+        return {"success": False, "stage": "port", "error": f"Am Port {port} hängt nicht mehr die {label} Hälfte. Nichts geflasht; bitte erneut starten."}
     upload_cmd = [
         arduino_cli, "upload",
         "-p", port,

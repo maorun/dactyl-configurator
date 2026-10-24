@@ -42,6 +42,10 @@
       configCombo: [{ r: 0, c: 0 }, { r: 4, c: 5 }],
       comboLabel: "R4C5 + R0C0",
       absentKeys: ["4_0", "5_5"],
+      // Die rechte Vorlage hat auf R5C5 historisch eine Aktion; sie bleibt ohne Wirkung (wie server.py)
+      strictAbsentKeys: false,
+      // Layout-Presets (PRESETS in app.js) sind Belegungen der rechten Hand
+      presets: true,
       // Rechte Hand: Daumen-Cluster links neben dem Finger-Cluster
       thumbsFirst: true,
       thumbDefs: [
@@ -75,6 +79,9 @@
       configCombo: [{ r: 0, c: 5 }, { r: 4, c: 0 }],
       comboLabel: "R0C5 + R4C0",
       absentKeys: ["4_5", "5_0"],
+      // Fehlende Tasten dürfen keine Aktion tragen (server.py lehnt sie für links mit HTTP 400 ab)
+      strictAbsentKeys: true,
+      presets: false,
       // Linke Hand: Finger-Cluster links, Daumen-Cluster rechts (Spiegelbild der rechten Hand)
       thumbsFirst: false,
       thumbDefs: [
@@ -138,7 +145,48 @@
     return Object.prototype.hasOwnProperty.call(SIDE_PROFILES, info.side) ? info.side : null;
   }
 
+  // Aktionen einer Zelle exakt wie cell_actions + validate_config in server.py: Objekt mit tap/hold/dtap
+  // oder ein Code-String. Kein Tap ("", "NONE", kein String): nur hold wirkt (als normale Taste), ein
+  // Doppel-Tipp bleibt ohne Wirkung. Ein Tap "0" gilt dort als Tap; dann zählen hold und dtap mit.
+  function cellHasAction(cell) {
+    const isAction = v => typeof v === "string" && v !== "" && v !== "NONE" && v !== "0";
+    const str = v => (typeof v === "string" ? v : "NONE");
+    if (typeof cell === "string") return isAction(cell);
+    if (!cell || typeof cell !== "object") return false;
+    const tap = str(cell.tap ?? "NONE");
+    if (tap === "" || tap === "NONE") return isAction(str(cell.hold ?? "NONE"));
+    return [tap, str(cell.hold ?? "NONE"), str(cell.dtap ?? "NONE")].some(isAction);
+  }
+
+  // Verstöße gegen die fehlenden Tasten der Hälfte, dieselben Regeln wie validate_config in server.py:
+  // Combos auf fehlenden Tasten immer, Aktionen auf fehlenden Tasten nur bei strictAbsentKeys.
+  // Liefert lesbare Positionen, z. B. "R5C0 (Ebene 0)" oder "Combo 1 (R4C5)"; leer = gültig.
+  function absentKeyViolations(profile, cfg) {
+    const out = [];
+    if (!profile || !cfg || typeof cfg !== "object") return out;
+    if (profile.strictAbsentKeys && Array.isArray(cfg.layers)) {
+      cfg.layers.forEach((layer, l) => {
+        if (!Array.isArray(layer)) return;
+        layer.forEach((row, r) => {
+          if (!Array.isArray(row)) return;
+          row.forEach((cell, c) => {
+            if (!isPhysicalKey(profile, r, c) && cellHasAction(cell)) out.push(`R${r}C${c} (Ebene ${l})`);
+          });
+        });
+      });
+    }
+    if (Array.isArray(cfg.combos)) {
+      cfg.combos.forEach((cb, i) => {
+        for (const key of [cb && cb.key1, cb && cb.key2]) {
+          if (key && !isPhysicalKey(profile, key.r, key.c)) out.push(`Combo ${i + 1} (R${key.r}C${key.c})`);
+        }
+      });
+    }
+    return out;
+  }
+
   root.Dactyl = Object.assign(root.Dactyl || {}, {
-    SIDE_PROFILES, SIDE_IDS, isPhysicalKey, isWiredSwitch, isConfigComboKey, sideFromBleName, sideFromDeviceInfo
+    SIDE_PROFILES, SIDE_IDS, isPhysicalKey, isWiredSwitch, isConfigComboKey, sideFromBleName, sideFromDeviceInfo,
+    absentKeyViolations
   });
 })(typeof window !== "undefined" ? window : globalThis);

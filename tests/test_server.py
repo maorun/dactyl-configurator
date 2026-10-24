@@ -384,21 +384,24 @@ class TestServerAndCodegen(unittest.TestCase):
             calls.append(cmd)
             return Done()
 
-        old = (server.find_arduino_cli, server.find_serial_port, server.subprocess.run)
+        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run)
         server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
         server.find_serial_port = lambda side="R": "/dev/cu.usbserial-test"
+        server.query_device_side = lambda port: "R"
         server.subprocess.run = fake_run
         try:
             server.flash_firmware()
         finally:
-            server.find_arduino_cli, server.find_serial_port, server.subprocess.run = old
+            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run = old
         self.assertEqual([c[1] for c in calls], ["compile", "upload"])
         for cmd in calls:
             self.assertEqual(cmd[cmd.index("--fqbn") + 1], "esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs")
 
-    def run_flash(self, side, port_for):
-        """Führt flash_firmware(side) mit gefälschtem arduino-cli aus; port_for(side) ersetzt die Port-Erkennung."""
+    def run_flash(self, side, port_for, side_before_upload=None):
+        """Führt flash_firmware(side) mit gefälschtem arduino-cli aus; port_for(side) ersetzt die Port-Erkennung.
+        side_before_upload: Antwort der Nachprüfung vor dem Upload (Standard: die angefragte Hälfte)."""
         calls = []
+        probes = []
 
         class Done:
             returncode = 0
@@ -409,15 +412,32 @@ class TestServerAndCodegen(unittest.TestCase):
             calls.append(cmd)
             return Done()
 
-        old = (server.find_arduino_cli, server.find_serial_port, server.subprocess.run)
+        def fake_query(port):
+            probes.append((port, len(calls)))
+            return side if side_before_upload is None else side_before_upload
+
+        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run)
         server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
         server.find_serial_port = port_for
+        server.query_device_side = fake_query
         server.subprocess.run = fake_run
         try:
             result = server.flash_firmware(side)
         finally:
-            server.find_arduino_cli, server.find_serial_port, server.subprocess.run = old
+            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run = old
+        self.last_probes = probes
         return result, calls
+
+    def test_flash_rechecks_port_side_before_upload(self):
+        # Kompilieren dauert lange: wurde umgesteckt, darf der Upload nicht auf die andere Hälfte gehen
+        result, calls = self.run_flash("L", lambda s: "/dev/cu.usbserial-a", side_before_upload="R")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["stage"], "port")
+        self.assertEqual([c[1] for c in calls], ["compile"])          # kein Upload
+        self.assertEqual(self.last_probes, [("/dev/cu.usbserial-a", 1)])  # geprüft nach dem Compile
+        result, calls = self.run_flash("L", lambda s: "/dev/cu.usbserial-a", side_before_upload=None)
+        self.assertTrue(result["success"])
+        self.assertEqual([c[1] for c in calls], ["compile", "upload"])
 
     def test_flash_uses_sketch_and_port_of_the_side(self):
         ports = {"L": "/dev/cu.usbserial-left", "R": "/dev/cu.usbserial-right"}
@@ -484,6 +504,24 @@ class TestServerAndCodegen(unittest.TestCase):
             server.validate_config({"layers": [[]], "combos": [combo_r]}, "R")
         server.validate_config({"layers": [[]], "combos": [combo_r]}, "L")
 
+    def test_absent_key_cell_rules_match_app(self):
+        # Dieselben Fälle wie in tests/test_side_profiles.js: Doppel-Tipp ohne Tap ist keine Aktion
+        def layer_with(cell):
+            layer = [[{"tap": "NONE"}] * 7 for _ in range(6)]
+            layer[5] = list(layer[5])
+            layer[5][0] = cell
+            return {"layers": [layer]}
+        allowed = [{"tap": "NONE", "hold": "NONE", "dtap": "KEY_A"}, {"tap": "", "dtap": "KEY_A"},
+                   {"tap": 7, "hold": "NONE"}, "0", {"tap": "0"}]
+        rejected = [{"tap": "NONE", "hold": "MO_1", "dtap": "KEY_A"}, {"tap": "KEY_A", "hold": "NONE", "dtap": "NONE"},
+                    {"tap": "KEY_A", "dtap": 5}, "KEY_A", {"tap": "0", "dtap": "KEY_A"}, {"tap": "0", "hold": "MO_1"},
+                    {"hold": "KEY_A"}]
+        for cell in allowed:
+            server.validate_config(layer_with(cell), "L")
+        for cell in rejected:
+            with self.assertRaises(ValueError, msg=str(cell)):
+                server.validate_config(layer_with(cell), "L")
+
     def test_left_default_name_in_settings(self):
         self.assertIn('String deviceName = "Dactyl Links";', server.generate_settings_cpp({}, "L"))
         self.assertIn('String deviceName = "Dactyl Keyboard";', server.generate_settings_cpp({}, "R"))
@@ -526,6 +564,19 @@ class TestServerAndCodegen(unittest.TestCase):
                 self.assertTrue(os.path.exists(paths["current_config_left.json"]))
             finally:
                 server.CONFIG_FILE, server.INO_FILE, server.LEFT_CONFIG_FILE, server.LEFT_INO_FILE = old
+
+    def test_build_app_script_copies_main_js_and_resigns(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
+            pkg = json.load(f)
+        self.assertEqual(pkg["main"], "main.js")
+        self.assertEqual(pkg["scripts"]["build:app"], "bash scripts/build-app.sh")
+        with open(os.path.join(root, "scripts", "build-app.sh"), encoding="utf-8") as f:
+            script = f.read()
+        self.assertIn("set -euo pipefail", script)
+        self.assertIn('cp "$REPO_DIR/main.js" "$REPO_DIR/package.json" "$APP_DIR/"', script)
+        self.assertIn('codesign --force --deep --sign - "$APP"', script)
+        self.assertIn("pgrep", script)  # baut nicht in eine laufende App
 
     def test_left_user_config_is_not_versioned(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -576,6 +627,7 @@ class TestServerHttp(unittest.TestCase):
         self.assertEqual(self.request("GET", "/firmware/dactyl_right/dactyl_right.ino")[0], 404)
         self.assertEqual(self.request("GET", "/js/side-profiles.js?v=1")[0], 200)
         self.assertEqual(self.request("GET", "/js/side-state.js")[0], 200)
+        self.assertEqual(self.request("GET", "/js/side-routing.js")[0], 200)
         self.assertEqual(self.request("GET", "/js/")[0], 404)
         self.assertEqual(self.request("GET", "/js/../server.py")[0], 404)
 

@@ -226,6 +226,259 @@ TEST(test_rx_queue_fifo_full_and_wrap) {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Master: gemeinsamer Report (SplitArbitratedKeyboard) und Empfangssteuerung (splitProcessRx)
+// -----------------------------------------------------------------------------
+// Test-Double der BLE-HID-Klasse: protokolliert jeden Report-Aufruf
+struct FakeHid {
+  std::vector<std::string> log;
+  bool batching = false;
+  FakeHid(const char * = "", const char * = "", int = 0) {}
+  size_t press(uint8_t k) { log.push_back("P" + std::to_string(k)); return 1; }
+  size_t release(uint8_t k) { log.push_back("R" + std::to_string(k)); return 1; }
+  size_t press(const uint8_t k[2]) { log.push_back("MP" + std::to_string(splitMediaBits(k))); return 1; }
+  size_t release(const uint8_t k[2]) { log.push_back("MR" + std::to_string(splitMediaBits(k))); return 1; }
+  void mousePress(uint8_t b) { log.push_back("BP" + std::to_string(b)); }
+  void mouseRelease(uint8_t b) { log.push_back("BR" + std::to_string(b)); }
+  void mouseClick(uint8_t b) { log.push_back("BC" + std::to_string(b)); }
+  void mouseScroll(int8_t s) { log.push_back("SC" + std::to_string(s)); }
+  void releaseAll() { log.push_back("ALL"); }
+  void beginReportBatch() { batching = true; log.push_back("BEGIN"); }
+  void endReportBatch() { batching = false; log.push_back("END"); }
+};
+
+typedef SplitArbitratedKeyboard<FakeHid> Kbd;
+typedef std::vector<std::string> Log;
+
+static void left(Kbd &k, uint8_t op, uint16_t code = 0, int8_t arg = 0, unsigned long now = 0) {
+  splitApplyHidEvent(k.splitLeft, makeSplitHidEvent(op, code, arg), now, k);
+}
+
+TEST(test_right_release_keeps_key_held_by_left) {
+  Kbd k("Dactyl Keyboard", "Dactyl DIY", 100);
+  left(k, SPLIT_OP_KEY_PRESS, 0x81);  // linkes Shift
+  k.press((uint8_t)0x81);             // rechtes Shift
+  k.release((uint8_t)0x81);           // rechts los: links hält noch
+  assert((k.log == Log{"P129", "P129"}));
+  left(k, SPLIT_OP_KEY_RELEASE, 0x81);
+  assert((k.log == Log{"P129", "P129", "R129"}));
+}
+
+TEST(test_right_shifted_char_keeps_left_shift) {
+  // Links hält Shift, rechts tippt 'A': das Release von 'A' löscht im Report das Shift-Bit
+  Kbd k;
+  left(k, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  k.write((uint8_t)'A');
+  assert((k.log == Log{"P129", "P65", "BEGIN", "R65", "P129", "END"}));
+}
+
+TEST(test_left_shifted_char_keeps_right_shift) {
+  Kbd k;
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  left(k, SPLIT_OP_KEY_WRITE, '!');
+  assert((k.log == Log{"P129", "P33", "BEGIN", "R33", "P129", "END"}));
+  // Auch ein linkes RELEASE nach PRESS (Einmal-Aktion als Paar) stellt Shift wieder her
+  k.log.clear();
+  left(k, SPLIT_OP_KEY_PRESS, 'A');
+  left(k, SPLIT_OP_KEY_RELEASE, 'A');
+  assert((k.log == Log{"P65", "BEGIN", "R65", "P129", "END"}));
+}
+
+TEST(test_shifted_char_held_by_other_half_keeps_shift) {
+  // Die andere Hälfte hält ein gesetztes Zeichen ('!'): ihr implizites Shift bleibt erhalten
+  Kbd k;
+  left(k, SPLIT_OP_KEY_PRESS, '!');
+  k.write((uint8_t)'A');
+  assert((k.log == Log{"P33", "P65", "BEGIN", "R65", "P129", "END"}));
+}
+
+TEST(test_shift_release_keeps_shift_for_held_shifted_char) {
+  // Spiegelfall: eine Hälfte hält 'A', die andere lässt Shift los. Das gehaltene 'A' muss groß bleiben.
+  Kbd k;
+  left(k, SPLIT_OP_KEY_PRESS, 'A');
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.release((uint8_t)KEY_LEFT_SHIFT);
+  assert((k.log == Log{"P65", "P129"}));
+  Kbd k2;
+  k2.press((uint8_t)'A');
+  left(k2, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  left(k2, SPLIT_OP_KEY_RELEASE, KEY_LEFT_SHIFT);
+  assert((k2.log == Log{"P65", "P129"}));
+  // Ohne gesetztes Zeichen der anderen Hälfte wird Shift normal gelöst
+  k2.release((uint8_t)'A');
+  left(k2, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  left(k2, SPLIT_OP_KEY_RELEASE, KEY_LEFT_SHIFT);
+  assert(k2.log.back() == "R129");
+}
+
+TEST(test_release_without_shift_need_is_plain) {
+  Kbd k;
+  k.write((uint8_t)'A');                // niemand sonst hält Shift
+  left(k, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  k.write((uint8_t)'a');                // kleines 'a' löscht kein Shift
+  left(k, SPLIT_OP_KEY_PRESS, KEY_RIGHT_SHIFT);
+  assert((k.log == Log{"P65", "R65", "P129", "P97", "R97", "P133"}));
+  // Nur linkes Shift-Bit betroffen: rechtes Shift (0x85) allein braucht keine Wiederherstellung
+  Kbd k2;
+  left(k2, SPLIT_OP_KEY_PRESS, KEY_RIGHT_SHIFT);
+  k2.write((uint8_t)'A');
+  assert((k2.log == Log{"P133", "P65", "R65"}));
+}
+
+TEST(test_left_release_keeps_key_held_by_right) {
+  Kbd k;
+  k.press((uint8_t)'a');
+  left(k, SPLIT_OP_KEY_PRESS, 'a');
+  left(k, SPLIT_OP_KEY_RELEASE, 'a');
+  assert((k.log == Log{"P97", "P97"}));
+  k.release((uint8_t)'a');
+  assert(k.log.back() == "R97");
+}
+
+TEST(test_media_and_mouse_arbitration) {
+  Kbd k;
+  const uint8_t vol[2] = {0x20, 0};
+  left(k, SPLIT_OP_MEDIA_PRESS, 0x0020);
+  k.press(vol);
+  k.release(vol);                     // links hält die Media-Taste
+  k.mousePress(1);
+  left(k, SPLIT_OP_MOUSE_PRESS, 1);
+  left(k, SPLIT_OP_MOUSE_RELEASE, 1); // rechts hält den Button
+  k.mouseClick(2);
+  left(k, SPLIT_OP_MOUSE_PRESS, 2);
+  k.mouseClick(2);                    // Klick würde den linken Button lösen
+  assert((k.log == Log{"MP32", "MP32", "BP1", "BP1", "BC2", "BP2"}));
+  k.mouseRelease(1);
+  assert(k.log.back() == "BR1");
+}
+
+TEST(test_right_release_all_keeps_left_inputs_in_one_batch) {
+  Kbd k;
+  left(k, SPLIT_OP_KEY_PRESS, 0x81);
+  left(k, SPLIT_OP_MEDIA_PRESS, 0x0400);
+  left(k, SPLIT_OP_MOUSE_PRESS, 4);
+  k.press((uint8_t)'x');
+  k.log.clear();
+  k.releaseAll();
+  assert((k.log == Log{"BEGIN", "ALL", "P129", "MP1024", "BP4", "END"}));
+  assert(!splitSetAny(k.rightHeld()));
+  assert(splitHeldKey(k.splitLeft, 0x81));
+}
+
+TEST(test_right_release_all_without_left_inputs_is_plain) {
+  Kbd k;
+  k.press((uint8_t)'x');
+  k.log.clear();
+  k.releaseAll();
+  assert((k.log == Log{"ALL"}));
+}
+
+TEST(test_host_loss_resets_both_halves) {
+  Kbd k;
+  left(k, SPLIT_OP_KEY_PRESS, 'q');
+  k.press((uint8_t)'x');
+  k.log.clear();
+  k.splitResetForHostLoss();
+  assert((k.log == Log{"ALL"}));
+  assert(!splitHeldAny(k.splitLeft) && !splitSetAny(k.rightHeld()));
+  // Nach dem Reset löst ein spätes Release nichts mehr aus
+  left(k, SPLIT_OP_KEY_RELEASE, 'q');
+  assert(k.log.size() == 1);
+}
+
+static std::vector<uint16_t> appliedCodes;
+static void recordApplied(const SplitHidEvent &ev) { appliedCodes.push_back(ev.code); }
+
+TEST(test_process_rx_applies_events_when_host_ready) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  appliedCodes.clear();
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a')); // Retry-Duplikat
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, recordApplied);
+  assert(rep.applied == 1 && !rep.hostLost && !rep.overflow && !rep.linkLost);
+  assert((appliedCodes == std::vector<uint16_t>{'a'}));
+  assert((k.log == Log{"P97"}));
+  assert(hostWas && k.splitLeft.linkUp && k.splitLeft.lastRxMs == 100);
+}
+
+TEST(test_process_rx_without_host_keeps_link_but_sends_nothing) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 500, nullptr);
+  assert(rep.applied == 0 && !rep.hostLost);
+  assert(k.log.empty());
+  assert(!splitHeldAny(k.splitLeft));
+  assert(k.splitLeft.linkUp && k.splitLeft.lastRxMs == 500);
+  SplitHidEvent out;
+  assert(!splitRxPop(rxq, out)); // Ring trotzdem geleert
+}
+
+TEST(test_process_rx_host_loss_transition_resets_once) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 0x81));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 0, nullptr);
+  k.press((uint8_t)'x');
+  k.log.clear();
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 10, nullptr);
+  assert(rep.hostLost);
+  assert((k.log == Log{"ALL"}));
+  assert(!splitHeldAny(k.splitLeft) && !splitSetAny(k.rightHeld()));
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 20, nullptr);
+  assert(!rep.hostLost && k.log.size() == 1); // nur beim Übergang
+}
+
+TEST(test_process_rx_overflow_releases_left_inputs) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = true;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'q'));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 0, nullptr);
+  k.press((uint8_t)'x');
+  for (int i = 0; i < SPLIT_RX_QUEUE_SIZE + 1; i++) splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  assert(rxq.dropped == 1);
+  k.log.clear();
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 10, nullptr);
+  assert(rep.overflow);
+  assert((k.log == Log{"R113"}));          // nur die linke Taste, rechtes 'x' bleibt
+  assert(splitSetHasKey(k.rightHeld(), 'x'));
+  assert(droppedSeen == 1);
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 20, nullptr);
+  assert(!rep.overflow);                    // gleicher Zähler: keine zweite Meldung
+}
+
+TEST(test_process_rx_overflow_releases_after_draining) {
+  // Ein PRESS liegt vor dem verworfenen Paket (dessen RELEASE) im Ring: nach dem Abarbeiten darf nichts hängen
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = true;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'q'));
+  for (int i = 1; i < SPLIT_RX_QUEUE_SIZE; i++) splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  assert(!splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_RELEASE, 'q'))); // RELEASE geht verloren
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 10, nullptr);
+  assert(rep.overflow);
+  assert((k.log == Log{"P113", "R113"}));
+  assert(!splitHeldAny(k.splitLeft));
+}
+
+TEST(test_process_rx_link_timeout_releases_left_inputs) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = true;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'q'));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1000, nullptr);
+  k.log.clear();
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1000 + SPLIT_LINK_TIMEOUT_MS, nullptr);
+  assert(rep.linkLost);
+  assert((k.log == Log{"R113"}));
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Split HID Protocol Test Suite" << std::endl;

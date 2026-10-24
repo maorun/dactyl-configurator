@@ -136,6 +136,30 @@ void tapKeyPair(uint16_t action) {
 void releaseHeldKeyPairs();
 
 // -----------------------------------------------------------------------------
+// Umlaute (ACT_UMLAUT_BASE + Index): Zeichenfolge für das macOS-Layout "U.S."
+// -----------------------------------------------------------------------------
+bool isUmlautAction(uint16_t action) {
+  return action >= ACT_UMLAUT_BASE && action < ACT_UMLAUT_BASE + NUM_UMLAUT_ACTIONS;
+}
+
+// Tottaste Alt + u, danach der Vokal; Großbuchstaben über das ASCII-Zeichen (Shift implizit). ß = Alt + s.
+void sendUmlaut(uint16_t action) {
+  static const char vowels[NUM_UMLAUT_ACTIONS] = { 'a', 'o', 'u', 'A', 'O', 'U', 0 };
+  if (!isUmlautAction(action)) return;
+  uint8_t idx = action - ACT_UMLAUT_BASE;
+  bleKeyboard.press(KEY_LEFT_ALT);
+  bleKeyboard.press(vowels[idx] ? 'u' : 's');
+  delay(5);
+  bleKeyboard.release(vowels[idx] ? 'u' : 's');
+  bleKeyboard.release(KEY_LEFT_ALT);
+  if (!vowels[idx]) return;
+  delay(5);
+  bleKeyboard.press(vowels[idx]);
+  delay(5);
+  bleKeyboard.release(vowels[idx]);
+}
+
+// -----------------------------------------------------------------------------
 // Aktionen ausführen (Tastendruck / Loslassen einer aufgelösten Aktion)
 // -----------------------------------------------------------------------------
 void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) {
@@ -226,6 +250,17 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         if (pressKeyPair(action)) keySentToHost[r][c] = true;
       }
     }
+  } else if (isUmlautAction(action)) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Umlaut %d\",\"code\":%d,\"layer\":%d}", r, c, action - ACT_UMLAUT_BASE, action, currentLayer);
+    sendConfigNotification(String(buf));
+    Serial.printf("Umlaut gedrückt: [R%d, C%d] (L%d) -> 0x%03X\n", r, c, currentLayer, action);
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
+        sendUmlaut(action);
+        keySentToHost[r][c] = true;
+      }
+    }
   } else if (action > 0 && action <= 0xFF) {
     String keyLabel = "";
     if (action >= 'a' && action <= 'z') keyLabel = String((char)toupper(action));
@@ -288,6 +323,15 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         else if (action == 0x132) bleKeyboard.mouseClick(MOUSE_BUTTON_MIDDLE);
         else if (action == 0x133) bleKeyboard.mouseScroll(1);
         else if (action == 0x134) bleKeyboard.mouseScroll(-1);
+      }
+    }
+  } else if (isUmlautAction(action)) {
+    // Die Folge ist beim Drücken schon vollständig gesendet; nur ein gepufferter Combo-Kandidat sendet jetzt
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      if (keySentToHost[r][c]) {
+        keySentToHost[r][c] = false;
+      } else if (!wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
+        sendUmlaut(action);
       }
     }
   } else if (isKeyPairAction(action)) {
@@ -447,6 +491,9 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       keySentToHost[r][c] = true;
     } else if (isKeyPairAction(act)) {
       if (pressKeyPair(act)) keySentToHost[r][c] = true;
+    } else if (isUmlautAction(act)) {
+      sendUmlaut(act);
+      keySentToHost[r][c] = true;
     } else if (act >= 0x130 && act <= 0x132) {
       if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
       else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
@@ -605,6 +652,9 @@ void processDeferredKeys(unsigned long now) {
               keySentToHost[r][c] = true;
             } else if (isKeyPairAction(act)) {
               if (pressKeyPair(act)) keySentToHost[r][c] = true;
+            } else if (isUmlautAction(act)) {
+              sendUmlaut(act);
+              keySentToHost[r][c] = true;
             } else if (act >= 0x130 && act <= 0x134) {
               if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
               else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
@@ -1189,6 +1239,8 @@ void checkUserCombos() {
               else if (act == 0x132) bleKeyboard.mouseClick(MOUSE_BUTTON_MIDDLE);
               else if (act == 0x133) bleKeyboard.mouseScroll(1);
               else if (act == 0x134) bleKeyboard.mouseScroll(-1);
+            } else if (isUmlautAction(act)) {
+              sendUmlaut(act);
             } else if (act <= 0xFF) {
               bleKeyboard.write((uint8_t)act);
             }

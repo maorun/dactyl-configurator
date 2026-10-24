@@ -42,7 +42,7 @@
       ],
       [
         {
-          "label": "Y",
+          "label": "Z",
           "tap": "KEY_Z",
           "hold": "NONE"
         },
@@ -67,8 +67,8 @@
           "hold": "NONE"
         },
         {
-          "tap": "KEY_LEFT_BRACKET",
-          "label": "[",
+          "tap": "UMLAUT_UE",
+          "label": "\u00fc",
           "hold": "NONE"
         }
       ],
@@ -94,13 +94,13 @@
           "hold": "NONE"
         },
         {
-          "tap": "KEY_SEMICOLON",
-          "label": ";",
+          "tap": "UMLAUT_OE",
+          "label": "\u00f6",
           "hold": "NONE"
         },
         {
-          "tap": "KEY_QUOTE",
-          "label": "'",
+          "tap": "UMLAUT_AE",
+          "label": "\u00e4",
           "hold": "NONE"
         },
         {

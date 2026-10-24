@@ -17,10 +17,10 @@ const KEYCODES = [
     { code: "KEY_U", label: "U", char: "u" }, { code: "KEY_V", label: "V", char: "v" },
     { code: "KEY_W", label: "W", char: "w" }, { code: "KEY_X", label: "X", char: "x" },
     { code: "KEY_Y", label: "Y", char: "y" }, { code: "KEY_Z", label: "Z", char: "z" },
-    { code: "KEY_LEFT_BRACKET", label: "Ü (Ger)", char: "ü" },
-    { code: "KEY_SEMICOLON", label: "Ö (Ger)", char: "ö" },
-    { code: "KEY_QUOTE", label: "Ä (Ger)", char: "ä" },
-    { code: "KEY_MINUS", label: "ß (Ger)", char: "ß" }
+    { code: "UMLAUT_AE", label: "ä", char: "ä" }, { code: "UMLAUT_OE", label: "ö", char: "ö" },
+    { code: "UMLAUT_UE", label: "ü", char: "ü" }, { code: "UMLAUT_AE_UPPER", label: "Ä", char: "Ä" },
+    { code: "UMLAUT_OE_UPPER", label: "Ö", char: "Ö" }, { code: "UMLAUT_UE_UPPER", label: "Ü", char: "Ü" },
+    { code: "UMLAUT_SZ", label: "ß", char: "ß" }
   ]},
   { group: "Zahlen & Symbole", keys: [
     { code: "KEY_1", label: "1", char: "1" }, { code: "KEY_2", label: "2", char: "2" },
@@ -50,7 +50,7 @@ const KEYCODES = [
     { code: "KEY_PAGE_DOWN", label: "Bild ↓", char: "" },
     { code: "KEY_HOME", label: "Pos 1", char: "" },
     { code: "KEY_END", label: "Ende", char: "" },
-    { code: "KEY_NON_US_BACKSLASH", label: "ISO-Taste (< >)", char: "<" }
+    { code: "KEY_NON_US_BACKSLASH", label: "ISO-Taste (§ ±)", char: "§" }
   ]},
   { group: "Modifier Tasten", keys: [
     { code: "KEY_LEFT_CTRL", label: "Strg (Links)", char: "" },
@@ -142,18 +142,18 @@ const KEYCODES = [
 // Presets
 const PRESETS = {
   de_qwertz: {
-    name: "Deutsch QWERTZ (macOS)",
+    name: "Deutsch QWERTZ (macOS US-Layout)",
     layers: [
       // Layer 0: Base
       [
         // Row 0: Zahlenreihe (6 Tasten: Col 0..5)
-        [ { tap: "KEY_6", label: "6", hold: "NONE" }, { tap: "KEY_7", label: "7", hold: "NONE" }, { tap: "KEY_8", label: "8", hold: "NONE" }, { tap: "KEY_9", label: "9", hold: "NONE" }, { tap: "KEY_0", label: "0", hold: "NONE" }, { tap: "KEY_MINUS", label: "ß", hold: "NONE" } ],
+        [ { tap: "KEY_6", label: "6", hold: "NONE" }, { tap: "KEY_7", label: "7", hold: "NONE" }, { tap: "KEY_8", label: "8", hold: "NONE" }, { tap: "KEY_9", label: "9", hold: "NONE" }, { tap: "KEY_0", label: "0", hold: "NONE" }, { tap: "UMLAUT_SZ", label: "ß", hold: "NONE" } ],
         // Row 1: Obere Reihe (6 Tasten: Col 0..5)
-        [ { tap: "KEY_Z", label: "Z", hold: "NONE" }, { tap: "KEY_U", label: "U", hold: "NONE" }, { tap: "KEY_I", label: "I", hold: "NONE" }, { tap: "KEY_O", label: "O", hold: "NONE" }, { tap: "KEY_P", label: "P", hold: "NONE" }, { tap: "KEY_LEFT_BRACKET", label: "Ü", hold: "NONE" } ],
+        [ { tap: "KEY_Z", label: "Z", hold: "NONE" }, { tap: "KEY_U", label: "U", hold: "NONE" }, { tap: "KEY_I", label: "I", hold: "NONE" }, { tap: "KEY_O", label: "O", hold: "NONE" }, { tap: "KEY_P", label: "P", hold: "NONE" }, { tap: "UMLAUT_UE", label: "ü", hold: "NONE" } ],
         // Row 2: Home Row (Col 0..5 Finger, Col 6 ist Daumen R2C6)
-        [ { tap: "KEY_H", label: "H", hold: "NONE" }, { tap: "KEY_J", label: "J", hold: "NONE" }, { tap: "KEY_K", label: "K", hold: "NONE" }, { tap: "KEY_L", label: "L", hold: "NONE" }, { tap: "KEY_SEMICOLON", label: "Ö", hold: "NONE" }, { tap: "KEY_QUOTE", label: "Ä", hold: "NONE" }, { tap: "KEY_DELETE", label: "Entf", hold: "NONE" } ],
+        [ { tap: "KEY_H", label: "H", hold: "NONE" }, { tap: "KEY_J", label: "J", hold: "NONE" }, { tap: "KEY_K", label: "K", hold: "NONE" }, { tap: "KEY_L", label: "L", hold: "NONE" }, { tap: "UMLAUT_OE", label: "ö", hold: "NONE" }, { tap: "UMLAUT_AE", label: "ä", hold: "NONE" }, { tap: "KEY_DELETE", label: "Entf", hold: "NONE" } ],
         // Row 3: Untere Reihe (6 Tasten: Col 0..5)
-        [ { tap: "KEY_N", label: "N", hold: "NONE" }, { tap: "KEY_M", label: "M", hold: "NONE" }, { tap: "KEY_COMMA", label: ",", hold: "NONE" }, { tap: "KEY_PERIOD", label: ".", hold: "NONE" }, { tap: "KEY_SLASH", label: "-", hold: "NONE" }, { tap: "KEY_RIGHT_SHIFT", label: "Shift", hold: "NONE" } ],
+        [ { tap: "KEY_N", label: "N", hold: "NONE" }, { tap: "KEY_M", label: "M", hold: "NONE" }, { tap: "KEY_COMMA", label: ",", hold: "NONE" }, { tap: "KEY_PERIOD", label: ".", hold: "NONE" }, { tap: "KEY_MINUS", label: "-", hold: "NONE" }, { tap: "KEY_RIGHT_SHIFT", label: "Shift", hold: "NONE" } ],
         // Row 4: Pfeile & Modifier (Col 0 existiert nicht, Col 1..5)
         [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_LEFT_ARROW", label: "←", hold: "NONE" }, { tap: "KEY_DOWN_ARROW", label: "↓", hold: "NONE" }, { tap: "KEY_UP_ARROW", label: "↑", hold: "NONE" }, { tap: "KEY_RIGHT_ARROW", label: "→", hold: "NONE" }, { tap: "KEY_RIGHT_ALT", label: "Alt", hold: "NONE" } ],
         // Row 5: Thumb Cluster (Alle Daumentasten auf Row 5 / Lila!)
@@ -173,7 +173,7 @@ const PRESETS = {
         [ { tap: "KEY_6", label: "6", hold: "NONE" }, { tap: "KEY_7", label: "7", hold: "NONE" }, { tap: "KEY_8", label: "8", hold: "NONE" }, { tap: "KEY_9", label: "9", hold: "NONE" }, { tap: "KEY_0", label: "0", hold: "NONE" }, { tap: "KEY_EQUAL", label: "=", hold: "NONE" } ],
         [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_7", label: "7", hold: "NONE" }, { tap: "KEY_8", label: "8", hold: "NONE" }, { tap: "KEY_9", label: "9", hold: "NONE" }, { tap: "KEY_SLASH", label: "/", hold: "NONE" }, { tap: "NONE", label: "---", hold: "NONE" } ],
         [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_4", label: "4", hold: "NONE" }, { tap: "KEY_5", label: "5", hold: "NONE" }, { tap: "KEY_6", label: "6", hold: "NONE" }, { tap: "KEY_MINUS", label: "-", hold: "NONE" }, { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_DELETE", label: "Entf", hold: "NONE" } ],
-        [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_1", label: "1", hold: "NONE" }, { tap: "KEY_2", label: "2", hold: "NONE" }, { tap: "KEY_3", label: "3", hold: "NONE" }, { tap: "KEY_EQUAL", label: "+", hold: "NONE" }, { tap: "KEY_RIGHT_SHIFT", label: "Shift", hold: "NONE" } ],
+        [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_1", label: "1", hold: "NONE" }, { tap: "KEY_2", label: "2", hold: "NONE" }, { tap: "KEY_3", label: "3", hold: "NONE" }, { tap: "+", label: "+", hold: "NONE" }, { tap: "KEY_RIGHT_SHIFT", label: "Shift", hold: "NONE" } ],
         [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_0", label: "0", hold: "NONE" }, { tap: "KEY_PERIOD", label: ".", hold: "NONE" }, { tap: "KEY_COMMA", label: ",", hold: "NONE" }, { tap: "KEY_RETURN", label: "Enter", hold: "NONE" }, { tap: "KEY_RIGHT_ALT", label: "Alt", hold: "NONE" } ],
         [ { tap: "KEY_LEFT_GUI", label: "Cmd", hold: "NONE" }, { tap: "KEY_LEFT_ALT", label: "Alt", hold: "NONE" }, { tap: "KEY_RETURN", label: "Enter (2U)", hold: "NONE" }, { tap: "KEY_SPACE", label: "Space (2U)", hold: "NONE" }, { tap: "KEY_TAB", label: "Tab", hold: "NONE" }, { tap: "KEY_BACKSPACE", label: "Bksp", hold: "NONE" }, { tap: "KEY_ESC", label: "Esc", hold: "NONE" } ]
       ],
@@ -182,7 +182,7 @@ const PRESETS = {
         [ { tap: "KEY_6", label: "6", hold: "NONE" }, { tap: "KEY_7", label: "7", hold: "NONE" }, { tap: "KEY_8", label: "8", hold: "NONE" }, { tap: "KEY_9", label: "9", hold: "NONE" }, { tap: "KEY_0", label: "0", hold: "NONE" }, { tap: "KEY_EQUAL", label: "=", hold: "NONE" } ],
         [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_7", label: "7", hold: "NONE" }, { tap: "KEY_8", label: "8", hold: "NONE" }, { tap: "KEY_9", label: "9", hold: "NONE" }, { tap: "KEY_SLASH", label: "/", hold: "NONE" }, { tap: "NONE", label: "---", hold: "NONE" } ],
         [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_4", label: "4", hold: "NONE" }, { tap: "KEY_5", label: "5", hold: "NONE" }, { tap: "KEY_6", label: "6", hold: "NONE" }, { tap: "KEY_MINUS", label: "-", hold: "NONE" }, { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_DELETE", label: "Entf", hold: "NONE" } ],
-        [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_1", label: "1", hold: "NONE" }, { tap: "KEY_2", label: "2", hold: "NONE" }, { tap: "KEY_3", label: "3", hold: "NONE" }, { tap: "KEY_EQUAL", label: "+", hold: "NONE" }, { tap: "KEY_RIGHT_SHIFT", label: "Shift", hold: "NONE" } ],
+        [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_1", label: "1", hold: "NONE" }, { tap: "KEY_2", label: "2", hold: "NONE" }, { tap: "KEY_3", label: "3", hold: "NONE" }, { tap: "+", label: "+", hold: "NONE" }, { tap: "KEY_RIGHT_SHIFT", label: "Shift", hold: "NONE" } ],
         [ { tap: "NONE", label: "---", hold: "NONE" }, { tap: "KEY_0", label: "0", hold: "NONE" }, { tap: "KEY_PERIOD", label: ".", hold: "NONE" }, { tap: "KEY_COMMA", label: ",", hold: "NONE" }, { tap: "KEY_RETURN", label: "Enter", hold: "NONE" }, { tap: "KEY_RIGHT_ALT", label: "Alt", hold: "NONE" } ],
         [ { tap: "KEY_LEFT_GUI", label: "Cmd", hold: "NONE" }, { tap: "KEY_LEFT_ALT", label: "Alt", hold: "NONE" }, { tap: "KEY_RETURN", label: "Enter (2U)", hold: "NONE" }, { tap: "KEY_SPACE", label: "Space (2U)", hold: "NONE" }, { tap: "KEY_TAB", label: "Tab", hold: "NONE" }, { tap: "KEY_BACKSPACE", label: "Bksp", hold: "NONE" }, { tap: "KEY_ESC", label: "Esc", hold: "NONE" } ]
       ],
@@ -328,6 +328,11 @@ const ACTION_TO_NUMERIC = {
   "LAYER_UP": 0x118,
   "LAYER_DOWN": 0x119,
 
+  // Umlaute für das macOS-Layout "U.S." (0x150..0x156): Tottaste Alt + u, dann Vokal; ß = Alt + s
+  "UMLAUT_AE": 0x150, "UMLAUT_OE": 0x151, "UMLAUT_UE": 0x152,
+  "UMLAUT_AE_UPPER": 0x153, "UMLAUT_OE_UPPER": 0x154, "UMLAUT_UE_UPPER": 0x155,
+  "UMLAUT_SZ": 0x156,
+
   // Mouse Actions (0x130..0x134)
   "MOUSE_LEFT": 0x130,
   "MOUSE_RIGHT": 0x131,
@@ -341,6 +346,11 @@ const ACTION_TO_NUMERIC = {
   "ACT_MOUSE_WHEEL_DOWN": 0x134
 };
 
+// Beschriftung der Umlaut-Aktionen (Keycap, GET_CONFIG-Rückweg)
+const UMLAUT_LABELS = {
+  UMLAUT_AE: "ä", UMLAUT_OE: "ö", UMLAUT_UE: "ü", UMLAUT_AE_UPPER: "Ä", UMLAUT_OE_UPPER: "Ö", UMLAUT_UE_UPPER: "Ü", UMLAUT_SZ: "ß"
+};
+
 // Tastenpaar PAIR_<n>: eine Taste drückt zwei Tasten gleichzeitig (Index in currentConfig.keyPairs)
 const ACT_KEY_PAIR_BASE = 0x140;
 const MAX_KEY_PAIRS = 16;
@@ -352,45 +362,35 @@ function pairIndexFromCode(code) {
   return idx < MAX_KEY_PAIRS ? idx : -1;
 }
 
-// Zeichen des deutschen macOS-Layouts. Die Firmware sendet US-HID-Codes, macOS übersetzt sie mit dem
-// deutschen Layout: ":" liegt auf US-">" (Shift + .). code = ASCII-Zeichen (Shift implizit, dactylAsciiToHid),
+// Sonderzeichen für das macOS-Layout "U.S.". Die Firmware sendet US-HID-Codes, macOS gibt sie unverändert aus.
+// code = ASCII-Zeichen (Shift implizit, dactylAsciiToHid) oder Tastencode,
 // pair = Option-Zeichen als Tastenpaar (die App legt das Paar beim Übernehmen an oder nutzt ein gleiches).
 const DE_MAC_CHARS = [
   { char: "!", name: "Ausrufezeichen", hint: "Shift + 1", code: "!" },
-  { char: "\"", name: "Anführungszeichen", hint: "Shift + 2", code: "@" },
-  { char: "§", name: "Paragraf", hint: "Shift + 3", code: "#" },
+  { char: "@", name: "At-Zeichen", hint: "Shift + 2", code: "@" },
+  { char: "#", name: "Raute", hint: "Shift + 3", code: "#" },
   { char: "$", name: "Dollar", hint: "Shift + 4", code: "$" },
   { char: "%", name: "Prozent", hint: "Shift + 5", code: "%" },
-  { char: "&", name: "Und-Zeichen", hint: "Shift + 6", code: "^" },
-  { char: "/", name: "Schrägstrich", hint: "Shift + 7", code: "&" },
-  { char: "(", name: "Klammer auf", hint: "Shift + 8", code: "*" },
-  { char: ")", name: "Klammer zu", hint: "Shift + 9", code: "(" },
-  { char: "=", name: "Gleich", hint: "Shift + 0", code: ")" },
-  { char: "?", name: "Fragezeichen", hint: "Shift + ß", code: "_" },
-  { char: "+", name: "Plus", hint: "Taste +", code: "]" },
-  { char: "*", name: "Stern", hint: "Shift + +", code: "}" },
-  { char: "#", name: "Raute", hint: "Taste #", code: "\\" },
-  { char: "'", name: "Apostroph", hint: "Shift + #", code: "|" },
-  { char: "-", name: "Minus", hint: "Taste -", code: "/" },
-  { char: "_", name: "Unterstrich", hint: "Shift + -", code: "?" },
-  { char: ";", name: "Semikolon", hint: "Shift + ,", code: "<" },
-  { char: ":", name: "Doppelpunkt", hint: "Shift + .", code: ">" },
-  // ISO-Tastaturtyp: HID 0x64 = < >, HID 0x35 (US-`) = ^ °. Bei ANSI vertauscht macOS beide Tasten.
-  { char: "<", name: "Kleiner als", hint: "ISO-Taste", code: "KEY_NON_US_BACKSLASH" },
-  { char: "^", name: "Zirkumflex (Tottaste, danach Leertaste)", hint: "Taste ^", code: "`" },
-  { char: "°", name: "Grad", hint: "Shift + ^", code: "~" },
-  { char: "´", name: "Akut (Tottaste, danach Leertaste)", hint: "Taste ´", code: "=" },
-  { char: "`", name: "Gravis (Tottaste, danach Leertaste)", hint: "Shift + ´", code: "+" },
-  { char: ">", name: "Größer als", hint: "Shift + ISO-Taste", pair: { first: "KEY_LEFT_SHIFT", second: "KEY_NON_US_BACKSLASH" } },
-  { char: "@", name: "At-Zeichen", hint: "Alt + L", pair: { first: "KEY_LEFT_ALT", second: "KEY_L" } },
-  { char: "€", name: "Euro", hint: "Alt + E", pair: { first: "KEY_LEFT_ALT", second: "KEY_E" } },
-  { char: "[", name: "Eckige Klammer auf", hint: "Alt + 5", pair: { first: "KEY_LEFT_ALT", second: "KEY_5" } },
-  { char: "]", name: "Eckige Klammer zu", hint: "Alt + 6", pair: { first: "KEY_LEFT_ALT", second: "KEY_6" } },
-  { char: "|", name: "Senkrechter Strich", hint: "Alt + 7", pair: { first: "KEY_LEFT_ALT", second: "KEY_7" } },
-  { char: "{", name: "Geschweifte Klammer auf", hint: "Alt + 8", pair: { first: "KEY_LEFT_ALT", second: "KEY_8" } },
-  { char: "}", name: "Geschweifte Klammer zu", hint: "Alt + 9", pair: { first: "KEY_LEFT_ALT", second: "KEY_9" } },
-  { char: "\\", name: "Backslash", hint: "Alt + Shift + 7", pair: { first: "KEY_LEFT_ALT", second: "&" } },
-  { char: "~", name: "Tilde (Tottaste, danach Leertaste)", hint: "Alt + N", pair: { first: "KEY_LEFT_ALT", second: "KEY_N" } }
+  { char: "^", name: "Zirkumflex", hint: "Shift + 6", code: "^" },
+  { char: "&", name: "Und-Zeichen", hint: "Shift + 7", code: "&" },
+  { char: "*", name: "Stern", hint: "Shift + 8", code: "*" },
+  { char: "(", name: "Klammer auf", hint: "Shift + 9", code: "(" },
+  { char: ")", name: "Klammer zu", hint: "Shift + 0", code: ")" },
+  { char: "_", name: "Unterstrich", hint: "Shift + -", code: "_" },
+  { char: "+", name: "Plus", hint: "Shift + =", code: "+" },
+  { char: "{", name: "Geschweifte Klammer auf", hint: "Shift + [", code: "{" },
+  { char: "}", name: "Geschweifte Klammer zu", hint: "Shift + ]", code: "}" },
+  { char: "|", name: "Senkrechter Strich", hint: "Shift + \\", code: "|" },
+  { char: ":", name: "Doppelpunkt", hint: "Shift + ;", code: ":" },
+  { char: "\"", name: "Anführungszeichen", hint: "Shift + '", code: "\"" },
+  { char: "~", name: "Tilde", hint: "Shift + `", code: "~" },
+  { char: "<", name: "Kleiner als", hint: "Shift + ,", code: "<" },
+  { char: ">", name: "Größer als", hint: "Shift + .", code: ">" },
+  { char: "?", name: "Fragezeichen", hint: "Shift + /", code: "?" },
+  { char: "§", name: "Paragraf", hint: "ISO-Taste", code: "KEY_NON_US_BACKSLASH" },
+  { char: "°", name: "Grad", hint: "Alt + Shift + 8", pair: { first: "KEY_LEFT_ALT", second: "*" } },
+  { char: "€", name: "Euro", hint: "Alt + Shift + 2", pair: { first: "KEY_LEFT_ALT", second: "@" } },
+  { char: "´", name: "Akut (Tottaste, danach Leertaste)", hint: "Alt + E", pair: { first: "KEY_LEFT_ALT", second: "KEY_E" } }
 ];
 
 // Auswahlwert eines Option-Zeichens; wird beim Übernehmen in PAIR_<n> aufgelöst und nie gespeichert
@@ -545,7 +545,8 @@ function findDefinitionByCode(numericCode) {
       if (key === "ACT_MAC_GLOBE" || key === "MAC_GLOBE") lbl = "Globe";
       else if (key === "LAYER_UP") lbl = "Layer ▲";
       else if (key === "LAYER_DOWN") lbl = "Layer ▼";
-      else if (key === "KEY_NON_US_BACKSLASH") lbl = "<";
+      else if (key === "KEY_NON_US_BACKSLASH") lbl = "§";
+      else if (UMLAUT_LABELS[key]) lbl = UMLAUT_LABELS[key];
       return { label: lbl, tap: key };
     }
   }
@@ -1659,7 +1660,7 @@ function normalizeHoldCode(code) {
 const HOLD_SUBLABEL_SHORT = {
   KEY_LEFT_CTRL: "Ctrl", KEY_RIGHT_CTRL: "Ctrl", KEY_LEFT_SHIFT: "Shift", KEY_RIGHT_SHIFT: "Shift",
   KEY_LEFT_ALT: "Alt", KEY_RIGHT_ALT: "Alt", KEY_LEFT_GUI: "Cmd", KEY_RIGHT_GUI: "Cmd",
-  LAYER_UP: "L+1", LAYER_DOWN: "L-1", MAC_GLOBE: "Globe"
+  LAYER_UP: "L+1", LAYER_DOWN: "L-1", MAC_GLOBE: "Globe", ...UMLAUT_LABELS
 };
 
 function holdSublabel(code) {
@@ -1675,10 +1676,10 @@ function holdSublabel(code) {
 // Präfix der Optionen in den Auswahllisten für Halte- und Doppel-Tipp-Aktion
 const OPTIONAL_ACTION_PREFIX = { holdActionSelect: "Halten = ", dtapActionSelect: "2× Tippen = " };
 
-// Gruppe "Deutsche Zeichen (macOS)"; charPairs = auch Option-Zeichen, die ein Tastenpaar brauchen
+// Gruppe "Sonderzeichen (macOS US)"; charPairs = auch Option-Zeichen, die ein Tastenpaar brauchen
 function appendDeMacCharGroup(select, { charPairs = false, prefix = "" } = {}) {
   const optgroup = document.createElement("optgroup");
-  optgroup.label = "Deutsche Zeichen (macOS)";
+  optgroup.label = "Sonderzeichen (macOS US)";
   DE_MAC_CHARS.forEach((entry, i) => {
     if (entry.pair && !charPairs) return;
     const opt = document.createElement("option");
@@ -1709,7 +1710,7 @@ function fillKeycodeSelect(select, { holdMode = false, prefix = "Halten = ", cha
       optgroup.appendChild(opt);
     });
     select.appendChild(optgroup);
-    // Deutsche Zeichen direkt nach "Zahlen & Symbole"
+    // Sonderzeichen direkt nach "Zahlen & Symbole"
     if (group.group === "Zahlen & Symbole") appendDeMacCharGroup(select, { charPairs, prefix: holdMode ? prefix : "" });
   });
 }

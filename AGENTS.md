@@ -114,7 +114,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 - `DEVICE_INFO` contains `"side":"L"` (macro `DEVICE_SIDE`, default `"R"` in `DactylLogic.h`). App and server identify the half at a USB port with it; firmware without the field counts as right.
 - Power: standby after 5 min (80 MHz, slower scan), deep sleep after 60 min. Before deep sleep: `RELEASE_ALL`, ESP-NOW off, rows held `HIGH` (`gpio_hold_en`), columns as RTC inputs with pull-down, Ext1 `ANY_HIGH` on the columns. A key press drives row -> switch -> diode -> column high.
 - Known limit: sleeps are not synchronized. A left key wakes only the left half; a sleeping master receives nothing until a right key wakes it.
-- Default layout: QWERTZ left hand (US-ASCII codes like the right half; macOS German layout maps `'y'`/`'z'`). `R4C5` and `R5C0` do not exist physically.
+- Default layout: QWERTZ positions on the left hand (US-ASCII codes like the right half; with the macOS layout "U.S." the `'y'` on the Z position prints `y`). `R4C5` and `R5C0` do not exist physically.
 
 ### Wiring (diodes on columns, columns on RTC pins)
 - **Diodes are on the columns** (cathode/black ring to the column wire). The scan drives one column `LOW` and reads the rows with `INPUT_PULLUP`. All columns must be RTC GPIOs for the Ext1 wakeup (`test_columns_are_rtc_wakeup_capable`).
@@ -169,7 +169,7 @@ Keys in the matrix use `uint16_t` action codes:
 | `0x20` .. `0x7E` | ASCII Characters | Printable keys (`'a'`, `'1'`, `'-'`, `' '`) |
 | `0x80` .. `0x87` | Modifiers | `KEY_LEFT_CTRL` (0x80), `KEY_LEFT_SHIFT` (0x81), `KEY_LEFT_ALT` (0x82), `KEY_LEFT_GUI` (0x83), etc. |
 | `0xB0` .. `0xEB` | Navigation / System | `KEY_RETURN` (0xB0), `KEY_ESC` (0xB1), `KEY_BACKSPACE` (0xB2), `KEY_TAB` (0xB3), `KEY_DELETE` (0xD4), Arrows (0xD7..0xDA), CapsLock (0xC1), Insert (0xD1), PrtSc (0xCE), Numpad (0xDC..0xEB) |
-| `0xEC` | ISO Key (`KEY_NON_US_BACKSLASH`) | HID usage `0x64` between left Shift and Z; `<` / `>` on German macOS with keyboard type ISO |
+| `0xEC` | ISO Key (`KEY_NON_US_BACKSLASH`) | HID usage `0x64` between left Shift and Z; `§` / `±` with the macOS layout "U.S." |
 | `0xC2` .. `0xCD` | Function Keys F1..F12 | `KEY_F1` (0xC2) to `KEY_F12` (0xCD) |
 | `0xF0` .. `0xFB` | Function Keys F13..F24 | `KEY_F13` (0xF0) to `KEY_F24` (0xFB) |
 | `0x100` .. `0x107` | Momentary Layer (`MO_0`..`MO_7`) | Activates target layer while held; `MO_0` forces temporary return to Base Layer 0 |
@@ -179,7 +179,8 @@ Keys in the matrix use `uint16_t` action codes:
 | `0x120` .. `0x126` | Media Keys | Play/Pause (0x120), Mute (0x121), Vol+ (0x122), Vol- (0x123), Next (0x124), Prev (0x125), Stop (0x126) |
 | `0x127` | Apple Mac Globe / Fn Key | Emits HID Consumer Usage `0x029D` (*AC Next Keyboard Layout Select* / Globe 🌐) |
 | `0x130` .. `0x134` | Mouse Actions | Left Click (0x130), Right Click (0x131), Middle Click (0x132), Scroll Up (0x133), Scroll Down (0x134) via Composite BLE HID Report ID 3 |
-| `0x140` .. `0x14F` | Key Pair (`PAIR_0`..`PAIR_15`) | Presses two keyboard codes at the same time (e.g. `Shift` + `.` = `:` on German macOS); index into `userKeyPairs[]` |
+| `0x140` .. `0x14F` | Key Pair (`PAIR_0`..`PAIR_15`) | Presses two keyboard codes at the same time (e.g. `Alt` + `*` = `°` with the macOS layout "U.S."); index into `userKeyPairs[]` |
+| `0x150` .. `0x156` | Umlaut (`UMLAUT_AE`, `UMLAUT_OE`, `UMLAUT_UE`, `UMLAUT_AE_UPPER`, `UMLAUT_OE_UPPER`, `UMLAUT_UE_UPPER`, `UMLAUT_SZ`) | Dead key `Alt` + `u`, then the vowel; `ß` = `Alt` + `s` (macOS layout "U.S.") |
 
 ### Key Pairs (`userKeyPairs`)
 - A key pair holds two keyboard codes `1..255` (ASCII, modifiers, special keys). It is pressed first-then-second and released in reverse order. It works as a tap action and as a hold action, also for combo candidates.
@@ -189,10 +190,12 @@ Keys in the matrix use `uint16_t` action codes:
 - `CLEAR_PAIRS` first releases every pair that is held at the host; the physical release of that key then sends nothing.
 - Every pair can be deleted in the app. Keys reference pairs by index, so `removeKeyPairAt` renumbers the references in all layers (tap, hold, double-tap) and in combo actions: references to the deleted pair become `NONE`, higher indices move down by one. The deletion is a snapshot pending change; the next full sync sends the renumbered keys (`SET_K`) and the new pair list.
 
-### German macOS characters in the picker (`DE_MAC_CHARS`)
-- The firmware sends US HID codes; macOS translates them with the German layout. `DE_MAC_CHARS` in `app.js` lists German characters with the US code that produces them, e.g. `:` = US `>` (Shift implicit via `dactylAsciiToHid`). These entries store the plain ASCII code; firmware and `server.py` need no change.
-- `<` uses the ISO key `KEY_NON_US_BACKSLASH` (`0xEC`, HID `0x64`); `>` is the key pair `Shift` + ISO key. `^` = US `` ` ``, `°` = US `~`, `´` = US `=`, `` ` `` = US `+` (`^`, `´`, `` ` `` are dead keys). This mapping assumes the macOS keyboard type ISO. With ANSI, macOS swaps HID `0x35` and `0x64`, so `<`/`>` and `^`/`°` change places.
-- Option characters (`@ € [ ] { } | ~ \`) need a key pair (`Alt` + key). Their select value `CHAR_PAIR_<i>` is never stored: on "Änderung übernehmen", `resolveCharPairActions` reuses an equal pair or appends one (pending change) and writes `PAIR_<n>`. With 16 pairs a new one is rejected. A key with a new pair is only staged, because the device knows the pair only after the next sync.
+### macOS layout "U.S." and special characters (`DE_MAC_CHARS`, umlauts)
+- The Mac uses the input source "U.S.". The firmware sends US HID codes, and macOS prints the US character. App labels, presets and templates must use US labels (`KEY_SEMICOLON` = `;`, never `Ö`).
+- `DE_MAC_CHARS` in `app.js` (picker group "Sonderzeichen (macOS US)") lists special characters. ASCII entries store the character itself (`+`, `~`, `<`; Shift implicit via `dactylAsciiToHid`). `§` is the ISO key `KEY_NON_US_BACKSLASH` (`0xEC`, HID `0x64`).
+- Umlauts use their own actions `UMLAUT_AE` .. `UMLAUT_SZ` (`0x150` .. `0x156`, `ACT_UMLAUT_*` in `DactylCommon.h`). `sendUmlaut()` taps the dead key `Alt` + `u` and then the vowel (`'A'` for `Ä`, Shift implicit); `ß` is `Alt` + `s`. The sequence is sent once on press (also as forced hold, buffered combo candidate and combo `KEY_PRESS`); the release sends nothing. Umlauts are not key pair members.
+- The `.ino` defaults of both halves still contain German-layout codes (`;` for `ö`). A repository flash keeps the NVS keymap, so they do not reach the device. The preset "Deutsch QWERTZ (macOS US-Layout)" and `default_config*.json` use the umlaut actions.
+- Option characters (`° € ´`) need a key pair (`Alt` + key). Their select value `CHAR_PAIR_<i>` is never stored: on "Änderung übernehmen", `resolveCharPairActions` reuses an equal pair or appends one (pending change) and writes `PAIR_<n>`. With 16 pairs a new one is rejected. A key with a new pair is only staged, because the device knows the pair only after the next sync.
 - Combo actions show only the single-code characters (combos do not support pairs). A search field above each action select filters its options (`applySelectFilter`).
 
 ### Mod-Tap / Layer-Tap (`HOLDMAP`)
@@ -237,6 +240,7 @@ Keys in the matrix use `uint16_t` action codes:
 
 - Do not fix `LOW` findings from code reviews directly. Record each one in `docs/ideas.md`, section "Offene LOW-Befunde aus Code-Reviews".
 - Write each entry with file and line, the problem, the consequence and the recommended correction. A later dedicated run fixes these entries together, each with a regression test.
+- Record `LOW` findings without a separate verification against the code. The later dedicated run verifies each entry. Verify `BLOCKER`, `HIGH` and `MEDIUM` findings against the code before you change it.
 - Fix `BLOCKER`, `HIGH` and `MEDIUM` findings in the current work as usual.
 - A review cycle counts as clean when no `BLOCKER`, `HIGH` or `MEDIUM` finding remains.
 

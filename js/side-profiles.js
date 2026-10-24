@@ -25,7 +25,7 @@
       [cell("KEY_TAB", "Tab"), cell("KEY_Q", "Q"), cell("KEY_W", "W"), cell("KEY_E", "E"), cell("KEY_R", "R"), cell("KEY_T", "T"), none()],
       [cell("KEY_CAPS_LOCK", "Caps"), cell("KEY_A", "A"), cell("KEY_S", "S"), cell("KEY_D", "D"), cell("KEY_F", "F"), cell("KEY_G", "G"), none()],
       [cell("KEY_LEFT_SHIFT", "Shift"), cell("KEY_Y", "Y"), cell("KEY_X", "X"), cell("KEY_C", "C"), cell("KEY_V", "V"), cell("KEY_B", "B"), none()],
-      [cell("KEY_LEFT_CTRL", "Ctrl"), cell("KEY_GRAVE", "^"), cell("KEY_LEFT_ALT", "Alt"), cell("KEY_LEFT_GUI", "Cmd"), cell("MO_1", "Nav"), none(), none()],
+      [cell("KEY_LEFT_CTRL", "Ctrl"), cell("KEY_GRAVE", "`"), cell("KEY_LEFT_ALT", "Alt"), cell("KEY_LEFT_GUI", "Cmd"), cell("MO_1", "Nav"), none(), none()],
       [none(), cell("KEY_BACKSPACE", "Bksp"), cell("KEY_DELETE", "Del"), cell("KEY_LEFT_CTRL", "Ctrl"), cell("KEY_SPACE", "Space"), cell("KEY_LEFT_GUI", "Cmd"), cell("KEY_LEFT_ALT", "Alt")]
     ];
     const nav = emptyLayer();

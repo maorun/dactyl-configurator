@@ -69,6 +69,16 @@ static uint8_t numCombos = 0;
 static KeyCombo userCombos[MAX_COMBOS];
 
 #define ACT_KEY_PAIR_BASE 0x140
+// Umlaut-Aktion (wie DactylCommon.h)
+#define ACT_UMLAUT_BASE      0x150
+#define ACT_UMLAUT_AE        0x150
+#define ACT_UMLAUT_OE        0x151
+#define ACT_UMLAUT_UE        0x152
+#define ACT_UMLAUT_AE_UPPER  0x153
+#define ACT_UMLAUT_OE_UPPER  0x154
+#define ACT_UMLAUT_UE_UPPER  0x155
+#define ACT_UMLAUT_SZ        0x156
+#define NUM_UMLAUT_ACTIONS   7
 #define MAX_KEY_PAIRS 16
 struct KeyPair {
   uint8_t first;
@@ -1695,6 +1705,99 @@ TEST(test_update_without_dtapmap_keeps_keymap) {
   // Eine belegte DTAPMAP verändert den Fingerprint: neue App-Defaults werden übernommen
   DTAPMAP[0][2][2] = KEY_ESC;
   assert(keymapDefaultsFingerprint() != h);
+}
+
+// -----------------------------------------------------------------------------
+// Umlaut-Aktion: Tottaste Alt + u, danach der Vokal; ß = Alt + s; einmal pro Tastendruck
+// -----------------------------------------------------------------------------
+TEST(test_umlaut_action_sends_dead_key_sequence) {
+  resetState();
+  KEYMAP[0][2][4] = ACT_UMLAUT_OE;
+  setMillis(1000);
+  onMatrixKeyChange(2, 4, true);
+  std::vector<uint8_t> expected = { KEY_LEFT_ALT, 'u', 'o' };
+  assert(bleKeyboard.pressHistory == expected);
+  assert(bleKeyboard.pressedKeys.empty());            // alles wieder losgelassen
+  setMillis(1100);
+  onMatrixKeyChange(2, 4, false);
+  assert(bleKeyboard.pressHistory == expected);       // Loslassen sendet nichts nach
+
+  // Großbuchstabe: der Vokal kommt als 'U' (Shift implizit über dactylAsciiToHid)
+  resetState();
+  KEYMAP[0][1][5] = ACT_UMLAUT_UE_UPPER;
+  onMatrixKeyChange(1, 5, true);
+  expected = { KEY_LEFT_ALT, 'u', 'U' };
+  assert(bleKeyboard.pressHistory == expected);
+  onMatrixKeyChange(1, 5, false);
+
+  // ß ist Alt + s ohne Vokal
+  resetState();
+  KEYMAP[0][0][5] = ACT_UMLAUT_SZ;
+  onMatrixKeyChange(0, 5, true);
+  expected = { KEY_LEFT_ALT, 's' };
+  assert(bleKeyboard.pressHistory == expected);
+  assert(bleKeyboard.pressedKeys.empty());
+  onMatrixKeyChange(0, 5, false);
+
+  // Codes außerhalb des Bereichs sind keine Umlaute
+  assert(isUmlautAction(ACT_UMLAUT_SZ) && !isUmlautAction(ACT_UMLAUT_BASE + NUM_UMLAUT_ACTIONS));
+  assert(!isUmlautAction(ACT_KEY_PAIR_BASE + 15));
+}
+
+TEST(test_umlaut_action_as_hold_and_combo_candidate) {
+  // Halte-Aktion: nach TAPPING_TERM_MS genau einmal gesendet
+  resetState();
+  KEYMAP[0][2][3] = 'l';
+  HOLDMAP[0][2][3] = ACT_UMLAUT_AE;
+  setMillis(1000);
+  onMatrixKeyChange(2, 3, true);
+  setMillis(1000 + TAPPING_TERM_MS);
+  processDeferredKeys(1000 + TAPPING_TERM_MS);
+  std::vector<uint8_t> expected = { KEY_LEFT_ALT, 'u', 'a' };
+  assert(bleKeyboard.pressHistory == expected);
+  setMillis(1500);
+  onMatrixKeyChange(2, 3, false);
+  assert(bleKeyboard.pressHistory == expected);
+
+  // Combo-Kandidat: schneller Tipp sendet beim Loslassen
+  resetState();
+  KEYMAP[0][2][1] = ACT_UMLAUT_OE;
+  KEYMAP[0][2][2] = 'k';
+  numCombos = 1;
+  userCombos[0] = { 2, 1, 2, 2, 0, KEY_ESC };
+  setMillis(2000);
+  onMatrixKeyChange(2, 1, true);
+  assert(bleKeyboard.pressHistory.empty());
+  setMillis(2010);
+  onMatrixKeyChange(2, 1, false);
+  expected = { KEY_LEFT_ALT, 'u', 'o' };
+  assert(bleKeyboard.pressHistory == expected);
+
+  // Combo-Kandidat gehalten: processDeferredKeys sendet einmal, Loslassen nichts mehr
+  bleKeyboard.pressHistory.clear();
+  setMillis(3000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(3000 + comboTimeoutMs);
+  processDeferredKeys(3000 + comboTimeoutMs);
+  assert(bleKeyboard.pressHistory == expected);
+  setMillis(3300);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressHistory == expected);
+
+  // Combo-Aktion KEY_PRESS mit Umlaut
+  resetState();
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  numCombos = 1;
+  userCombos[0] = { 2, 1, 2, 2, 0, ACT_UMLAUT_SZ };
+  setMillis(4000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true);
+  checkUserCombos();
+  expected = { KEY_LEFT_ALT, 's' };
+  assert(bleKeyboard.pressHistory == expected);
 }
 
 int main() {

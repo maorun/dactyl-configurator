@@ -202,7 +202,7 @@
           "dtap": "NONE"
         },
         {
-          "label": "^",
+          "label": "`",
           "tap": "KEY_GRAVE",
           "hold": "NONE",
           "dtap": "NONE"

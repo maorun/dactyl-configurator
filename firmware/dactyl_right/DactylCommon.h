@@ -45,6 +45,17 @@
 // Tastenpaar: eine Taste drückt zwei Tasten gleichzeitig (z. B. Shift + .); Index in userKeyPairs[]
 #define ACT_KEY_PAIR_BASE        0x140
 
+// Umlaut-Aktion für das macOS-Layout "U.S.": Tottaste Alt + u, danach der Vokal (ä ö ü Ä Ö Ü); ß = Alt + s
+#define ACT_UMLAUT_BASE          0x150
+#define ACT_UMLAUT_AE            0x150
+#define ACT_UMLAUT_OE            0x151
+#define ACT_UMLAUT_UE            0x152
+#define ACT_UMLAUT_AE_UPPER      0x153
+#define ACT_UMLAUT_OE_UPPER      0x154
+#define ACT_UMLAUT_UE_UPPER      0x155
+#define ACT_UMLAUT_SZ            0x156
+#define NUM_UMLAUT_ACTIONS       7
+
 #define NUM_LAYERS 8
 
 #define MAX_COMBOS 16

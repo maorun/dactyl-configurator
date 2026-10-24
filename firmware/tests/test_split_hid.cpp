@@ -292,6 +292,25 @@ TEST(test_shifted_char_held_by_other_half_keeps_shift) {
   assert((k.log == Log{"P33", "P65", "BEGIN", "R65", "P129", "END"}));
 }
 
+TEST(test_shift_release_keeps_shift_for_held_shifted_char) {
+  // Spiegelfall: eine Hälfte hält 'A', die andere lässt Shift los. Das gehaltene 'A' muss groß bleiben.
+  Kbd k;
+  left(k, SPLIT_OP_KEY_PRESS, 'A');
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.release((uint8_t)KEY_LEFT_SHIFT);
+  assert((k.log == Log{"P65", "P129"}));
+  Kbd k2;
+  k2.press((uint8_t)'A');
+  left(k2, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  left(k2, SPLIT_OP_KEY_RELEASE, KEY_LEFT_SHIFT);
+  assert((k2.log == Log{"P65", "P129"}));
+  // Ohne gesetztes Zeichen der anderen Hälfte wird Shift normal gelöst
+  k2.release((uint8_t)'A');
+  left(k2, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  left(k2, SPLIT_OP_KEY_RELEASE, KEY_LEFT_SHIFT);
+  assert(k2.log.back() == "R129");
+}
+
 TEST(test_release_without_shift_need_is_plain) {
   Kbd k;
   k.write((uint8_t)'A');                // niemand sonst hält Shift

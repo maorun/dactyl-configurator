@@ -209,6 +209,11 @@ test("Fehlende Tasten: gleiche Zellregeln wie cell_actions in server.py", () => 
   assert.strictEqual(D.absentKeyViolations(L, at("0")).length, 0);
   assert.strictEqual(D.absentKeyViolations(L, at("KEY_A")).length, 1);
   assert.strictEqual(D.absentKeyViolations(L, at(null)).length, 0);
+  // Tap "0" ist in server.py ein Tap: dann zählen hold und dtap
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "0", dtap: "KEY_A" })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "0", hold: "MO_1" })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "0" })).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, at({ hold: "KEY_A" })).length, 1); // fehlender Tap = "NONE"
   // Gegenprobe gegen den Server-Test: dieselben Fälle in tests/test_server.py (test_absent_key_cell_rules_match_app)
   assert.ok(read("tests/test_server.py").includes("test_absent_key_cell_rules_match_app"));
 });

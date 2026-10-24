@@ -512,9 +512,10 @@ class TestServerAndCodegen(unittest.TestCase):
             layer[5][0] = cell
             return {"layers": [layer]}
         allowed = [{"tap": "NONE", "hold": "NONE", "dtap": "KEY_A"}, {"tap": "", "dtap": "KEY_A"},
-                   {"tap": 7, "hold": "NONE"}, "0"]
+                   {"tap": 7, "hold": "NONE"}, "0", {"tap": "0"}]
         rejected = [{"tap": "NONE", "hold": "MO_1", "dtap": "KEY_A"}, {"tap": "KEY_A", "hold": "NONE", "dtap": "NONE"},
-                    {"tap": "KEY_A", "dtap": 5}, "KEY_A"]
+                    {"tap": "KEY_A", "dtap": 5}, "KEY_A", {"tap": "0", "dtap": "KEY_A"}, {"tap": "0", "hold": "MO_1"},
+                    {"hold": "KEY_A"}]
         for cell in allowed:
             server.validate_config(layer_with(cell), "L")
         for cell in rejected:

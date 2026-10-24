@@ -392,8 +392,10 @@ private:
     }
     return false;
   }
-  // Release, das ein von other gehaltenes Shift in demselben Report wiederherstellt
+  // Release, das ein von other gehaltenes Shift erhält: linkes Shift bleibt im Report, solange other ein
+  // gesetztes Zeichen hält; ein gesetztes Zeichen stellt Shift in demselben Report wieder her.
   size_t releaseKeepingShift(uint8_t code, const SplitHeldSet &other) {
+    if (code == KEY_LEFT_SHIFT && needsShift(other)) return 1;
     if (!impliesShift(code) || !needsShift(other)) return Hid::release(code);
     Hid::beginReportBatch();
     size_t n = Hid::release(code);

@@ -145,14 +145,17 @@
     return Object.prototype.hasOwnProperty.call(SIDE_PROFILES, info.side) ? info.side : null;
   }
 
-  // Aktionen einer Zelle wie cell_actions in server.py: Objekt mit tap/hold/dtap oder ein Code-String.
-  // Ohne Tap wirkt nur hold (als normale Taste); ein Doppel-Tipp ohne Tap bleibt ohne Wirkung.
+  // Aktionen einer Zelle exakt wie cell_actions + validate_config in server.py: Objekt mit tap/hold/dtap
+  // oder ein Code-String. Kein Tap ("", "NONE", kein String): nur hold wirkt (als normale Taste), ein
+  // Doppel-Tipp bleibt ohne Wirkung. Ein Tap "0" gilt dort als Tap; dann zählen hold und dtap mit.
   function cellHasAction(cell) {
     const isAction = v => typeof v === "string" && v !== "" && v !== "NONE" && v !== "0";
+    const str = v => (typeof v === "string" ? v : "NONE");
     if (typeof cell === "string") return isAction(cell);
     if (!cell || typeof cell !== "object") return false;
-    if (!isAction(cell.tap)) return isAction(cell.hold);
-    return true;
+    const tap = str(cell.tap ?? "NONE");
+    if (tap === "" || tap === "NONE") return isAction(str(cell.hold ?? "NONE"));
+    return [tap, str(cell.hold ?? "NONE"), str(cell.dtap ?? "NONE")].some(isAction);
   }
 
   // Verstöße gegen die fehlenden Tasten der Hälfte, dieselben Regeln wie validate_config in server.py:

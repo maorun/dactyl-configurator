@@ -264,6 +264,48 @@ TEST(test_right_release_keeps_key_held_by_left) {
   assert((k.log == Log{"P129", "P129", "R129"}));
 }
 
+TEST(test_right_shifted_char_keeps_left_shift) {
+  // Links hält Shift, rechts tippt 'A': das Release von 'A' löscht im Report das Shift-Bit
+  Kbd k;
+  left(k, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  k.write((uint8_t)'A');
+  assert((k.log == Log{"P129", "P65", "BEGIN", "R65", "P129", "END"}));
+}
+
+TEST(test_left_shifted_char_keeps_right_shift) {
+  Kbd k;
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  left(k, SPLIT_OP_KEY_WRITE, '!');
+  assert((k.log == Log{"P129", "P33", "BEGIN", "R33", "P129", "END"}));
+  // Auch ein linkes RELEASE nach PRESS (Einmal-Aktion als Paar) stellt Shift wieder her
+  k.log.clear();
+  left(k, SPLIT_OP_KEY_PRESS, 'A');
+  left(k, SPLIT_OP_KEY_RELEASE, 'A');
+  assert((k.log == Log{"P65", "BEGIN", "R65", "P129", "END"}));
+}
+
+TEST(test_shifted_char_held_by_other_half_keeps_shift) {
+  // Die andere Hälfte hält ein gesetztes Zeichen ('!'): ihr implizites Shift bleibt erhalten
+  Kbd k;
+  left(k, SPLIT_OP_KEY_PRESS, '!');
+  k.write((uint8_t)'A');
+  assert((k.log == Log{"P33", "P65", "BEGIN", "R65", "P129", "END"}));
+}
+
+TEST(test_release_without_shift_need_is_plain) {
+  Kbd k;
+  k.write((uint8_t)'A');                // niemand sonst hält Shift
+  left(k, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  k.write((uint8_t)'a');                // kleines 'a' löscht kein Shift
+  left(k, SPLIT_OP_KEY_PRESS, KEY_RIGHT_SHIFT);
+  assert((k.log == Log{"P65", "R65", "P129", "P97", "R97", "P133"}));
+  // Nur linkes Shift-Bit betroffen: rechtes Shift (0x85) allein braucht keine Wiederherstellung
+  Kbd k2;
+  left(k2, SPLIT_OP_KEY_PRESS, KEY_RIGHT_SHIFT);
+  k2.write((uint8_t)'A');
+  assert((k2.log == Log{"P133", "P65", "R65"}));
+}
+
 TEST(test_left_release_keeps_key_held_by_right) {
   Kbd k;
   k.press((uint8_t)'a');

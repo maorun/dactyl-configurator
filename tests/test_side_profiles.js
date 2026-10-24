@@ -197,6 +197,22 @@ test("Fehlende Tasten: links verboten (wie server.py), rechts nur für Combos", 
   assert.strictEqual(D.absentKeyViolations(null, { layers: [l] }).length, 0);
 });
 
+test("Fehlende Tasten: gleiche Zellregeln wie cell_actions in server.py", () => {
+  // Doppel-Tipp ohne Tap hat keine Wirkung (server.py: cell_actions gibt dann nur hold weiter)
+  const at = cell => { const l = Array.from({ length: 6 }, () => Array(7).fill({ tap: "NONE" })); l[5] = [...l[5]]; l[5][0] = cell; return { layers: [l] }; };
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "NONE", hold: "NONE", dtap: "KEY_A" })).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "", dtap: "KEY_A" })).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "NONE", hold: "MO_1", dtap: "KEY_A" })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "KEY_A", hold: "NONE", dtap: "NONE" })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: "KEY_A", dtap: 5 })).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at({ tap: 7, hold: "NONE" })).length, 0); // kein String = keine Aktion
+  assert.strictEqual(D.absentKeyViolations(L, at("0")).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, at("KEY_A")).length, 1);
+  assert.strictEqual(D.absentKeyViolations(L, at(null)).length, 0);
+  // Gegenprobe gegen den Server-Test: dieselben Fälle in tests/test_server.py (test_absent_key_cell_rules_match_app)
+  assert.ok(read("tests/test_server.py").includes("test_absent_key_cell_rules_match_app"));
+});
+
 test("Layout-Presets nur für die rechte Hand", () => {
   assert.strictEqual(R.presets, true);
   assert.strictEqual(L.presets, false);

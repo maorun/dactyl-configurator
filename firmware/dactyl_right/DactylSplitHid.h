@@ -10,6 +10,7 @@
  */
 #include <stdint.h>
 #include <string.h>
+#include "DactylKeycodes.h" // dactylAsciiToHid, KEY_LEFT_SHIFT (implizites Shift großer/gesetzter Zeichen)
 
 #define SPLIT_ESPNOW_CHANNEL 1
 
@@ -287,7 +288,7 @@ public:
   size_t release(uint8_t k) {
     splitSetKey(right, k, false);
     if (splitSetHasKey(splitLeft.set, k)) return 1;
-    return Hid::release(k);
+    return releaseKeepingShift(k, splitLeft.set);
   }
   size_t write(uint8_t k) {
     size_t p = press(k);
@@ -351,7 +352,7 @@ public:
   // --- Linke Hälfte (SplitHidSink, Zustand ist vorher aktualisiert) ---
   void leftKeyPress(uint8_t code) override { Hid::press(code); }
   void leftKeyRelease(uint8_t code) override {
-    if (!splitSetHasKey(right, code)) Hid::release(code);
+    if (!splitSetHasKey(right, code)) releaseKeepingShift(code, right);
   }
   void leftMediaPress(uint16_t bits) override {
     uint8_t r[2];
@@ -378,6 +379,28 @@ public:
 
 private:
   SplitHeldSet right = {};
+
+  // Große und gesetzte ASCII-Zeichen ('A', '!') drücken implizit Shift; ihr Release löscht im Report das
+  // Shift-Bit (DactylBleComposite::release), auch wenn die andere Hälfte Shift noch braucht.
+  static bool impliesShift(uint8_t code) {
+    return code < 0x80 && (dactylAsciiToHid(code) & DACTYL_ASCII_SHIFT);
+  }
+  static bool needsShift(const SplitHeldSet &s) {
+    if (splitSetHasKey(s, KEY_LEFT_SHIFT)) return true;
+    for (int code = 1; code < 0x80; code++) {
+      if (splitSetHasKey(s, (uint8_t)code) && impliesShift((uint8_t)code)) return true;
+    }
+    return false;
+  }
+  // Release, das ein von other gehaltenes Shift in demselben Report wiederherstellt
+  size_t releaseKeepingShift(uint8_t code, const SplitHeldSet &other) {
+    if (!impliesShift(code) || !needsShift(other)) return Hid::release(code);
+    Hid::beginReportBatch();
+    size_t n = Hid::release(code);
+    Hid::press(KEY_LEFT_SHIFT);
+    Hid::endReportBatch();
+    return n;
+  }
 
   void pressSet(const SplitHeldSet &s) {
     for (int code = 1; code < 256; code++) {

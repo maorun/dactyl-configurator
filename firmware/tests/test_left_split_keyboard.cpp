@@ -252,6 +252,18 @@ TEST(test_link_recovery_sends_release_all) {
   assert(drain().empty());
 }
 
+TEST(test_first_ack_on_fresh_proxy_sends_no_release_all) {
+  // Frischer Proxy ohne jede Bestätigung (wie nach dem Booten): die erste Bestätigung ist kein Wiederaufbau
+  SplitSendQueue freshQueue;
+  queueReset(freshQueue);
+  DactylSplitKeyboard fresh(freshQueue);
+  setMillis(SPLIT_LINK_DOWN_MS * 10);
+  assert(!fresh.isConnected());
+  fresh.onSendResult(true, millis());
+  assert(fresh.isConnected());
+  assert(freshQueue.count == 0);
+}
+
 TEST(test_first_ack_and_short_gap_send_no_release_all) {
   advanceMillis(SPLIT_LINK_DOWN_MS - 1);
   bleKeyboard.onSendResult(true, millis());

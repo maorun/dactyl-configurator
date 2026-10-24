@@ -504,6 +504,23 @@ class TestServerAndCodegen(unittest.TestCase):
             server.validate_config({"layers": [[]], "combos": [combo_r]}, "R")
         server.validate_config({"layers": [[]], "combos": [combo_r]}, "L")
 
+    def test_absent_key_cell_rules_match_app(self):
+        # Dieselben Fälle wie in tests/test_side_profiles.js: Doppel-Tipp ohne Tap ist keine Aktion
+        def layer_with(cell):
+            layer = [[{"tap": "NONE"}] * 7 for _ in range(6)]
+            layer[5] = list(layer[5])
+            layer[5][0] = cell
+            return {"layers": [layer]}
+        allowed = [{"tap": "NONE", "hold": "NONE", "dtap": "KEY_A"}, {"tap": "", "dtap": "KEY_A"},
+                   {"tap": 7, "hold": "NONE"}, "0"]
+        rejected = [{"tap": "NONE", "hold": "MO_1", "dtap": "KEY_A"}, {"tap": "KEY_A", "hold": "NONE", "dtap": "NONE"},
+                    {"tap": "KEY_A", "dtap": 5}, "KEY_A"]
+        for cell in allowed:
+            server.validate_config(layer_with(cell), "L")
+        for cell in rejected:
+            with self.assertRaises(ValueError, msg=str(cell)):
+                server.validate_config(layer_with(cell), "L")
+
     def test_left_default_name_in_settings(self):
         self.assertIn('String deviceName = "Dactyl Links";', server.generate_settings_cpp({}, "L"))
         self.assertIn('String deviceName = "Dactyl Keyboard";', server.generate_settings_cpp({}, "R"))

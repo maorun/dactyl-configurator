@@ -823,6 +823,8 @@ let keepReading = true;
 
 // Hälfte am USB-Port: kommt aus DEVICE_INFO.side (null bis zur ersten Antwort auf GET_INFO)
 let serialSide = null;
+// Bricht die GET_INFO-Wiederholung nach dem Öffnen des USB-Ports ab
+let stopSerialInfoRetry = null;
 
 // Web Bluetooth & Auto-Sync State
 let bleDevice = null;
@@ -2880,50 +2882,19 @@ function sendBleCommand(cmd) {
 // -----------------------------------------------------------------------------
 // Firmware-Bestätigungen (OK <CMD> / ERR ...): Erfolg erst nach Antwort der Tastatur
 // -----------------------------------------------------------------------------
-const pendingAcks = [];
+// Wartende Bestätigungen tragen die Hälfte, von der die Antwort kommen muss (js/side-routing.js)
+const ackRegistry = Dactyl.createAckRegistry();
+// Löst mit true (OK), false (ERR) oder null (Timeout) auf. side: erwartete Hälfte (null = jede Hälfte).
+const waitForAck = (okPrefix, timeoutMs = 2500, side = null) => ackRegistry.wait(okPrefix, timeoutMs, side);
+const resolveAcksForLine = (line, side = null) => ackRegistry.resolveLine(line, side);
+const rejectAllPendingAcks = (reason, side = null) => ackRegistry.reject(reason, side);
 
-// Wartet auf "OK <okPrefix>" bzw. ein ERR für diesen Befehl. Löst mit true (OK), false (ERR) oder null (Timeout) auf.
-// side: Hälfte, von der die Antwort kommen muss (null = jede Hälfte).
-function waitForAck(okPrefix, timeoutMs = 2500, side = null) {
-  return new Promise((resolve) => {
-    const entry = { okPrefix, resolve, timer: null, side };
-    entry.timer = setTimeout(() => {
-      const i = pendingAcks.indexOf(entry);
-      if (i !== -1) pendingAcks.splice(i, 1);
-      resolve(null);
-    }, timeoutMs);
-    pendingAcks.push(entry);
-  });
-}
-
-function resolveAcksForLine(line, side = null) {
-  if (!line.startsWith("OK ") && !line.startsWith("ERR ")) return;
-  const isOk = line.startsWith("OK ");
-  for (let i = 0; i < pendingAcks.length; i++) {
-    const entry = pendingAcks[i];
-    // Eine Antwort der anderen Hälfte (BLE und USB gleichzeitig) bestätigt keinen Befehl dieser Hälfte
-    if (side && entry.side && entry.side !== side) continue;
-    // OK <CMD> ... bzw. ERR <GRUND> <CMD>... (ERR BUSY/ARGS/NVS/UNKNOWN enthalten den Befehlsnamen)
-    const matches = isOk ? line.startsWith(`OK ${entry.okPrefix}`) : line.includes(entry.okPrefix);
-    if (matches) {
-      clearTimeout(entry.timer);
-      pendingAcks.splice(i, 1);
-      entry.resolve(isOk);
-      return;
-    }
-  }
-}
-
-// Verwirft wartende Bestätigungen; mit side nur die dieser Hälfte (und die ohne Hälfte)
-function rejectAllPendingAcks(reason, side = null) {
-  for (let i = pendingAcks.length - 1; i >= 0; i--) {
-    const entry = pendingAcks[i];
-    if (side && entry.side && entry.side !== side) continue;
-    pendingAcks.splice(i, 1);
-    clearTimeout(entry.timer);
-    console.warn("Bestätigung verworfen:", entry.okPrefix, reason);
-    entry.resolve(false);
-  }
+// Verbindungszustand für die reinen Routing-Funktionen in js/side-routing.js
+function connectionState() {
+  return {
+    bleUp: !!bleConfigChar, bleSide,
+    serialUp: !!(serialPort && serialPort.writable), serialSide
+  };
 }
 
 async function sendBleCommandAwait(cmd, okPrefix, timeoutMs) {
@@ -2939,21 +2910,20 @@ async function sendBleCommandAwait(cmd, okPrefix, timeoutMs) {
 
 // Verbindung zu einer bestimmten Hälfte (BLE im Config Mode oder USB mit erkannter Hälfte)
 function isDeviceConnected(side = editSide) {
-  return (!!bleConfigChar && bleSide === side) || (!!(serialPort && serialPort.writable) && serialSide === side);
+  return Dactyl.routeCommand(side, connectionState()) !== null;
 }
 
 // Hälfte der aktiven Verbindung (BLE bevorzugt), null ohne Verbindung oder bei unbekannter USB-Hälfte
 function connectedSide() {
-  if (bleConfigChar) return bleSide;
-  if (serialPort && serialPort.writable) return serialSide;
-  return null;
+  return Dactyl.connectedSide(connectionState());
 }
 
 // Sendet einen Befehl an eine Hälfte (BLE bevorzugt). Rückgabe: true bei erfolgreichem Senden.
 // Ohne Verbindung zu dieser Hälfte wird nichts gesendet: die Änderung bleibt für deren nächsten Sync vorgemerkt.
 async function sendDeviceCommand(cmd, side = editSide) {
-  if (bleConfigChar && bleSide === side) return sendBleCommand(cmd);
-  if (serialPort && serialPort.writable && serialSide === side) return sendSerialCommand(cmd);
+  const route = Dactyl.routeCommand(side, connectionState());
+  if (route === "ble") return sendBleCommand(cmd);
+  if (route === "usb") return sendSerialCommand(cmd);
   return false;
 }
 
@@ -3036,9 +3006,13 @@ async function connectSerialNow(options = {}) {
     // Start read loop
     serialReadPromise = startSerialReadLoop(port);
 
-    // Query device info
+    // Hälfte abfragen: das Öffnen startet das Board neu, eine einzelne Anfrage ginge dann verloren.
+    // GET_INFO alle 500 ms wiederholen, bis DEVICE_INFO die Hälfte meldet (höchstens 5 s).
+    if (stopSerialInfoRetry) stopSerialInfoRetry();
     setTimeout(() => {
-      sendSerialCommand("GET_INFO");
+      if (serialPort !== port) return;
+      stopSerialInfoRetry = Dactyl.retryUntil(() => serialPort !== port || serialSide !== null,
+        () => sendSerialCommand("GET_INFO"), 500, 5000);
     }, 300);
 
   } catch (err) {
@@ -3076,7 +3050,13 @@ async function disconnectSerialNow() {
       console.warn("Serial close warning:", e);
     }
   }
-  rejectAllPendingAcks("USB-Verbindung getrennt", serialSide);
+  if (stopSerialInfoRetry) {
+    stopSerialInfoRetry();
+    stopSerialInfoRetry = null;
+  }
+  // Ein laufender BLE-Sync derselben Hälfte bleibt bestehen (js/side-routing.js)
+  const scope = Dactyl.usbDisconnectAckScope({ ...connectionState(), serialUp: false });
+  if (scope.reject) rejectAllPendingAcks("USB-Verbindung getrennt", scope.side);
   serialSide = null;
   serialReader = null;
   updateConnectionUI(false, "Nicht verbunden");

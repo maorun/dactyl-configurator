@@ -86,6 +86,12 @@ inline bool parseSplitHidPacket(const uint8_t *srcMac, const uint8_t *data, int 
   return true;
 }
 
+// Scrollen hat keinen Zustand: ein doppelt zugestelltes Retry-Paket scrollte doppelt. Ein verlorener
+// Scrollschritt ist harmloser, deshalb wiederholt die linke Hälfte MOUSE_SCROLL nicht.
+inline bool splitEventRetryable(const SplitHidEvent &ev) {
+  return ev.op != SPLIT_OP_MOUSE_SCROLL;
+}
+
 inline uint16_t splitMediaBits(const uint8_t report[2]) {
   return (uint16_t)(report[0] | (report[1] << 8));
 }
@@ -454,13 +460,9 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   }
   hostWasReady = hostReady;
 
-  // Verworfene Pakete vor dem Abarbeiten prüfen: Gedrücktes ist danach nicht mehr verlässlich
+  // Zählerstand vor dem Abarbeiten lesen. Gelöst wird erst danach: Ein PRESS, der vor dem verworfenen
+  // Paket im Ring lag, liefe sonst nach dem Lösen und bliebe gedrückt.
   uint32_t dropped = q.dropped;
-  if (dropped != droppedSeen) {
-    droppedSeen = dropped;
-    rep.overflow = true;
-    if (hostReady) splitReleaseHeld(kbd.splitLeft, kbd);
-  }
 
   SplitHidEvent ev;
   while (splitRxPop(q, ev)) {
@@ -472,6 +474,13 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
     if (!splitApplyHidEvent(kbd.splitLeft, ev, nowMs, kbd)) continue;
     if (rep.applied < 255) rep.applied++;
     if (onApplied) onApplied(ev);
+  }
+
+  // Ein verworfenes Paket kann ein Release gewesen sein: Gedrücktes ist nicht mehr verlässlich
+  if (dropped != droppedSeen) {
+    droppedSeen = dropped;
+    rep.overflow = true;
+    if (hostReady) splitReleaseHeld(kbd.splitLeft, kbd);
   }
   if (splitCheckLinkTimeout(kbd.splitLeft, nowMs, kbd)) rep.linkLost = true;
   return rep;

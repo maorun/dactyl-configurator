@@ -392,6 +392,20 @@ TEST(test_process_rx_overflow_releases_left_inputs) {
   assert(!rep.overflow);                    // gleicher Zähler: keine zweite Meldung
 }
 
+TEST(test_process_rx_overflow_releases_after_draining) {
+  // Ein PRESS liegt vor dem verworfenen Paket (dessen RELEASE) im Ring: nach dem Abarbeiten darf nichts hängen
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = true;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'q'));
+  for (int i = 1; i < SPLIT_RX_QUEUE_SIZE; i++) splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  assert(!splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_RELEASE, 'q'))); // RELEASE geht verloren
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 10, nullptr);
+  assert(rep.overflow);
+  assert((k.log == Log{"P113", "R113"}));
+  assert(!splitHeldAny(k.splitLeft));
+}
+
 TEST(test_process_rx_link_timeout_releases_left_inputs) {
   Kbd k;
   uint32_t droppedSeen = 0;

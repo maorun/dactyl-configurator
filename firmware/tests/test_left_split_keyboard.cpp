@@ -84,10 +84,12 @@ static void resetState() {
   numCombos = 0;
   numKeyPairs = 0;
   isConfigMode = false;
-  queueReset(sendQueue);
   setMillis(1000);
-  // Master hat einmal bestätigt: Proxy meldet "verbunden"
+  // Gehaltene Eingaben des vorigen Tests vergessen; Master hat einmal bestätigt: Proxy meldet "verbunden".
+  // Die Warteschlange erst danach leeren (onSendResult kann nach einem Zeitsprung RELEASE_ALL einreihen).
+  bleKeyboard.releaseAll();
   bleKeyboard.onSendResult(true, millis());
+  queueReset(sendQueue);
   Serial.clear();
 }
 
@@ -188,9 +190,74 @@ TEST(test_media_globe_and_mouse_are_forwarded) {
   std::vector<SplitHidEvent> ev = drain();
   for (const SplitHidEvent &e : ev) assert(isValidSplitHidEvent(e));
   assert(is(ev[0], SPLIT_OP_MEDIA_PRESS, 0x0400) && is(ev[1], SPLIT_OP_MEDIA_RELEASE, 0x0400));
-  assert(is(ev[2], SPLIT_OP_MEDIA_WRITE, splitMediaBits(KEY_MEDIA_MUTE)));
-  assert(is(ev[3], SPLIT_OP_MOUSE_PRESS, MOUSE_BUTTON_LEFT) && is(ev[4], SPLIT_OP_MOUSE_RELEASE, MOUSE_BUTTON_LEFT));
-  assert(ev[5].op == SPLIT_OP_MOUSE_SCROLL && ev[5].arg < 0);
+  // Einmal-Aktionen kommen als PRESS + RELEASE (idempotent bei Retry-Duplikaten), nie als *_WRITE/CLICK
+  uint16_t mute = splitMediaBits(KEY_MEDIA_MUTE);
+  assert(is(ev[2], SPLIT_OP_MEDIA_PRESS, mute) && is(ev[3], SPLIT_OP_MEDIA_RELEASE, mute));
+  assert(is(ev[4], SPLIT_OP_MOUSE_PRESS, MOUSE_BUTTON_LEFT) && is(ev[5], SPLIT_OP_MOUSE_RELEASE, MOUSE_BUTTON_LEFT));
+  assert(ev[6].op == SPLIT_OP_MOUSE_SCROLL && ev[6].arg < 0);
+  assert(ev.size() == 7);
+}
+
+TEST(test_one_shot_actions_never_use_write_or_click_ops) {
+  bleKeyboard.write((uint8_t)'a');
+  bleKeyboard.write(KEY_MEDIA_VOLUME_UP);
+  bleKeyboard.mouseClick(MOUSE_BUTTON_RIGHT);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 6);
+  assert(is(ev[0], SPLIT_OP_KEY_PRESS, 'a') && is(ev[1], SPLIT_OP_KEY_RELEASE, 'a'));
+  uint16_t vol = splitMediaBits(KEY_MEDIA_VOLUME_UP);
+  assert(is(ev[2], SPLIT_OP_MEDIA_PRESS, vol) && is(ev[3], SPLIT_OP_MEDIA_RELEASE, vol));
+  assert(is(ev[4], SPLIT_OP_MOUSE_PRESS, MOUSE_BUTTON_RIGHT) && is(ev[5], SPLIT_OP_MOUSE_RELEASE, MOUSE_BUTTON_RIGHT));
+}
+
+TEST(test_one_shot_on_held_input_keeps_it_held) {
+  // Wie KEY_WRITE/MOUSE_CLICK auf dem Master: ein Tippen löst eine gehaltene Eingabe nicht
+  bleKeyboard.press((uint8_t)KEY_LEFT_SHIFT);
+  bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
+  bleKeyboard.press(KEY_MEDIA_MUTE);
+  drain();
+  assert(bleKeyboard.write((uint8_t)KEY_LEFT_SHIFT) == 0);
+  bleKeyboard.mouseClick(MOUSE_BUTTON_LEFT);
+  assert(bleKeyboard.write(KEY_MEDIA_MUTE) == 0);
+  assert(drain().empty());
+  bleKeyboard.release((uint8_t)KEY_LEFT_SHIFT);
+  drain();
+  assert(bleKeyboard.write((uint8_t)KEY_LEFT_SHIFT) == 1);
+  assert(drain().size() == 2);
+  bleKeyboard.releaseAll(); // vergisst alle gehaltenen Eingaben
+  drain();
+  bleKeyboard.mouseClick(MOUSE_BUTTON_LEFT);
+  assert(drain().size() == 2);
+}
+
+TEST(test_link_recovery_sends_release_all) {
+  // Ausfall länger als SPLIT_LINK_DOWN_MS: DactylLogic.h sendet kein Loslassen. Der Master hält die Taste
+  // noch bis SPLIT_LINK_TIMEOUT_MS. Kommt der Link vorher zurück, gleicht RELEASE_ALL beide Seiten ab.
+  KEYMAP[0][2][1] = 'a';
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  drain();
+  advanceMillis(SPLIT_LINK_DOWN_MS + 200);
+  assert(!bleKeyboard.isConnected());
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false); // Loslassen geht verloren
+  assert(drain().empty());
+  assert(SPLIT_LINK_DOWN_MS + 200 < SPLIT_LINK_TIMEOUT_MS);
+  bleKeyboard.onSendResult(true, millis()); // Heartbeat kommt wieder durch
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && is(ev[0], SPLIT_OP_RELEASE_ALL, 0));
+  // Danach kein weiteres RELEASE_ALL bei normalem Betrieb
+  advanceMillis(500);
+  bleKeyboard.onSendResult(true, millis());
+  assert(drain().empty());
+}
+
+TEST(test_first_ack_and_short_gap_send_no_release_all) {
+  advanceMillis(SPLIT_LINK_DOWN_MS - 1);
+  bleKeyboard.onSendResult(true, millis());
+  assert(drain().empty());
+  bleKeyboard.onSendResult(false, millis() + SPLIT_LINK_DOWN_MS * 3);
+  assert(drain().empty());
 }
 
 TEST(test_disconnected_master_sends_nothing) {

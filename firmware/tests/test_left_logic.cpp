@@ -174,6 +174,21 @@ TEST(test_queue_retries_same_event_then_drops) {
   assert(queueOnSendResult(q, false, now) == SEND_RETRY);
 }
 
+TEST(test_scroll_is_not_retried) {
+  // Ein doppelt zugestelltes Scroll-Paket scrollte doppelt: Scrollen wird nie wiederholt
+  queueReset(q);
+  queuePush(q, makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, -1));
+  queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, keyCode(0, 0)));
+  SplitHidEvent ev;
+  assert(queueNextToSend(q, 0, ev) && ev.op == SPLIT_OP_MOUSE_SCROLL);
+  assert(queueOnSendResult(q, false, 0) == SEND_DROPPED);
+  assert(queueNextToSend(q, 0, ev) && ev.op == SPLIT_OP_KEY_PRESS);
+  // Alle anderen Ops bleiben wiederholbar (idempotent auf dem Master)
+  for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
+    assert(splitEventRetryable(makeSplitHidEvent(op, 1)) == (op != SPLIT_OP_MOUSE_SCROLL));
+  }
+}
+
 TEST(test_retry_waits_for_delay) {
   queueReset(q);
   queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, keyCode(1, 1)));

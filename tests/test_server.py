@@ -384,21 +384,24 @@ class TestServerAndCodegen(unittest.TestCase):
             calls.append(cmd)
             return Done()
 
-        old = (server.find_arduino_cli, server.find_serial_port, server.subprocess.run)
+        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run)
         server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
         server.find_serial_port = lambda side="R": "/dev/cu.usbserial-test"
+        server.query_device_side = lambda port: "R"
         server.subprocess.run = fake_run
         try:
             server.flash_firmware()
         finally:
-            server.find_arduino_cli, server.find_serial_port, server.subprocess.run = old
+            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run = old
         self.assertEqual([c[1] for c in calls], ["compile", "upload"])
         for cmd in calls:
             self.assertEqual(cmd[cmd.index("--fqbn") + 1], "esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs")
 
-    def run_flash(self, side, port_for):
-        """Führt flash_firmware(side) mit gefälschtem arduino-cli aus; port_for(side) ersetzt die Port-Erkennung."""
+    def run_flash(self, side, port_for, side_before_upload=None):
+        """Führt flash_firmware(side) mit gefälschtem arduino-cli aus; port_for(side) ersetzt die Port-Erkennung.
+        side_before_upload: Antwort der Nachprüfung vor dem Upload (Standard: die angefragte Hälfte)."""
         calls = []
+        probes = []
 
         class Done:
             returncode = 0
@@ -409,15 +412,32 @@ class TestServerAndCodegen(unittest.TestCase):
             calls.append(cmd)
             return Done()
 
-        old = (server.find_arduino_cli, server.find_serial_port, server.subprocess.run)
+        def fake_query(port):
+            probes.append((port, len(calls)))
+            return side if side_before_upload is None else side_before_upload
+
+        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run)
         server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
         server.find_serial_port = port_for
+        server.query_device_side = fake_query
         server.subprocess.run = fake_run
         try:
             result = server.flash_firmware(side)
         finally:
-            server.find_arduino_cli, server.find_serial_port, server.subprocess.run = old
+            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run = old
+        self.last_probes = probes
         return result, calls
+
+    def test_flash_rechecks_port_side_before_upload(self):
+        # Kompilieren dauert lange: wurde umgesteckt, darf der Upload nicht auf die andere Hälfte gehen
+        result, calls = self.run_flash("L", lambda s: "/dev/cu.usbserial-a", side_before_upload="R")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["stage"], "port")
+        self.assertEqual([c[1] for c in calls], ["compile"])          # kein Upload
+        self.assertEqual(self.last_probes, [("/dev/cu.usbserial-a", 1)])  # geprüft nach dem Compile
+        result, calls = self.run_flash("L", lambda s: "/dev/cu.usbserial-a", side_before_upload=None)
+        self.assertTrue(result["success"])
+        self.assertEqual([c[1] for c in calls], ["compile", "upload"])
 
     def test_flash_uses_sketch_and_port_of_the_side(self):
         ports = {"L": "/dev/cu.usbserial-left", "R": "/dev/cu.usbserial-right"}
@@ -589,6 +609,7 @@ class TestServerHttp(unittest.TestCase):
         self.assertEqual(self.request("GET", "/firmware/dactyl_right/dactyl_right.ino")[0], 404)
         self.assertEqual(self.request("GET", "/js/side-profiles.js?v=1")[0], 200)
         self.assertEqual(self.request("GET", "/js/side-state.js")[0], 200)
+        self.assertEqual(self.request("GET", "/js/side-routing.js")[0], 200)
         self.assertEqual(self.request("GET", "/js/")[0], 404)
         self.assertEqual(self.request("GET", "/js/../server.py")[0], 404)
 

@@ -611,8 +611,9 @@ function keyPairLabel(pair, labelFor) {
   return `${labelFor(pair.first)} + ${labelFor(pair.second)}`;
 }
 
-// Prüft eine importierte oder vom Server geladene Konfiguration und wirft bei ungültiger Struktur
-function validateConfigShape(cfg) {
+// Prüft eine importierte oder vom Server geladene Konfiguration und wirft bei ungültiger Struktur.
+// profile: Hälfte, für die die Config bestimmt ist (fehlende Tasten und Combos, wie server.py)
+function validateConfigShape(cfg, profile) {
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("Konfiguration muss ein Objekt sein.");
   if (!Array.isArray(cfg.layers) || cfg.layers.length === 0 || cfg.layers.length > NUM_LAYERS) {
     throw new Error(`'layers' muss 1..${NUM_LAYERS} Ebenen enthalten.`);
@@ -643,6 +644,8 @@ function validateConfigShape(cfg) {
   }
   if (cfg.layerNames !== undefined && !Array.isArray(cfg.layerNames)) throw new Error("'layerNames' muss eine Liste sein.");
   if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");
+  const absent = Dactyl.absentKeyViolations(profile, cfg);
+  if (absent.length) throw new Error(`Diese Tasten gibt es auf der ${profile.label} nicht: ${absent.join(", ")}`);
 }
 
 // Ebenen-Werkzeuge: Kopieren, Tauschen und Leeren ganzer Ebenen (liefert neue Ebenen-Liste, ändert nichts in-place)
@@ -1156,7 +1159,7 @@ async function loadSavedConfigFromServer() {
       const data = await res.json();
       if (!data || !data.layers || data.layers.length === 0) continue;
       try {
-        validateConfigShape(data);
+        validateConfigShape(data, profile);
       } catch (validationErr) {
         showToast(`⚠️ Gespeicherte Konfiguration der ${profile.label} ungültig (${validationErr.message}). Standard wird verwendet.`, 7000);
         continue;
@@ -1379,6 +1382,11 @@ function initUI() {
   if (btnPreset) {
     btnPreset.addEventListener("click", () => {
       const presetKey = document.getElementById("layoutPresetSelect").value;
+      // Presets sind Belegungen der rechten Hand; auf links belegten sie fehlende Tasten (R5C0)
+      if (!activeProfile().presets) {
+        showToast(`Layout-Presets gibt es nur für die rechte Hand, nicht für die ${activeProfile().label}.`, 5000);
+        return;
+      }
       if (PRESETS[presetKey]) {
         const oldLayer0 = JSON.parse(JSON.stringify(currentConfig.layers[0]));
         currentConfig.layers[0] = JSON.parse(JSON.stringify(PRESETS[presetKey].layers[0]));
@@ -1583,6 +1591,11 @@ function updateSideLabels() {
   if (diode) diode.textContent = `${profile.label} · ${profile.diodeHint}`;
   const flashBtn = document.getElementById("btnSaveToDactyl");
   if (flashBtn) flashBtn.title = `Tastenbelegung der ${profile.label} kompilieren und per USB auf diese Hälfte flashen`;
+  const presetBtn = document.getElementById("btnApplyPreset");
+  if (presetBtn) {
+    presetBtn.disabled = !profile.presets;
+    presetBtn.title = profile.presets ? "" : "Layout-Presets gibt es nur für die rechte Hand";
+  }
 }
 
 function renderMatrix() {
@@ -2230,7 +2243,7 @@ function setupEventListeners() {
       try {
         const parsed = JSON.parse(event.target.result);
         // Vollständig validieren, BEVOR der Zustand ersetzt oder auf dem Server gespeichert wird
-        validateConfigShape(parsed);
+        validateConfigShape(parsed, activeProfile());
         if (!confirm(`Konfiguration aus "${file.name || "Backup"}" importieren? Die aktuelle Belegung wird ersetzt (Rückgängig über die vorgemerkten Änderungen).`)) {
           return;
         }

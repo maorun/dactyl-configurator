@@ -152,6 +152,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 - The left half gets changes on the same paths as the right half: BLE one-shot auto-sync after `R0C5 + R4C0` (`Dactyl Config L`), BLE live editing in config mode, USB serial sync and "Auf Dactyl flashen".
 - Every connection knows its half: BLE from the config name (`Dactyl.sideFromBleName`, confirmed by `DEVICE_INFO`), USB from `DEVICE_INFO.side`. `sendDeviceCommand(cmd, side)` sends only to a connection of that half; otherwise the change stays pending for that half. `writeConfigToESP32` syncs the half of the connection, not the displayed half. Acks carry the half, so a reply from the other half never confirms a command.
 - Revert closures of pending changes write to `currentConfig`; a change recorded for the non-edited half has no revert.
+- `validateConfigShape(cfg, profile)` applies the absent-key rules of `server.py` before an import or a loaded config replaces the state (`Dactyl.absentKeyViolations`): left keys `R4C5`/`R5C0` must not carry an action, no combo may use an absent key. Layout presets (`PRESETS`) are right-hand layouts; the profile flag `presets: false` disables them for the left half.
 - `tests/test_side_profiles.js` checks the profiles against the firmware sources (combo, names, pins, `KEYMAP` of `dactyl_left.ino`, `default_config_left.json`).
 
 ---

@@ -166,6 +166,33 @@ test("default_config_left.json entspricht der linken Standard-Belegung im Profil
   assert.strictEqual(file.settings.deviceName, L.deviceName);
 });
 
+test("Fehlende Tasten: links verboten (wie server.py), rechts nur für Combos", () => {
+  const layer = () => Array.from({ length: 6 }, () => Array.from({ length: 7 }, () => ({ tap: "NONE", hold: "NONE", dtap: "NONE" })));
+  const l = layer();
+  l[5][0] = { tap: "KEY_LEFT_GUI", hold: "NONE", dtap: "NONE" };
+  assert.deepStrictEqual([...D.absentKeyViolations(L, { layers: [l] })], ["R5C0 (Ebene 0)"]);
+  const h = layer();
+  h[4][5] = { tap: "NONE", hold: "MO_1", dtap: "NONE" };
+  assert.deepStrictEqual([...D.absentKeyViolations(L, { layers: [layer(), h] })], ["R4C5 (Ebene 1)"]);
+  assert.deepStrictEqual([...D.absentKeyViolations(L, { layers: [[[], [], [], [], [], ["KEY_A"]]] })], ["R5C0 (Ebene 0)"]);
+  // Rechte Vorlage: Aktion auf R5C5 bleibt erlaubt, wie validate_config für side=R
+  const r = layer();
+  r[5][5] = { tap: "KEY_BACKSPACE", hold: "NONE", dtap: "NONE" };
+  assert.strictEqual(D.absentKeyViolations(R, { layers: [r] }).length, 0);
+  const combo = (a, b) => ({ key1: a, key2: b });
+  assert.deepStrictEqual([...D.absentKeyViolations(L, { layers: [], combos: [combo({ r: 0, c: 0 }, { r: 4, c: 5 })] })], ["Combo 1 (R4C5)"]);
+  assert.deepStrictEqual([...D.absentKeyViolations(R, { layers: [], combos: [combo({ r: 4, c: 0 }, { r: 0, c: 0 })] })], ["Combo 1 (R4C0)"]);
+  assert.strictEqual(D.absentKeyViolations(L, { layers: [], combos: [combo({ r: 4, c: 0 }, { r: 0, c: 0 })] }).length, 0);
+  assert.strictEqual(D.absentKeyViolations(L, JSON.parse(read("default_config_left.json"))).length, 0);
+  assert.strictEqual(D.absentKeyViolations(R, JSON.parse(read("default_config.json"))).length, 0);
+  assert.strictEqual(D.absentKeyViolations(null, { layers: [l] }).length, 0);
+});
+
+test("Layout-Presets nur für die rechte Hand", () => {
+  assert.strictEqual(R.presets, true);
+  assert.strictEqual(L.presets, false);
+});
+
 test("Zustand pro Hälfte: getrennte Configs und Änderungen, nur bekannte Felder", () => {
   const store = D.createSideStore(["R", "L"], side => ({ config: { side } }));
   assert.strictEqual(store.get("L").config.side, "L");

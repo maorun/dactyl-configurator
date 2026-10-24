@@ -244,6 +244,7 @@
 
             <div class="form-group">
               <label for="primaryActionSelect">Haupt-Aktion (Normaler Tastendruck):</label>
+              <input type="search" class="form-control keycode-filter" data-filter-for="primaryActionSelect" placeholder="Aktion suchen, z. B. : oder Doppelpunkt" aria-label="Aktion suchen">
               <select id="primaryActionSelect" class="form-control">
                 <!-- Grouped key options -->
               </select>
@@ -251,6 +252,7 @@
 
             <div class="form-group">
               <label for="holdActionSelect">Halte-Aktion / Mod-Tap (Optional beim Festhalten):</label>
+              <input type="search" class="form-control keycode-filter" data-filter-for="holdActionSelect" placeholder="Aktion suchen, z. B. : oder Doppelpunkt" aria-label="Aktion suchen">
               <select id="holdActionSelect" class="form-control">
                 <!-- Wird von app.js mit allen Aktionen befüllt (Tap A / Halten B) -->
               </select>
@@ -259,6 +261,7 @@
 
             <div class="form-group">
               <label for="dtapActionSelect">Doppel-Tipp-Aktion / Tap-Dance (Optional):</label>
+              <input type="search" class="form-control keycode-filter" data-filter-for="dtapActionSelect" placeholder="Aktion suchen, z. B. : oder Doppelpunkt" aria-label="Aktion suchen">
               <select id="dtapActionSelect" class="form-control">
                 <!-- Wird von app.js mit allen Aktionen befüllt -->
               </select>
@@ -467,6 +470,7 @@
 
           <div class="form-group">
             <label for="comboActionSelect">Aktion / Auslöser:</label>
+            <input type="search" class="form-control keycode-filter" data-filter-for="comboActionSelect" placeholder="Aktion suchen, z. B. : oder Doppelpunkt" aria-label="Aktion suchen">
             <select id="comboActionSelect" class="form-control"></select>
           </div>
         </div>
@@ -484,6 +488,6 @@
   <script src="js/side-profiles.js?v=1"></script>
   <script src="js/side-state.js?v=1"></script>
   <script src="js/side-routing.js?v=1"></script>
-  <script src="app.js?v=36"></script>
+  <script src="app.js?v=37"></script>
 </body>
 </html>

@@ -348,6 +348,96 @@ function pairIndexFromCode(code) {
   return idx < MAX_KEY_PAIRS ? idx : -1;
 }
 
+// Zeichen des deutschen macOS-Layouts. Die Firmware sendet US-HID-Codes, macOS übersetzt sie mit dem
+// deutschen Layout: ":" liegt auf US-">" (Shift + .). code = ASCII-Zeichen (Shift implizit, dactylAsciiToHid),
+// pair = Option-Zeichen als Tastenpaar (die App legt das Paar beim Übernehmen an oder nutzt ein gleiches).
+const DE_MAC_CHARS = [
+  { char: "!", name: "Ausrufezeichen", hint: "Shift + 1", code: "!" },
+  { char: "\"", name: "Anführungszeichen", hint: "Shift + 2", code: "@" },
+  { char: "§", name: "Paragraf", hint: "Shift + 3", code: "#" },
+  { char: "$", name: "Dollar", hint: "Shift + 4", code: "$" },
+  { char: "%", name: "Prozent", hint: "Shift + 5", code: "%" },
+  { char: "&", name: "Und-Zeichen", hint: "Shift + 6", code: "^" },
+  { char: "/", name: "Schrägstrich", hint: "Shift + 7", code: "&" },
+  { char: "(", name: "Klammer auf", hint: "Shift + 8", code: "*" },
+  { char: ")", name: "Klammer zu", hint: "Shift + 9", code: "(" },
+  { char: "=", name: "Gleich", hint: "Shift + 0", code: ")" },
+  { char: "?", name: "Fragezeichen", hint: "Shift + ß", code: "_" },
+  { char: "+", name: "Plus", hint: "Taste +", code: "]" },
+  { char: "*", name: "Stern", hint: "Shift + +", code: "}" },
+  { char: "#", name: "Raute", hint: "Taste #", code: "\\" },
+  { char: "'", name: "Apostroph", hint: "Shift + #", code: "|" },
+  { char: "-", name: "Minus", hint: "Taste -", code: "/" },
+  { char: "_", name: "Unterstrich", hint: "Shift + -", code: "?" },
+  { char: ";", name: "Semikolon", hint: "Shift + ,", code: "<" },
+  { char: ":", name: "Doppelpunkt", hint: "Shift + .", code: ">" },
+  { char: "@", name: "At-Zeichen", hint: "Alt + L", pair: { first: "KEY_LEFT_ALT", second: "KEY_L" } },
+  { char: "€", name: "Euro", hint: "Alt + E", pair: { first: "KEY_LEFT_ALT", second: "KEY_E" } },
+  { char: "[", name: "Eckige Klammer auf", hint: "Alt + 5", pair: { first: "KEY_LEFT_ALT", second: "KEY_5" } },
+  { char: "]", name: "Eckige Klammer zu", hint: "Alt + 6", pair: { first: "KEY_LEFT_ALT", second: "KEY_6" } },
+  { char: "|", name: "Senkrechter Strich", hint: "Alt + 7", pair: { first: "KEY_LEFT_ALT", second: "KEY_7" } },
+  { char: "{", name: "Geschweifte Klammer auf", hint: "Alt + 8", pair: { first: "KEY_LEFT_ALT", second: "KEY_8" } },
+  { char: "}", name: "Geschweifte Klammer zu", hint: "Alt + 9", pair: { first: "KEY_LEFT_ALT", second: "KEY_9" } },
+  { char: "\\", name: "Backslash", hint: "Alt + Shift + 7", pair: { first: "KEY_LEFT_ALT", second: "&" } },
+  { char: "~", name: "Tilde (Tottaste, danach Leertaste)", hint: "Alt + N", pair: { first: "KEY_LEFT_ALT", second: "KEY_N" } }
+];
+
+// Auswahlwert eines Option-Zeichens; wird beim Übernehmen in PAIR_<n> aufgelöst und nie gespeichert
+function charPairCode(index) {
+  return `CHAR_PAIR_${index}`;
+}
+
+function charPairIndexFromCode(code) {
+  const m = /^CHAR_PAIR_(\d{1,2})$/.exec(String(code || ""));
+  if (!m) return -1;
+  const idx = Number(m[1]);
+  return idx < DE_MAC_CHARS.length && DE_MAC_CHARS[idx].pair ? idx : -1;
+}
+
+// Index eines gleichen Tastenpaars (gleiche Zahlencodes, gleiche Reihenfolge) oder -1
+function findKeyPairIndex(pairs, pair) {
+  const first = actionCodeToNumeric(pair.first);
+  const second = actionCodeToNumeric(pair.second);
+  return (pairs || []).findIndex(p => p && actionCodeToNumeric(p.first) === first && actionCodeToNumeric(p.second) === second);
+}
+
+// Deutsches Zeichen zu einem Einzelcode (z. B. ">" -> ":"), sonst null
+function deMacCharForCode(code) {
+  const entry = DE_MAC_CHARS.find(e => e.code === code);
+  return entry ? entry.char : null;
+}
+
+// Löst CHAR_PAIR_<i> in Tap/Halten/Doppel-Tipp zu PAIR_<n> auf: ein gleiches Paar wird wiederverwendet,
+// sonst angehängt. Ändert pairs nicht; added = neu anzuhängende Paare in Reihenfolge. null = kein Platz.
+function resolveCharPairActions(actions, pairs, max = MAX_KEY_PAIRS) {
+  const all = [...(pairs || [])];
+  const added = [];
+  const resolved = {};
+  for (const [field, code] of Object.entries(actions)) {
+    const charIdx = charPairIndexFromCode(code);
+    if (charIdx < 0) {
+      resolved[field] = code;
+      continue;
+    }
+    const pair = DE_MAC_CHARS[charIdx].pair;
+    let idx = findKeyPairIndex(all, pair);
+    if (idx < 0) {
+      if (all.length >= max) return null;
+      all.push({ ...pair });
+      added.push({ ...pair });
+      idx = all.length - 1;
+    }
+    resolved[field] = `PAIR_${idx}`;
+  }
+  return { actions: resolved, added };
+}
+
+// Suchfeld der Aktions-Auswahl: Teilstring ohne Groß-/Kleinschreibung, leere Suche trifft alles
+function keycodeOptionMatches(text, query) {
+  const q = String(query || "").trim().toLowerCase();
+  return q === "" || String(text || "").toLowerCase().includes(q);
+}
+
 function actionCodeToNumeric(code) {
   if (!code || code === "NONE") return 0;
   if (ACTION_TO_NUMERIC[code] !== undefined) {
@@ -474,7 +564,7 @@ function findDefinitionByCode(numericCode) {
   // Printable ASCII fallback (Finding #15)
   if (numericCode >= 32 && numericCode <= 126) {
     const ch = String.fromCharCode(numericCode);
-    return { label: ch, tap: ch };
+    return { label: deMacCharForCode(ch) || ch, tap: ch };
   }
   return { label: `Key ${numericCode}`, tap: `KEY_${numericCode}` };
 }
@@ -603,6 +693,31 @@ function isKeyPairMember(code) {
   if (typeof code !== "string" || pairIndexFromCode(code) >= 0) return false;
   const n = actionCodeToNumeric(code);
   return n >= 1 && n <= 0xFF;
+}
+
+// true, wenn eine Taste einer Ebene PAIR_<idx> als Tap, Halten oder Doppel-Tipp nutzt
+function isKeyPairUsed(layers, idx) {
+  const code = `PAIR_${idx}`;
+  return (layers || []).some(layer => (layer || []).some(row => (row || []).some(k => k && (k.tap === code || k.hold === code || k.dtap === code))));
+}
+
+// Hängt die beim Übernehmen neu angelegten Paare an pairs an; liefert den Index des ersten neuen Paars
+function appendResolvedPairs(pairs, added) {
+  const firstIdx = pairs.length;
+  added.forEach(pair => pairs.push({ ...pair }));
+  return firstIdx;
+}
+
+// Revert einer Tastenänderung: entfernt die mitangelegten Paare, solange sie am Ende stehen und keine
+// Taste sie nutzt (layers enthält die Taste bereits im alten Zustand). Liefert die Anzahl entfernter Paare.
+function revertResolvedPairs(pairs, layers, firstIdx, count) {
+  let removed = 0;
+  for (let i = firstIdx + count - 1; i >= firstIdx; i--) {
+    if (pairs.length !== i + 1 || isKeyPairUsed(layers, i)) break;
+    pairs.pop();
+    removed++;
+  }
+  return removed;
 }
 
 // Anzeigename eines Tastenpaars, z. B. "Umschalt (Links) + ."
@@ -1528,7 +1643,21 @@ function holdSublabel(code) {
 // Präfix der Optionen in den Auswahllisten für Halte- und Doppel-Tipp-Aktion
 const OPTIONAL_ACTION_PREFIX = { holdActionSelect: "Halten = ", dtapActionSelect: "2× Tippen = " };
 
-function fillKeycodeSelect(select, { holdMode = false, prefix = "Halten = " } = {}) {
+// Gruppe "Deutsche Zeichen (macOS)"; charPairs = auch Option-Zeichen, die ein Tastenpaar brauchen
+function appendDeMacCharGroup(select, { charPairs = false, prefix = "" } = {}) {
+  const optgroup = document.createElement("optgroup");
+  optgroup.label = "Deutsche Zeichen (macOS)";
+  DE_MAC_CHARS.forEach((entry, i) => {
+    if (entry.pair && !charPairs) return;
+    const opt = document.createElement("option");
+    opt.value = entry.pair ? charPairCode(i) : entry.code;
+    opt.textContent = `${prefix}${entry.char} ${entry.name} (${entry.hint}${entry.pair ? ", Tastenpaar" : ""})`;
+    optgroup.appendChild(opt);
+  });
+  select.appendChild(optgroup);
+}
+
+function fillKeycodeSelect(select, { holdMode = false, prefix = "Halten = ", charPairs = false } = {}) {
   select.innerHTML = "";
   if (holdMode) {
     // Halte- bzw. Doppel-Tipp-Aktion: jede Aktion ist erlaubt (Modifier, Layer, Media, Maus)
@@ -1548,14 +1677,55 @@ function fillKeycodeSelect(select, { holdMode = false, prefix = "Halten = " } = 
       optgroup.appendChild(opt);
     });
     select.appendChild(optgroup);
+    // Deutsche Zeichen direkt nach "Zahlen & Symbole"
+    if (group.group === "Zahlen & Symbole") appendDeMacCharGroup(select, { charPairs, prefix: holdMode ? prefix : "" });
   });
 }
 
 function populateKeycodeSelects() {
-  fillKeycodeSelect(document.getElementById("primaryActionSelect"));
+  fillKeycodeSelect(document.getElementById("primaryActionSelect"), { charPairs: true });
+  // Combo-Aktionen unterstützen keine Tastenpaare: nur Zeichen mit Einzelcode
   fillKeycodeSelect(document.getElementById("comboActionSelect"));
-  fillKeycodeSelect(document.getElementById("holdActionSelect"), { holdMode: true });
-  fillKeycodeSelect(document.getElementById("dtapActionSelect"), { holdMode: true, prefix: OPTIONAL_ACTION_PREFIX.dtapActionSelect });
+  fillKeycodeSelect(document.getElementById("holdActionSelect"), { holdMode: true, charPairs: true });
+  fillKeycodeSelect(document.getElementById("dtapActionSelect"), { holdMode: true, prefix: OPTIONAL_ACTION_PREFIX.dtapActionSelect, charPairs: true });
+  ["primaryActionSelect", "holdActionSelect", "dtapActionSelect", "comboActionSelect"].forEach(id => {
+    const input = document.querySelector(`[data-filter-for="${id}"]`);
+    if (input) input.addEventListener("input", () => applySelectFilter(id));
+  });
+}
+
+// Suchfeld über einer Aktions-Auswahl: blendet nicht passende Optionen und leere Gruppen aus. Passt der
+// Gruppenname, bleibt die ganze Gruppe sichtbar. Ist die gewählte Option ausgeblendet, gilt die erste sichtbare.
+function applySelectFilter(selectId) {
+  const select = document.getElementById(selectId);
+  const input = document.querySelector(`[data-filter-for="${selectId}"]`);
+  if (!select || !input) return;
+  const query = input.value;
+  Array.from(select.children).forEach(child => {
+    if (child.tagName === "OPTGROUP") {
+      const groupMatch = query.trim() !== "" && keycodeOptionMatches(child.label, query);
+      let visible = 0;
+      Array.from(child.children).forEach(opt => {
+        opt.hidden = !(groupMatch || keycodeOptionMatches(opt.textContent, query));
+        if (!opt.hidden) visible++;
+      });
+      child.hidden = visible === 0;
+    } else {
+      child.hidden = !keycodeOptionMatches(child.textContent, query);
+    }
+  });
+  const selected = select.options[select.selectedIndex];
+  if (selected && (selected.hidden || (selected.parentElement && selected.parentElement.hidden))) {
+    const first = Array.from(select.options).find(o => !o.hidden && !(o.parentElement && o.parentElement.hidden));
+    if (first) select.value = first.value;
+  }
+}
+
+function clearSelectFilter(selectId) {
+  const input = document.querySelector(`[data-filter-for="${selectId}"]`);
+  if (!input) return;
+  input.value = "";
+  applySelectFilter(selectId);
 }
 
 // Wechselt die bearbeitete Hälfte: Zustand der bisherigen Hälfte sichern, den der neuen laden
@@ -1816,6 +1986,7 @@ function updateInspector(r, c) {
   const layer = currentConfig.layers[activeLayerIndex] || currentConfig.layers[0];
   const keyData = (layer[r] && layer[r][c]) ? layer[r][c] : { label: "", tap: "NONE", hold: "NONE" };
 
+  ["primaryActionSelect", "holdActionSelect", "dtapActionSelect"].forEach(clearSelectFilter);
   labelInput.value = keyData.label || "";
   primarySelect.value = keyData.tap || "KEY_SPACE";
   setOptionalActionSelect(holdSelect, normalizeHoldCode(keyData.hold));
@@ -1916,7 +2087,7 @@ function keycodeLabel(code) {
     const k = group.keys.find(key => key.code === code);
     if (k) return k.label;
   }
-  return code;
+  return deMacCharForCode(code) || code;
 }
 
 // Tap- und Halte-Auswahl im Inspektor: Gruppe "Tastenpaare" mit den aktuell definierten Paaren
@@ -1939,6 +2110,7 @@ function refreshKeyPairOptions() {
     });
     if (group.children.length) select.appendChild(group);
     select.value = previous;
+    applySelectFilter(id);
   });
 }
 
@@ -2002,8 +2174,7 @@ function addKeyPairFromUI() {
 function deleteLastKeyPair() {
   const idx = currentConfig.keyPairs.length - 1;
   if (idx < 0) return;
-  const code = `PAIR_${idx}`;
-  const used = currentConfig.layers.some(layer => (layer || []).some(row => (row || []).some(k => k && (k.tap === code || k.hold === code || k.dtap === code))));
+  const used = isKeyPairUsed(currentConfig.layers, idx);
   if (used && !confirm(`Tastenpaar ${idx} ist noch Tasten zugewiesen. Diese Tasten senden danach nichts. Trotzdem löschen?`)) return;
   const removed = currentConfig.keyPairs.pop();
   renderKeyPairs();
@@ -2037,6 +2208,7 @@ function initKeyPairsUI() {
         optgroup.appendChild(opt);
       });
       if (optgroup.children.length) select.appendChild(optgroup);
+      if (group.group === "Zahlen & Symbole") appendDeMacCharGroup(select);
     });
   });
   firstSel.value = "KEY_LEFT_SHIFT";
@@ -2094,14 +2266,25 @@ function setupEventListeners() {
     const holdSelect = document.getElementById("holdActionSelect");
 
     const label = labelInput.value.trim() || primarySelect.options[primarySelect.selectedIndex].text.split(" ")[0];
-    const tap = primarySelect.value;
-    const hold = holdSelect.value;
-    const dtap = document.getElementById("dtapActionSelect").value;
     const side = editSide;
     if (!isPhysicalKey(r, c, activeProfile())) {
       showToast(`R${r}C${c} existiert physisch nicht.`);
       return;
     }
+    // Option-Zeichen (CHAR_PAIR_<i>) als Tastenpaar auflösen: gleiches Paar wiederverwenden, sonst anhängen
+    const resolved = resolveCharPairActions({
+      tap: primarySelect.value,
+      hold: holdSelect.value,
+      dtap: document.getElementById("dtapActionSelect").value
+    }, currentConfig.keyPairs);
+    if (!resolved) {
+      showToast(`Kein Platz für ein neues Tastenpaar: maximal ${MAX_KEY_PAIRS} Paare. Lösche zuerst ein Paar.`);
+      return;
+    }
+    const { tap, hold, dtap } = resolved.actions;
+    // Neue Paare gehören zur Tastenänderung: ein eigener Revert würde ein noch genutztes Paar entfernen
+    const firstAddedIdx = appendResolvedPairs(currentConfig.keyPairs, resolved.added);
+    if (resolved.added.length) renderKeyPairs();
 
     const oldKey = JSON.parse(JSON.stringify(layer[r][c] || { label: "---", tap: "NONE", hold: "NONE" }));
     const layerName = (currentConfig.layerNames && currentConfig.layerNames[targetLayer]) || `Layer ${targetLayer}`;
@@ -2120,6 +2303,8 @@ function setupEventListeners() {
       revert: () => {
         if (currentConfig.layers[targetLayer] && currentConfig.layers[targetLayer][r]) {
           currentConfig.layers[targetLayer][r][c] = oldKey;
+          // Mitangelegte Paare entfernen, solange sie am Ende stehen und keine andere Taste sie nutzt
+          if (revertResolvedPairs(currentConfig.keyPairs, currentConfig.layers, firstAddedIdx, resolved.added.length)) renderKeyPairs();
           renderMatrix();
           if (selectedKey && selectedKey.r === r && selectedKey.c === c && activeLayerIndex === targetLayer) {
             updateInspector(r, c);
@@ -2128,6 +2313,17 @@ function setupEventListeners() {
         }
       }
     };
+    if (resolved.added.length) {
+      changeRecord.description += ` (neues Tastenpaar: ${resolved.added.map(p => keyPairLabel(p, keycodeLabel)).join(", ")})`;
+    }
+
+    // Ein neues Tastenpaar kennt das Gerät erst nach dem nächsten Sync: Taste ebenfalls nur vormerken
+    if (resolved.added.length) {
+      markPendingSync(changeRecord, side);
+      showToast("Neues Tastenpaar angelegt. Taste und Paar werden mit dem nächsten Sync übertragen.");
+      saveConfigToServer(side);
+      return;
+    }
 
     // SET_KEY <l> <r> <c> <tap> <hold> <dtap>: Firmware antwortet mit OK SET_KEY bzw. ERR (Toast im Notification-Handler)
     const sent = await sendDeviceCommand(`SET_KEY ${targetLayer} ${r} ${c} ${tapCode} ${holdCode} ${dtapCode}`, side);
@@ -2162,6 +2358,7 @@ function setupEventListeners() {
   const comboModal = document.getElementById("comboModal");
   document.getElementById("btnOpenAddComboModal").addEventListener("click", () => {
     populateComboKeyDropdowns();
+    clearSelectFilter("comboActionSelect");
     comboModal.style.display = "flex";
   });
   document.getElementById("btnCloseComboModal").addEventListener("click", () => {

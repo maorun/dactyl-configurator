@@ -11,15 +11,17 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 - **Tap-Dance / Doppel-Tippen:** dritte Aktion pro Taste; zwei Tipps innerhalb von 200 ms lösen sie aus.
 - **Linke Hälfte:** eigene Firmware (Keymap, NVS, Config-BLE, Power Management) mit ESP-NOW zum Master; die App bearbeitet, synchronisiert und flasht beide Hälften.
 - **Flash-Port-Auswahl:** `server.py` flasht nur den Port, dessen Board sich per `DEVICE_INFO.side` als die gewählte Hälfte meldet.
+- **Deutsche Zeichen im Keycode-Picker:** Gruppe "Deutsche Zeichen (macOS)" mit Shift-Zeichen (`:`, `+`, `*`, `?` …) als Einzelcode und Option-Zeichen (`@`, `€`, `{` …) als automatisch angelegtes Tastenpaar; Suchfeld über jeder Aktions-Auswahl.
 
 ## App (Configurator)
 
-- **Besserer Keycode-Picker:** im Dropdown fehlen Zeichen wie `:` und `+` (deutsches Layout braucht dafür Shift-Kombinationen). Statt eines langen `<select>` eine durchsuchbare Auswahl oder eine Bildschirm-Tastatur; Tastenpaare decken die Zeichen heute schon ab, der Picker würde sie direkt anbieten (z. B. `:` legt automatisch das Paar `Shift` + `.` an).
+- **Weitere deutsche Zeichen:** `<`, `>`, `^`, `°`, `´` und `` ` `` fehlen in "Deutsche Zeichen (macOS)", weil ihre ISO-/ANSI-Tastenzuordnung auf macOS noch nicht auf der Hardware geprüft ist (`<` braucht die ISO-Taste HID `0x64`, die die Firmware heute nicht sendet).
+- **Bildschirm-Tastatur als Picker:** Alternative zum `<select>` mit Suchfeld.
 - **Makro-Engine (App-Seite):** Editor für Tastenfolgen mit Verzögerung; braucht Firmware-Aktionscodes und NVS-Speicher.
 - **Profilverwaltung:** mehrere benannte Layouts lokal speichern und umschalten (heute nur ein `current_config.json` plus JSON-Export/Import).
 - **Layout-Diff vor dem Sync:** pro Taste anzeigen, was sich gegenüber dem Gerät ändert (`GET_CONFIG` mit lokalem Stand vergleichen).
 - **Ebenen-Übersicht:** alle 8 Ebenen verkleinert nebeneinander, damit transparente Tasten und Konflikte sichtbar werden.
-- **Tastatur-Bedienung im Editor:** Pfeiltasten zum Wechseln der ausgewählten Taste, Suchfeld im Keycode-Dropdown.
+- **Tastatur-Bedienung im Editor:** Pfeiltasten zum Wechseln der ausgewählten Taste.
 - **Heatmap pro Ebene:** Zähler zusätzlich nach `layer` aus dem `KEY_PRESS`-Event trennen.
 - **Heatmap-Export:** Zähler als CSV/JSON exportieren, z. B. für Layout-Optimierung.
 - **Matrix-Test für leere Tasten:** im Test-Modus Ebene 0 erzwingen oder das reine Matrix-Event der Firmware nutzen.
@@ -42,6 +44,13 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 ## Offene LOW-Befunde aus Code-Reviews
 
 Kleine Befunde aus dem Review der linken Hälfte, bewusst auf später verschoben. Jeder Punkt braucht beim Umsetzen einen Regressionstest.
+
+- `app.js` `applySelectFilter`: das Suchfeld wählt still die erste sichtbare Option, wenn die gewählte ausgeblendet wird; nach dem Leeren bleibt diese Wahl. Folge: Tippen in das Suchfeld ändert Halte- oder Doppel-Tipp-Aktion. Korrektur: Auswahl nur bei expliziter Wahl ändern, beim Leeren die vorherige Wahl wiederherstellen.
+- `app.js` `applySelectFilter`: ohne Treffer bleibt eine ausgeblendete Option gewählt. Folge: "Änderung übernehmen" speichert eine unsichtbare Aktion. Korrektur: ohne Treffer den Übernehmen-Knopf sperren oder einen Hinweis zeigen.
+- `app.js` `applySelectFilter`: der Filter vergleicht auch das Präfix "Halten = " bzw. "2× Tippen = ". Folge: eine Suche nach "halten", "tippen" oder "=" trifft jede Option der Halte- und Doppel-Tipp-Auswahl. Korrektur: die Suche ohne das Präfix vergleichen.
+- `app.js` `keycodeLabel`: das Paar-Mitglied `&` des Backslash-Paars heißt "/" (deutsches Zeichen). Folge: die Paarliste zeigt "Alt/Option (Links) + /", gesendet wird Alt + Shift + 7. Korrektur: Paar-Mitglieder als US-Taste beschriften oder den `hint` des Eintrags nutzen.
+- `app.js` Apply-Handler (`btnApplyKey`): ein wiederverwendetes Tastenpaar, das selbst noch vorgemerkt ist, löst trotzdem ein sofortiges `SET_KEY` aus. Folge: das Gerät kennt das Paar noch nicht, die Taste sendet bis zum nächsten Sync nichts. Korrektur: die Taste nur vormerken, wenn ein genutztes Paar noch nicht synchronisiert ist.
+- `tests/test_app_logic.js`: kein Test prüft die Optionslisten (Combo ohne Tastenpaar-Zeichen, Gruppenposition, Ausblenden durch das Suchfeld). Folge: diese Annahmen haben keinen Regressionsschutz. Korrektur: Listenaufbau und Filter als reine Funktionen herauslösen und testen.
 
 
 ## Tooling & Qualität

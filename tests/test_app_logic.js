@@ -40,7 +40,8 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
-             resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs };`, ctx);
+             resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
+             removeKeyPairAt };`, ctx);
 const api = ctx.api;
 const R = api.SIDE_PROFILES.R;
 const L = api.SIDE_PROFILES.L;
@@ -554,6 +555,38 @@ test("Deutsche Zeichen: Übernehmen hängt Paare an, Rückgängig entfernt nur u
   // Ohne neue Paare entfernt der Revert nichts
   assert.strictEqual(api.revertResolvedPairs(pairs, layers, 1, 0), 0);
   assert.strictEqual(pairs.length, 1);
+});
+
+test("Tastenpaar: jedes Paar ist löschbar, Verweise werden neu nummeriert", () => {
+  const p = (a, b) => ({ first: a, second: b });
+  const config = {
+    keyPairs: [p("KEY_A", "KEY_B"), p("KEY_LEFT_SHIFT", "KEY_PERIOD"), p("KEY_LEFT_ALT", "KEY_L")],
+    layers: [
+      [[{ label: "x", tap: "PAIR_0", hold: "PAIR_1", dtap: "PAIR_2" }, { label: "y", tap: "KEY_A", hold: "NONE", dtap: "NONE" }]],
+      [["PAIR_2", null]]
+    ],
+    combos: [{ id: "c1", action: "PAIR_1" }, { id: "c2", action: "PAIR_2" }, { id: "c3", action: "KEY_ESC" }]
+  };
+  const before = JSON.stringify(config);
+  // Mittleres Paar löschen: PAIR_1 wird leer, PAIR_2 rückt auf PAIR_1, PAIR_0 bleibt
+  const mid = JSON.parse(JSON.stringify(api.removeKeyPairAt(config, 1)));
+  assert.deepStrictEqual(mid.keyPairs, [p("KEY_A", "KEY_B"), p("KEY_LEFT_ALT", "KEY_L")]);
+  assert.deepStrictEqual(mid.layers[0][0][0], { label: "x", tap: "PAIR_0", hold: "NONE", dtap: "PAIR_1" });
+  assert.deepStrictEqual(mid.layers[0][0][1], { label: "y", tap: "KEY_A", hold: "NONE", dtap: "NONE" });
+  assert.deepStrictEqual(mid.layers[1][0], ["PAIR_1", null]);
+  assert.deepStrictEqual(mid.combos.map(c => c.action), ["NONE", "PAIR_1", "KEY_ESC"]);
+  assert.strictEqual(JSON.stringify(config), before); // Eingabe unverändert (Revert nutzt den alten Stand)
+  // Erstes Paar löschen: alle Verweise rücken auf
+  const first = JSON.parse(JSON.stringify(api.removeKeyPairAt(config, 0)));
+  assert.deepStrictEqual(first.layers[0][0][0], { label: "x", tap: "NONE", hold: "PAIR_0", dtap: "PAIR_1" });
+  // Letztes Paar löschen: nur dessen Verweise werden leer
+  const last = JSON.parse(JSON.stringify(api.removeKeyPairAt(config, 2)));
+  assert.deepStrictEqual(last.layers[0][0][0], { label: "x", tap: "PAIR_0", hold: "PAIR_1", dtap: "NONE" });
+  assert.deepStrictEqual(last.combos.map(c => c.action), ["PAIR_1", "NONE", "KEY_ESC"]);
+  // Ungültiger Index
+  assert.strictEqual(api.removeKeyPairAt(config, 3), null);
+  assert.strictEqual(api.removeKeyPairAt(config, -1), null);
+  assert.strictEqual(api.removeKeyPairAt({ layers: [] }, 0), null);
 });
 
 test("Suchfeld: Teilstring ohne Groß-/Kleinschreibung", () => {

@@ -50,6 +50,8 @@ Kleine Befunde aus dem Review der linken Hälfte, bewusst auf später verschoben
 - `app.js` `applySelectFilter`: der Filter vergleicht auch das Präfix "Halten = " bzw. "2× Tippen = ". Folge: eine Suche nach "halten", "tippen" oder "=" trifft jede Option der Halte- und Doppel-Tipp-Auswahl. Korrektur: die Suche ohne das Präfix vergleichen.
 - `app.js` `keycodeLabel`: das Paar-Mitglied `&` des Backslash-Paars heißt "/" (deutsches Zeichen). Folge: die Paarliste zeigt "Alt/Option (Links) + /", gesendet wird Alt + Shift + 7. Korrektur: Paar-Mitglieder als US-Taste beschriften oder den `hint` des Eintrags nutzen.
 - `app.js` Apply-Handler (`btnApplyKey`): ein wiederverwendetes Tastenpaar, das selbst noch vorgemerkt ist, löst trotzdem ein sofortiges `SET_KEY` aus. Folge: das Gerät kennt das Paar noch nicht, die Taste sendet bis zum nächsten Sync nichts. Korrektur: die Taste nur vormerken, wenn ein genutztes Paar noch nicht synchronisiert ist.
+- `app.js` `isKeyPairUsed`: die Prüfung ignoriert alte Zellen im String-Format (`"PAIR_2"` statt Objekt). Folge: `deleteKeyPair` fragt nicht nach, `removeKeyPairAt` leert diese Zellen trotzdem. Korrektur: String-Zellen gleich `PAIR_<idx>` in `isKeyPairUsed` erkennen.
+- `tests/test_app_logic.js`: kein Test prüft `deleteKeyPair` (Nachfrage bei Nutzung, Snapshot-Flag, Revert stellt Paare, Ebenen und Combos wieder her). Folge: ein Fehler im Ablauf bleibt unentdeckt. Korrektur: den Ablauf als reine Funktion herauslösen und testen.
 - `tests/test_app_logic.js`: kein Test prüft die Optionslisten (Combo ohne Tastenpaar-Zeichen, Gruppenposition, Ausblenden durch das Suchfeld). Folge: diese Annahmen haben keinen Regressionsschutz. Korrektur: Listenaufbau und Filter als reine Funktionen herauslösen und testen.
 
 

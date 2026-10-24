@@ -186,7 +186,7 @@ Keys in the matrix use `uint16_t` action codes:
 - Commands: `CLEAR_PAIRS`, `ADD_PAIR <first> <second>` (appends the next index), `SAVE_PAIRS` (NVS keys `num_pairs`, `pairs_data`). A persisted count of `0` overrides the compiled-in list at boot. An unassigned index sends nothing.
 - When `loadKeymapFromNVS()` applies new app defaults over a stored keymap, it removes `num_pairs`/`pairs_data`, because the new keymap references the compiled-in pairs. A plain repository flash keeps the stored pairs.
 - `CLEAR_PAIRS` first releases every pair that is held at the host; the physical release of that key then sends nothing.
-- Only the last pair can be deleted in the app, because keys reference pairs by index.
+- Every pair can be deleted in the app. Keys reference pairs by index, so `removeKeyPairAt` renumbers the references in all layers (tap, hold, double-tap) and in combo actions: references to the deleted pair become `NONE`, higher indices move down by one. The deletion is a snapshot pending change; the next full sync sends the renumbered keys (`SET_K`) and the new pair list.
 
 ### German macOS characters in the picker (`DE_MAC_CHARS`)
 - The firmware sends US HID codes; macOS translates them with the German layout. `DE_MAC_CHARS` in `app.js` lists German characters with the US code that produces them, e.g. `:` = US `>` (Shift implicit via `dactylAsciiToHid`). These entries store the plain ASCII code; firmware and `server.py` need no change.

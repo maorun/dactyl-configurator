@@ -701,6 +701,26 @@ function isKeyPairUsed(layers, idx) {
   return (layers || []).some(layer => (layer || []).some(row => (row || []).some(k => k && (k.tap === code || k.hold === code || k.dtap === code))));
 }
 
+// Entfernt das Tastenpaar idx und nummeriert die Verweise neu: PAIR_idx wird "NONE", PAIR_n mit n > idx
+// wird PAIR_(n-1). Gilt für Tap, Halten und Doppel-Tipp aller Ebenen sowie für Combo-Aktionen.
+// Ändert nichts in-place; liefert { keyPairs, layers, combos } oder null bei ungültigem Index.
+function removeKeyPairAt(config, idx) {
+  const pairs = (config && config.keyPairs) || [];
+  if (!isValidIndex(idx, pairs.length)) return null;
+  const remap = code => {
+    const n = pairIndexFromCode(code);
+    if (n < 0 || n < idx) return code;
+    return n === idx ? "NONE" : `PAIR_${n - 1}`;
+  };
+  const layers = JSON.parse(JSON.stringify(config.layers || []));
+  layers.forEach(layer => (layer || []).forEach(row => (row || []).forEach((k, c) => {
+    if (typeof k === "string") row[c] = remap(k);
+    else if (k && typeof k === "object") ["tap", "hold", "dtap"].forEach(f => { if (f in k) k[f] = remap(k[f]); });
+  })));
+  const combos = JSON.parse(JSON.stringify(config.combos || [])).map(cb => (cb && "action" in cb ? { ...cb, action: remap(cb.action) } : cb));
+  return { keyPairs: pairs.filter((_, i) => i !== idx).map(p => ({ ...p })), layers, combos };
+}
+
 // Hängt die beim Übernehmen neu angelegten Paare an pairs an; liefert den Index des ersten neuen Paars
 function appendResolvedPairs(pairs, added) {
   const firstIdx = pairs.length;
@@ -2129,14 +2149,11 @@ function renderKeyPairs() {
       tr.appendChild(td);
     });
     const tdDel = document.createElement("td");
-    // Nur das letzte Paar löschbar: sonst verschieben sich die Indizes, auf die Tasten verweisen
-    if (i === currentConfig.keyPairs.length - 1) {
-      const delBtn = document.createElement("button");
-      delBtn.className = "btn btn-danger btn-sm";
-      delBtn.textContent = "Löschen";
-      delBtn.addEventListener("click", deleteLastKeyPair);
-      tdDel.appendChild(delBtn);
-    }
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn btn-danger btn-sm";
+    delBtn.textContent = "Löschen";
+    delBtn.addEventListener("click", () => deleteKeyPair(i));
+    tdDel.appendChild(delBtn);
     tr.appendChild(tdDel);
     tbody.appendChild(tr);
   });
@@ -2171,23 +2188,32 @@ function addKeyPairFromUI() {
   });
 }
 
-function deleteLastKeyPair() {
-  const idx = currentConfig.keyPairs.length - 1;
-  if (idx < 0) return;
-  const used = isKeyPairUsed(currentConfig.layers, idx);
-  if (used && !confirm(`Tastenpaar ${idx} ist noch Tasten zugewiesen. Diese Tasten senden danach nichts. Trotzdem löschen?`)) return;
-  const removed = currentConfig.keyPairs.pop();
-  renderKeyPairs();
-  saveConfigToServer();
+// Löscht ein beliebiges Paar. Tasten verweisen per Index: removeKeyPairAt nummeriert die Verweise neu,
+// Tasten des gelöschten Paars werden leer. Snapshot, weil Ebenen und Combos ersetzt werden.
+function deleteKeyPair(idx) {
+  const removed = currentConfig.keyPairs[idx];
+  if (!removed) return;
+  const used = isKeyPairUsed(currentConfig.layers, idx) || (currentConfig.combos || []).some(cb => cb && cb.action === `PAIR_${idx}`);
+  if (used && !confirm(`Tastenpaar ${idx} ist noch Tasten oder Combos zugewiesen. Diese Belegungen werden geleert. Trotzdem löschen?`)) return;
+  const next = removeKeyPairAt(currentConfig, idx);
+  if (!next) return;
+  const old = JSON.parse(JSON.stringify({ keyPairs: currentConfig.keyPairs, layers: currentConfig.layers, combos: currentConfig.combos || [] }));
+  const apply = state => {
+    currentConfig.keyPairs = state.keyPairs;
+    currentConfig.layers = state.layers;
+    currentConfig.combos = state.combos;
+    renderMatrix();
+    renderCombosTable();
+    if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+    saveConfigToServer();
+  };
+  apply(next);
   markPendingSync({
     type: "key_pair",
+    snapshot: true,
     title: `Tastenpaar ${idx} gelöscht`,
-    description: keyPairLabel(removed, keycodeLabel),
-    revert: () => {
-      if (currentConfig.keyPairs.length === idx) currentConfig.keyPairs.push(removed);
-      renderKeyPairs();
-      saveConfigToServer();
-    }
+    description: `${keyPairLabel(removed, keycodeLabel)}${idx < old.keyPairs.length - 1 ? "; folgende Paare rücken auf" : ""}`,
+    revert: () => apply(old)
   });
 }
 

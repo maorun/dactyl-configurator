@@ -797,6 +797,13 @@ body {
   border-color: var(--border-focus);
 }
 
+/* Suchfeld über einer Aktions-Auswahl (filtert die Optionen darunter) */
+.keycode-filter {
+  margin-bottom: 0.35rem;
+  padding: 0.4rem 0.7rem;
+  font-size: 0.85rem;
+}
+
 .form-hint {
   display: block;
   font-size: 0.78rem;

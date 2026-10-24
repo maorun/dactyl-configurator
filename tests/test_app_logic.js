@@ -38,7 +38,10 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
-             applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell };`, ctx);
+             applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell,
+             DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
+             resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
+             removeKeyPairAt };`, ctx);
 const api = ctx.api;
 const R = api.SIDE_PROFILES.R;
 const L = api.SIDE_PROFILES.L;
@@ -442,6 +445,158 @@ test("Doppel-Tipp: GET_CONFIG-Matrizen setzen Tap, Halten und Doppel-Tipp", () =
   assert.strictEqual(api.applyMatrixData(layers, undefined, { l: 0, k: [] }), false);
   api.applyMatrixData(layers, "dtap", { l: 1, k: [[70000, -1, 1.5]] });
   assert.strictEqual(layers[1][0][0].dtap, "NONE");
+});
+
+// Zeichen, die dactylAsciiToHid (DactylKeycodes.h) in einen HID-Code übersetzt
+const asciiHeader = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylKeycodes.h"), "utf8");
+const asciiStart = asciiHeader.indexOf("dactylAsciiToHid");
+const asciiFn = asciiHeader.slice(asciiStart, asciiHeader.indexOf("0x00;", asciiStart));
+const firmwareAscii = new Set([...asciiFn.matchAll(/c == '(\\.|[^'])'/g)].map(m => m[1].length === 2 ? m[1][1] : m[1]));
+
+test("Deutsche Zeichen: Einzelcodes sind druckbare ASCII-Zeichen, die die Firmware sendet", () => {
+  const singles = api.DE_MAC_CHARS.filter(e => e.code);
+  assert.ok(singles.length >= 19);
+  for (const e of singles) {
+    assert.strictEqual(e.code.length, 1, e.char);
+    assert.ok(firmwareAscii.has(e.code), `${e.char}: ${e.code} fehlt in dactylAsciiToHid`);
+    const n = api.actionCodeToNumeric(e.code);
+    assert.ok(n >= 0x20 && n <= 0x7E, e.char);
+    // GET_CONFIG-Rückweg ergibt denselben Zahlencode (z. B. 93 -> KEY_RIGHT_BRACKET)
+    assert.strictEqual(api.actionCodeToNumeric(api.findDefinitionByCode(n).tap), n, e.char);
+  }
+  // Zuordnung des deutschen macOS-Layouts (US-Taste -> deutsches Zeichen)
+  const byChar = Object.fromEntries(singles.map(e => [e.char, e.code]));
+  assert.deepStrictEqual({ ":": byChar[":"], "+": byChar["+"], "*": byChar["*"], "?": byChar["?"], "#": byChar["#"], "-": byChar["-"] },
+                         { ":": ">", "+": "]", "*": "}", "?": "_", "#": "\\", "-": "/" });
+  assert.strictEqual(new Set(api.DE_MAC_CHARS.map(e => e.char)).size, api.DE_MAC_CHARS.length);
+});
+
+test("Deutsche Zeichen: Label aus GET_CONFIG-Codes und für Tastenpaare", () => {
+  assert.strictEqual(api.findDefinitionByCode(62).label, ":");
+  assert.strictEqual(api.findDefinitionByCode(62).tap, ">");
+  assert.strictEqual(api.findDefinitionByCode(93).label, "]"); // KEY_RIGHT_BRACKET bleibt eigener Eintrag
+  assert.strictEqual(api.findDefinitionByCode(126).label, "~"); // kein deutsches Zeichen
+  assert.strictEqual(api.deMacCharForCode("&"), "/");
+  assert.strictEqual(api.deMacCharForCode("KEY_A"), null);
+});
+
+test("Deutsche Zeichen: Option-Zeichen bestehen aus Tastenpaar-Mitgliedern", () => {
+  const pairs = api.DE_MAC_CHARS.filter(e => e.pair);
+  assert.ok(pairs.length >= 9);
+  for (const e of pairs) {
+    assert.ok(api.isKeyPairMember(e.pair.first) && api.isKeyPairMember(e.pair.second), e.char);
+  }
+  const at = api.DE_MAC_CHARS.findIndex(e => e.char === "@");
+  assert.strictEqual(api.charPairIndexFromCode(api.charPairCode(at)), at);
+  const colon = api.DE_MAC_CHARS.findIndex(e => e.char === ":");
+  assert.strictEqual(api.charPairIndexFromCode(api.charPairCode(colon)), -1); // Einzelcode, kein Paar
+  for (const bad of ["CHAR_PAIR_99", "CHAR_PAIR_x", "PAIR_0", "", undefined]) {
+    assert.strictEqual(api.charPairIndexFromCode(bad), -1, String(bad));
+  }
+});
+
+test("Deutsche Zeichen: CHAR_PAIR wird zu PAIR_<n> aufgelöst, gleiche Paare werden wiederverwendet", () => {
+  const at = api.charPairCode(api.DE_MAC_CHARS.findIndex(e => e.char === "@"));
+  const euro = api.charPairCode(api.DE_MAC_CHARS.findIndex(e => e.char === "€"));
+  const existing = [{ first: "KEY_LEFT_SHIFT", second: "KEY_PERIOD" }, { first: "KEY_LEFT_ALT", second: "KEY_L" }];
+  // Vorhandenes Paar Alt + L
+  let res = api.resolveCharPairActions({ tap: at, hold: "NONE", dtap: "NONE" }, existing);
+  assert.deepStrictEqual({ ...res.actions }, { tap: "PAIR_1", hold: "NONE", dtap: "NONE" });
+  assert.strictEqual(res.added.length, 0);
+  // Neues Paar, zweimal gewählt: nur einmal angehängt; Eingabe bleibt unverändert
+  res = api.resolveCharPairActions({ tap: euro, hold: "KEY_A", dtap: euro }, existing);
+  assert.deepStrictEqual({ ...res.actions }, { tap: "PAIR_2", hold: "KEY_A", dtap: "PAIR_2" });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(res.added)), [{ first: "KEY_LEFT_ALT", second: "KEY_E" }]);
+  assert.strictEqual(existing.length, 2);
+  // Ohne CHAR_PAIR keine Änderung
+  res = api.resolveCharPairActions({ tap: ">", hold: "NONE", dtap: "NONE" }, []);
+  assert.deepStrictEqual({ ...res.actions }, { tap: ">", hold: "NONE", dtap: "NONE" });
+  // Voller Speicher: neues Paar nicht möglich, vorhandenes Paar weiterhin
+  const full = Array.from({ length: api.MAX_KEY_PAIRS }, (_, i) => i === 3 ? { first: "KEY_LEFT_ALT", second: "KEY_L" } : { first: "KEY_A", second: "KEY_B" });
+  assert.strictEqual(api.resolveCharPairActions({ tap: euro }, full), null);
+  assert.strictEqual(api.resolveCharPairActions({ tap: at }, full).actions.tap, "PAIR_3");
+  // Vergleich über Zahlencodes: "l" und KEY_L sind dasselbe Mitglied, die Reihenfolge zählt
+  assert.strictEqual(api.findKeyPairIndex([{ first: "KEY_LEFT_ALT", second: "l" }], { first: "KEY_LEFT_ALT", second: "KEY_L" }), 0);
+  assert.strictEqual(api.findKeyPairIndex([{ first: "KEY_L", second: "KEY_LEFT_ALT" }], { first: "KEY_LEFT_ALT", second: "KEY_L" }), -1);
+});
+
+test("Tastenpaar: Nutzung durch Tap, Halten oder Doppel-Tipp wird erkannt", () => {
+  const layers = [[[{ tap: "KEY_A", hold: "PAIR_1", dtap: "NONE" }]], [[null, { tap: "PAIR_3" }]], [[{ tap: "KEY_B", dtap: "PAIR_4" }]]];
+  assert.ok(api.isKeyPairUsed(layers, 1));
+  assert.ok(api.isKeyPairUsed(layers, 3));
+  assert.ok(api.isKeyPairUsed(layers, 4));
+  assert.ok(!api.isKeyPairUsed(layers, 0));
+  assert.ok(!api.isKeyPairUsed([], 0));
+  assert.ok(!api.isKeyPairUsed(undefined, 0));
+});
+
+test("Deutsche Zeichen: Übernehmen hängt Paare an, Rückgängig entfernt nur ungenutzte Paare am Ende", () => {
+  const at = api.charPairCode(api.DE_MAC_CHARS.findIndex(e => e.char === "@"));
+  const euro = api.charPairCode(api.DE_MAC_CHARS.findIndex(e => e.char === "€"));
+  const pairs = [{ first: "KEY_LEFT_SHIFT", second: "KEY_PERIOD" }];
+  const layers = [[[{ label: "A", tap: "KEY_A", hold: "NONE", dtap: "NONE" }]]];
+  // Taste R0C0: Tap = @, Doppel-Tipp = € -> zwei neue Paare 1 und 2
+  const res = api.resolveCharPairActions({ tap: at, hold: "NONE", dtap: euro }, pairs);
+  const first = api.appendResolvedPairs(pairs, res.added);
+  assert.strictEqual(first, 1);
+  assert.strictEqual(pairs.length, 3);
+  layers[0][0][0] = { label: "@", ...res.actions };
+  assert.strictEqual(layers[0][0][0].tap, "PAIR_1");
+  assert.strictEqual(layers[0][0][0].dtap, "PAIR_2");
+  // Revert bei weiterhin genutzter Taste (z. B. andere Taste nutzt PAIR_2): nichts oberhalb wird entfernt
+  const other = [[[{ tap: "KEY_A" }, { tap: "PAIR_2" }]]];
+  assert.strictEqual(api.revertResolvedPairs([...pairs], other, first, res.added.length), 0);
+  // Revert, nachdem ein weiteres Paar angehängt wurde: Paare stehen nicht mehr am Ende
+  assert.strictEqual(api.revertResolvedPairs([...pairs, { first: "KEY_A", second: "KEY_B" }], [[[{ tap: "KEY_A" }]]], first, res.added.length), 0);
+  // Normaler Revert: Taste wieder alt, beide Paare entfernt, vorhandenes Paar 0 bleibt
+  layers[0][0][0] = { label: "A", tap: "KEY_A", hold: "NONE", dtap: "NONE" };
+  assert.strictEqual(api.revertResolvedPairs(pairs, layers, first, res.added.length), 2);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(pairs)), [{ first: "KEY_LEFT_SHIFT", second: "KEY_PERIOD" }]);
+  // Ohne neue Paare entfernt der Revert nichts
+  assert.strictEqual(api.revertResolvedPairs(pairs, layers, 1, 0), 0);
+  assert.strictEqual(pairs.length, 1);
+});
+
+test("Tastenpaar: jedes Paar ist löschbar, Verweise werden neu nummeriert", () => {
+  const p = (a, b) => ({ first: a, second: b });
+  const config = {
+    keyPairs: [p("KEY_A", "KEY_B"), p("KEY_LEFT_SHIFT", "KEY_PERIOD"), p("KEY_LEFT_ALT", "KEY_L")],
+    layers: [
+      [[{ label: "x", tap: "PAIR_0", hold: "PAIR_1", dtap: "PAIR_2" }, { label: "y", tap: "KEY_A", hold: "NONE", dtap: "NONE" }]],
+      [["PAIR_2", null]]
+    ],
+    combos: [{ id: "c1", action: "PAIR_1" }, { id: "c2", action: "PAIR_2" }, { id: "c3", action: "KEY_ESC" }]
+  };
+  const before = JSON.stringify(config);
+  // Mittleres Paar löschen: PAIR_1 wird leer, PAIR_2 rückt auf PAIR_1, PAIR_0 bleibt
+  const mid = JSON.parse(JSON.stringify(api.removeKeyPairAt(config, 1)));
+  assert.deepStrictEqual(mid.keyPairs, [p("KEY_A", "KEY_B"), p("KEY_LEFT_ALT", "KEY_L")]);
+  assert.deepStrictEqual(mid.layers[0][0][0], { label: "x", tap: "PAIR_0", hold: "NONE", dtap: "PAIR_1" });
+  assert.deepStrictEqual(mid.layers[0][0][1], { label: "y", tap: "KEY_A", hold: "NONE", dtap: "NONE" });
+  assert.deepStrictEqual(mid.layers[1][0], ["PAIR_1", null]);
+  assert.deepStrictEqual(mid.combos.map(c => c.action), ["NONE", "PAIR_1", "KEY_ESC"]);
+  assert.strictEqual(JSON.stringify(config), before); // Eingabe unverändert (Revert nutzt den alten Stand)
+  // Erstes Paar löschen: alle Verweise rücken auf
+  const first = JSON.parse(JSON.stringify(api.removeKeyPairAt(config, 0)));
+  assert.deepStrictEqual(first.layers[0][0][0], { label: "x", tap: "NONE", hold: "PAIR_0", dtap: "PAIR_1" });
+  // Letztes Paar löschen: nur dessen Verweise werden leer
+  const last = JSON.parse(JSON.stringify(api.removeKeyPairAt(config, 2)));
+  assert.deepStrictEqual(last.layers[0][0][0], { label: "x", tap: "PAIR_0", hold: "PAIR_1", dtap: "NONE" });
+  assert.deepStrictEqual(last.combos.map(c => c.action), ["PAIR_1", "NONE", "KEY_ESC"]);
+  // Ungültiger Index
+  assert.strictEqual(api.removeKeyPairAt(config, 3), null);
+  assert.strictEqual(api.removeKeyPairAt(config, -1), null);
+  assert.strictEqual(api.removeKeyPairAt({ layers: [] }, 0), null);
+});
+
+test("Suchfeld: Teilstring ohne Groß-/Kleinschreibung", () => {
+  assert.ok(api.keycodeOptionMatches(": Doppelpunkt (Shift + .)", "doppel"));
+  assert.ok(api.keycodeOptionMatches(": Doppelpunkt (Shift + .)", "DOPPEL"));
+  assert.ok(api.keycodeOptionMatches(": Doppelpunkt (Shift + .)", " : "));
+  assert.ok(!api.keycodeOptionMatches("A (KEY_A)", "zz"));
+  assert.ok(api.keycodeOptionMatches("A (KEY_A)", ""));
+  assert.ok(api.keycodeOptionMatches("A (KEY_A)", undefined));
+  assert.ok(!api.keycodeOptionMatches(undefined, "a"));
 });
 
 console.log(`\n${passed} app.js-Tests bestanden.`);

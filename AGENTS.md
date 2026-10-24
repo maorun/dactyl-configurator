@@ -327,5 +327,5 @@ python3 server.py
      - Base MAC: `2E:BC:BB:81:61:B0`
      - Wi-Fi STA MAC: `2E:BC:BB:81:61:B0`
      - Fixed ESP-NOW Target Peer: `2E:BC:BB:81:61:A6` (Kanal 1, unverschlüsselt für <2 ms Airtime).
-   - **Split Payload:** 4-Byte Struct `SplitKeyEvent { uint8_t row; uint8_t col; bool pressed; uint8_t flags; }`.
-   - **Master Merging:** Der rechte Master empfängt das Event im `onDataRecv`-Callback, mappt `col` auf den linken Bereich (Spalten 0..6 Links) und führt es synchron mit den lokalen Zeilen-/Spaltenereignissen in die gemeinsame Tastatur-State-Machine und den BLE HID Stream ein.
+   - **Split Payload:** 4-Byte Struct `SplitHidEvent { uint8_t op; int8_t arg; uint16_t code; }` mit einer fertig aufgelösten HID-Operation. Die linke Hälfte löst Layer, Tap-Hold und Combos selbst auf; sie sendet keine Matrix-Positionen.
+   - **Master Merging:** Der rechte Master prüft das Paket im Wi-Fi-Callback (`parseSplitHidPacket`), legt es in den Empfangsring und führt es in `loop()` über `splitProcessRx` auf seiner BLE-HID-Verbindung aus. `SplitArbitratedKeyboard` verfolgt, welche Hälfte welche Eingabe hält. Details: „Split HID protocol" unter „Left Half Firmware".

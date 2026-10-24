@@ -527,6 +527,19 @@ class TestServerAndCodegen(unittest.TestCase):
             finally:
                 server.CONFIG_FILE, server.INO_FILE, server.LEFT_CONFIG_FILE, server.LEFT_INO_FILE = old
 
+    def test_build_app_script_copies_main_js_and_resigns(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
+            pkg = json.load(f)
+        self.assertEqual(pkg["main"], "main.js")
+        self.assertEqual(pkg["scripts"]["build:app"], "bash scripts/build-app.sh")
+        with open(os.path.join(root, "scripts", "build-app.sh"), encoding="utf-8") as f:
+            script = f.read()
+        self.assertIn("set -euo pipefail", script)
+        self.assertIn('cp "$REPO_DIR/main.js" "$REPO_DIR/package.json" "$APP_DIR/"', script)
+        self.assertIn('codesign --force --deep --sign - "$APP"', script)
+        self.assertIn("pgrep", script)  # baut nicht in eine laufende App
+
     def test_left_user_config_is_not_versioned(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         with open(os.path.join(root, ".gitignore"), encoding="utf-8") as f:

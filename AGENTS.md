@@ -253,6 +253,13 @@ node --check app.js && node --check main.js && node --check js/side-profiles.js 
 xmllint --noout docs/lolin32_lite_wiring.svg
 ```
 
+### 3a. Rebuild the Desktop App
+```bash
+npm run build:app   # copies main.js + package.json into ~/Applications/Dactyl Configurator.app and re-signs it ad hoc
+```
+- The installed Electron bundle keeps its own copy of `main.js` (BLE/serial device selection, server start). Run `build:app` after every change to `main.js`; quit the app first (the script refuses while it runs). `DACTYL_APP=<path>` selects another bundle.
+- The web UI (`index.html`, `app.js`, `js/`) and `server.py` are not in the bundle; the app loads them from the main checkout at runtime. After a change to `server.py`, stop the running server process so the app starts the new one.
+
 ### 4. Run Local Server
 ```bash
 python3 server.py

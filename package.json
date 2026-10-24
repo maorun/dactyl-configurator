@@ -1,5 +1,8 @@
 {
   "name": "dactyl-configurator",
   "version": "1.0.0",
-  "main": "main.js"
+  "main": "main.js",
+  "scripts": {
+    "build:app": "bash scripts/build-app.sh"
+  }
 }

@@ -80,6 +80,8 @@ const uint8_t KEY_NUM_MINUS = 0xDE;
 const uint8_t KEY_NUM_PLUS = 0xDF;
 const uint8_t KEY_NUM_ENTER = 0xE0;
 const uint8_t KEY_NUM_PERIOD = 0xEB;
+// ISO-Taste zwischen linkem Shift und Z (HID 0x64; deutsches macOS: < und >)
+const uint8_t KEY_NON_US_BACKSLASH = 0xEC;
 
 // Consumer-Control-Report (Report ID 2): 16 Bit, Bitposition = Reihenfolge im Report-Descriptor
 typedef uint8_t MediaKeyReport[2];

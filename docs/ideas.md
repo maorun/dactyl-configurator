@@ -12,10 +12,10 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 - **Linke Hälfte:** eigene Firmware (Keymap, NVS, Config-BLE, Power Management) mit ESP-NOW zum Master; die App bearbeitet, synchronisiert und flasht beide Hälften.
 - **Flash-Port-Auswahl:** `server.py` flasht nur den Port, dessen Board sich per `DEVICE_INFO.side` als die gewählte Hälfte meldet.
 - **Deutsche Zeichen im Keycode-Picker:** Gruppe "Deutsche Zeichen (macOS)" mit Shift-Zeichen (`:`, `+`, `*`, `?` …) als Einzelcode und Option-Zeichen (`@`, `€`, `{` …) als automatisch angelegtes Tastenpaar; Suchfeld über jeder Aktions-Auswahl.
+- **Weitere deutsche Zeichen:** `<` (ISO-Taste `KEY_NON_US_BACKSLASH`, HID `0x64`), `>` (Tastenpaar Shift + ISO-Taste), `^`, `°`, `´` und `` ` `` in "Deutsche Zeichen (macOS)"; Zuordnung für den macOS-Tastaturtyp ISO.
 
 ## App (Configurator)
 
-- **Weitere deutsche Zeichen:** `<`, `>`, `^`, `°`, `´` und `` ` `` fehlen in "Deutsche Zeichen (macOS)", weil ihre ISO-/ANSI-Tastenzuordnung auf macOS noch nicht auf der Hardware geprüft ist (`<` braucht die ISO-Taste HID `0x64`, die die Firmware heute nicht sendet).
 - **Bildschirm-Tastatur als Picker:** Alternative zum `<select>` mit Suchfeld.
 - **Makro-Engine (App-Seite):** Editor für Tastenfolgen mit Verzögerung; braucht Firmware-Aktionscodes und NVS-Speicher.
 - **Profilverwaltung:** mehrere benannte Layouts lokal speichern und umschalten (heute nur ein `current_config.json` plus JSON-Export/Import).
@@ -48,6 +48,7 @@ Kleine Befunde aus dem Review der linken Hälfte, bewusst auf später verschoben
 - `app.js` `applySelectFilter`: das Suchfeld wählt still die erste sichtbare Option, wenn die gewählte ausgeblendet wird; nach dem Leeren bleibt diese Wahl. Folge: Tippen in das Suchfeld ändert Halte- oder Doppel-Tipp-Aktion. Korrektur: Auswahl nur bei expliziter Wahl ändern, beim Leeren die vorherige Wahl wiederherstellen.
 - `app.js` `applySelectFilter`: ohne Treffer bleibt eine ausgeblendete Option gewählt. Folge: "Änderung übernehmen" speichert eine unsichtbare Aktion. Korrektur: ohne Treffer den Übernehmen-Knopf sperren oder einen Hinweis zeigen.
 - `app.js` `applySelectFilter`: der Filter vergleicht auch das Präfix "Halten = " bzw. "2× Tippen = ". Folge: eine Suche nach "halten", "tippen" oder "=" trifft jede Option der Halte- und Doppel-Tipp-Auswahl. Korrektur: die Suche ohne das Präfix vergleichen.
+- `app.js:565` `findDefinitionByCode`: `punctRev` liefert für die Codes 96 und 61 die US-Labels `` ` `` und `=`, nicht `^` und `´`. Folge: eine Taste mit `^` oder `´` zeigt nach einem `GET_CONFIG`-Rückweg das US-Zeichen auf der Tastenkappe. Korrektur: die Labels dieser Codes über `deMacCharForCode` auf das deutsche Zeichen abbilden.
 - `app.js` `keycodeLabel`: das Paar-Mitglied `&` des Backslash-Paars heißt "/" (deutsches Zeichen). Folge: die Paarliste zeigt "Alt/Option (Links) + /", gesendet wird Alt + Shift + 7. Korrektur: Paar-Mitglieder als US-Taste beschriften oder den `hint` des Eintrags nutzen.
 - `app.js` Apply-Handler (`btnApplyKey`): ein wiederverwendetes Tastenpaar, das selbst noch vorgemerkt ist, löst trotzdem ein sofortiges `SET_KEY` aus. Folge: das Gerät kennt das Paar noch nicht, die Taste sendet bis zum nächsten Sync nichts. Korrektur: die Taste nur vormerken, wenn ein genutztes Paar noch nicht synchronisiert ist.
 - `app.js` `isKeyPairUsed`: die Prüfung ignoriert alte Zellen im String-Format (`"PAIR_2"` statt Objekt). Folge: `deleteKeyPair` fragt nicht nach, `removeKeyPairAt` leert diese Zellen trotzdem. Korrektur: String-Zellen gleich `PAIR_<idx>` in `isKeyPairUsed` erkennen.

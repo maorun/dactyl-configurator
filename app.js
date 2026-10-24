@@ -49,7 +49,8 @@ const KEYCODES = [
     { code: "KEY_PAGE_UP", label: "Bild ↑", char: "" },
     { code: "KEY_PAGE_DOWN", label: "Bild ↓", char: "" },
     { code: "KEY_HOME", label: "Pos 1", char: "" },
-    { code: "KEY_END", label: "Ende", char: "" }
+    { code: "KEY_END", label: "Ende", char: "" },
+    { code: "KEY_NON_US_BACKSLASH", label: "ISO-Taste (< >)", char: "<" }
   ]},
   { group: "Modifier Tasten", keys: [
     { code: "KEY_LEFT_CTRL", label: "Strg (Links)", char: "" },
@@ -306,6 +307,9 @@ const ACTION_TO_NUMERIC = {
   "KEY_NUM_SLASH": 0xDC, "KEY_NUM_ASTERISK": 0xDD, "KEY_NUM_MINUS": 0xDE,
   "KEY_NUM_PLUS": 0xDF, "KEY_NUM_ENTER": 0xE0, "KEY_NUM_PERIOD": 0xEB,
 
+  // ISO-Taste zwischen linkem Shift und Z (HID 0x64)
+  "KEY_NON_US_BACKSLASH": 0xEC,
+
   // Media Keys (0x120..0x126)
   "MEDIA_PLAY_PAUSE": 0x120,
   "MEDIA_MUTE": 0x121,
@@ -371,6 +375,13 @@ const DE_MAC_CHARS = [
   { char: "_", name: "Unterstrich", hint: "Shift + -", code: "?" },
   { char: ";", name: "Semikolon", hint: "Shift + ,", code: "<" },
   { char: ":", name: "Doppelpunkt", hint: "Shift + .", code: ">" },
+  // ISO-Tastaturtyp: HID 0x64 = < >, HID 0x35 (US-`) = ^ °. Bei ANSI vertauscht macOS beide Tasten.
+  { char: "<", name: "Kleiner als", hint: "ISO-Taste", code: "KEY_NON_US_BACKSLASH" },
+  { char: "^", name: "Zirkumflex (Tottaste, danach Leertaste)", hint: "Taste ^", code: "`" },
+  { char: "°", name: "Grad", hint: "Shift + ^", code: "~" },
+  { char: "´", name: "Akut (Tottaste, danach Leertaste)", hint: "Taste ´", code: "=" },
+  { char: "`", name: "Gravis (Tottaste, danach Leertaste)", hint: "Shift + ´", code: "+" },
+  { char: ">", name: "Größer als", hint: "Shift + ISO-Taste", pair: { first: "KEY_LEFT_SHIFT", second: "KEY_NON_US_BACKSLASH" } },
   { char: "@", name: "At-Zeichen", hint: "Alt + L", pair: { first: "KEY_LEFT_ALT", second: "KEY_L" } },
   { char: "€", name: "Euro", hint: "Alt + E", pair: { first: "KEY_LEFT_ALT", second: "KEY_E" } },
   { char: "[", name: "Eckige Klammer auf", hint: "Alt + 5", pair: { first: "KEY_LEFT_ALT", second: "KEY_5" } },
@@ -534,6 +545,7 @@ function findDefinitionByCode(numericCode) {
       if (key === "ACT_MAC_GLOBE" || key === "MAC_GLOBE") lbl = "Globe";
       else if (key === "LAYER_UP") lbl = "Layer ▲";
       else if (key === "LAYER_DOWN") lbl = "Layer ▼";
+      else if (key === "KEY_NON_US_BACKSLASH") lbl = "<";
       return { label: lbl, tap: key };
     }
   }

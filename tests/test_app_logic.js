@@ -454,8 +454,8 @@ const asciiFn = asciiHeader.slice(asciiStart, asciiHeader.indexOf("0x00;", ascii
 const firmwareAscii = new Set([...asciiFn.matchAll(/c == '(\\.|[^'])'/g)].map(m => m[1].length === 2 ? m[1][1] : m[1]));
 
 test("Deutsche Zeichen: Einzelcodes sind druckbare ASCII-Zeichen, die die Firmware sendet", () => {
-  const singles = api.DE_MAC_CHARS.filter(e => e.code);
-  assert.ok(singles.length >= 19);
+  const singles = api.DE_MAC_CHARS.filter(e => e.code && e.code.length === 1);
+  assert.ok(singles.length >= 23);
   for (const e of singles) {
     assert.strictEqual(e.code.length, 1, e.char);
     assert.ok(firmwareAscii.has(e.code), `${e.char}: ${e.code} fehlt in dactylAsciiToHid`);
@@ -471,11 +471,37 @@ test("Deutsche Zeichen: Einzelcodes sind druckbare ASCII-Zeichen, die die Firmwa
   assert.strictEqual(new Set(api.DE_MAC_CHARS.map(e => e.char)).size, api.DE_MAC_CHARS.length);
 });
 
+test("Deutsche Zeichen: < > ^ ° ´ ` mit ISO-Taste (HID 0x64) und Tottasten", () => {
+  const byChar = Object.fromEntries(api.DE_MAC_CHARS.map(e => [e.char, e]));
+  // ISO-Tastaturtyp: US-` = ^, US-~ = °; Taste neben ß: US-= = ´, US-+ = `
+  assert.deepStrictEqual({ "<": byChar["<"].code, "^": byChar["^"].code, "°": byChar["°"].code, "´": byChar["´"].code, "`": byChar["`"].code },
+                         { "<": "KEY_NON_US_BACKSLASH", "^": "`", "°": "~", "´": "=", "`": "+" });
+  assert.deepStrictEqual({ ...byChar[">"].pair }, { first: "KEY_LEFT_SHIFT", second: "KEY_NON_US_BACKSLASH" });
+  assert.ok(api.isKeyPairMember(byChar[">"].pair.second));
+  // Firmware-Konstante: 0xEC, press() sendet code - 136 = HID 0x64
+  const m = /const uint8_t KEY_NON_US_BACKSLASH = (0x[0-9A-F]+);/.exec(asciiHeader);
+  assert.ok(m, "KEY_NON_US_BACKSLASH fehlt in DactylKeycodes.h");
+  assert.strictEqual(api.actionCodeToNumeric("KEY_NON_US_BACKSLASH"), Number(m[1]));
+  assert.strictEqual(Number(m[1]) - 136, 0x64);
+  // GET_CONFIG-Rückweg und Labels
+  assert.deepStrictEqual({ ...api.findDefinitionByCode(0xEC) }, { label: "<", tap: "KEY_NON_US_BACKSLASH" });
+  assert.strictEqual(api.findDefinitionByCode(126).label, "°");
+  assert.strictEqual(api.findDefinitionByCode(43).label, "`");
+  assert.strictEqual(api.findDefinitionByCode(61).tap, "KEY_EQUAL"); // KEY_EQUAL bleibt eigener Eintrag
+  assert.strictEqual(api.deMacCharForCode("KEY_NON_US_BACKSLASH"), "<");
+  // Das >-Paar wird beim Übernehmen angelegt
+  const gt = api.charPairCode(api.DE_MAC_CHARS.indexOf(byChar[">"]));
+  const res = api.resolveCharPairActions({ tap: gt }, [{ first: "KEY_LEFT_SHIFT", second: "KEY_PERIOD" }]);
+  assert.strictEqual(res.actions.tap, "PAIR_1");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(res.added)), [{ first: "KEY_LEFT_SHIFT", second: "KEY_NON_US_BACKSLASH" }]);
+});
+
 test("Deutsche Zeichen: Label aus GET_CONFIG-Codes und für Tastenpaare", () => {
   assert.strictEqual(api.findDefinitionByCode(62).label, ":");
   assert.strictEqual(api.findDefinitionByCode(62).tap, ">");
   assert.strictEqual(api.findDefinitionByCode(93).label, "]"); // KEY_RIGHT_BRACKET bleibt eigener Eintrag
-  assert.strictEqual(api.findDefinitionByCode(126).label, "~"); // kein deutsches Zeichen
+  assert.strictEqual(api.findDefinitionByCode(124).label, "'"); // US-| = Apostroph
+  assert.strictEqual(api.findDefinitionByCode(123).label, "{"); // kein deutsches Zeichen
   assert.strictEqual(api.deMacCharForCode("&"), "/");
   assert.strictEqual(api.deMacCharForCode("KEY_A"), null);
 });

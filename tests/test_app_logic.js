@@ -810,4 +810,54 @@ test("Live-Monitor Split-Ansicht: jede Hälfte mit eigener Config, gemeinsame Co
   assert.strictEqual(api.resolveKeyForSide(empty, L, 0, ev("KeyJ")), null);
 });
 
+// Verdrahtung mit dem globalen Zustand: resolveKeysFromEvent und checkActiveCombos laufen in einem eigenen
+// Kontext mit ersetzten Werten für activeHandView, editSide, configFor und den Combo-Hinweis.
+function liveContext(handView, edited) {
+  const live = { alerts: [] };
+  vm.createContext(live);
+  vm.runInContext(`${code}
+${section("js/keyboard-hooks.js", "// Gehaltene MO_x-Ebene einer Hälfte", "// Löst einen Browser-Tastencode für eine Hälfte auf")}
+${section("js/keyboard-hooks.js", "// Alle Treffer eines Tastendrucks", "// Find key on Layer 0")}
+${section("js/live-monitor.js", "// Combos gelten je Hälfte", "function showComboAlert")}
+var activeHandView = ${JSON.stringify(handView)};
+var editSide = ${JSON.stringify(edited)};
+const activePressedKeys = new Set();
+const configs = { R: JSON.parse(JSON.stringify(SIDE_PROFILES.R.defaultConfig)),
+                  L: JSON.parse(JSON.stringify(SIDE_PROFILES.L.defaultConfig)) };
+function configFor(side) { return configs[side]; }
+function showComboAlert(combo) { alerts.push(combo.id); }
+function hideComboAlert() { alerts.push(null); }
+this.live = { resolveKeysFromEvent, checkActiveCombos, activePressedKeys, setView: v => { activeHandView = v; } };`, live);
+  return live;
+}
+
+test("Live-Monitor Split-Ansicht: Verdrahtung mit Ansicht, bearbeiteter Hälfte und Combos", () => {
+  const plain = o => JSON.parse(JSON.stringify(o));
+  const ev = code => ({ code, key: "", altKey: false });
+  const hits = (ctx, code) => plain(ctx.live.resolveKeysFromEvent(ev(code))).map(h => `${h.side}R${h.matched.r}C${h.matched.c}`);
+  // Split-Ansicht, rechts bearbeitet: Q (nur links) trifft links, Space trifft beide Hälften
+  const split = liveContext("both", "R");
+  assert.deepStrictEqual(hits(split, "KeyQ"), ["LR1C1"]);
+  assert.deepStrictEqual(hits(split, "Space"), ["RR5C3", "LR5C4"]);
+  // Einzelansicht: nur die bearbeitete Hälfte
+  assert.deepStrictEqual(hits(liveContext("right", "R"), "KeyQ"), []);
+  assert.deepStrictEqual(hits(liveContext("left", "L"), "KeyQ"), ["LR1C1"]);
+  assert.deepStrictEqual(hits(liveContext("left", "L"), "KeyJ"), []);
+  // Combo der rechten Hälfte (J + K) meldet sich in der Split-Ansicht auch bei bearbeiteter linker Hälfte
+  const combo = liveContext("both", "L");
+  combo.live.activePressedKeys.add("R_2_1");
+  combo.live.activePressedKeys.add("R_2_2");
+  combo.live.checkActiveCombos();
+  assert.strictEqual(combo.alerts.at(-1), "combo-1");
+  // Wechsel in die linke Einzelansicht: der rechte Combo-Hinweis erlischt
+  combo.live.setView("left");
+  combo.live.checkActiveCombos();
+  assert.strictEqual(combo.alerts.at(-1), null);
+});
+
+test("Ansichtswechsel prüft den Combo-Hinweis neu", () => {
+  const handler = section("js/editor.js", "// Hand Switcher Buttons", "// Apply Layout Preset Button");
+  assert.ok(/checkActiveCombos\(\)/.test(handler));
+});
+
 console.log(`\n${passed} App-Logik-Tests bestanden.`);

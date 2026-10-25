@@ -3,37 +3,6 @@
 // =============================================================================
 // Standard-Config, Grenzen, Validierung, Normalisierung, Matrix-Test und Tipp-Statistik.
 
-// Standard-Konfiguration
-const DEFAULT_CONFIG = {
-  settings: {
-    deviceName: "Dactyl Keyboard",
-    debounceMs: 5,
-    comboTimeoutMs: 40
-  },
-  layerNames: [...DEFAULT_LAYER_NAMES],
-  layers: PRESETS.de_qwertz.layers,
-  combos: [
-    {
-      id: "combo-1",
-      name: "J + K -> Escape",
-      key1: { r: 2, c: 1, label: "J" },
-      key2: { r: 2, c: 2, label: "K" },
-      behavior: "KEY_PRESS",
-      action: "KEY_ESC",
-      actionLabel: "Escape"
-    },
-    {
-      id: "combo-2",
-      name: "J + L -> Ctrl (Modifier Hold)",
-      key1: { r: 2, c: 1, label: "J" },
-      key2: { r: 2, c: 3, label: "L" },
-      behavior: "MODIFIER_HOLD",
-      action: "KEY_LEFT_CTRL",
-      actionLabel: "Strg / Control"
-    }
-  ]
-};
-
 // Matrix- und Firmware-Grenzen (identisch zu dactyl_right.ino / server.py)
 const NUM_LAYERS = 8;
 const NUM_ROWS = 6;

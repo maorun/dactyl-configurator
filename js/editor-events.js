@@ -219,7 +219,7 @@ function setupEventListeners() {
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentConfig, null, 2));
     const dlAnchorElem = document.createElement("a");
     dlAnchorElem.setAttribute("href", dataStr);
-    dlAnchorElem.setAttribute("download", `dactyl_config_${editSide === "L" ? "left_" : ""}${new Date().toISOString().slice(0, 10)}.json`);
+    dlAnchorElem.setAttribute("download", `dactyl_config_${activeProfile().exportPrefix}${new Date().toISOString().slice(0, 10)}.json`);
     dlAnchorElem.click();
   });
 

@@ -156,6 +156,8 @@ function initUI() {
       const viewSide = Dactyl.sideFromHandView(activeHandView);
       if (viewSide) switchEditSide(viewSide);
       else renderMatrix();
+      // Combo-Hinweis gilt für die Hälften der Ansicht; ein Combo der ausgeblendeten Hälfte erlischt
+      checkActiveCombos();
       showToast(`Ansicht: ${btn.textContent}`);
     });
   });

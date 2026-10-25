@@ -22,7 +22,8 @@ const code = [
       "js/config-model.js"].map(read),
   section("js/editor.js", "// Alte Configs speichern Modifier-Halte-Aktionen", "function appendOptionGroup"),
   section("js/editor.js", "// Sichtbarkeit der Optionen bei einer Suche", "// Auswahl-IDs, deren Suche"),
-  section("js/keyboard-hooks.js", "const ACTION_CODE_TO_EVENT_CODES", "function getHeldKeyboardLayer")
+  section("js/keyboard-hooks.js", "const ACTION_CODE_TO_EVENT_CODES", "// Gehaltene MO_x-Ebene einer Hälfte"),
+  section("js/keyboard-hooks.js", "// Löst einen Browser-Tastencode für eine Hälfte auf", "// Alle Treffer eines Tastendrucks")
 ].join("\n");
 
 const ctx = {};
@@ -42,7 +43,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              removeKeyPairAt, KEYCODES, UMLAUT_LABELS, holdSublabel,
              planKeyPairDeletion, hasPendingPairChange, keyNeedsStagedPairs,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
-             ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode };`, ctx);
+             ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides };`, ctx);
 const api = ctx.api;
 const R = api.SIDE_PROFILES.R;
 const L = api.SIDE_PROFILES.L;
@@ -779,6 +780,84 @@ test("Live-Monitor: US-Beschriftungen und Umlaut-Zuordnung", () => {
   // Mit Alt, aber ohne passende Umlaut-Taste: normale Taste
   assert.strictEqual(api.findKeyForEventCode([[key("KEY_U", "U")]], "KeyU", true).key.label, "U");
   assert.strictEqual(api.findKeyForEventCode(layer, "KeyQ", false), null);
+});
+
+test("Live-Monitor Split-Ansicht: jede Hälfte mit eigener Config, gemeinsame Codes auf beiden", () => {
+  const plain = o => JSON.parse(JSON.stringify(o));
+  // Split-Ansicht prüft beide Hälften, die Einzelansicht nur die bearbeitete
+  assert.deepStrictEqual(plain(api.browserKeySides("both", "R", ["R", "L"])), ["R", "L"]);
+  assert.deepStrictEqual(plain(api.browserKeySides("left", "L", ["R", "L"])), ["L"]);
+  assert.deepStrictEqual(plain(api.browserKeySides("right", "R", ["R", "L"])), ["R"]);
+  const left = { layers: L.defaultConfig.layers };
+  const right = { layers: R.defaultConfig.layers };
+  const ev = (code, altKey = false) => ({ code, key: "", altKey });
+  // Q liegt nur links, J nur rechts: jede Hälfte findet nur ihre eigene Taste
+  assert.deepStrictEqual(plain(api.resolveKeyForSide(left, L, 0, ev("KeyQ"))), { r: 1, c: 1, label: "Q", layer: 0 });
+  assert.strictEqual(api.resolveKeyForSide(right, R, 0, ev("KeyQ")), null);
+  assert.strictEqual(api.resolveKeyForSide(left, L, 0, ev("KeyJ")), null);
+  assert.deepStrictEqual(plain(api.resolveKeyForSide(right, R, 0, ev("KeyJ"))), { r: 2, c: 1, label: "J", layer: 0 });
+  // Space liegt auf beiden Hälften: beide liefern einen Treffer an ihrer eigenen Position
+  const spaceL = api.resolveKeyForSide(left, L, 0, ev("Space"));
+  const spaceR = api.resolveKeyForSide(right, R, 0, ev("Space"));
+  assert.deepStrictEqual([spaceL.r, spaceL.c], [5, 4]);
+  assert.deepStrictEqual([spaceR.r, spaceR.c], [5, 3]);
+  // Gehaltene Ebene der Hälfte: Treffer auf Ebene 1, sonst Rückfall auf Ebene 0
+  assert.deepStrictEqual(plain(api.resolveKeyForSide(left, L, 1, ev("F1"))), null);
+  assert.strictEqual(api.resolveKeyForSide(left, L, 1, ev("KeyQ")).layer, 0);
+  // Scancode-Tabelle nur im rechten Profil: leere rechte Ebene fällt auf die Tabelle zurück, links nicht
+  const empty = { layers: [Array.from({ length: 6 }, () => Array.from({ length: 7 }, () => ({ tap: "NONE" })))] };
+  assert.deepStrictEqual(plain(api.resolveKeyForSide(empty, R, 0, ev("KeyJ"))), { r: 2, c: 1, label: "J", layer: 0 });
+  assert.strictEqual(api.resolveKeyForSide(empty, L, 0, ev("KeyJ")), null);
+});
+
+// Verdrahtung mit dem globalen Zustand: resolveKeysFromEvent und checkActiveCombos laufen in einem eigenen
+// Kontext mit ersetzten Werten für activeHandView, editSide, configFor und den Combo-Hinweis.
+function liveContext(handView, edited) {
+  const live = { alerts: [] };
+  vm.createContext(live);
+  vm.runInContext(`${code}
+${section("js/keyboard-hooks.js", "// Gehaltene MO_x-Ebene einer Hälfte", "// Löst einen Browser-Tastencode für eine Hälfte auf")}
+${section("js/keyboard-hooks.js", "// Alle Treffer eines Tastendrucks", "// Find key on Layer 0")}
+${section("js/live-monitor.js", "// Combos gelten je Hälfte", "function showComboAlert")}
+var activeHandView = ${JSON.stringify(handView)};
+var editSide = ${JSON.stringify(edited)};
+const activePressedKeys = new Set();
+const configs = { R: JSON.parse(JSON.stringify(SIDE_PROFILES.R.defaultConfig)),
+                  L: JSON.parse(JSON.stringify(SIDE_PROFILES.L.defaultConfig)) };
+function configFor(side) { return configs[side]; }
+function showComboAlert(combo) { alerts.push(combo.id); }
+function hideComboAlert() { alerts.push(null); }
+this.live = { resolveKeysFromEvent, checkActiveCombos, activePressedKeys, setView: v => { activeHandView = v; } };`, live);
+  return live;
+}
+
+test("Live-Monitor Split-Ansicht: Verdrahtung mit Ansicht, bearbeiteter Hälfte und Combos", () => {
+  const plain = o => JSON.parse(JSON.stringify(o));
+  const ev = code => ({ code, key: "", altKey: false });
+  const hits = (ctx, code) => plain(ctx.live.resolveKeysFromEvent(ev(code))).map(h => `${h.side}R${h.matched.r}C${h.matched.c}`);
+  // Split-Ansicht, rechts bearbeitet: Q (nur links) trifft links, Space trifft beide Hälften
+  const split = liveContext("both", "R");
+  assert.deepStrictEqual(hits(split, "KeyQ"), ["LR1C1"]);
+  assert.deepStrictEqual(hits(split, "Space"), ["RR5C3", "LR5C4"]);
+  // Einzelansicht: nur die bearbeitete Hälfte
+  assert.deepStrictEqual(hits(liveContext("right", "R"), "KeyQ"), []);
+  assert.deepStrictEqual(hits(liveContext("left", "L"), "KeyQ"), ["LR1C1"]);
+  assert.deepStrictEqual(hits(liveContext("left", "L"), "KeyJ"), []);
+  // Combo der rechten Hälfte (J + K) meldet sich in der Split-Ansicht auch bei bearbeiteter linker Hälfte
+  const combo = liveContext("both", "L");
+  combo.live.activePressedKeys.add("R_2_1");
+  combo.live.activePressedKeys.add("R_2_2");
+  combo.live.checkActiveCombos();
+  assert.strictEqual(combo.alerts.at(-1), "combo-1");
+  // Wechsel in die linke Einzelansicht: der rechte Combo-Hinweis erlischt
+  combo.live.setView("left");
+  combo.live.checkActiveCombos();
+  assert.strictEqual(combo.alerts.at(-1), null);
+});
+
+test("Ansichtswechsel prüft den Combo-Hinweis neu", () => {
+  const handler = section("js/editor.js", "// Hand Switcher Buttons", "// Apply Layout Preset Button");
+  assert.ok(/checkActiveCombos\(\)/.test(handler));
 });
 
 console.log(`\n${passed} App-Logik-Tests bestanden.`);

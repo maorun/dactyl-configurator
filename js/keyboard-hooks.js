@@ -70,12 +70,13 @@ function findKeyForEventCode(layer, eventCode, altKey) {
   return null;
 }
 
-function getHeldKeyboardLayer() {
-  const base = currentConfig.layers[0];
+// Gehaltene MO_x-Ebene einer Hälfte (aus ihren gedrückten Tasten auf Ebene 0); 0 = keine
+function getHeldKeyboardLayer(side = editSide) {
+  const base = configFor(side).layers[0];
   if (!base) return 0;
   for (let r = 0; r < 6; r++) {
     for (let c = 0; c < 7; c++) {
-      if (activePressedKeys.has(`${editSide}_${r}_${c}`)) {
+      if (activePressedKeys.has(`${side}_${r}_${c}`)) {
         const k = base[r] && base[r][c];
         if (k && k.tap && k.tap.startsWith("MO_")) {
           const l = parseInt(k.tap.replace("MO_", ""), 10);
@@ -91,24 +92,25 @@ function getHeldKeyboardLayer() {
   return 0;
 }
 
-function resolveKeyFromEvent(e) {
-  // 1. Physische Tastatur-Ebene ermitteln (0 oder gehaltene MO_x Ebene)
-  const kbLayerIdx = getHeldKeyboardLayer();
-  const kbLayer = currentConfig.layers[kbLayerIdx] || currentConfig.layers[0];
+// Löst einen Browser-Tastencode für eine Hälfte auf: Config der Hälfte, ihre gehaltene Ebene (heldLayer)
+// und ihre Scancode-Tabelle. Reine Funktion; liefert { r, c, label, layer } oder null.
+function resolveKeyForSide(config, profile, heldLayer, e) {
+  const kbLayer = config.layers[heldLayer] || config.layers[0];
 
+  // 1. Gehaltene Ebene (oder Ebene 0)
   if (kbLayer) {
     const hit = findKeyForEventCode(kbLayer, e.code, e.altKey);
-    if (hit) return { r: hit.r, c: hit.c, label: hit.key.label || e.key, layer: kbLayerIdx };
+    if (hit) return { r: hit.r, c: hit.c, label: hit.key.label || e.key, layer: heldLayer };
   }
 
   // 2. Falls ein Layer gehalten war aber die Taste nicht belegt ist: Fallback auf Base Layer (Layer 0)
-  if (kbLayerIdx !== 0) {
-    const hit = findKeyForEventCode(currentConfig.layers[0], e.code, e.altKey);
+  if (heldLayer !== 0) {
+    const hit = findKeyForEventCode(config.layers[0], e.code, e.altKey);
     if (hit) return { r: hit.r, c: hit.c, label: hit.key.label || e.key, layer: 0 };
   }
 
   // 3. Fallback auf die physische Scancode-Tabelle des Profils (nur mit Tabelle, immer Layer 0)
-  const scancodeMap = activeProfile().scancodeMap;
+  const scancodeMap = profile.scancodeMap;
   if (scancodeMap && scancodeMap[e.code]) {
     return { ...scancodeMap[e.code], layer: 0 };
   }
@@ -116,10 +118,27 @@ function resolveKeyFromEvent(e) {
   return null;
 }
 
+// Hälften, die ein Browser-Tastendruck treffen kann. macOS sieht beide Hälften als eine Tastatur, und der
+// Code sagt nicht, welche Hälfte gedrückt wurde. Die Split-Ansicht prüft deshalb jede Hälfte, die
+// Einzelansicht nur die bearbeitete. Ein Code auf beiden Hälften leuchtet auf beiden auf.
+function browserKeySides(handView, editedSide, sideIds) {
+  return handView === "both" ? [...sideIds] : [editedSide];
+}
+
+// Alle Treffer eines Tastendrucks als [{ side, matched }]
+function resolveKeysFromEvent(e) {
+  const hits = [];
+  for (const side of browserKeySides(activeHandView, editSide, Dactyl.SIDE_IDS)) {
+    const matched = resolveKeyForSide(configFor(side), SIDE_PROFILES[side], getHeldKeyboardLayer(side), e);
+    if (matched) hits.push({ side, matched });
+  }
+  return hits;
+}
+
 // Find key on Layer 0 that triggers targetLayer (MO_1..7)
-function findLayerTriggerKey(targetLayer) {
+function findLayerTriggerKey(targetLayer, side = editSide) {
   if (!targetLayer || targetLayer <= 0) return null;
-  const base = currentConfig.layers[0];
+  const base = configFor(side).layers[0];
   if (!base) return null;
   const moCode = `MO_${targetLayer}`;
   const tgCode = `TG_${targetLayer}`;
@@ -134,8 +153,8 @@ function findLayerTriggerKey(targetLayer) {
   return null;
 }
 
-// Beim keydown aufgelöste Taste je event.code, damit keyup dieselbe Taste loslässt
-// (auch wenn sich die gehaltene Ebene zwischenzeitlich geändert hat)
+// Beim keydown aufgelöste Tasten je event.code (eine pro getroffener Hälfte), damit keyup dieselben Tasten
+// loslässt (auch wenn sich die gehaltene Ebene oder die Ansicht zwischenzeitlich geändert hat)
 const browserHeldKeys = new Map();
 
 function isEditableTarget(target) {
@@ -149,10 +168,10 @@ function setupBrowserKeyboardHooks() {
     const held = browserHeldKeys.get(code);
     if (!held) return;
     browserHeldKeys.delete(code);
-    if (held.trigger) {
-      triggerVisualKeyRelease(held.trigger.r, held.trigger.c, held.side);
+    for (const { side, matched, trigger } of held) {
+      if (trigger) triggerVisualKeyRelease(trigger.r, trigger.c, side);
+      triggerVisualKeyRelease(matched.r, matched.c, side);
     }
-    triggerVisualKeyRelease(held.matched.r, held.matched.c, held.side);
   };
 
   window.addEventListener("keydown", (e) => {
@@ -162,19 +181,20 @@ function setupBrowserKeyboardHooks() {
     // Veralteter Eintrag ohne keyup (z. B. nach Cmd-Kombination): erst freigeben, dann neu drücken
     if (browserHeldKeys.has(e.code)) releaseHeld(e.code);
 
-    const matched = resolveKeyFromEvent(e);
-    if (matched) {
+    const held = [];
+    for (const { side, matched } of resolveKeysFromEvent(e)) {
       let trigger = null;
       // If key is on another layer, also highlight the MO key on layer 0!
       if (matched.layer !== undefined && matched.layer > 0) {
-        trigger = findLayerTriggerKey(matched.layer);
+        trigger = findLayerTriggerKey(matched.layer, side);
         if (trigger) {
-          triggerVisualKeyPress(trigger.r, trigger.c, trigger.label, editSide, 0);
+          triggerVisualKeyPress(trigger.r, trigger.c, trigger.label, side, 0);
         }
       }
-      browserHeldKeys.set(e.code, { matched, trigger, side: editSide });
-      triggerVisualKeyPress(matched.r, matched.c, matched.label, editSide, matched.layer);
+      held.push({ side, matched, trigger });
+      triggerVisualKeyPress(matched.r, matched.c, matched.label, side, matched.layer);
     }
+    if (held.length) browserHeldKeys.set(e.code, held);
   });
 
   window.addEventListener("keyup", (e) => {

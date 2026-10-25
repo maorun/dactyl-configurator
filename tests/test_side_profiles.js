@@ -1,4 +1,5 @@
-// Unit-Tests für js/side-profiles.js und js/side-state.js: Profile gegen die Firmware-Quellen prüfen.
+// Unit-Tests für js/side-profiles.js, js/side-right.js, js/side-left.js und js/side-state.js:
+// Profile gegen die Firmware-Quellen prüfen.
 // Ausführen: node tests/test_side_profiles.js
 const assert = require("assert");
 const fs = require("fs");
@@ -11,6 +12,8 @@ const read = rel => fs.readFileSync(path.join(root, rel), "utf8");
 const ctx = {};
 vm.createContext(ctx);
 vm.runInContext(read("js/side-profiles.js"), ctx);
+vm.runInContext(read("js/side-right.js"), ctx);
+vm.runInContext(read("js/side-left.js"), ctx);
 vm.runInContext(read("js/side-state.js"), ctx);
 vm.runInContext(read("js/side-routing.js"), ctx);
 const D = ctx.Dactyl;
@@ -218,9 +221,43 @@ test("Fehlende Tasten: gleiche Zellregeln wie cell_actions in server.py", () => 
   assert.ok(read("tests/test_server.py").includes("test_absent_key_cell_rules_match_app"));
 });
 
-test("Layout-Presets nur für die rechte Hand", () => {
-  assert.strictEqual(R.presets, true);
-  assert.strictEqual(L.presets, false);
+test("Layout-Presets und Scancode-Tabelle nur im rechten Profil", () => {
+  assert.deepStrictEqual(Object.keys(R.presets), ["de_qwertz", "us_qwerty"]);
+  assert.strictEqual(L.presets, null);
+  assert.strictEqual(R.scancodeMap.KeyJ.r, 2);
+  assert.strictEqual(L.scancodeMap, null);
+  // Die Preset-Auswahl in index.html bietet genau die Presets des Profils an
+  const options = [...read("index.html").matchAll(/<option value="([^"]+)">/g)].map(m => m[1])
+    .filter(v => v in R.presets || v === "us_qwerty" || v === "de_qwertz");
+  assert.deepStrictEqual(options, Object.keys(R.presets));
+});
+
+test("Profile: Registrierung, Master, Ansicht und Export pro Hälfte", () => {
+  assert.deepStrictEqual([...D.SIDE_IDS], ["R", "L"]);
+  assert.strictEqual(D.getMasterSide(), "R");
+  assert.strictEqual(R.master, true);
+  assert.ok(!L.master);
+  assert.deepStrictEqual([...D.sidesInDisplayOrder()], ["L", "R"]);
+  assert.strictEqual(D.sideFromHandView("right"), "R");
+  assert.strictEqual(D.sideFromHandView("left"), "L");
+  assert.strictEqual(D.sideFromHandView("both"), null);
+  // Knöpfe data-hand in index.html passen zu den Profilen
+  const views = [...read("index.html").matchAll(/data-hand="([a-z]+)"/g)].map(m => m[1]);
+  assert.deepStrictEqual(views.filter(v => v !== "both"), [R.handView, L.handView]);
+  assert.deepStrictEqual([R.cssClass, L.cssClass], ["right-half", "left-half"]);
+  assert.ok(read("style.css").includes(".right-half") && read("style.css").includes(".left-half"));
+  assert.deepStrictEqual([R.exportPrefix, L.exportPrefix], ["", "left_"]);
+  // Doppelte Hälfte und zweiter Master werden abgelehnt
+  assert.throws(() => D.registerSideProfile({ id: "R" }), /doppeltes/);
+  assert.throws(() => D.registerSideProfile({ id: "X", master: true }), /Master/);
+  assert.ok(!D.SIDE_IDS.includes("X"));
+});
+
+test("Rechte Standard-Config: Preset Deutsch QWERTZ, zwei Combos, Name des Profils", () => {
+  assert.strictEqual(R.defaultConfig.layers, R.presets.de_qwertz.layers);
+  assert.deepStrictEqual([...R.defaultConfig.combos.map(c => c.id)], ["combo-1", "combo-2"]);
+  assert.strictEqual(R.defaultConfig.settings.deviceName, R.deviceName);
+  assert.strictEqual(L.defaultConfig.settings.deviceName, L.deviceName);
 });
 
 test("Zustand pro Hälfte: getrennte Configs und Änderungen, nur bekannte Felder", () => {

@@ -2,65 +2,6 @@
 // Direct Bluetooth Keyboard Hooks (macOS HID Keydown / Keyup in Browser)
 // =============================================================================
 
-// Precise physical scancode mapping for the Right Hand
-const SCANCODE_MAP_RIGHT = {
-  // Row 0: Zahlenreihe (6 Tasten: Col 0..5)
-  "Digit6": { r: 0, c: 0, label: "6" },
-  "Digit7": { r: 0, c: 1, label: "7" },
-  "Digit8": { r: 0, c: 2, label: "8" },
-  "Digit9": { r: 0, c: 3, label: "9" },
-  "Digit0": { r: 0, c: 4, label: "0" },
-  "Minus":  { r: 0, c: 5, label: "-" },
-
-  // Row 1: QWERTY / QWERTZ (6 Tasten: Col 0..5)
-  "KeyZ": { r: 1, c: 0, label: "Z" },
-  "KeyY": { r: 1, c: 0, label: "Y" },
-  "KeyU": { r: 1, c: 1, label: "U" },
-  "KeyI": { r: 1, c: 2, label: "I" },
-  "KeyO": { r: 1, c: 3, label: "O" },
-  "KeyP": { r: 1, c: 4, label: "P" },
-  "BracketLeft":  { r: 1, c: 5, label: "[" },
-
-  // Row 2: Home Row (Col 0..5 Finger, Col 6 ist Daumentaste R2C6)
-  "KeyH": { r: 2, c: 0, label: "H" },
-  "KeyJ": { r: 2, c: 1, label: "J" },
-  "KeyK": { r: 2, c: 2, label: "K" },
-  "KeyL": { r: 2, c: 3, label: "L" },
-  "Semicolon": { r: 2, c: 4, label: ";" },
-  "Quote":     { r: 2, c: 5, label: "'" },
-
-  // Row 3: Bottom Row (6 Tasten: Col 0..5)
-  "KeyN": { r: 3, c: 0, label: "N" },
-  "KeyM": { r: 3, c: 1, label: "M" },
-  "Comma":  { r: 3, c: 2, label: "," },
-  "Period": { r: 3, c: 3, label: "." },
-  "Slash":  { r: 3, c: 4, label: "/" },
-  "ShiftRight": { r: 3, c: 5, label: "Shift" },
-
-  // Row 4: Navigation / Mods (R4C0 existiert nicht, Tasten sind Col 1..5)
-  "ArrowLeft":  { r: 4, c: 1, label: "←" },
-  "ArrowDown":  { r: 4, c: 2, label: "↓" },
-  "ArrowUp":    { r: 4, c: 3, label: "↑" },
-  "ArrowRight": { r: 4, c: 4, label: "→" },
-  "AltRight":   { r: 4, c: 5, label: "Alt" },
-
-  // Daumen-Cluster (Alle an Lila / Row 5):
-  // R5C0: Oben mitte (über R5C3)
-  "MetaRight":  { r: 5, c: 0, label: "Cmd" },
-  "MetaLeft":   { r: 5, c: 0, label: "Cmd" },
-  // R5C1: Ganz oben links (Rot + Lila)
-  "AltLeft":    { r: 5, c: 1, label: "Alt (Rot)" },
-  // R5C6: Mitte links (Gelb + Lila)
-  "Escape":     { r: 5, c: 6, label: "Esc (Gelb)" },
-  // R5C4: Daumentaste Unten links
-  "Tab":        { r: 5, c: 4, label: "Tab" },
-  // R5C3: 2U Daumentaste Mitte
-  "Space":      { r: 5, c: 3, label: "Space (2U)" },
-  // R5C2: 2U Daumentaste Rechts
-  "Enter":      { r: 5, c: 2, label: "Enter (2U)" },
-  "NumpadEnter": { r: 5, c: 2, label: "Enter (2U)" }
-};
-
 const ACTION_CODE_TO_EVENT_CODES = {
   "KEY_A": ["KeyA"], "KEY_B": ["KeyB"], "KEY_C": ["KeyC"], "KEY_D": ["KeyD"],
   "KEY_E": ["KeyE"], "KEY_F": ["KeyF"], "KEY_G": ["KeyG"], "KEY_H": ["KeyH"],
@@ -166,9 +107,10 @@ function resolveKeyFromEvent(e) {
     if (hit) return { r: hit.r, c: hit.c, label: hit.key.label || e.key, layer: 0 };
   }
 
-  // 3. Fallback auf physische Scancode-Tabelle (nur rechte Hand, immer Layer 0)
-  if (editSide === "R" && SCANCODE_MAP_RIGHT[e.code]) {
-    return { ...SCANCODE_MAP_RIGHT[e.code], layer: 0 };
+  // 3. Fallback auf die physische Scancode-Tabelle des Profils (nur mit Tabelle, immer Layer 0)
+  const scancodeMap = activeProfile().scancodeMap;
+  if (scancodeMap && scancodeMap[e.code]) {
+    return { ...scancodeMap[e.code], layer: 0 };
   }
 
   return null;

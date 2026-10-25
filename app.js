@@ -8,14 +8,14 @@
 // State
 // Bearbeitete Hälfte ("R" oder "L"). currentConfig und pendingChanges gehören immer zu dieser Hälfte;
 // der Zustand der anderen Hälfte liegt in sideStore (js/side-state.js).
-let editSide = "R";
+let editSide = Dactyl.getMasterSide();
 function activeProfile() {
   return SIDE_PROFILES[editSide];
 }
 
 function defaultConfigFor(side) {
   const profile = SIDE_PROFILES[side];
-  return normalizeConfig(JSON.parse(JSON.stringify(profile.defaultConfig || DEFAULT_CONFIG)), profile);
+  return normalizeConfig(JSON.parse(JSON.stringify(profile.defaultConfig)), profile);
 }
 
 const sideStore = Dactyl.createSideStore(Dactyl.SIDE_IDS, side => ({
@@ -53,7 +53,7 @@ function matrixTestFor(side) {
 }
 
 let activeLayerIndex = 0;
-let activeHandView = "right"; // "right", "left", "both"
+let activeHandView = SIDE_PROFILES[editSide].handView; // handView eines Profils oder "both"
 let thumbClusterFormat = "2x3"; // "2x3" or "3x2"
 let selectedKey = null; // { r, c, side, isThumb }
 let serialPort = null;

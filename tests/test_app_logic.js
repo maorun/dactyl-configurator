@@ -18,10 +18,11 @@ function section(file, startMarker, endMarker) {
 
 // Reihenfolge wie im Browser (index.html); keycodes.js und config-model.js sind ganz DOM-frei
 const code = [
-  ...["js/side-profiles.js", "js/side-state.js", "js/keycodes.js", "js/config-model.js"].map(read),
+  ...["js/side-profiles.js", "js/side-right.js", "js/side-left.js", "js/side-state.js", "js/keycodes.js",
+      "js/config-model.js"].map(read),
   section("js/editor.js", "// Alte Configs speichern Modifier-Halte-Aktionen", "function appendOptionGroup"),
   section("js/editor.js", "// Sichtbarkeit der Optionen bei einer Suche", "// Auswahl-IDs, deren Suche"),
-  section("js/keyboard-hooks.js", "// Precise physical scancode mapping", "function getHeldKeyboardLayer")
+  section("js/keyboard-hooks.js", "const ACTION_CODE_TO_EVENT_CODES", "function getHeldKeyboardLayer")
 ].join("\n");
 
 const ctx = {};
@@ -38,10 +39,10 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
-             removeKeyPairAt, KEYCODES, PRESETS, UMLAUT_LABELS, holdSublabel,
+             removeKeyPairAt, KEYCODES, UMLAUT_LABELS, holdSublabel,
              planKeyPairDeletion, hasPendingPairChange, keyNeedsStagedPairs,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
-             SCANCODE_MAP_RIGHT, ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode };`, ctx);
+             ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode };`, ctx);
 const api = ctx.api;
 const R = api.SIDE_PROFILES.R;
 const L = api.SIDE_PROFILES.L;
@@ -509,7 +510,7 @@ test("Umlaute: Aktionscodes 0x150..0x156 wie DactylCommon.h, Labels und Rückweg
 test("Preset Deutsch QWERTZ: Umlaut-Aktionen und US-Codes, keine deutschen Beschriftungen auf US-Tasten", () => {
   const usLabel = { KEY_SEMICOLON: ";", KEY_QUOTE: "'", KEY_LEFT_BRACKET: "[", KEY_RIGHT_BRACKET: "]", KEY_MINUS: "-",
                     KEY_SLASH: "/", KEY_EQUAL: "=", KEY_BACKSLASH: "\\", KEY_GRAVE: "`", KEY_Z: "Z", KEY_Y: "Y" };
-  const files = { de_qwertz: api.PRESETS.de_qwertz.layers, us_qwerty: api.PRESETS.us_qwerty.layers,
+  const files = { de_qwertz: R.presets.de_qwertz.layers, us_qwerty: R.presets.us_qwerty.layers,
                   default_config: JSON.parse(fs.readFileSync(path.join(__dirname, "..", "default_config.json"), "utf8")).layers,
                   default_config_left: JSON.parse(fs.readFileSync(path.join(__dirname, "..", "default_config_left.json"), "utf8")).layers };
   for (const [name, layers] of Object.entries(files)) {
@@ -517,7 +518,7 @@ test("Preset Deutsch QWERTZ: Umlaut-Aktionen und US-Codes, keine deutschen Besch
       if (cell && usLabel[cell.tap] !== undefined) assert.strictEqual(cell.label, usLabel[cell.tap], `${name} L${l} R${r}C${c}`);
     })));
   }
-  const base = api.PRESETS.de_qwertz.layers[0];
+  const base = R.presets.de_qwertz.layers[0];
   assert.deepStrictEqual([base[0][5].tap, base[1][0].tap, base[1][5].tap, base[2][4].tap, base[2][5].tap, base[3][4].tap],
                          ["UMLAUT_SZ", "KEY_Z", "UMLAUT_UE", "UMLAUT_OE", "UMLAUT_AE", "KEY_MINUS"]);
 });
@@ -761,7 +762,7 @@ test("Suchfeld: Hinweis sperrt ohne Treffer und nennt eine ausgeblendete Auswahl
 });
 
 test("Live-Monitor: US-Beschriftungen und Umlaut-Zuordnung", () => {
-  const m = api.SCANCODE_MAP_RIGHT;
+  const m = R.scancodeMap;
   assert.deepStrictEqual([m.Minus.label, m.BracketLeft.label, m.Semicolon.label, m.Quote.label, m.Slash.label], ["-", "[", ";", "'", "/"]);
   // Keine Y/Z-Vertauschung mehr (macOS "U.S.")
   assert.deepStrictEqual(Array.from(api.ACTION_CODE_TO_EVENT_CODES.KEY_Y), ["KeyY"]);

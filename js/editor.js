@@ -153,8 +153,8 @@ function initUI() {
       document.querySelectorAll(".hand-btn[data-hand]").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       activeHandView = btn.dataset.hand;
-      if (activeHandView === "right") switchEditSide("R");
-      else if (activeHandView === "left") switchEditSide("L");
+      const viewSide = Dactyl.sideFromHandView(activeHandView);
+      if (viewSide) switchEditSide(viewSide);
       else renderMatrix();
       showToast(`Ansicht: ${btn.textContent}`);
     });
@@ -165,14 +165,15 @@ function initUI() {
   if (btnPreset) {
     btnPreset.addEventListener("click", () => {
       const presetKey = document.getElementById("layoutPresetSelect").value;
-      // Presets sind Belegungen der rechten Hand; auf links belegten sie fehlende Tasten (R5C0)
-      if (!activeProfile().presets) {
-        showToast(`Layout-Presets gibt es nur für die rechte Hand, nicht für die ${activeProfile().label}.`, 5000);
+      // Presets gehören zum Profil; eine Hälfte ohne Presets lehnt sie ab
+      const presets = activeProfile().presets;
+      if (!presets) {
+        showToast(`Für die ${activeProfile().label} gibt es keine Layout-Presets.`, 5000);
         return;
       }
-      if (PRESETS[presetKey]) {
+      if (presets[presetKey]) {
         const oldLayer0 = JSON.parse(JSON.stringify(currentConfig.layers[0]));
-        currentConfig.layers[0] = JSON.parse(JSON.stringify(PRESETS[presetKey].layers[0]));
+        currentConfig.layers[0] = JSON.parse(JSON.stringify(presets[presetKey].layers[0]));
         renderMatrix();
         saveConfigToServer();
         // Immer vormerken: das Preset wird mit dem nächsten Sync (Combo oder "Schreiben") übertragen
@@ -180,7 +181,7 @@ function initUI() {
           type: "preset",
           snapshot: true,
           title: `Layout-Preset angewendet`,
-          description: `${PRESETS[presetKey].name} (Ebene 0)`,
+          description: `${presets[presetKey].name} (Ebene 0)`,
           revert: () => {
             currentConfig.layers[0] = oldLayer0;
             renderMatrix();
@@ -508,7 +509,7 @@ function updateSideLabels() {
   const presetBtn = document.getElementById("btnApplyPreset");
   if (presetBtn) {
     presetBtn.disabled = !profile.presets;
-    presetBtn.title = profile.presets ? "" : "Layout-Presets gibt es nur für die rechte Hand";
+    presetBtn.title = profile.presets ? "" : `Für die ${profile.label} gibt es keine Layout-Presets`;
   }
 }
 
@@ -528,7 +529,7 @@ function renderMatrix() {
     splitWrapper.style.justifyContent = "center";
     splitWrapper.style.flexWrap = "wrap";
 
-    for (const side of ["L", "R"]) {
+    for (const side of Dactyl.sidesInDisplayOrder()) {
       const col = document.createElement("div");
       const title = document.createElement("h4");
       title.style.cssText = `margin-bottom: 12px; text-align: center; color: ${side === editSide ? "#10b981" : "#94a3b8"};`;
@@ -547,7 +548,7 @@ function renderMatrix() {
 function createHalfMatrix(matrixData, side) {
   const profile = SIDE_PROFILES[side];
   const halfEl = document.createElement("div");
-  halfEl.className = "matrix-half " + (side === "L" ? "left-half" : "right-half");
+  halfEl.className = "matrix-half " + profile.cssClass;
 
   // 1. FINGER-MATRIX (Reihen 0 bis 4 = 5 Fingerreihen mit je 6 Spalten 0..5)
   const fingerMatrixEl = document.createElement("div");

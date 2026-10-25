@@ -224,7 +224,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
       }
     } catch (_) {}
   }
-  const lineSide = side || "R";
+  const lineSide = side || Dactyl.getMasterSide();
   const isEditSide = lineSide === editSide;
   const cfg = configFor(lineSide);
 

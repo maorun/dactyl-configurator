@@ -46,7 +46,8 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht beim Umsetzen einen Regressionstest.
 
-- Keine offenen Befunde. Die 13 Befunde aus dem Review der linken Hälfte und der Umstellung auf "U.S." und die 2 Befunde aus deren Review sind erledigt.
+- `tests/test_side_profiles.js:231`: Der Test der Preset-Auswahl filtert die Optionen in `index.html` mit den festen Schlüsseln `us_qwerty` und `de_qwertz`. Folge: Ein neues Preset in `R.presets` ohne Option in `index.html` fällt nicht auf. Korrektur: Die festen Schlüssel entfernen und die Optionen von `layoutPresetSelect` mit `Object.keys(R.presets)` vergleichen.
+- `js/side-right.js:211`: `R.defaultConfig.layers` ist dasselbe Objekt wie `R.presets.de_qwertz.layers`. Folge: Eine direkte Änderung des einen Objekts ändert das andere; heute kopiert `defaultConfigFor` tief, darum tritt kein Fehler auf. Korrektur: Die gemeinsame Referenz dokumentieren oder die Ebenen beim Aufbau von `defaultConfig` tief kopieren.
 - Hardware-Prüfung offen: Tottaste Alt + u eines Umlauts auf der linken Hälfte am Mac testen. Der Host-Test prüft nur die Reihenfolge der `SplitHidEvent`s; der Master sendet sie ohne Abstand.
 
 

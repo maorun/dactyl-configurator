@@ -219,6 +219,7 @@ STATIC_ALLOWLIST = {
     "/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/style.css": "style.css",
     "/js/side-profiles.js": "js/side-profiles.js", "/js/side-state.js": "js/side-state.js",
     "/js/side-routing.js": "js/side-routing.js",
+    "/js/side-right.js": "js/side-right.js", "/js/side-left.js": "js/side-left.js",
 }
 # Module der Web-App (Reihenfolge in index.html)
 APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "editor-events", "ble", "serial",

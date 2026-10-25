@@ -107,13 +107,16 @@ function triggerVisualKeyRelease(r, c, side = editSide) {
 }
 
 
+// Combos gelten je Hälfte; die Split-Ansicht prüft beide Hälften, die Einzelansicht die bearbeitete
 function checkActiveCombos() {
-  for (const combo of currentConfig.combos) {
-    const k1Id = `${editSide}_${combo.key1.r}_${combo.key1.c}`;
-    const k2Id = `${editSide}_${combo.key2.r}_${combo.key2.c}`;
-    if (activePressedKeys.has(k1Id) && activePressedKeys.has(k2Id)) {
-      showComboAlert(combo);
-      return;
+  for (const side of browserKeySides(activeHandView, editSide, Dactyl.SIDE_IDS)) {
+    for (const combo of configFor(side).combos) {
+      const k1Id = `${side}_${combo.key1.r}_${combo.key1.c}`;
+      const k2Id = `${side}_${combo.key2.r}_${combo.key2.c}`;
+      if (activePressedKeys.has(k1Id) && activePressedKeys.has(k2Id)) {
+        showComboAlert(combo);
+        return;
+      }
     }
   }
   hideComboAlert();

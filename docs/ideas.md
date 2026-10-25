@@ -47,6 +47,8 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht beim Umsetzen einen Regressionstest.
 
 - `tests/test_side_profiles.js:231`: Der Test der Preset-Auswahl filtert die Optionen in `index.html` mit den festen Schlüsseln `us_qwerty` und `de_qwertz`. Folge: Ein neues Preset in `R.presets` ohne Option in `index.html` fällt nicht auf. Korrektur: Die festen Schlüssel entfernen und die Optionen von `layoutPresetSelect` mit `Object.keys(R.presets)` vergleichen.
+- `js/live-monitor.js:112`: `checkActiveCombos` prüft nur die Hälften der aktuellen Ansicht. Folge: Nach einem Ansichtswechsel mit gehaltener Taste bleibt der Combo-Hinweis der alten Hälfte bis zum nächsten Tastenereignis stehen. Korrektur: Den Combo-Hinweis im Handler des Ansichtswechsels ausblenden.
+- `js/keyboard-hooks.js:131`: Kein Test prüft, wie `resolveKeysFromEvent` `activeHandView` und `editSide` übergibt. Folge: Eine falsche Argumentreihenfolge im Aufruf besteht die Unit-Tests. Korrektur: Einen Test ergänzen, der `resolveKeysFromEvent` mit ersetzten globalen Werten ausführt.
 - Hardware-Prüfung offen: Tottaste Alt + u eines Umlauts auf der linken Hälfte am Mac testen. Der Host-Test prüft nur die Reihenfolge der `SplitHidEvent`s; der Master sendet sie ohne Abstand.
 
 

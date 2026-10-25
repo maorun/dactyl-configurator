@@ -323,6 +323,7 @@ python3 server.py
 
 4. **Live Monitor Layer Filtering:**
    - Visual keypress indicators in the configurator must compare `pressedLayer` with `activeLayerIndex`. Keys pressed on a different layer must not highlight keycaps on the currently viewed layer.
+   - Browser key events (`js/keyboard-hooks.js`) carry no half, because macOS sees both halves as one keyboard. The split view resolves the code in each half with that half's config, held layer and scancode table (`resolveKeyForSide`, `browserKeySides`). A code that exists on both halves (for example `Space`) highlights on both. The single view resolves only the edited half. Combo alerts follow the same rule. USB `KEY_PRESS` lines carry their half and are not affected.
 
 5. **Composite BLE HID Architecture (`DactylBleComposite.h`):**
    - Implements a single unified HID service with three distinct Input Reports:

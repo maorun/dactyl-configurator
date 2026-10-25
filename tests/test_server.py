@@ -634,6 +634,12 @@ class TestServerHttp(unittest.TestCase):
         self.assertEqual(self.request("GET", "/js/side-state.js")[0], 200)
         self.assertEqual(self.request("GET", "/js/side-routing.js")[0], 200)
         self.assertEqual(self.request("GET", "/js/")[0], 404)
+        # Jedes Skript aus index.html muss ausgeliefert werden, sonst fehlt der App ein Modul
+        with open(os.path.join(os.path.dirname(server.__file__), "index.html"), encoding="utf-8") as f:
+            scripts = re.findall(r'<script src="([^"]+)"', f.read())
+        self.assertGreater(len(scripts), 3)
+        for src in scripts:
+            self.assertEqual(self.request("GET", "/" + src)[0], 200, src)
         self.assertEqual(self.request("GET", "/js/../server.py")[0], 404)
 
     def test_config_per_side_roundtrip_and_invalid_side(self):

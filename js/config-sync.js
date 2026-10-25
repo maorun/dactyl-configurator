@@ -1,0 +1,186 @@
+// =============================================================================
+// Configuration Read/Write
+// =============================================================================
+
+async function writeConfigToESP32(options = {}) {
+  const autoDisconnectAfter = !!(options && options.autoDisconnectAfter);
+
+  if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
+    alert(`Keine Verbindung zum ESP32 aktiv! Halte ${activeProfile().comboLabel} für 0.5s an der ${activeProfile().label} gedrückt oder verbinde USB.`);
+    return;
+  }
+  if (isAutoSyncing) return;
+
+  // Ziel ist die Hälfte der Verbindung (One-Shot Auto-Sync: die Hälfte, die gerade den Config Mode zeigt),
+  // nicht die angezeigte Hälfte. Config und Änderungen beim Start festhalten.
+  const side = connectedSide();
+  if (!side) {
+    alert("Die Hälfte am USB-Port ist noch nicht erkannt (DEVICE_INFO fehlt). Bitte USB neu verbinden.");
+    return;
+  }
+  const cfg = configFor(side);
+  const profile = SIDE_PROFILES[side];
+
+  const progressWrap = document.getElementById("autoSyncProgressWrap");
+  const progressBar = document.getElementById("autoSyncProgressBar");
+  if (progressWrap) progressWrap.style.display = "block";
+  if (progressBar) progressBar.style.width = "2%";
+
+  const previousConfigMode = isConfigModeActive;
+  updateConfigModeUI(bleConfigChar ? true : previousConfigMode, true);
+  showToast(`🔄 Übertrage Konfiguration an ${profile.label} (ESP32 NVS)...`);
+
+  // Änderungen, die während des Syncs neu vorgemerkt werden, dürfen am Ende nicht mit verworfen werden
+  const syncedChangeIds = new Set(pendingFor(side).map(c => c.id));
+  let syncSucceeded = false;
+  let completedSteps = 0;
+
+  try {
+    // Fehler bei SET_K (ungültige Argumente, belegter Mutex) meldet die Firmware asynchron als ERR
+    let batchError = null;
+    const errWatcher = (okPrefix) => waitForAck(okPrefix, 60000, side).then(ok => { if (ok === false && !batchError) batchError = okPrefix; });
+
+    const sendCmd = async (cmd) => {
+      let ok = false;
+      // Wechselt die Verbindung während des Syncs zur anderen Hälfte, wird abgebrochen
+      if (connectedSide() !== side) throw new Error(`Verbindung zur ${profile.label} unterbrochen`);
+      if (bleConfigChar) {
+        ok = await sendBleCommand(cmd);
+        if (!ok) throw new Error(`BLE-Übertragung unterbrochen (${cmd})`);
+      } else if (serialPort && serialPort.writable) {
+        ok = await sendSerialCommand(cmd);
+        if (!ok) throw new Error(`USB-Übertragung fehlgeschlagen (${cmd})`);
+        // Pacing für USB-Serial Übertragung
+        if (completedSteps % 16 === 0) {
+          await new Promise(r => setTimeout(r, 4));
+        }
+      } else {
+        throw new Error("Verbindung zum ESP32 unterbrochen");
+      }
+    };
+
+    // Sendet einen Befehl und wartet auf "OK <prefix>" der Firmware (ERR oder Timeout = Fehler)
+    const sendConfirmed = async (cmd, okPrefix, timeoutMs = 3000) => {
+      const ack = waitForAck(okPrefix, timeoutMs, side);
+      try {
+        await sendCmd(cmd);
+      } catch (e) {
+        resolveAcksForLine(`ERR SEND ${okPrefix}`, side);
+        throw e;
+      }
+      if ((await ack) !== true) throw new Error(`Tastatur hat ${okPrefix} nicht bestätigt`);
+    };
+
+    const totalLayers = Math.min(cfg.layers.length, NUM_LAYERS);
+    const totalCombos = Array.isArray(cfg.combos) ? cfg.combos.length : 0;
+    const totalSteps = NUM_LAYERS + (totalLayers * NUM_ROWS * NUM_COLS) + totalCombos + 9;
+    const updateProgress = () => {
+      completedSteps++;
+      if (progressBar) {
+        const pct = Math.min(100, Math.round((completedSteps / totalSteps) * 100));
+        progressBar.style.width = `${pct}%`;
+      }
+    };
+
+    const s = cfg.settings || {};
+    await sendConfirmed(`SET_STANDBY ${clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5)}`, "SET_STANDBY");
+    updateProgress();
+    await sendConfirmed(`SET_SLEEP ${clampSetting("sleepTimeoutMinutes", s.sleepTimeoutMinutes ?? 60)}`, "SET_SLEEP");
+    updateProgress();
+    await sendConfirmed(`SET_DEV_NAME ${sanitizeCommandText(s.deviceName, profile.deviceName)}`, "SET_DEV_NAME");
+    updateProgress();
+    await sendConfirmed(`SET_DEBOUNCE ${clampSetting("debounceMs", s.debounceMs ?? 5)}`, "SET_DEBOUNCE");
+    updateProgress();
+    await sendConfirmed(`SET_COMBO_TIMEOUT ${clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40)}`, "SET_COMBO_TIMEOUT");
+    updateProgress();
+
+    for (let l = 0; l < NUM_LAYERS; l++) {
+      const name = sanitizeCommandText(cfg.layerNames[l], DEFAULT_LAYER_NAMES[l]);
+      await sendConfirmed(`SET_NAME ${l} ${name}`, `SET_NAME ${l}`);
+      updateProgress();
+    }
+
+    // Schnelles RAM-Update für alle Tasten via SET_K (ohne OK) + einmaliges, bestätigtes SAVE_NVS
+    const setKErr = errWatcher("SET_K");
+    for (let l = 0; l < totalLayers; l++) {
+      const layer = cfg.layers[l] || [];
+      for (let r = 0; r < NUM_ROWS; r++) {
+        const row = layer[r] || [];
+        for (let c = 0; c < NUM_COLS; c++) {
+          const { tapCode, holdCode, dtapCode } = keyToNumericActions(row[c]);
+          await sendCmd(`SET_K ${l} ${r} ${c} ${tapCode} ${holdCode} ${dtapCode}`);
+          updateProgress();
+        }
+      }
+    }
+
+    await sendConfirmed("SAVE_NVS", "SAVE_NVS", 5000);
+    if (batchError) throw new Error("Tastatur hat mindestens ein SET_K abgelehnt");
+    // Watcher für SET_K-Fehler beenden (kein ERR eingetroffen)
+    resolveAcksForLine("OK SET_K", side);
+    await setKErr;
+    updateProgress();
+
+    // Combos synchronisieren
+    await sendConfirmed("CLEAR_COMBOS", "CLEAR_COMBOS");
+    const bMap = { "KEY_PRESS": 0, "MODIFIER_HOLD": 1, "LAYER_TOGGLE": 2 };
+    for (const cb of cfg.combos.slice(0, MAX_COMBOS)) {
+      const bCode = bMap[cb.behavior] ?? 0;
+      const actCode = actionCodeToNumeric(cb.action);
+      await sendConfirmed(`ADD_COMBO ${cb.key1.r} ${cb.key1.c} ${cb.key2.r} ${cb.key2.c} ${bCode} ${actCode}`, "ADD_COMBO");
+      updateProgress();
+    }
+    await sendConfirmed("SAVE_COMBOS", "SAVE_COMBOS", 5000);
+    updateProgress();
+
+    // Tastenpaare synchronisieren (Index = Position in der Liste, PAIR_<n> verweist darauf)
+    await sendConfirmed("CLEAR_PAIRS", "CLEAR_PAIRS");
+    for (const pair of cfg.keyPairs.slice(0, MAX_KEY_PAIRS)) {
+      await sendConfirmed(`ADD_PAIR ${actionCodeToNumeric(pair.first)} ${actionCodeToNumeric(pair.second)}`, "ADD_PAIR");
+    }
+    await sendConfirmed("SAVE_PAIRS", "SAVE_PAIRS", 5000);
+    updateProgress();
+
+    // Nur die tatsächlich übertragenen Änderungen dieser Hälfte verwerfen
+    const remaining = pendingFor(side).filter(c => !syncedChangeIds.has(c.id));
+    if (remaining.length === 0) clearPendingSync(side);
+    else {
+      setPendingFor(side, remaining);
+      if (side === editSide) renderPendingSyncUI();
+    }
+    syncSucceeded = true;
+  } catch (err) {
+    console.error("Write config error:", err);
+    rejectAllPendingAcks("Sync abgebrochen", side);
+    showToast("Fehler beim Übertragen der Konfiguration: " + err.message + " (Änderungen bleiben vorgemerkt)", 7000);
+  } finally {
+    isAutoSyncing = false;
+    // One-Shot: Tastatur IMMER zurück in den Mac-Modus schicken, auch nach einem Fehler
+    if (autoDisconnectAfter && bleConfigChar) {
+      await new Promise(r => setTimeout(r, 150));
+      const exited = await disconnectBle();
+      if (syncSucceeded && exited) {
+        showToast(`✅ ${profile.label} automatisch synchronisiert & getrennt! Sie tippt wieder normal.`);
+      }
+    } else {
+      updateConfigModeUI(bleConfigChar ? true : previousConfigMode, false);
+      if (syncSucceeded) showToast(`✅ Vollständige Konfiguration der ${profile.label} im ESP32 NVS gespeichert!`);
+    }
+    setTimeout(() => {
+      if (progressWrap) progressWrap.style.display = "none";
+      if (progressBar) progressBar.style.width = "0%";
+    }, 600);
+  }
+}
+
+async function readConfigFromESP32() {
+  if (bleConfigChar) {
+    await sendBleCommand("GET_CONFIG");
+    showToast("Konfigurations-Anfrage per Bluetooth an ESP32 gesendet...");
+  } else if (serialPort && serialPort.writable) {
+    await sendSerialCommand("GET_CONFIG");
+    showToast("Konfigurations-Anfrage per USB an ESP32 gesendet...");
+  } else {
+    alert("Keine Verbindung zum ESP32 aktiv! Bitte verbinde erst Bluetooth Live-Sync oder USB Live-Monitor.");
+  }
+}

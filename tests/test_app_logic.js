@@ -1,33 +1,27 @@
-// Unit-Tests für die DOM-freien Hilfsfunktionen in app.js (Action-Codes, Sanitizing, Config-Validierung).
+// Unit-Tests für die DOM-freien Hilfsfunktionen der Web-App (Action-Codes, Sanitizing, Config-Validierung).
 // Ausführen: node tests/test_app_logic.js
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
 
-const src = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+const read = rel => fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
 
-// Schneidet die reinen Logik-Abschnitte aus app.js aus (ohne DOM-/Browser-Zugriffe)
-function section(startMarker, endMarker) {
+// Schneidet reine Logik-Abschnitte aus einer Datei mit DOM-Zugriffen aus
+function section(file, startMarker, endMarker) {
+  const src = read(file);
   const start = src.indexOf(startMarker);
   const end = src.indexOf(endMarker, start);
-  assert.ok(start >= 0 && end > start, `Abschnitt nicht gefunden: ${startMarker}`);
+  assert.ok(start >= 0 && end > start, `Abschnitt nicht gefunden: ${file}: ${startMarker}`);
   return src.slice(start, end);
 }
 
-// Seitenprofile werden wie im Browser vor app.js geladen (index.html)
-const sideModules = ["side-profiles.js", "side-state.js"]
-  .map(f => fs.readFileSync(path.join(__dirname, "..", "js", f), "utf8"));
-
+// Reihenfolge wie im Browser (index.html); keycodes.js und config-model.js sind ganz DOM-frei
 const code = [
-  ...sideModules,
-  section("const KEYCODES", "const DEFAULT_LAYER_NAMES"),
-  section("const DEFAULT_LAYER_NAMES", "// BLE GATT"),
-  section("const ACTION_TO_NUMERIC", "// Standard-Konfiguration"),
-  section("// Matrix- und Firmware-Grenzen", "// State\n"),
-  section("// Alte Configs speichern Modifier-Halte-Aktionen", "function appendOptionGroup"),
-  section("// Sichtbarkeit der Optionen bei einer Suche", "// Auswahl-IDs, deren Suche"),
-  section("// Precise physical scancode mapping", "function getHeldKeyboardLayer")
+  ...["js/side-profiles.js", "js/side-state.js", "js/keycodes.js", "js/config-model.js"].map(read),
+  section("js/editor.js", "// Alte Configs speichern Modifier-Halte-Aktionen", "function appendOptionGroup"),
+  section("js/editor.js", "// Sichtbarkeit der Optionen bei einer Suche", "// Auswahl-IDs, deren Suche"),
+  section("js/keyboard-hooks.js", "// Precise physical scancode mapping", "function getHeldKeyboardLayer")
 ].join("\n");
 
 const ctx = {};
@@ -762,7 +756,7 @@ test("Suchfeld: Hinweis sperrt ohne Treffer und nennt eine ausgeblendete Auswahl
   assert.deepStrictEqual(plain(api.selectFilterHint("ctrl", 3, true, "Halten = A (KEY_A)")), { text: "Gewählt bleibt: Halten = A (KEY_A)", blocked: false });
   assert.deepStrictEqual(plain(api.selectFilterHint("ctrl", 3, false, "x")), { text: "", blocked: false });
   // applySelectFilter setzt select.value nicht mehr (die Auswahl ändert nur eine explizite Wahl)
-  const filterSrc = src.slice(src.indexOf("function applySelectFilter"), src.indexOf("function updateFilterBlockedButton"));
+  const filterSrc = section("js/editor.js", "function applySelectFilter", "function updateFilterBlockedButton");
   assert.ok(!/select\.value\s*=/.test(filterSrc));
 });
 
@@ -786,4 +780,4 @@ test("Live-Monitor: US-Beschriftungen und Umlaut-Zuordnung", () => {
   assert.strictEqual(api.findKeyForEventCode(layer, "KeyQ", false), null);
 });
 
-console.log(`\n${passed} app.js-Tests bestanden.`);
+console.log(`\n${passed} App-Logik-Tests bestanden.`);

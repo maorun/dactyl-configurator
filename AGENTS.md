@@ -12,8 +12,10 @@ This repository versions the firmware, web-based configurator, macOS desktop app
    - Split receiver: executes the `SplitHidEvent`s of the left half (ESP-NOW, `DactylSplitHid.h`) on its BLE HID connection; see "Left Half Firmware".
    - Matrix scanning: 6 Rows (`ROW_PINS = {13, 14, 27, 26, 33, 32}`) x 7 Columns (`COL_PINS = {23, 19, 18, 17, 16, 4, 25}`). Hand-wired matrix using 1N4148 diodes (Cathode/black ring to Row wire, Anode to switch pin 1, Columns soldered directly to switch pin 2 on active-low `INPUT_PULLUP`).
 
-2. **Web Configurator (`index.html`, `style.css`, `app.js`):**
+2. **Web Configurator (`index.html`, `style.css`, `app.js`, `js/`):**
    - Vanilla JavaScript SPA with zero external runtime dependencies.
+   - Classic scripts that share one global scope, loaded in the order of `index.html`; `app.js` loads last and starts the app on `DOMContentLoaded`. A new module needs a `<script>` tag in `index.html` and an entry in `APP_MODULES` (`server.py`).
+   - Modules: `js/keycodes.js` (keycodes, presets, action codes, key pair and special character helpers), `js/config-model.js` (default config, limits, validation, normalization, matrix test and typing statistics; no DOM), `js/editor.js` (layer tools, keycode selects and search, matrix, inspector, combo table), `js/key-pairs-ui.js`, `js/editor-events.js` (event listeners, combo deletion, flash), `js/ble.js`, `js/serial.js` (incl. `handleSerialLine`), `js/live-monitor.js`, `js/heatmap.js`, `js/matrix-test.js`, `js/keyboard-hooks.js`, `js/config-sync.js` (`writeConfigToESP32`, `readConfigFromESP32`). `app.js` keeps the global state, the initialization, the config mode indicator, pending changes and the server save.
    - Real-time communication via Web Bluetooth API (`navigator.bluetooth`, including modern `getDevices()` + `watchAdvertisements()` auto-sync) and Web Serial API (`navigator.serial`).
    - Dynamic 8-layer editor (Layer 0 Base to Layer 7 Custom), layer renaming, staged offline configuration (`markPendingSync`), One-Shot Auto-Sync on hardware combo (`R4C5 + R0C0`), Config Mode status indicator (`#configModeStatusPill`), and visual keypress feedback filtered by the active hardware layer.
 
@@ -22,7 +24,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
    - Automatically checks and starts the local Python backend server (`server.py`) upon launch and opens Chrome in `--app=http://localhost:8088` mode with `--enable-features=WebBluetoothNewPermissionsBackend` and `--enable-experimental-web-platform-features` so `navigator.bluetooth.getDevices()` and `device.watchAdvertisements()` work out-of-the-box.
 
 4. **Local REST Server (`server.py`):**
-   - Python HTTP server bound strictly to `127.0.0.1:8088`. Every request requires an exact `Host` header (`localhost:8088` / `127.0.0.1:8088`, DNS-rebinding protection); POST requests with a foreign `Origin` are rejected. Static serving is limited to an allowlist (`index.html`, `app.js`, `style.css`, `js/side-profiles.js`, `js/side-state.js`, `js/side-routing.js`).
+   - Python HTTP server bound strictly to `127.0.0.1:8088`. Every request requires an exact `Host` header (`localhost:8088` / `127.0.0.1:8088`, DNS-rebinding protection); POST requests with a foreign `Origin` are rejected. Static serving is limited to an allowlist (`index.html`, `app.js`, `style.css`, the `js/side-*.js` files and the app modules in `APP_MODULES`).
    - Configs are validated (each layer at most 6 rows x 7 keys, key cells object or code string, combo coordinates, firmware setting ranges; JSON `null` bodies return HTTP 400) and the `.ino` is rendered in memory before `current_config.json` and `dactyl_right.ino` are written atomically.
    - Ensures Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) are in `PATH` even when launched from macOS Finder/Dock.
    - Serves configurator web assets with no-cache headers.
@@ -147,7 +149,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 ```
 
 ### App support for both halves (`js/side-profiles.js`, `js/side-state.js`)
-- Everything that differs between the halves lives in `SIDE_PROFILES` (`js/side-profiles.js`): BLE config name, default device name, config combo, missing keys, thumb cluster layout, row/column wires, diode hint, heatmap storage key, left default config. Do not add side-specific logic to `app.js`; the right half will move out of `app.js` into the same structure later.
+- Everything that differs between the halves lives in `SIDE_PROFILES` (`js/side-profiles.js`): BLE config name, default device name, config combo, missing keys, thumb cluster layout, row/column wires, diode hint, heatmap storage key, left default config. Do not add side-specific logic to `app.js` or the other app modules; the right half will move out of them into the same structure later.
 - The hand switcher selects the edited half. `currentConfig` and `pendingChanges` in `app.js` always belong to it; the other half is kept in `sideStore` (`js/side-state.js`). Heatmap counters and the matrix test exist per half. The displayed layer is shared.
 - The left half gets changes on the same paths as the right half: BLE one-shot auto-sync after `R0C5 + R4C0` (`Dactyl Config L`), BLE live editing in config mode, USB serial sync and "Auf Dactyl flashen".
 - Every connection knows its half: BLE from the config name (`Dactyl.sideFromBleName`, confirmed by `DEVICE_INFO`), USB from `DEVICE_INFO.side`. After opening the USB port the app repeats `GET_INFO` every 500 ms (max. 5 s), because opening the port resets the board. `sendDeviceCommand(cmd, side)` sends only to a connection of that half; otherwise the change stays pending for that half. `writeConfigToESP32` syncs the half of the connection, not the displayed half. Acks carry the half, so a reply from the other half never confirms a command; unplugging USB does not cancel a running BLE sync of the same half.
@@ -192,7 +194,7 @@ Keys in the matrix use `uint16_t` action codes:
 
 ### macOS layout "U.S." and special characters (`DE_MAC_CHARS`, umlauts)
 - The Mac uses the input source "U.S.". The firmware sends US HID codes, and macOS prints the US character. App labels, presets and templates must use US labels (`KEY_SEMICOLON` = `;`, never `Ö`).
-- `DE_MAC_CHARS` in `app.js` (picker group "Sonderzeichen (macOS US)") lists special characters. ASCII entries store the character itself (`+`, `~`, `<`; Shift implicit via `dactylAsciiToHid`). `§` is the ISO key `KEY_NON_US_BACKSLASH` (`0xEC`, HID `0x64`). This assumes the macOS keyboard type ISO; with ANSI, macOS swaps HID `0x35` and `0x64`, and `§` does not appear on the ISO key.
+- `DE_MAC_CHARS` in `js/keycodes.js` (picker group "Sonderzeichen (macOS US)") lists special characters. ASCII entries store the character itself (`+`, `~`, `<`; Shift implicit via `dactylAsciiToHid`). `§` is the ISO key `KEY_NON_US_BACKSLASH` (`0xEC`, HID `0x64`). This assumes the macOS keyboard type ISO; with ANSI, macOS swaps HID `0x35` and `0x64`, and `§` does not appear on the ISO key.
 - Umlauts use their own actions `UMLAUT_AE` .. `UMLAUT_SZ` (`0x150` .. `0x156`, `ACT_UMLAUT_*` in `DactylCommon.h`). `sendUmlaut()` taps the dead key `Alt` + `u` and then the vowel (`'A'` for `Ä`, Shift implicit); `ß` is `Alt` + `s`. The sequence is sent once on press (also as forced hold, buffered combo candidate and combo `KEY_PRESS`); the release sends nothing. Modifiers that this half holds at the host (keys, key pairs, `MODIFIER_HOLD` combos; a held shifted ASCII code counts as left Shift; members of an active combo do not count) are released before the sequence and pressed again after it (`heldModifierMask`). On the left half, every step is a separate `PRESS`/`RELEASE` event; the `delay(5)` only delays the queueing, so the dead key needs a hardware check. Umlauts are not key pair members.
 - The `.ino` defaults of both halves still contain German-layout codes (`;` for `ö`). A repository flash keeps the NVS keymap, so they do not reach the device. The preset "Deutsch QWERTZ (macOS US-Layout)" and `default_config*.json` use the umlaut actions.
 - Option characters (`° € ´`) need a key pair (`Alt` + key). Their select value `CHAR_PAIR_<i>` is never stored: on "Änderung übernehmen", `resolveCharPairActions` reuses an equal pair or appends one (pending change) and writes `PAIR_<n>`. With 16 pairs a new one is rejected. A key with a new pair is only staged, because the device knows the pair only after the next sync. The same applies to a key that uses any `PAIR_<n>` while a pending change with the flag `pairs` exists (`keyNeedsStagedPairs`: pair added or deleted, import, key with a new pair).
@@ -266,11 +268,11 @@ Keys in the matrix use `uint16_t` action codes:
 ### 3. Tests, Syntax & XML Verification
 ```bash
 python3 tests/test_server.py          # Codegen, validation, HTTP host/origin/static allowlist
-node tests/test_app_logic.js          # app.js action codes, sanitizing, config validation
+node tests/test_app_logic.js          # web app action codes, sanitizing, config validation
 node tests/test_side_profiles.js      # side profiles vs. firmware sources, per-half state, side routing and acks
 bash firmware/tests/run_tests.sh      # DactylLogic.h, DactylLeftLogic.h, DactylSplitHid.h, left proxy
 python3 -m py_compile server.py
-node --check app.js && node --check main.js && node --check js/side-profiles.js && node --check js/side-state.js && node --check js/side-routing.js
+node --check app.js && node --check main.js && for f in js/*.js; do node --check "$f"; done
 xmllint --noout docs/lolin32_lite_wiring.svg
 ```
 

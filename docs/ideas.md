@@ -52,5 +52,4 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 
 ## Tooling & Qualität
 
-- **Gemeinsame Matrix-Konstanten:** Pins, Größen und nicht vorhandene Tasten einmal definieren und in `app.js`, `server.py` und Firmware prüfen.
-- **`app.js` aufteilen:** Datei hat über 3.000 Zeilen; Module für BLE, Serial, Editor und Live-Monitor.
+- **Gemeinsame Matrix-Konstanten:** Pins, Größen und nicht vorhandene Tasten einmal definieren und in der Web-App, `server.py` und Firmware prüfen.

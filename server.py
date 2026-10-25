@@ -220,6 +220,10 @@ STATIC_ALLOWLIST = {
     "/js/side-profiles.js": "js/side-profiles.js", "/js/side-state.js": "js/side-state.js",
     "/js/side-routing.js": "js/side-routing.js",
 }
+# Module der Web-App (Reihenfolge in index.html)
+APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "editor-events", "ble", "serial",
+               "live-monitor", "heatmap", "matrix-test", "keyboard-hooks", "config-sync")
+STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 
 # Wertebereiche identisch zur Firmware (handleConfigCommand)
 SETTINGS_RANGES = {

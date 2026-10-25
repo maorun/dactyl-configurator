@@ -33,9 +33,7 @@ jobs:
         run: |
           node --check app.js
           node --check main.js
-          node --check js/side-profiles.js
-          node --check js/side-state.js
-          node --check js/side-routing.js
+          for f in js/*.js; do node --check "$f"; done
           python3 -m py_compile server.py
 
       - name: Run Configurator Logic Unit Tests (Node)

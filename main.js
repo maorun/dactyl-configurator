@@ -171,7 +171,7 @@ function createWindow() {
   logElectron('Registered select-bluetooth-device handler on mainWindow.webContents and session.');
 
   // Bei zwei angeschlossenen Hälften wählt dies den ersten USB-Port. Die App erkennt die Hälfte danach
-  // über DEVICE_INFO.side und sendet Befehle nur an die passende Hälfte (siehe sendDeviceCommand in app.js).
+  // über DEVICE_INFO.side und sendet Befehle nur an die passende Hälfte (siehe sendDeviceCommand in js/ble.js).
   ses.on('select-serial-port', (event, portList, webContents, callback) => {
     event.preventDefault();
     const espPort = portList.find(p => p.portName && (p.portName.includes('usbserial') || p.portName.includes('wchusb')));

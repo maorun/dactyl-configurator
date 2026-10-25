@@ -39,8 +39,50 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 ## Split / Hardware
 
 - **Linke Tasten im Live-Monitor über den Master:** `SPLIT_HID`-Zeilen tragen keine Matrix-Position. Heute zeigt die App linke Tasten nur über eine direkte Verbindung zur linken Hälfte (BLE im Config Mode oder USB).
-- **Synchronisierter Sleep:** eine linke Taste weckt heute nur die linke Hälfte.
 - ESP-NOW härten bzw. encrypten die Übertragung
+
+### Plan: ESP-NOW-Neustart nach wiederholten Sendefehlern (linke Hälfte)
+
+**Anlass (2026-10-25):** Beide Hälften waren wach. Rechts: BLE zum Mac verbunden, ESP-NOW-Empfang bereit. Links: Matrix aktiv. Trotzdem scheiterte jeder Versand der linken Hälfte (`ESPNOW_RETRY` 3x, dann `ESPNOW_FAIL`, Status `Master erreichbar=0`); keine linke Taste kam am Mac an. Erst ein Reset beider Boards (zuerst Master, dann links) stellte die Verbindung her. Die Boot-Logs zeigten danach richtige MAC-Adressen (links Wi-Fi-STA `…:B0`, Master `…:A6`) und Kanal 1. Die Ursache ist unbekannt; der Plan ist eine Absicherung, keine Ursachenbehebung.
+
+**Umsetzung:**
+1. `DactylLeftLogic.h`: Zähler `consecutiveDrops` für Ereignisse mit Ergebnis `SEND_DROPPED`; ein bestätigter Versand setzt ihn auf 0. Reine Funktion, z. B. `shouldRestartEspNow(drops, linkDownSinceMs, nowMs)`, damit der Host-Test sie prüfen kann.
+2. Auslöser: mindestens `ESPNOW_RESTART_DROPS` verworfene Ereignisse (Vorschlag 5) **und** Link seit mindestens `ESPNOW_RESTART_DOWN_MS` unten (Vorschlag 5 s; der Heartbeat liefert jede Sekunde ein Ereignis). Danach höchstens ein Neustart pro `ESPNOW_RESTART_BACKOFF_MS` (Vorschlag 30 s), damit kein Neustart-Kreislauf entsteht.
+3. `dactyl_left.ino`: `restartEspNow()` = Sendewarteschlange leeren, `esp_now_deinit()`, `WiFi.mode(WIFI_OFF)`, dann `setupEspNow()` erneut (stellt Kanal, Peer und das erste `RELEASE_ALL` her). Serial-Zeile `ESPNOW_RESTART` für die Diagnose.
+4. Optional als zweite Stufe: nach N erfolglosen ESP-NOW-Neustarts `ESP.restart()` der linken Hälfte (Keymap liegt in NVS; Kosten: kurze Pause der linken Hälfte).
+
+**Tests:**
+- Host-Test (`firmware/tests/run_tests.sh`): Schwellwert, Rücksetzen nach Erfolg, Backoff, kein Neustart im Config Mode und während Deep-Sleep-Vorbereitung.
+- Hardware: Master per Reset-Taste neu starten, während links getippt wird; erwartet: `ESPNOW_RESTART` höchstens einmal pro Backoff, danach `Master erreichbar=1` ohne Reset der linken Hälfte.
+
+**Offene Fragen:**
+- Soll auch der Master etwas tun (z. B. ESP-NOW neu starten, wenn `SPLIT_LINK_TIMEOUT_MS` lange anhält)? Heute weiß der Master nicht, ob die linke Hälfte schläft oder hängt.
+- Reproduktion: Der Fehlerzustand trat ohne bekannten Auslöser auf. Vor dem Fix den Master-Log bei `[SPLIT] WARN: Linke Hälfte nicht erreichbar` mitschneiden.
+
+### Plan: Synchronisierte Inaktivitäts-Timer (Standby und Deep Sleep)
+
+**Heute:**
+- Rechts (`dactyl_right.ino:461`): angewendete linke Ereignisse setzen `lastActivityTime` zurück. Der Master schläft nicht ein, solange links getippt wird.
+- Links (`dactyl_left.ino:475`): nur eigene Tasten setzen `lastActivityTime` zurück. Bei 60 Min nur rechts tippen geht die linke Hälfte in Deep Sleep.
+- Aufwachen: Eine Hälfte im Deep Sleep empfängt kein Funksignal; die andere Hälfte kann sie nicht wecken. Nach dem Deep Sleep braucht jede Hälfte einen eigenen Tastendruck. Das bleibt so (Hardware-Grenze).
+
+**Ziel:** Beide Hälften gehen erst in Standby / Deep Sleep, wenn auf **keiner** Hälfte getippt wurde.
+
+**Umsetzung:**
+1. Neue Rückrichtung Master -> links. Protokoll in `DactylSplitHid.h` append-only erweitern, z. B. Op `SPLIT_OP_ACTIVITY` (nur Master -> links, ohne HID-Wirkung). `parseSplitHidPacket` auf dem Master lehnt sie ab; ein eigener Parser links prüft Absender-MAC `…:A6` und Länge.
+2. Master: Bei eigener Taste höchstens alle `SPLIT_ACTIVITY_INTERVAL_MS` (Vorschlag 10 s) ein `ACTIVITY`-Paket senden. Dafür braucht der Master einen Peer auf die linke MAC `…:B0`; kein Retry, ein verlorenes Paket ist unkritisch.
+3. Links: Empfangs-Callback registrieren; ein gültiges `ACTIVITY` setzt `lastActivityTime` zurück und beendet Standby. Kein Tastendruck, keine HID-Wirkung.
+4. `AGENTS.md`: Abschnitt "Config mode, NVS, power" und "Known limit" anpassen.
+
+**Tests:**
+- Host-Test: Parser links (gültig, falsche MAC, falsche Länge, unbekannter Op), Drosselung auf dem Master, Rücksetzen des Timers links.
+- Hardware: 6 Min nur rechts tippen; links darf nicht in Standby gehen (Serial `[POWER]`), und linke Tasten kommen ohne Verzögerung an.
+
+**Offene Fragen:**
+- Soll `ACTIVITY` auch den Standby der linken Hälfte verhindern oder nur den Deep Sleep? Ohne Standby verbraucht links mehr Strom, reagiert aber ohne gedrosselten Scan (40 ms).
+- Funkzeit: Ein Paket alle 10 s ist gering, teilt sich aber das 2,4-GHz-Radio mit BLE. Intervall auf Hardware prüfen.
+- Soll auch der umgekehrte Fall (Master bleibt wach wegen links) unverändert bleiben? Heute ja.
+- Sollen beide Hälften dieselben Timeout-Werte erzwingen (heute getrennt pro Hälfte in NVS)?
 
 ## Offene LOW-Befunde aus Code-Reviews
 

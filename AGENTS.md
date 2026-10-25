@@ -241,6 +241,12 @@ Keys in the matrix use `uint16_t` action codes:
 
 ---
 
+## Idea Backlog Ranking (`docs/ideas.md`)
+
+- The section "Rangliste" in `docs/ideas.md` is an unnumbered list. The top entry is the most important.
+- Rate each new idea (benefit, effort) and insert it at its rank. Do not append it at the end.
+- Follow the ranking rules at the top of `docs/ideas.md`.
+
 ## Code Review Rule: LOW Findings
 
 - Do not fix `LOW` findings from code reviews directly. Record each one in `docs/ideas.md`, section "Offene LOW-Befunde aus Code-Reviews".

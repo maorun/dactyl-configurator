@@ -281,7 +281,7 @@ xmllint --noout docs/lolin32_lite_wiring.svg
 npm run build:app   # copies main.js + package.json into ~/Applications/Dactyl Configurator.app and re-signs it ad hoc
 ```
 - The installed Electron bundle keeps its own copy of `main.js` (BLE/serial device selection, server start). Run `build:app` after every change to `main.js`; quit the app first (the script refuses while it runs). `DACTYL_APP=<path>` selects another bundle.
-- The web UI (`index.html`, `app.js`, `js/`) and `server.py` are not in the bundle; the app loads them from the main checkout at runtime. After a change to `server.py`, stop the running server process so the app starts the new one.
+- The web UI (`index.html`, `app.js`, `js/`) and `server.py` are not in the bundle; the app loads them from the main checkout at runtime. After a change to `server.py`, restart the app. The app starts `server.py` itself and stops it on quit (`before-quit` in `main.js`), so the restart loads the new server. Do not stop the server process by hand. After the restart, verify that the PID on port 8088 changed and that the changed path answers.
 
 ### 4. Run Local Server
 ```bash

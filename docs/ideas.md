@@ -44,21 +44,10 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Offene LOW-Befunde aus Code-Reviews
 
-Kleine Befunde aus dem Review der linken Hälfte, bewusst auf später verschoben. Jeder Punkt braucht beim Umsetzen einen Regressionstest.
+Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht beim Umsetzen einen Regressionstest.
 
-- `app.js` `applySelectFilter`: das Suchfeld wählt still die erste sichtbare Option, wenn die gewählte ausgeblendet wird; nach dem Leeren bleibt diese Wahl. Folge: Tippen in das Suchfeld ändert Halte- oder Doppel-Tipp-Aktion. Korrektur: Auswahl nur bei expliziter Wahl ändern, beim Leeren die vorherige Wahl wiederherstellen.
-- `app.js` `applySelectFilter`: ohne Treffer bleibt eine ausgeblendete Option gewählt. Folge: "Änderung übernehmen" speichert eine unsichtbare Aktion. Korrektur: ohne Treffer den Übernehmen-Knopf sperren oder einen Hinweis zeigen.
-- `app.js` `applySelectFilter`: der Filter vergleicht auch das Präfix "Halten = " bzw. "2× Tippen = ". Folge: eine Suche nach "halten", "tippen" oder "=" trifft jede Option der Halte- und Doppel-Tipp-Auswahl. Korrektur: die Suche ohne das Präfix vergleichen.
-- `app.js` Apply-Handler (`btnApplyKey`): ein wiederverwendetes Tastenpaar, das selbst noch vorgemerkt ist, löst trotzdem ein sofortiges `SET_KEY` aus. Folge: das Gerät kennt das Paar noch nicht, die Taste sendet bis zum nächsten Sync nichts. Korrektur: die Taste nur vormerken, wenn ein genutztes Paar noch nicht synchronisiert ist.
-- `app.js` `isKeyPairUsed`: die Prüfung ignoriert alte Zellen im String-Format (`"PAIR_2"` statt Objekt). Folge: `deleteKeyPair` fragt nicht nach, `removeKeyPairAt` leert diese Zellen trotzdem. Korrektur: String-Zellen gleich `PAIR_<idx>` in `isKeyPairUsed` erkennen.
-- `tests/test_app_logic.js`: kein Test prüft `deleteKeyPair` (Nachfrage bei Nutzung, Snapshot-Flag, Revert stellt Paare, Ebenen und Combos wieder her). Folge: ein Fehler im Ablauf bleibt unentdeckt. Korrektur: den Ablauf als reine Funktion herauslösen und testen.
-- `tests/test_app_logic.js`: kein Test prüft die Optionslisten (Combo ohne Tastenpaar-Zeichen, Gruppenposition, Ausblenden durch das Suchfeld). Folge: diese Annahmen haben keinen Regressionsschutz. Korrektur: Listenaufbau und Filter als reine Funktionen herauslösen und testen.
-- `app.js:3924` `SCANCODE_MAP_RIGHT`: die Ersatztabelle des Live-Monitors beschriftet `Minus`, `BracketLeft`, `Semicolon`, `Quote` und `Slash` mit `ß`, `Ü`, `Ö`, `Ä` und `-`. Folge: mit dem macOS-Layout "U.S." zeigt der Live-Monitor deutsche Beschriftungen. Korrektur: die US-Zeichen als Beschriftung nutzen.
-- `app.js:3982` `ACTION_CODE_TO_EVENT_CODES`: die Tabelle hat keine `UMLAUT_*`-Einträge und vertauscht `KEY_Y`/`KEY_Z` noch für das deutsche Layout. Folge: eine Taste mit Umlaut-Aktion leuchtet im Live-Monitor nicht auf. Korrektur: `UMLAUT_*` auf `KeyU`/`KeyS` abbilden und die Y/Z-Vertauschung entfernen.
-- `firmware/dactyl_right/DactylLogic.h:146` `sendUmlaut`: die Folge beachtet kein physisch gehaltenes Shift oder Alt. Folge: gehaltenes Shift macht aus Alt + u die Folge Alt + Shift + u; das Alt-Release löst ein gehaltenes Alt. Korrektur: gehaltene Modifier vor der Folge lösen und danach wiederherstellen.
-- `firmware/dactyl_right/DactylLogic.h:150` `sendUmlaut` auf der linken Hälfte: `delay(5)` verzögert nur das Einreihen in die ESP-NOW-Warteschlange. Folge: der Master sendet Alt, u und Vokal ohne Abstand an macOS. Korrektur: einen Test für die linke Hälfte ergänzen und die Tottaste auf der Hardware prüfen.
-- `firmware/tests/test_firmware_logic.cpp:1710`: kein Test prüft einen Umlaut als Doppel-Tipp-Aktion oder als Halten, das ein Tastendruck einer anderen Taste erzwingt. Folge: ein Fehler in diesen Pfaden bleibt unentdeckt. Korrektur: Tests für den Doppel-Tipp-Pfad und das erzwungene Halten ergänzen.
-- `AGENTS.md` (Abschnitt "macOS layout U.S."): der Text nennt `§` auf HID `0x64` ohne den Hinweis auf den macOS-Tastaturtyp. Folge: mit Tastaturtyp ANSI vertauscht macOS HID `0x35` und `0x64`, dann erscheint `§` nicht. Korrektur: den ISO/ANSI-Hinweis für `KEY_NON_US_BACKSLASH` wieder aufnehmen.
+- Keine offenen Befunde. Die 13 Befunde aus dem Review der linken Hälfte und der Umstellung auf "U.S." und die 2 Befunde aus deren Review sind erledigt.
+- Hardware-Prüfung offen: Tottaste Alt + u eines Umlauts auf der linken Hälfte am Mac testen. Der Host-Test prüft nur die Reihenfolge der `SplitHidEvent`s; der Master sendet sie ohne Abstand.
 
 
 ## Tooling & Qualität

@@ -266,8 +266,10 @@ public:
   BleKeyboard(std::string n, std::string m, uint8_t b) : name(n), mfr(m), batt(b) {}
   bool isConnected() { return connected; }
   std::vector<uint8_t> pressHistory; // jeder press() an den Host, wird von releaseAll() nicht geleert
-  void press(uint8_t k) { pressedKeys.push_back(k); pressHistory.push_back(k); }
+  std::vector<int> keyEvents;        // +code = press, -code = release, in Aufrufreihenfolge
+  void press(uint8_t k) { pressedKeys.push_back(k); pressHistory.push_back(k); keyEvents.push_back(k); }
   void release(uint8_t k) {
+    keyEvents.push_back(-(int)k);
     auto it = std::find(pressedKeys.begin(), pressedKeys.end(), k);
     if (it != pressedKeys.end()) pressedKeys.erase(it);
   }

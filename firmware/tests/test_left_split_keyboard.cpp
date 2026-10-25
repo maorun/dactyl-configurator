@@ -335,6 +335,32 @@ TEST(test_get_info_reports_left_names) {
   assert(Serial.outputLines.back().find("\"name\":\"Dactyl Config L\"") != std::string::npos);
 }
 
+// Umlaut auf der linken Hälfte: die Tottaste geht als einzelne PRESS/RELEASE-Ereignisse in Reihenfolge an den
+// Master (jedes Ereignis ist dort ein eigener HID-Report); ein gehaltenes Shift wird gelöst und wiederhergestellt
+TEST(test_umlaut_sequence_is_queued_in_order) {
+  KEYMAP[0][2][4] = ACT_UMLAUT_OE;
+  KEYMAP[0][3][0] = KEY_LEFT_SHIFT;
+  keyState[3][0] = true;
+  onMatrixKeyChange(3, 0, true);
+  drain();
+  keyState[2][4] = true;
+  onMatrixKeyChange(2, 4, true);
+  std::vector<SplitHidEvent> ev = drain();
+  const uint8_t P = SPLIT_OP_KEY_PRESS, R = SPLIT_OP_KEY_RELEASE;
+  const SplitHidEvent expected[] = {
+    { R, 0, KEY_LEFT_SHIFT }, { P, 0, KEY_LEFT_ALT }, { P, 0, 'u' }, { R, 0, 'u' }, { R, 0, KEY_LEFT_ALT },
+    { P, 0, 'o' }, { R, 0, 'o' }, { P, 0, KEY_LEFT_SHIFT }
+  };
+  assert(ev.size() == sizeof(expected) / sizeof(expected[0]));
+  for (size_t i = 0; i < ev.size(); i++) {
+    assert(is(ev[i], expected[i].op, expected[i].code));
+    assert(splitEventRetryable(ev[i]));                // PRESS/RELEASE sind idempotent und dürfen wiederholt werden
+  }
+  keyState[2][4] = false;
+  onMatrixKeyChange(2, 4, false);
+  assert(drain().empty());                              // das Loslassen sendet nichts nach
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Split-Keyboard Proxy Test Suite" << std::endl;

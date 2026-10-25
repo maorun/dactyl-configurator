@@ -142,21 +142,69 @@ bool isUmlautAction(uint16_t action) {
   return action >= ACT_UMLAUT_BASE && action < ACT_UMLAUT_BASE + NUM_UMLAUT_ACTIONS;
 }
 
+// true, wenn (r, c) zu einer aktiven Combo gehört: deren Tasten sind verbraucht (releaseAll), ihre
+// pressedAction ist nicht am Host gedrückt
+bool isActiveComboMember(uint8_t r, uint8_t c) {
+  for (uint8_t i = 0; i < numCombos; i++) {
+    if (!comboRuntime[i].active) continue;
+    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) || (userCombos[i].r2 == r && userCombos[i].c2 == c)) return true;
+  }
+  return false;
+}
+
+// Bitmaske der Modifier (Bit i = Code 0x80 + i), die diese Hälfte gerade am Host hält: Tasten, Tastenpaare
+// und Combos mit MODIFIER_HOLD. Große und gesetzte ASCII-Zeichen ('A', '!') halten implizit das linke Shift.
+uint8_t heldModifierMask() {
+  uint8_t mask = 0;
+  auto add = [&mask](uint16_t code) {
+    if (code >= KEY_LEFT_CTRL && code <= KEY_RIGHT_GUI) mask |= (uint8_t)(1 << (code - KEY_LEFT_CTRL));
+    else if (code > 0 && code < 0x80 && (dactylAsciiToHid((uint8_t)code) & DACTYL_ASCII_SHIFT))
+      mask |= (uint8_t)(1 << (KEY_LEFT_SHIFT - KEY_LEFT_CTRL));
+  };
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (!keySentToHost[r][c] || isActiveComboMember(r, c)) continue;
+      uint16_t act = pressedAction[r][c];
+      const KeyPair* p = keyPairForAction(act);
+      if (p) {
+        add(p->first);
+        add(p->second);
+      } else {
+        add(act);
+      }
+    }
+  }
+  for (uint8_t i = 0; i < numCombos; i++) {
+    if (comboRuntime[i].active && userCombos[i].behavior == 1) add(userCombos[i].action);
+  }
+  return mask;
+}
+
 // Tottaste Alt + u, danach der Vokal; Großbuchstaben über das ASCII-Zeichen (Shift implizit). ß = Alt + s.
+// Gehaltene Modifier (z. B. Shift) werden vorher gelöst und danach wiederhergestellt: sonst käme Alt + Shift + u
+// an, und das Release der Folge löste ein gehaltenes Alt.
 void sendUmlaut(uint16_t action) {
   static const char vowels[NUM_UMLAUT_ACTIONS] = { 'a', 'o', 'u', 'A', 'O', 'U', 0 };
   if (!isUmlautAction(action)) return;
-  uint8_t idx = action - ACT_UMLAUT_BASE;
+  char vowel = vowels[action - ACT_UMLAUT_BASE];
+  uint8_t held = heldModifierMask();
+  for (uint8_t i = 0; i < 8; i++) {
+    if (held & (1 << i)) bleKeyboard.release((uint8_t)(KEY_LEFT_CTRL + i));
+  }
   bleKeyboard.press(KEY_LEFT_ALT);
-  bleKeyboard.press(vowels[idx] ? 'u' : 's');
+  bleKeyboard.press(vowel ? 'u' : 's');
   delay(5);
-  bleKeyboard.release(vowels[idx] ? 'u' : 's');
+  bleKeyboard.release(vowel ? 'u' : 's');
   bleKeyboard.release(KEY_LEFT_ALT);
-  if (!vowels[idx]) return;
-  delay(5);
-  bleKeyboard.press(vowels[idx]);
-  delay(5);
-  bleKeyboard.release(vowels[idx]);
+  if (vowel) {
+    delay(5);
+    bleKeyboard.press(vowel);
+    delay(5);
+    bleKeyboard.release(vowel);
+  }
+  for (uint8_t i = 0; i < 8; i++) {
+    if (held & (1 << i)) bleKeyboard.press((uint8_t)(KEY_LEFT_CTRL + i));
+  }
 }
 
 // -----------------------------------------------------------------------------

@@ -25,7 +25,9 @@ const code = [
   section("const DEFAULT_LAYER_NAMES", "// BLE GATT"),
   section("const ACTION_TO_NUMERIC", "// Standard-Konfiguration"),
   section("// Matrix- und Firmware-Grenzen", "// State\n"),
-  section("// Alte Configs speichern Modifier-Halte-Aktionen", "function fillKeycodeSelect")
+  section("// Alte Configs speichern Modifier-Halte-Aktionen", "function appendOptionGroup"),
+  section("// Sichtbarkeit der Optionen bei einer Suche", "// Auswahl-IDs, deren Suche"),
+  section("// Precise physical scancode mapping", "function getHeldKeyboardLayer")
 ].join("\n");
 
 const ctx = {};
@@ -42,7 +44,10 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
-             removeKeyPairAt, KEYCODES, PRESETS, UMLAUT_LABELS, holdSublabel };`, ctx);
+             removeKeyPairAt, KEYCODES, PRESETS, UMLAUT_LABELS, holdSublabel,
+             planKeyPairDeletion, hasPendingPairChange, keyNeedsStagedPairs,
+             deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
+             SCANCODE_MAP_RIGHT, ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode };`, ctx);
 const api = ctx.api;
 const R = api.SIDE_PROFILES.R;
 const L = api.SIDE_PROFILES.L;
@@ -651,6 +656,134 @@ test("Suchfeld: Teilstring ohne Groß-/Kleinschreibung", () => {
   assert.ok(api.keycodeOptionMatches("A (KEY_A)", ""));
   assert.ok(api.keycodeOptionMatches("A (KEY_A)", undefined));
   assert.ok(!api.keycodeOptionMatches(undefined, "a"));
+});
+
+const p = (a, b) => ({ first: a, second: b });
+
+test("Tastenpaar: alte Zellen im String-Format zählen als Nutzung", () => {
+  const layers = [[["PAIR_2", "KEY_A"]], [[{ tap: "KEY_B", hold: "NONE", dtap: "NONE" }]]];
+  assert.ok(api.isKeyPairUsed(layers, 2));
+  assert.ok(!api.isKeyPairUsed(layers, 1));
+  assert.ok(!api.isKeyPairUsed([[["PAIR_20"]]], 2));
+  // deleteKeyPair fragt deshalb nach und removeKeyPairAt leert die Zelle
+  const plan = api.planKeyPairDeletion({ keyPairs: [p("KEY_A", "KEY_B"), p("KEY_C", "KEY_D"), p("KEY_E", "KEY_F")], layers, combos: [] }, 2);
+  assert.strictEqual(plan.used, true);
+  assert.strictEqual(plan.next.layers[0][0][0], "NONE");
+});
+
+test("Tastenpaar löschen: Nachfrage, Snapshot-Zustand und Revert", () => {
+  const config = {
+    keyPairs: [p("KEY_A", "KEY_B"), p("KEY_C", "KEY_D")],
+    layers: [[[{ label: "x", tap: "PAIR_1", hold: "NONE", dtap: "NONE" }, { label: "y", tap: "KEY_A", hold: "NONE", dtap: "NONE" }]]],
+    combos: [{ id: 1, action: "PAIR_0" }]
+  };
+  const before = JSON.stringify(config);
+  // Paar 1 nutzt eine Taste, Paar 0 eine Combo: beide fragen nach
+  assert.strictEqual(api.planKeyPairDeletion(config, 1).used, true);
+  const plan0 = api.planKeyPairDeletion(config, 0);
+  assert.strictEqual(plan0.used, true);
+  assert.strictEqual(plan0.shiftsFollowing, true);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(plan0.removed)), { first: "KEY_A", second: "KEY_B" });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(plan0.next.keyPairs)), [{ first: "KEY_C", second: "KEY_D" }]);
+  assert.strictEqual(plan0.next.layers[0][0][0].tap, "PAIR_0");
+  assert.strictEqual(plan0.next.combos[0].action, "NONE");
+  // Revert-Zustand: Paare, Ebenen und Combos wie vorher, unabhängig vom Original
+  assert.strictEqual(JSON.stringify(plan0.old), JSON.stringify({ keyPairs: config.keyPairs, layers: config.layers, combos: config.combos }));
+  plan0.old.layers[0][0][0].tap = "MUTATED";
+  assert.strictEqual(JSON.stringify(config), before);
+  // Ungenutztes letztes Paar: keine Nachfrage, nichts rückt auf
+  const unused = api.planKeyPairDeletion({ keyPairs: config.keyPairs, layers: [[[]]], combos: [] }, 1);
+  assert.strictEqual(unused.used, false);
+  assert.strictEqual(unused.shiftsFollowing, false);
+  assert.strictEqual(api.planKeyPairDeletion(config, 5), null);
+});
+
+test("Tastenpaar: Taste mit noch nicht synchronisierter Paar-Tabelle wird nur vorgemerkt", () => {
+  const pending = [{ type: "key_pair", pairs: true }];
+  assert.ok(api.hasPendingPairChange(pending));
+  assert.ok(!api.hasPendingPairChange([{ type: "key" }, { type: "preset", snapshot: true }]));
+  assert.ok(!api.hasPendingPairChange(undefined));
+  assert.ok(api.keyNeedsStagedPairs({ tap: "PAIR_0", hold: "NONE", dtap: "NONE" }, pending));
+  assert.ok(api.keyNeedsStagedPairs({ tap: "KEY_A", hold: "NONE", dtap: "PAIR_3" }, pending));
+  assert.ok(!api.keyNeedsStagedPairs({ tap: "KEY_A", hold: "KEY_LEFT_CTRL", dtap: "NONE" }, pending));
+  // Synchronisierte Paare: Taste darf sofort per SET_KEY gesendet werden
+  assert.ok(!api.keyNeedsStagedPairs({ tap: "PAIR_0", hold: "NONE", dtap: "NONE" }, [{ type: "key" }]));
+});
+
+test("Optionslisten: Gruppenposition, Präfix und Combo ohne Tastenpaar-Zeichen", () => {
+  const groupLabels = tree => tree.filter(n => n.options).map(n => n.label);
+  const primary = api.keycodeOptionTree({ charPairs: true });
+  const labels = groupLabels(primary);
+  assert.strictEqual(labels[labels.indexOf("Zahlen & Symbole") + 1], "Sonderzeichen (macOS US)");
+  const values = tree => tree.flatMap(n => (n.options ? n.options.map(o => o.value) : [n.value]));
+  const pairChars = api.DE_MAC_CHARS.map((e, i) => (e.pair ? api.charPairCode(i) : null)).filter(Boolean);
+  assert.ok(pairChars.length > 0);
+  pairChars.forEach(code => assert.ok(values(primary).includes(code)));
+  // Combo: keine Option-Zeichen, die ein Tastenpaar brauchen
+  const combo = api.keycodeOptionTree();
+  pairChars.forEach(code => assert.ok(!values(combo).includes(code)));
+  assert.ok(values(combo).includes("KEY_NON_US_BACKSLASH"));
+  // Halten: "Keine" oben, Präfix vor jeder Option, kein zweites NONE
+  const hold = api.keycodeOptionTree({ holdMode: true, charPairs: true });
+  assert.strictEqual(hold[0].value, "NONE");
+  assert.strictEqual(values(hold).filter(v => v === "NONE").length, 1);
+  hold.filter(n => n.options).forEach(g => g.options.forEach(o => assert.ok(o.text.startsWith("Halten = "), o.text)));
+  const dtap = api.keycodeOptionTree({ holdMode: true, prefix: api.OPTIONAL_ACTION_PREFIX.dtapActionSelect, charPairs: true });
+  dtap.filter(n => n.options).forEach(g => g.options.forEach(o => assert.ok(o.text.startsWith("2× Tippen = "), o.text)));
+});
+
+test("Suchfeld: Filter ohne Präfix, Gruppentreffer und Trefferzahl", () => {
+  const prefix = api.OPTIONAL_ACTION_PREFIX.holdActionSelect;
+  const tree = api.keycodeOptionTree({ holdMode: true, charPairs: true });
+  const total = tree.reduce((n, node) => n + (node.options ? node.options.length : 1), 0);
+  // "halten", "tippen" und "=" treffen nicht jede Option über das Präfix
+  ["halten", "=", " = "].forEach(q => {
+    const r = api.filterOptionNodes(tree, q, prefix);
+    assert.ok(r.matches < total / 2, `${q}: ${r.matches} von ${total}`);
+  });
+  const dtapTree = api.keycodeOptionTree({ holdMode: true, prefix: api.OPTIONAL_ACTION_PREFIX.dtapActionSelect });
+  assert.strictEqual(api.filterOptionNodes(dtapTree, "tippen", api.OPTIONAL_ACTION_PREFIX.dtapActionSelect).matches, 0);
+  // Ein echter Treffer bleibt sichtbar, leere Gruppen werden ausgeblendet
+  const r = api.filterOptionNodes(tree, "doppelpunkt", prefix);
+  assert.strictEqual(r.matches, 1);
+  const visibleGroups = tree.filter((n, i) => n.options && r.nodes[i].visible).map(n => n.label);
+  assert.deepStrictEqual(Array.from(visibleGroups), ["Sonderzeichen (macOS US)"]);
+  // Passt der Gruppenname, bleibt die ganze Gruppe sichtbar
+  const g = api.filterOptionNodes([{ label: "Media", options: [{ text: "Play" }, { text: "Mute" }] }], "media");
+  assert.deepStrictEqual(Array.from(g.nodes[0].options), [true, true]);
+  // Leere Suche zeigt alles
+  assert.strictEqual(api.filterOptionNodes(tree, "", prefix).matches, total);
+});
+
+test("Suchfeld: Hinweis sperrt ohne Treffer und nennt eine ausgeblendete Auswahl", () => {
+  const plain = o => JSON.parse(JSON.stringify(o));
+  assert.deepStrictEqual(plain(api.selectFilterHint("", 0, true, "x")), { text: "", blocked: false });
+  assert.deepStrictEqual(plain(api.selectFilterHint("zz", 0, true, "x")), { text: "Keine Treffer. Suche ändern, um zu übernehmen.", blocked: true });
+  assert.deepStrictEqual(plain(api.selectFilterHint("ctrl", 3, true, "Halten = A (KEY_A)")), { text: "Gewählt bleibt: Halten = A (KEY_A)", blocked: false });
+  assert.deepStrictEqual(plain(api.selectFilterHint("ctrl", 3, false, "x")), { text: "", blocked: false });
+  // applySelectFilter setzt select.value nicht mehr (die Auswahl ändert nur eine explizite Wahl)
+  const filterSrc = src.slice(src.indexOf("function applySelectFilter"), src.indexOf("function updateFilterBlockedButton"));
+  assert.ok(!/select\.value\s*=/.test(filterSrc));
+});
+
+test("Live-Monitor: US-Beschriftungen und Umlaut-Zuordnung", () => {
+  const m = api.SCANCODE_MAP_RIGHT;
+  assert.deepStrictEqual([m.Minus.label, m.BracketLeft.label, m.Semicolon.label, m.Quote.label, m.Slash.label], ["-", "[", ";", "'", "/"]);
+  // Keine Y/Z-Vertauschung mehr (macOS "U.S.")
+  assert.deepStrictEqual(Array.from(api.ACTION_CODE_TO_EVENT_CODES.KEY_Y), ["KeyY"]);
+  assert.deepStrictEqual(Array.from(api.ACTION_CODE_TO_EVENT_CODES.KEY_Z), ["KeyZ"]);
+  // Jede Umlaut-Aktion hat einen Eintrag
+  Object.keys(api.UMLAUT_LABELS).forEach(code => assert.ok(api.ACTION_CODE_TO_EVENT_CODES[code], code));
+  const key = (tap, label) => ({ label, tap, hold: "NONE", dtap: "NONE" });
+  const layer = [[], [key("KEY_U", "U"), key("UMLAUT_UE", "ü")], [key("KEY_S", "S"), key("UMLAUT_OE", "ö"), key("UMLAUT_SZ", "ß")]];
+  // Tottaste Alt + u leuchtet die Umlaut-Taste auf, ein u ohne Alt die U-Taste
+  assert.strictEqual(api.findKeyForEventCode(layer, "KeyU", true).key.label, "ü");
+  assert.strictEqual(api.findKeyForEventCode(layer, "KeyU", false).key.label, "U");
+  assert.strictEqual(api.findKeyForEventCode(layer, "KeyS", true).key.label, "ß");
+  assert.strictEqual(api.findKeyForEventCode(layer, "KeyS", false).key.label, "S");
+  // Mit Alt, aber ohne passende Umlaut-Taste: normale Taste
+  assert.strictEqual(api.findKeyForEventCode([[key("KEY_U", "U")]], "KeyU", true).key.label, "U");
+  assert.strictEqual(api.findKeyForEventCode(layer, "KeyQ", false), null);
 });
 
 console.log(`\n${passed} app.js-Tests bestanden.`);

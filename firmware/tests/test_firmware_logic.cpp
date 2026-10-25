@@ -161,6 +161,7 @@ void resetState() {
   bleKeyboard.connected = true;
   bleKeyboard.writtenKeys.clear();
   bleKeyboard.pressHistory.clear();
+  bleKeyboard.keyEvents.clear();
   isConfigMode = false;
   enterConfigRequested = false;
   exitConfigRequested = false;
@@ -1798,6 +1799,142 @@ TEST(test_umlaut_action_as_hold_and_combo_candidate) {
   checkUserCombos();
   expected = { KEY_LEFT_ALT, 's' };
   assert(bleKeyboard.pressHistory == expected);
+}
+
+// Gehaltene Modifier: vor der Folge gelöst, danach wiederhergestellt (kein Alt + Shift + u, Alt bleibt gehalten)
+TEST(test_umlaut_releases_and_restores_held_modifiers) {
+  resetState();
+  KEYMAP[0][3][5] = KEY_LEFT_SHIFT;
+  KEYMAP[0][2][4] = ACT_UMLAUT_OE;
+  setMillis(1000);
+  keyState[3][5] = true; onMatrixKeyChange(3, 5, true);
+  bleKeyboard.keyEvents.clear();
+  setMillis(1100);
+  keyState[2][4] = true; onMatrixKeyChange(2, 4, true);
+  std::vector<int> expected = { -KEY_LEFT_SHIFT, KEY_LEFT_ALT, 'u', -'u', -KEY_LEFT_ALT, 'o', -'o', KEY_LEFT_SHIFT };
+  assert(bleKeyboard.keyEvents == expected);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == KEY_LEFT_SHIFT);
+  keyState[2][4] = false; onMatrixKeyChange(2, 4, false);
+  keyState[3][5] = false; onMatrixKeyChange(3, 5, false);
+  assert(bleKeyboard.pressedKeys.empty());
+
+  // Gehaltenes Alt bleibt nach der Folge gedrückt
+  resetState();
+  KEYMAP[0][4][5] = KEY_LEFT_ALT;
+  KEYMAP[0][0][5] = ACT_UMLAUT_SZ;
+  keyState[4][5] = true; onMatrixKeyChange(4, 5, true);
+  bleKeyboard.keyEvents.clear();
+  keyState[0][5] = true; onMatrixKeyChange(0, 5, true);
+  expected = { -KEY_LEFT_ALT, KEY_LEFT_ALT, 's', -'s', -KEY_LEFT_ALT, KEY_LEFT_ALT };
+  assert(bleKeyboard.keyEvents == expected);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == KEY_LEFT_ALT);
+
+  // Ein Tastenpaar mit Modifier zählt ebenfalls als gehalten
+  resetState();
+  numKeyPairs = 1;
+  userKeyPairs[0] = { KEY_LEFT_GUI, 'c' };
+  KEYMAP[0][3][0] = ACT_KEY_PAIR_BASE;
+  KEYMAP[0][2][5] = ACT_UMLAUT_AE;
+  keyState[3][0] = true; onMatrixKeyChange(3, 0, true);
+  bleKeyboard.keyEvents.clear();
+  keyState[2][5] = true; onMatrixKeyChange(2, 5, true);
+  assert(bleKeyboard.keyEvents.front() == -KEY_LEFT_GUI && bleKeyboard.keyEvents.back() == KEY_LEFT_GUI);
+
+  // Ein gehaltenes Zeichen mit implizitem Shift ('A') zählt als gehaltenes Shift
+  resetState();
+  KEYMAP[0][2][0] = 'A';
+  KEYMAP[0][2][4] = ACT_UMLAUT_OE;
+  keyState[2][0] = true; onMatrixKeyChange(2, 0, true);
+  bleKeyboard.keyEvents.clear();
+  keyState[2][4] = true; onMatrixKeyChange(2, 4, true);
+  expected = { -KEY_LEFT_SHIFT, KEY_LEFT_ALT, 'u', -'u', -KEY_LEFT_ALT, 'o', -'o', KEY_LEFT_SHIFT };
+  assert(bleKeyboard.keyEvents == expected);
+
+  // Ohne gehaltene Modifier bleibt die Folge unverändert
+  resetState();
+  KEYMAP[0][2][4] = ACT_UMLAUT_OE;
+  onMatrixKeyChange(2, 4, true);
+  expected = { KEY_LEFT_ALT, 'u', -'u', -KEY_LEFT_ALT, 'o', -'o' };
+  assert(bleKeyboard.keyEvents == expected);
+}
+
+// Umlaut während einer aktiven Combo: MODIFIER_HOLD hält seinen Modifier und wird wiederhergestellt;
+// die verbrauchten Combo-Tasten (releaseAll) zählen nicht als gehalten
+TEST(test_umlaut_during_active_combo) {
+  resetState();
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  KEYMAP[0][2][4] = ACT_UMLAUT_OE;
+  numCombos = 1;
+  userCombos[0] = { 2, 1, 2, 2, 1, KEY_LEFT_CTRL }; // MODIFIER_HOLD Ctrl
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  bleKeyboard.keyEvents.clear();
+  setMillis(1100);
+  keyState[2][4] = true; onMatrixKeyChange(2, 4, true);
+  std::vector<int> expected = { -KEY_LEFT_CTRL, KEY_LEFT_ALT, 'u', -'u', -KEY_LEFT_ALT, 'o', -'o', KEY_LEFT_CTRL };
+  assert(bleKeyboard.keyEvents == expected);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == KEY_LEFT_CTRL);
+
+  // KEY_PRESS-Combo aus zwei Shift-Tasten: nach releaseAll() ist kein Shift am Host, die Folge stellt keins her
+  resetState();
+  KEYMAP[0][3][4] = KEY_LEFT_SHIFT;
+  KEYMAP[0][3][5] = KEY_LEFT_SHIFT;
+  KEYMAP[0][2][4] = ACT_UMLAUT_OE;
+  numCombos = 1;
+  userCombos[0] = { 3, 4, 3, 5, 0, KEY_ESC };
+  setMillis(2000);
+  keyState[3][4] = true; onMatrixKeyChange(3, 4, true);
+  keyState[3][5] = true; onMatrixKeyChange(3, 5, true);
+  checkUserCombos();
+  assert(comboRuntime[0].active && keySentToHost[3][4] && keySentToHost[3][5]);
+  bleKeyboard.keyEvents.clear();
+  setMillis(2100);
+  keyState[2][4] = true; onMatrixKeyChange(2, 4, true);
+  expected = { KEY_LEFT_ALT, 'u', -'u', -KEY_LEFT_ALT, 'o', -'o' };
+  assert(bleKeyboard.keyEvents == expected);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// Umlaut als Doppel-Tipp-Aktion und als Halten, das der Druck einer anderen Taste erzwingt
+TEST(test_umlaut_as_double_tap_and_forced_hold) {
+  resetState();
+  KEYMAP[0][2][4] = ';';
+  DTAPMAP[0][2][4] = ACT_UMLAUT_OE;
+  tapKeyAt(2, 4, 1000, 1050);
+  assert(bleKeyboard.pressHistory.empty());            // erster Tipp wartet auf das Fenster
+  setMillis(1100);
+  keyState[2][4] = true; onMatrixKeyChange(2, 4, true);
+  std::vector<uint8_t> expected = { KEY_LEFT_ALT, 'u', 'o' };
+  assert(bleKeyboard.pressHistory == expected);
+  assert(bleKeyboard.pressedKeys.empty());
+  setMillis(1300);
+  keyState[2][4] = false; onMatrixKeyChange(2, 4, false);
+  setMillis(2000);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressHistory == expected);       // kein Tap ';' und keine zweite Folge
+  assert(countPresses(';') == 0);
+
+  // Erzwungenes Halten: eine andere Taste entscheidet die Taste sofort als Halten
+  resetState();
+  KEYMAP[0][2][3] = 'l';
+  HOLDMAP[0][2][3] = ACT_UMLAUT_AE;
+  KEYMAP[0][2][0] = 'h';
+  setMillis(1000);
+  keyState[2][3] = true; onMatrixKeyChange(2, 3, true);
+  setMillis(1050);
+  keyState[2][0] = true; onMatrixKeyChange(2, 0, true);
+  expected = { KEY_LEFT_ALT, 'u', 'a', 'h' };
+  assert(bleKeyboard.pressHistory == expected);       // Folge vor der abhängigen Taste
+  keyState[2][0] = false; onMatrixKeyChange(2, 0, false);
+  setMillis(1500);
+  processDeferredKeys(millis());
+  keyState[2][3] = false; onMatrixKeyChange(2, 3, false);
+  assert(bleKeyboard.pressHistory == expected);       // kein Tap 'l', keine zweite Folge
+  assert(bleKeyboard.pressedKeys.empty());
 }
 
 int main() {

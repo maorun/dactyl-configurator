@@ -708,10 +708,35 @@ function isKeyPairMember(code) {
   return n >= 1 && n <= 0xFF;
 }
 
-// true, wenn eine Taste einer Ebene PAIR_<idx> als Tap, Halten oder Doppel-Tipp nutzt
+// true, wenn eine Taste einer Ebene PAIR_<idx> als Tap, Halten oder Doppel-Tipp nutzt.
+// Alte Zellen im String-Format ("PAIR_2") zählen als Tap-Aktion.
 function isKeyPairUsed(layers, idx) {
   const code = `PAIR_${idx}`;
-  return (layers || []).some(layer => (layer || []).some(row => (row || []).some(k => k && (k.tap === code || k.hold === code || k.dtap === code))));
+  const uses = k => (typeof k === "string" ? k === code : !!k && (k.tap === code || k.hold === code || k.dtap === code));
+  return (layers || []).some(layer => (layer || []).some(row => (row || []).some(uses)));
+}
+
+// Löschen eines Tastenpaars als reine Funktion: used = Tasten oder Combos nutzen das Paar (Nachfrage),
+// next = neuer Zustand (removeKeyPairAt), old = Kopie des alten Zustands für den Revert. null = ungültiger Index.
+function planKeyPairDeletion(config, idx) {
+  const next = removeKeyPairAt(config, idx);
+  if (!next) return null;
+  const code = `PAIR_${idx}`;
+  const used = isKeyPairUsed(config.layers, idx) || (config.combos || []).some(cb => cb && cb.action === code);
+  const old = JSON.parse(JSON.stringify({ keyPairs: config.keyPairs, layers: config.layers || [], combos: config.combos || [] }));
+  return { used, next, old, removed: { ...config.keyPairs[idx] }, shiftsFollowing: idx < config.keyPairs.length - 1 };
+}
+
+// true, wenn eine vorgemerkte Änderung die Paar-Tabelle ändert (Flag pairs): das Gerät kennt die
+// lokalen PAIR_<n> dann erst nach dem nächsten Sync
+function hasPendingPairChange(changes) {
+  return (changes || []).some(ch => ch && ch.pairs);
+}
+
+// Eine Taste mit PAIR_<n> darf nur vorgemerkt werden, solange die Paar-Tabelle noch nicht synchronisiert ist
+function keyNeedsStagedPairs(actions, changes) {
+  const usesPair = Object.values(actions || {}).some(code => pairIndexFromCode(code) >= 0);
+  return usesPair && hasPendingPairChange(changes);
 }
 
 // Entfernt das Tastenpaar idx und nummeriert die Verweise neu: PAIR_idx wird "NONE", PAIR_n mit n > idx
@@ -1249,7 +1274,8 @@ function markPendingSync(changeOrSummary = "", side = editSide) {
         description: changeOrSummary.description || "",
         // Revert-Closures schreiben in currentConfig und gelten nur für die bearbeitete Hälfte
         revert: null,
-        snapshot: !!changeOrSummary.snapshot
+        snapshot: !!changeOrSummary.snapshot,
+        pairs: !!changeOrSummary.pairs
       });
     }
     return;
@@ -1273,7 +1299,8 @@ function markPendingSync(changeOrSummary = "", side = editSide) {
       title: changeOrSummary.title || "Änderung",
       description: changeOrSummary.description || "",
       revert: changeOrSummary.revert || null,
-      snapshot: !!changeOrSummary.snapshot
+      snapshot: !!changeOrSummary.snapshot,
+      pairs: !!changeOrSummary.pairs
     };
   }
   if (changeObj) {
@@ -1676,42 +1703,63 @@ function holdSublabel(code) {
 // Präfix der Optionen in den Auswahllisten für Halte- und Doppel-Tipp-Aktion
 const OPTIONAL_ACTION_PREFIX = { holdActionSelect: "Halten = ", dtapActionSelect: "2× Tippen = " };
 
-// Gruppe "Sonderzeichen (macOS US)"; charPairs = auch Option-Zeichen, die ein Tastenpaar brauchen
-function appendDeMacCharGroup(select, { charPairs = false, prefix = "" } = {}) {
-  const optgroup = document.createElement("optgroup");
-  optgroup.label = "Sonderzeichen (macOS US)";
+// Gruppe "Sonderzeichen (macOS US)" als Daten; charPairs = auch Option-Zeichen, die ein Tastenpaar brauchen
+function deMacCharGroup({ charPairs = false, prefix = "" } = {}) {
+  const options = [];
   DE_MAC_CHARS.forEach((entry, i) => {
     if (entry.pair && !charPairs) return;
+    options.push({
+      value: entry.pair ? charPairCode(i) : entry.code,
+      text: `${prefix}${entry.char} ${entry.name} (${entry.hint}${entry.pair ? ", Tastenpaar" : ""})`
+    });
+  });
+  return { label: "Sonderzeichen (macOS US)", options };
+}
+
+// Optionsliste einer Aktions-Auswahl als Daten: Einträge { value, text } oder Gruppen { label, options }.
+// holdMode = Halte- bzw. Doppel-Tipp-Aktion mit "Keine" oben und Präfix vor jeder Option.
+function keycodeOptionTree({ holdMode = false, prefix = "Halten = ", charPairs = false } = {}) {
+  const tree = [];
+  // Halte- bzw. Doppel-Tipp-Aktion: jede Aktion ist erlaubt (Modifier, Layer, Media, Maus)
+  if (holdMode) tree.push({ value: "NONE", text: "-- Keine (Nur Einzeltaste) --" });
+  KEYCODES.forEach(group => {
+    const options = group.keys
+      .filter(k => !(holdMode && k.code === "NONE")) // "Keine" steht bereits oben
+      .map(k => ({ value: k.code, text: holdMode ? `${prefix}${k.label} (${k.code})` : `${k.label} (${k.code})` }));
+    tree.push({ label: group.group, options });
+    // Sonderzeichen direkt nach "Zahlen & Symbole"
+    if (group.group === "Zahlen & Symbole") tree.push(deMacCharGroup({ charPairs, prefix: holdMode ? prefix : "" }));
+  });
+  return tree;
+}
+
+function appendOptionGroup(select, group) {
+  const optgroup = document.createElement("optgroup");
+  optgroup.label = group.label;
+  group.options.forEach(o => {
     const opt = document.createElement("option");
-    opt.value = entry.pair ? charPairCode(i) : entry.code;
-    opt.textContent = `${prefix}${entry.char} ${entry.name} (${entry.hint}${entry.pair ? ", Tastenpaar" : ""})`;
+    opt.value = o.value;
+    opt.textContent = o.text;
     optgroup.appendChild(opt);
   });
   select.appendChild(optgroup);
 }
 
-function fillKeycodeSelect(select, { holdMode = false, prefix = "Halten = ", charPairs = false } = {}) {
+function appendDeMacCharGroup(select, options = {}) {
+  appendOptionGroup(select, deMacCharGroup(options));
+}
+
+function fillKeycodeSelect(select, options = {}) {
   select.innerHTML = "";
-  if (holdMode) {
-    // Halte- bzw. Doppel-Tipp-Aktion: jede Aktion ist erlaubt (Modifier, Layer, Media, Maus)
-    const none = document.createElement("option");
-    none.value = "NONE";
-    none.textContent = "-- Keine (Nur Einzeltaste) --";
-    select.appendChild(none);
-  }
-  KEYCODES.forEach(group => {
-    const optgroup = document.createElement("optgroup");
-    optgroup.label = group.group;
-    group.keys.forEach(k => {
-      if (holdMode && k.code === "NONE") return; // "Keine" steht bereits oben
-      const opt = document.createElement("option");
-      opt.value = k.code;
-      opt.textContent = holdMode ? `${prefix}${k.label} (${k.code})` : `${k.label} (${k.code})`;
-      optgroup.appendChild(opt);
-    });
-    select.appendChild(optgroup);
-    // Sonderzeichen direkt nach "Zahlen & Symbole"
-    if (group.group === "Zahlen & Symbole") appendDeMacCharGroup(select, { charPairs, prefix: holdMode ? prefix : "" });
+  keycodeOptionTree(options).forEach(node => {
+    if (node.options) {
+      appendOptionGroup(select, node);
+      return;
+    }
+    const opt = document.createElement("option");
+    opt.value = node.value;
+    opt.textContent = node.text;
+    select.appendChild(opt);
   });
 }
 
@@ -1727,31 +1775,86 @@ function populateKeycodeSelects() {
   });
 }
 
-// Suchfeld über einer Aktions-Auswahl: blendet nicht passende Optionen und leere Gruppen aus. Passt der
-// Gruppenname, bleibt die ganze Gruppe sichtbar. Ist die gewählte Option ausgeblendet, gilt die erste sichtbare.
+// Sichtbarkeit der Optionen bei einer Suche, als reine Funktion. nodes: Einträge { text } oder Gruppen
+// { label, options: [{ text }] }. Passt der Gruppenname, bleibt die ganze Gruppe sichtbar. prefix ("Halten = ")
+// wird vor dem Vergleich vom Optionstext entfernt. Liefert { nodes, matches } mit visible pro Eintrag.
+function filterOptionNodes(nodes, query, prefix = "") {
+  const strip = text => (prefix && String(text).startsWith(prefix) ? String(text).slice(prefix.length) : text);
+  let matches = 0;
+  const result = (nodes || []).map(node => {
+    if (node.options) {
+      const groupMatch = String(query || "").trim() !== "" && keycodeOptionMatches(node.label, query);
+      const options = node.options.map(o => groupMatch || keycodeOptionMatches(strip(o.text), query));
+      const visible = options.filter(Boolean).length;
+      matches += visible;
+      return { visible: visible > 0, options };
+    }
+    const visible = keycodeOptionMatches(strip(node.text), query);
+    if (visible) matches++;
+    return { visible };
+  });
+  return { nodes: result, matches };
+}
+
+// Hinweis unter einer gefilterten Auswahl. Die Suche ändert die Auswahl nie: ohne Treffer wird das
+// Übernehmen gesperrt, eine ausgeblendete gewählte Option bleibt gewählt und wird genannt.
+function selectFilterHint(query, matches, selectedHidden, selectedText) {
+  if (String(query || "").trim() === "") return { text: "", blocked: false };
+  if (matches === 0) return { text: "Keine Treffer. Suche ändern, um zu übernehmen.", blocked: true };
+  if (selectedHidden) return { text: `Gewählt bleibt: ${selectedText}`, blocked: false };
+  return { text: "", blocked: false };
+}
+
+// Auswahl-IDs, deren Suche den Übernehmen- bzw. Speichern-Knopf sperrt
+const FILTER_BLOCKS_BUTTON = {
+  primaryActionSelect: "btnApplyKey", holdActionSelect: "btnApplyKey", dtapActionSelect: "btnApplyKey",
+  comboActionSelect: "btnSaveCombo"
+};
+
+// Suchfeld über einer Aktions-Auswahl: blendet nicht passende Optionen und leere Gruppen aus.
+// Die gewählte Option bleibt gewählt, auch wenn sie ausgeblendet ist (nur eine explizite Wahl ändert sie).
 function applySelectFilter(selectId) {
   const select = document.getElementById(selectId);
   const input = document.querySelector(`[data-filter-for="${selectId}"]`);
   if (!select || !input) return;
   const query = input.value;
-  Array.from(select.children).forEach(child => {
-    if (child.tagName === "OPTGROUP") {
-      const groupMatch = query.trim() !== "" && keycodeOptionMatches(child.label, query);
-      let visible = 0;
-      Array.from(child.children).forEach(opt => {
-        opt.hidden = !(groupMatch || keycodeOptionMatches(opt.textContent, query));
-        if (!opt.hidden) visible++;
-      });
-      child.hidden = visible === 0;
-    } else {
-      child.hidden = !keycodeOptionMatches(child.textContent, query);
-    }
+  const children = Array.from(select.children);
+  const nodes = children.map(child => (child.tagName === "OPTGROUP"
+    ? { label: child.label, options: Array.from(child.children).map(opt => ({ text: opt.textContent })) }
+    : { text: child.textContent }));
+  const filtered = filterOptionNodes(nodes, query, OPTIONAL_ACTION_PREFIX[selectId] || "");
+  children.forEach((child, i) => {
+    const vis = filtered.nodes[i];
+    child.hidden = !vis.visible;
+    if (child.tagName === "OPTGROUP") Array.from(child.children).forEach((opt, j) => { opt.hidden = !vis.options[j]; });
   });
   const selected = select.options[select.selectedIndex];
-  if (selected && (selected.hidden || (selected.parentElement && selected.parentElement.hidden))) {
-    const first = Array.from(select.options).find(o => !o.hidden && !(o.parentElement && o.parentElement.hidden));
-    if (first) select.value = first.value;
+  const selectedHidden = !!selected && (selected.hidden || (selected.parentElement && selected.parentElement.hidden));
+  const hint = selectFilterHint(query, filtered.matches, selectedHidden, selected ? selected.textContent : "");
+  let hintEl = select.parentElement && select.parentElement.querySelector(`[data-filter-hint-for="${selectId}"]`);
+  if (!hintEl && select.parentElement) {
+    hintEl = document.createElement("small");
+    hintEl.className = "form-hint filter-hint";
+    hintEl.dataset.filterHintFor = selectId;
+    select.insertAdjacentElement("afterend", hintEl);
   }
+  if (hintEl) {
+    hintEl.textContent = hint.text;
+    hintEl.style.display = hint.text ? "" : "none";
+  }
+  select.dataset.filterBlocked = hint.blocked ? "true" : "";
+  updateFilterBlockedButton(FILTER_BLOCKS_BUTTON[selectId]);
+}
+
+function updateFilterBlockedButton(buttonId) {
+  const btn = buttonId && document.getElementById(buttonId);
+  if (!btn) return;
+  const blocked = Object.entries(FILTER_BLOCKS_BUTTON).some(([id, b]) => {
+    const sel = document.getElementById(id);
+    return b === buttonId && sel && sel.dataset.filterBlocked === "true";
+  });
+  btn.disabled = blocked;
+  btn.title = blocked ? "Eine Suche hat keine Treffer. Suche ändern oder leeren." : "";
 }
 
 function clearSelectFilter(selectId) {
@@ -2191,6 +2294,7 @@ function addKeyPairFromUI() {
   saveConfigToServer();
   markPendingSync({
     type: "key_pair",
+    pairs: true,
     title: `Tastenpaar ${idx} hinzugefügt`,
     description: keyPairLabel(pair, keycodeLabel),
     revert: () => {
@@ -2204,13 +2308,9 @@ function addKeyPairFromUI() {
 // Löscht ein beliebiges Paar. Tasten verweisen per Index: removeKeyPairAt nummeriert die Verweise neu,
 // Tasten des gelöschten Paars werden leer. Snapshot, weil Ebenen und Combos ersetzt werden.
 function deleteKeyPair(idx) {
-  const removed = currentConfig.keyPairs[idx];
-  if (!removed) return;
-  const used = isKeyPairUsed(currentConfig.layers, idx) || (currentConfig.combos || []).some(cb => cb && cb.action === `PAIR_${idx}`);
-  if (used && !confirm(`Tastenpaar ${idx} ist noch Tasten oder Combos zugewiesen. Diese Belegungen werden geleert. Trotzdem löschen?`)) return;
-  const next = removeKeyPairAt(currentConfig, idx);
-  if (!next) return;
-  const old = JSON.parse(JSON.stringify({ keyPairs: currentConfig.keyPairs, layers: currentConfig.layers, combos: currentConfig.combos || [] }));
+  const plan = planKeyPairDeletion(currentConfig, idx);
+  if (!plan) return;
+  if (plan.used && !confirm(`Tastenpaar ${idx} ist noch Tasten oder Combos zugewiesen. Diese Belegungen werden geleert. Trotzdem löschen?`)) return;
   const apply = state => {
     currentConfig.keyPairs = state.keyPairs;
     currentConfig.layers = state.layers;
@@ -2220,13 +2320,14 @@ function deleteKeyPair(idx) {
     if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
     saveConfigToServer();
   };
-  apply(next);
+  apply(plan.next);
   markPendingSync({
     type: "key_pair",
     snapshot: true,
+    pairs: true,
     title: `Tastenpaar ${idx} gelöscht`,
-    description: `${keyPairLabel(removed, keycodeLabel)}${idx < old.keyPairs.length - 1 ? "; folgende Paare rücken auf" : ""}`,
-    revert: () => apply(old)
+    description: `${keyPairLabel(plan.removed, keycodeLabel)}${plan.shiftsFollowing ? "; folgende Paare rücken auf" : ""}`,
+    revert: () => apply(plan.old)
   });
 }
 
@@ -2337,6 +2438,7 @@ function setupEventListeners() {
 
     const changeRecord = {
       type: "key",
+      pairs: resolved.added.length > 0,
       title: `Taste [R${r}, C${c}] (${layerName})`,
       description: `${oldDesc} ➔ ${newDesc}`,
       revert: () => {
@@ -2360,6 +2462,13 @@ function setupEventListeners() {
     if (resolved.added.length) {
       markPendingSync(changeRecord, side);
       showToast("Neues Tastenpaar angelegt. Taste und Paar werden mit dem nächsten Sync übertragen.");
+      saveConfigToServer(side);
+      return;
+    }
+    // Ein wiederverwendetes Paar, dessen Tabelle noch vorgemerkt ist, kennt das Gerät ebenfalls noch nicht
+    if (keyNeedsStagedPairs({ tap, hold, dtap }, pendingFor(side))) {
+      markPendingSync(changeRecord, side);
+      showToast("Die Tastenpaare sind noch nicht synchronisiert. Die Taste wird mit dem nächsten Sync übertragen.");
       saveConfigToServer(side);
       return;
     }
@@ -2495,6 +2604,7 @@ function setupEventListeners() {
         markPendingSync({
           type: "import",
           snapshot: true,
+          pairs: true,
           title: "JSON-Konfiguration importiert",
           description: `${file.name || "Backup"} geladen`,
           revert: () => {
@@ -3928,7 +4038,7 @@ const SCANCODE_MAP_RIGHT = {
   "Digit8": { r: 0, c: 2, label: "8" },
   "Digit9": { r: 0, c: 3, label: "9" },
   "Digit0": { r: 0, c: 4, label: "0" },
-  "Minus":  { r: 0, c: 5, label: "ß" },
+  "Minus":  { r: 0, c: 5, label: "-" },
 
   // Row 1: QWERTY / QWERTZ (6 Tasten: Col 0..5)
   "KeyZ": { r: 1, c: 0, label: "Z" },
@@ -3937,22 +4047,22 @@ const SCANCODE_MAP_RIGHT = {
   "KeyI": { r: 1, c: 2, label: "I" },
   "KeyO": { r: 1, c: 3, label: "O" },
   "KeyP": { r: 1, c: 4, label: "P" },
-  "BracketLeft":  { r: 1, c: 5, label: "Ü" },
+  "BracketLeft":  { r: 1, c: 5, label: "[" },
 
   // Row 2: Home Row (Col 0..5 Finger, Col 6 ist Daumentaste R2C6)
   "KeyH": { r: 2, c: 0, label: "H" },
   "KeyJ": { r: 2, c: 1, label: "J" },
   "KeyK": { r: 2, c: 2, label: "K" },
   "KeyL": { r: 2, c: 3, label: "L" },
-  "Semicolon": { r: 2, c: 4, label: "Ö" },
-  "Quote":     { r: 2, c: 5, label: "Ä" },
+  "Semicolon": { r: 2, c: 4, label: ";" },
+  "Quote":     { r: 2, c: 5, label: "'" },
 
   // Row 3: Bottom Row (6 Tasten: Col 0..5)
   "KeyN": { r: 3, c: 0, label: "N" },
   "KeyM": { r: 3, c: 1, label: "M" },
   "Comma":  { r: 3, c: 2, label: "," },
   "Period": { r: 3, c: 3, label: "." },
-  "Slash":  { r: 3, c: 4, label: "-" },
+  "Slash":  { r: 3, c: 4, label: "/" },
   "ShiftRight": { r: 3, c: 5, label: "Shift" },
 
   // Row 4: Navigation / Mods (R4C0 existiert nicht, Tasten sind Col 1..5)
@@ -3986,7 +4096,7 @@ const ACTION_CODE_TO_EVENT_CODES = {
   "KEY_M": ["KeyM"], "KEY_N": ["KeyN"], "KEY_O": ["KeyO"], "KEY_P": ["KeyP"],
   "KEY_Q": ["KeyQ"], "KEY_R": ["KeyR"], "KEY_S": ["KeyS"], "KEY_T": ["KeyT"],
   "KEY_U": ["KeyU"], "KEY_V": ["KeyV"], "KEY_W": ["KeyW"], "KEY_X": ["KeyX"],
-  "KEY_Y": ["KeyY", "KeyZ"], "KEY_Z": ["KeyZ", "KeyY"],
+  "KEY_Y": ["KeyY"], "KEY_Z": ["KeyZ"],
   "KEY_1": ["Digit1"], "KEY_2": ["Digit2"], "KEY_3": ["Digit3"], "KEY_4": ["Digit4"],
   "KEY_5": ["Digit5"], "KEY_6": ["Digit6"], "KEY_7": ["Digit7"], "KEY_8": ["Digit8"],
   "KEY_9": ["Digit9"], "KEY_0": ["Digit0"],
@@ -4023,7 +4133,29 @@ const ACTION_CODE_TO_EVENT_CODES = {
   "KEY_RIGHT_SHIFT": ["ShiftRight"],
   "KEY_RIGHT_ALT": ["AltRight"],
   "KEY_RIGHT_GUI": ["MetaRight", "MetaLeft"],
+  // Umlaute: die Tottaste Alt + u (ß: Alt + s) kommt mit gehaltenem Alt an
+  "UMLAUT_AE": ["KeyU"], "UMLAUT_OE": ["KeyU"], "UMLAUT_UE": ["KeyU"],
+  "UMLAUT_AE_UPPER": ["KeyU"], "UMLAUT_OE_UPPER": ["KeyU"], "UMLAUT_UE_UPPER": ["KeyU"],
+  "UMLAUT_SZ": ["KeyS"],
 };
+
+// Sucht in einer Ebene die Taste, deren Tap-Aktion den Browser-Code eventCode erzeugt.
+// Mit gehaltenem Alt haben Umlaut-Tasten Vorrang (Tottaste); ohne Alt treffen Umlaute nicht.
+function findKeyForEventCode(layer, eventCode, altKey) {
+  const passes = altKey ? [true, false] : [false];
+  for (const umlautPass of passes) {
+    for (let r = 0; r < NUM_ROWS; r++) {
+      for (let c = 0; c < NUM_COLS; c++) {
+        const k = layer && layer[r] && layer[r][c];
+        if (!k || !k.tap || k.tap === "NONE") continue;
+        if (k.tap.startsWith("UMLAUT_") !== umlautPass) continue;
+        const matchingCodes = ACTION_CODE_TO_EVENT_CODES[k.tap];
+        if (matchingCodes && matchingCodes.includes(eventCode)) return { r, c, key: k };
+      }
+    }
+  }
+  return null;
+}
 
 function getHeldKeyboardLayer() {
   const base = currentConfig.layers[0];
@@ -4052,35 +4184,14 @@ function resolveKeyFromEvent(e) {
   const kbLayer = currentConfig.layers[kbLayerIdx] || currentConfig.layers[0];
 
   if (kbLayer) {
-    for (let r = 0; r < 6; r++) {
-      for (let c = 0; c < 7; c++) {
-        const k = kbLayer[r] && kbLayer[r][c];
-        if (k && k.tap && k.tap !== "NONE") {
-          const matchingCodes = ACTION_CODE_TO_EVENT_CODES[k.tap];
-          if (matchingCodes && matchingCodes.includes(e.code)) {
-            return { r, c, label: k.label || e.key, layer: kbLayerIdx };
-          }
-        }
-      }
-    }
+    const hit = findKeyForEventCode(kbLayer, e.code, e.altKey);
+    if (hit) return { r: hit.r, c: hit.c, label: hit.key.label || e.key, layer: kbLayerIdx };
   }
 
   // 2. Falls ein Layer gehalten war aber die Taste nicht belegt ist: Fallback auf Base Layer (Layer 0)
   if (kbLayerIdx !== 0) {
-    const base = currentConfig.layers[0];
-    if (base) {
-      for (let r = 0; r < 6; r++) {
-        for (let c = 0; c < 7; c++) {
-          const k = base[r] && base[r][c];
-          if (k && k.tap && k.tap !== "NONE") {
-            const matchingCodes = ACTION_CODE_TO_EVENT_CODES[k.tap];
-            if (matchingCodes && matchingCodes.includes(e.code)) {
-              return { r, c, label: k.label || e.key, layer: 0 };
-            }
-          }
-        }
-      }
-    }
+    const hit = findKeyForEventCode(currentConfig.layers[0], e.code, e.altKey);
+    if (hit) return { r: hit.r, c: hit.c, label: hit.key.label || e.key, layer: 0 };
   }
 
   // 3. Fallback auf physische Scancode-Tabelle (nur rechte Hand, immer Layer 0)

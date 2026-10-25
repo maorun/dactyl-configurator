@@ -254,7 +254,10 @@ test("Profile: Registrierung, Master, Ansicht und Export pro Hälfte", () => {
 });
 
 test("Rechte Standard-Config: Preset Deutsch QWERTZ, zwei Combos, Name des Profils", () => {
-  assert.strictEqual(R.defaultConfig.layers, R.presets.de_qwertz.layers);
+  // Gleicher Inhalt, aber eigene Objekte: eine Änderung der Standard-Config ändert das Preset nicht
+  assert.deepStrictEqual(R.defaultConfig.layers, R.presets.de_qwertz.layers);
+  assert.notStrictEqual(R.defaultConfig.layers, R.presets.de_qwertz.layers);
+  assert.notStrictEqual(R.defaultConfig.layers[0][0][0], R.presets.de_qwertz.layers[0][0][0]);
   assert.deepStrictEqual([...R.defaultConfig.combos.map(c => c.id)], ["combo-1", "combo-2"]);
   assert.strictEqual(R.defaultConfig.settings.deviceName, R.deviceName);
   assert.strictEqual(L.defaultConfig.settings.deviceName, L.deviceName);

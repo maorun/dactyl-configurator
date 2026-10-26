@@ -289,10 +289,19 @@ static EspNowRestartGuard restartGuard;
 static volatile bool lastSendOk = false;
 static volatile uint32_t callbackSeq = 0;
 
+// Vom Empfangs-Callback (Wi-Fi-Task) gesetzt: Am Master wurde getippt (SPLIT_OP_ACTIVITY)
+static volatile bool masterActivityReceived = false;
+
 static void onEspNowSent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
   (void)info;
   lastSendOk = (status == ESP_NOW_SEND_SUCCESS);
   callbackSeq = callbackSeq + 1;
+}
+
+// Läuft auf dem Wi-Fi-Task: nur prüfen und vormerken; loop() setzt den Inaktivitäts-Timer zurück
+static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+  if (info == nullptr || !parseSplitActivityPacket(info->src_addr, data, len)) return;
+  masterActivityReceived = true;
 }
 
 static bool setupEspNow() {
@@ -310,6 +319,8 @@ static bool setupEspNow() {
     return false;
   }
   esp_now_register_send_cb(onEspNowSent);
+  // Ohne Empfang schläft links weiter nach eigener Inaktivität ein (Verhalten vor ACTIVITY)
+  if (esp_now_register_recv_cb(onEspNowRecv) != ESP_OK) Serial.println("ERR ESPNOW_RECV_CB");
 
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, SPLIT_MASTER_MAC, sizeof(SPLIT_MASTER_MAC));
@@ -571,6 +582,12 @@ void loop() {
   if (!isConfigMode) {
     sendHeartbeatIfDue();
     serviceSendQueue();
+    // Tippen am Master zählt als Aktivität: Standby beenden, Deep Sleep verschieben
+    if (masterActivityReceived) {
+      masterActivityReceived = false;
+      lastActivityTime = millis();
+      exitStandby();
+    }
     // Deep-Sleep-Vorbereitung und Config-Mode-Wechsel kehren nicht in loop() zurück
     if (espNowReady && shouldRestartEspNow(restartGuard, millis(), true)) {
       restartEspNow();

@@ -417,6 +417,9 @@ static SplitRxQueue splitRxQueue;
 static bool splitRxReady = false;
 static uint32_t splitRxDroppedSeen = 0;
 static bool splitHostWasReady = false;
+// Eigenes Tippen an die linke Hälfte melden (synchronisierte Inaktivitäts-Timer, DactylSplitHid.h)
+static bool splitActivityPeerReady = false;
+static SplitActivityThrottle splitActivity;
 
 // Läuft auf dem Wi-Fi-Task: nur prüfen und einreihen, kein Serial, kein BLE
 static void onSplitDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
@@ -441,6 +444,15 @@ void setupSplitReceiver() {
     return;
   }
   splitRxReady = true;
+  // Peer für die Rückrichtung (ACTIVITY). Ohne Peer empfängt der Master weiter, nur links schläft dann allein ein.
+  esp_now_peer_info_t peer = {};
+  memcpy(peer.peer_addr, SPLIT_LEFT_MAC, sizeof(SPLIT_LEFT_MAC));
+  peer.channel = SPLIT_ESPNOW_CHANNEL;
+  peer.ifidx = WIFI_IF_STA;
+  peer.encrypt = false;
+  splitActivityReset(splitActivity);
+  splitActivityPeerReady = (esp_now_add_peer(&peer) == ESP_OK);
+  if (!splitActivityPeerReady) Serial.println("[SPLIT] ERR ESPNOW_PEER (Aktivität an links)");
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   Serial.printf("[SPLIT] ESP-NOW-Empfang bereit (Kanal %d, Wi-Fi-STA-MAC %02X:%02X:%02X:%02X:%02X:%02X)\n",
@@ -465,6 +477,14 @@ void processSplitEvents() {
   if (rep.hostLost) Serial.println("[SPLIT] Mac getrennt -> alle gehaltenen Eingaben gelöst");
   if (rep.overflow) Serial.println("[SPLIT] WARN: Empfangspuffer voll -> gehaltene Eingaben der linken Hälfte gelöst");
   if (rep.linkLost) Serial.println("[SPLIT] WARN: Linke Hälfte nicht erreichbar -> gehaltene Eingaben gelöst");
+}
+
+// Gedrosselt ACTIVITY an die linke Hälfte senden, damit sie beim Tippen nur rechts nicht einschläft
+void sendSplitActivityIfDue() {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  if (!splitActivityTake(splitActivity, millis())) return;
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_ACTIVITY);
+  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
 }
 
 void setup() {
@@ -587,6 +607,7 @@ void loop() {
           keyState[r][c] = isPressed;
           lastActivityTime = millis();
           exitStandby();
+          splitActivityNote(splitActivity);
           onMatrixKeyChange(r, c, isPressed);
         }
       }
@@ -668,6 +689,7 @@ void loop() {
 
   // Ereignisse der linken Hälfte (ESP-NOW) anzeigen
   processSplitEvents();
+  sendSplitActivityIfDue();
 
   // Deferriertes Starten/Beenden des Config-Modus aus loopTask
   if (enterConfigRequested) {

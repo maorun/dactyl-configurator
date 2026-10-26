@@ -18,7 +18,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Rangliste
 
-- **Synchronisierte Inaktivitäts-Timer (Standby und Deep Sleep)** `[Split]` — *Nutzen: hoch · Aufwand: mittel* — Wer 60 Min nur rechts tippt, schickt die linke Hälfte in Deep Sleep; die nächste linke Taste geht verloren. Der Fehler tritt im Alltag regelmäßig auf. Plan: [Synchronisierte Timer](#plan-synchronisierte-inaktivitäts-timer-standby-und-deep-sleep).
 - **Echte LiPo-Spannungsmessung** `[Firmware]` — *Nutzen: hoch · Aufwand: mittel* — `BAT_SENSE` (GPIO 35) mit externem Spannungsteiler auswerten und den BLE-Batteriestand setzen; die App zeigt heute keinen Akku an (`updateBatteryUI` ist deaktiviert). Ohne Anzeige fällt die Tastatur ohne Vorwarnung aus. Braucht einen Hardware-Umbau (Spannungsteiler), deshalb unter den Split-Fehlern.
 - **Layout-Diff vor dem Sync** `[App]` — *Nutzen: mittel · Aufwand: mittel* — Pro Taste anzeigen, was sich gegenüber dem Gerät ändert (`GET_CONFIG` mit lokalem Stand vergleichen). Verhindert, dass ein Sync eine Gerätebelegung unbemerkt überschreibt.
 - **Linke Tasten im Live-Monitor über den Master** `[Split]` — *Nutzen: mittel · Aufwand: mittel* — `SPLIT_HID`-Zeilen tragen keine Matrix-Position. Heute zeigt die App linke Tasten nur über eine direkte Verbindung zur linken Hälfte (BLE im Config Mode oder USB). Braucht ein Protokollfeld oder eine eigene Diagnose-Op (append-only).
@@ -50,33 +49,18 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 - `firmware/dactyl_left/dactyl_left.ino:339`: `restartEspNow()` leert die Warteschlange und sendet `RELEASE_ALL`, behält aber den gedrückten Zustand in `DactylLogic.h`. Folge: Eine während des Neustarts gehaltene Taste ist nur am Master gelöst; ein gehaltener Modifier fehlt danach. Korrektur: Das Verhalten in `AGENTS.md` dokumentieren oder gehaltene Tasten nach dem Neustart erneut drücken.
 - `firmware/dactyl_left/dactyl_left.ino:574`: Ist der Master aus oder im Deep Sleep, startet die linke Hälfte ESP-NOW alle 30 s neu. Folge: Jeder Neustart kostet Strom und blockiert `loop()` für etwa 20 ms. Korrektur: Den Backoff exponentiell steigern oder nach N Neustarts ohne Zustellung aussetzen.
 - Hardware-Prüfung offen: ESP-NOW-Neustart der linken Hälfte. Den Master per Reset-Taste neu starten, während links getippt wird. Erwartet: `ESPNOW_RESTART` höchstens einmal pro 30 s, danach `Master erreichbar=1` ohne Reset der linken Hälfte.
+- `firmware/dactyl_right/dactyl_right.ino` (`sendSplitActivityIfDue`): Der Master prüft den Rückgabewert von `esp_now_send` nicht. Folge: Ein fehlgeschlagener Versand verbraucht die Vormerkung; das nächste `ACTIVITY` folgt erst nach dem nächsten Tastendruck und Intervall. Korrektur: Rückgabewert prüfen und bei Fehler `splitActivityNote` erneut aufrufen.
+- `firmware/dactyl_left/dactyl_left.ino` (`loop`, Block `masterActivityReceived`): Kein Host-Test deckt das Rücksetzen des Timers links ab. Folge: Ein entfernter oder verschobener Block fällt in keinem Test auf. Korrektur: Das Rücksetzen in eine reine Funktion in einem Header verschieben und testen.
+- `firmware/dactyl_right/dactyl_right.ino` (Matrix-Scan, `splitActivityNote`): Kein Test prüft, dass ein Tastenwechsel am Master `ACTIVITY` vormerkt. Folge: Ein fehlender Aufruf fällt nur auf der Hardware auf. Korrektur: Den Aufruf in eine testbare Funktion auslagern oder in der Hardware-Prüfung unten abdecken.
+- `AGENTS.md` (Abschnitt 2a): Ein Sender mit gefälschter Master-MAC hält die linke Hälfte per `ACTIVITY` wach. Folge: nur Stromverbrauch, keine HID-Wirkung; passt zur akzeptierten Designentscheidung. Korrektur: Einen Satz zu diesem Risiko in Abschnitt 2a ergänzen.
+- `firmware/dactyl_left/dactyl_left.ino` (`loop`): Das Rücksetzen läuft nur außerhalb des Config Mode; ein vorher gesetztes `masterActivityReceived` bleibt stehen. Folge: keine, weil der Config Mode mit `ESP.restart()` endet. Korrektur: Einen Code-Kommentar ergänzen.
+- `docs/ideas.md` (Einträge zu `dactyl_left.ino:339` und `:574`): Der Merge von PR #18 verschiebt `restartEspNow()` und den Aufruf von `shouldRestartEspNow` in `loop()` um etwa 6 Zeilen. Folge: Die Zeilennummern stimmen nicht mehr. Korrektur: Die Einträge auf Funktionsnamen statt Zeilennummern umstellen.
+- `firmware/dactyl_left/dactyl_left.ino` (`setupEspNow`, `esp_now_register_recv_cb`): Ein Fehler beim Registrieren des Empfangs-Callbacks erzeugt nur eine Serial-Zeile. Folge: Die linke Hälfte schläft dann ohne Meldung nach eigener Inaktivität ein. Korrektur: Den Fehler als Setup-Fehler behandeln oder im Status melden.
+- Hardware-Prüfung offen: Synchronisierte Inaktivitäts-Timer. 6 Min nur rechts tippen; links darf nicht in Standby gehen (Serial `[POWER]`), und linke Tasten kommen ohne Verzögerung an. Der Host-Test prüft nur Parser und Drosselung, nicht den Funkweg Master -> links.
 
 ## Detailpläne
 
-### Plan: Synchronisierte Inaktivitäts-Timer (Standby und Deep Sleep)
-
-**Heute:**
-- Rechts (`dactyl_right.ino:461`): angewendete linke Ereignisse setzen `lastActivityTime` zurück. Der Master schläft nicht ein, solange links getippt wird.
-- Links (`dactyl_left.ino:475`): nur eigene Tasten setzen `lastActivityTime` zurück. Bei 60 Min nur rechts tippen geht die linke Hälfte in Deep Sleep.
-- Aufwachen: Eine Hälfte im Deep Sleep empfängt kein Funksignal; die andere Hälfte kann sie nicht wecken. Nach dem Deep Sleep braucht jede Hälfte einen eigenen Tastendruck. Das bleibt so (Hardware-Grenze).
-
-**Ziel:** Beide Hälften gehen erst in Standby / Deep Sleep, wenn auf **keiner** Hälfte getippt wurde.
-
-**Umsetzung:**
-1. Neue Rückrichtung Master -> links. Protokoll in `DactylSplitHid.h` append-only erweitern, z. B. Op `SPLIT_OP_ACTIVITY` (nur Master -> links, ohne HID-Wirkung). `parseSplitHidPacket` auf dem Master lehnt sie ab; ein eigener Parser links prüft Absender-MAC `…:A6` und Länge.
-2. Master: Bei eigener Taste höchstens alle `SPLIT_ACTIVITY_INTERVAL_MS` (Vorschlag 10 s) ein `ACTIVITY`-Paket senden. Dafür braucht der Master einen Peer auf die linke MAC `…:B0`; kein Retry, ein verlorenes Paket ist unkritisch.
-3. Links: Empfangs-Callback registrieren; ein gültiges `ACTIVITY` setzt `lastActivityTime` zurück und beendet Standby. Kein Tastendruck, keine HID-Wirkung.
-4. `AGENTS.md`: Abschnitt "Config mode, NVS, power" und "Known limit" anpassen.
-
-**Tests:**
-- Host-Test: Parser links (gültig, falsche MAC, falsche Länge, unbekannter Op), Drosselung auf dem Master, Rücksetzen des Timers links.
-- Hardware: 6 Min nur rechts tippen; links darf nicht in Standby gehen (Serial `[POWER]`), und linke Tasten kommen ohne Verzögerung an.
-
-**Offene Fragen:**
-- Soll `ACTIVITY` auch den Standby der linken Hälfte verhindern oder nur den Deep Sleep? Ohne Standby verbraucht links mehr Strom, reagiert aber ohne gedrosselten Scan (40 ms).
-- Funkzeit: Ein Paket alle 10 s ist gering, teilt sich aber das 2,4-GHz-Radio mit BLE. Intervall auf Hardware prüfen.
-- Soll auch der umgekehrte Fall (Master bleibt wach wegen links) unverändert bleiben? Heute ja.
-- Sollen beide Hälften dieselben Timeout-Werte erzwingen (heute getrennt pro Hälfte in NVS)?
+Derzeit kein offener Plan.
 
 ## Umgesetzt
 
@@ -92,3 +76,4 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 - **macOS-Layout "U.S.":** Gruppe "Sonderzeichen (macOS US)" mit US-Zeichen, `§` über die ISO-Taste, `° € ´` als Tastenpaar; eigene Umlaut-Aktionen `UMLAUT_AE` … `UMLAUT_SZ` (Tottaste Alt + u, dann Vokal; ß = Alt + s); Preset und Vorlagen mit US-Beschriftung.
 - **Konfigurierbarer Tapping-Term:** `tappingTermMs` (100–500 ms, Standard 200) pro Hälfte in NVS und App; steuert Mod-Tap und Tap-Dance — PR #19.
 - **ESP-NOW-Neustart nach wiederholten Sendefehlern (linke Hälfte):** Nach 5 verworfenen Ereignissen in Folge und 5 s ohne Zustellung startet die linke Hälfte ESP-NOW neu (`ESPNOW_RESTART`, höchstens einmal pro 30 s). Scheitert der Neustart, startet das Board neu. Offen: Reaktion des Masters auf einen langen Link-Ausfall — PR #17.
+- **Synchronisierte Inaktivitäts-Timer:** Tippen am Master meldet `SPLIT_OP_ACTIVITY` (höchstens alle 10 s) an die linke Hälfte; sie geht nicht mehr in Standby oder Deep Sleep, solange rechts getippt wird.

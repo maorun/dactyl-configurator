@@ -624,10 +624,12 @@ class TestServerAndCodegen(unittest.TestCase):
             bin_dir = os.path.join(tmp, "bin")
             os.makedirs(bin_dir)
             stubs = {
-                "pgrep": f'[ -e "{state}/app" ]',
+                # Muster mitschreiben: pgrep -f bekommt einen Regex
+                "pgrep": f'echo "$2" > "{state}/pattern"; [ -e "{state}/app" ]',
                 "lsof": f'[ -e "{state}/pid" ] && cat "{state}/pid"; true',
-                # Sauberes Beenden: App und ihr Server enden (außer quit_hangs)
-                "osascript": f'echo quit >> "{state}/log"; [ -e "{state}/quit_hangs" ] || rm -f "{state}/app" "{state}/pid"',
+                # Sauberes Beenden: App und ihr Server enden (außer quit_hangs); quit_denied = fehlende Berechtigung
+                "osascript": f'[ -e "{state}/quit_denied" ] && exit 1; echo quit >> "{state}/log"; '
+                             f'[ -e "{state}/quit_hangs" ] || rm -f "{state}/app" "{state}/pid"',
                 "open": f'echo open >> "{state}/log"; touch "{state}/app"; echo 2222 > "{state}/pid"',
                 "curl": "printf 200",
                 "sleep": "true",
@@ -637,11 +639,13 @@ class TestServerAndCodegen(unittest.TestCase):
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(f"#!/bin/bash\n{body}\n")
                 os.chmod(path, 0o755)
-            env = {**os.environ, "PATH": f"{bin_dir}:/usr/bin:/bin", "DACTYL_APP": os.path.join(tmp, "Dactyl.app"),
+            app_path = os.path.join(tmp, "Dactyl.app")
+            env = {**os.environ, "PATH": f"{bin_dir}:/usr/bin:/bin", "DACTYL_APP": app_path,
                    "DACTYL_QUIT_TIMEOUT": "1", "DACTYL_START_TIMEOUT": "1"}
 
-            def run(*present):
-                for name in ("app", "pid", "log", "quit_hangs", "build_fails"):
+            def run(*present, app=None):
+                env["DACTYL_APP"] = app or app_path
+                for name in ("app", "pid", "log", "quit_hangs", "quit_denied", "build_fails"):
                     p = os.path.join(state, name)
                     if os.path.exists(p):
                         os.remove(p)
@@ -659,10 +663,30 @@ class TestServerAndCodegen(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(log, ["quit", "build", "open"])
             self.assertIn("1111 -> 2222", proc.stdout)
-            # App läuft nicht, Port frei: bauen und starten ohne Quit
+            # pgrep erhält den Pfad als wörtlichen Regex ("." escaped)
+            with open(os.path.join(state, "pattern"), encoding="utf-8") as f:
+                pattern = f.read().strip()
+            self.assertTrue(pattern.endswith("/Dactyl\\.app/Contents/MacOS/"), pattern)
+            self.assertIsNotNone(re.fullmatch(pattern, app_path + "/Contents/MacOS/"))
+            # App läuft nicht, Port frei: bauen und starten ohne Quit; ohne alte PID meldet es "keine"
             proc, log = run()
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertEqual(log, ["build", "open"])
+            self.assertIn("keine -> 2222", proc.stdout)
+            # Schrägstrich am Ende von DACTYL_APP: die laufende App wird trotzdem erkannt und beendet
+            proc, log = run("app", "pid", app=app_path + "//")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(log, ["quit", "build", "open"])
+            with open(os.path.join(state, "pattern"), encoding="utf-8") as f:
+                self.assertNotIn("//", f.read())
+            # osascript scheitert (Automation-Berechtigung verweigert): Meldung mit App-Pfad, nichts bauen
+            proc, log = run("app", "pid", "quit_denied")
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertEqual(log, [])
+            self.assertIn("osascript", proc.stderr)
+            self.assertIn(app_path, proc.stderr)
+            # Kein Worktree (kein .git): keine Warnung
+            self.assertNotIn("Worktree", proc.stderr)
             # Fremder Server auf dem Port ohne App: nichts bauen, nichts starten
             proc, log = run("pid")
             self.assertNotEqual(proc.returncode, 0)
@@ -677,6 +701,18 @@ class TestServerAndCodegen(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0)
             self.assertEqual(log, ["build"])
             self.assertIn("rebuild:app", proc.stderr)
+            # DACTYL_APP=/ ergibt nach dem Kürzen einen leeren Pfad: abbrechen, nichts beenden oder bauen
+            proc, log = run("app", "pid", app="/")
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertEqual(log, [])
+            self.assertIn("DACTYL_APP", proc.stderr)
+            # Aufruf aus einem Worktree (.git ist eine Datei): Warnung, der Ablauf läuft weiter
+            with open(os.path.join(repo, ".git"), "w", encoding="utf-8") as f:
+                f.write("gitdir: /tmp/elsewhere\n")
+            proc, log = run()
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("Worktree", proc.stderr)
+            self.assertEqual(log, ["build", "open"])
 
     def test_left_user_config_is_not_versioned(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")

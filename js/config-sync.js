@@ -64,42 +64,41 @@ async function writeConfigToESP32(options = {}) {
       }
     };
 
-    // Sendet einen Befehl und wartet auf "OK <prefix>" der Firmware (ERR oder Timeout = Fehler)
-    const sendConfirmed = async (cmd, okPrefix, timeoutMs = 3000) => {
-      const ack = waitForAck(okPrefix, timeoutMs, side);
+    // Sendet einen Befehl und wartet auf "OK <prefix>" der Firmware (ERR oder Timeout = Fehler).
+    // optional: ältere Firmware kennt den Befehl nicht ("ERR UNKNOWN"); der Sync läuft dann ohne ihn weiter.
+    const sendConfirmed = async (cmd, okPrefix, timeoutMs = 3000, optional = false) => {
+      const ack = waitForAck(okPrefix, timeoutMs, side, optional);
       try {
         await sendCmd(cmd);
       } catch (e) {
         resolveAcksForLine(`ERR SEND ${okPrefix}`, side);
         throw e;
       }
-      if ((await ack) !== true) throw new Error(`Tastatur hat ${okPrefix} nicht bestätigt`);
+      const result = await ack;
+      if (result === "unknown") {
+        showToast(`⚠️ Die Firmware der ${profile.label} kennt ${okPrefix} nicht. Bitte neu flashen, um die Einstellung zu übernehmen.`, 7000);
+        return;
+      }
+      if (result !== true) throw new Error(`Tastatur hat ${okPrefix} nicht bestätigt`);
     };
 
+    const s = cfg.settings || {};
+    const settingCommands = buildSettingCommands(s, profile);
     const totalLayers = Math.min(cfg.layers.length, NUM_LAYERS);
-    const totalCombos = Array.isArray(cfg.combos) ? cfg.combos.length : 0;
-    const totalSteps = NUM_LAYERS + (totalLayers * NUM_ROWS * NUM_COLS) + totalCombos + 9;
+    const combos = cfg.combos.slice(0, MAX_COMBOS);
+    const totalSteps = countSyncSteps(settingCommands.length, totalLayers, combos.length);
     const updateProgress = () => {
       completedSteps++;
       if (progressBar) {
-        const pct = Math.min(100, Math.round((completedSteps / totalSteps) * 100));
+        const pct = Math.round((completedSteps / totalSteps) * 100);
         progressBar.style.width = `${pct}%`;
       }
     };
 
-    const s = cfg.settings || {};
-    await sendConfirmed(`SET_STANDBY ${clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5)}`, "SET_STANDBY");
-    updateProgress();
-    await sendConfirmed(`SET_SLEEP ${clampSetting("sleepTimeoutMinutes", s.sleepTimeoutMinutes ?? 60)}`, "SET_SLEEP");
-    updateProgress();
-    await sendConfirmed(`SET_DEV_NAME ${sanitizeCommandText(s.deviceName, profile.deviceName)}`, "SET_DEV_NAME");
-    updateProgress();
-    await sendConfirmed(`SET_DEBOUNCE ${clampSetting("debounceMs", s.debounceMs ?? 5)}`, "SET_DEBOUNCE");
-    updateProgress();
-    await sendConfirmed(`SET_COMBO_TIMEOUT ${clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40)}`, "SET_COMBO_TIMEOUT");
-    updateProgress();
-    await sendConfirmed(`SET_TAPPING_TERM ${clampSetting("tappingTermMs", s.tappingTermMs ?? 200)}`, "SET_TAPPING_TERM");
-    updateProgress();
+    for (const { cmd, ack, optional } of settingCommands) {
+      await sendConfirmed(cmd, ack, 3000, optional);
+      updateProgress();
+    }
 
     for (let l = 0; l < NUM_LAYERS; l++) {
       const name = sanitizeCommandText(cfg.layerNames[l], DEFAULT_LAYER_NAMES[l]);
@@ -131,7 +130,7 @@ async function writeConfigToESP32(options = {}) {
     // Combos synchronisieren
     await sendConfirmed("CLEAR_COMBOS", "CLEAR_COMBOS");
     const bMap = { "KEY_PRESS": 0, "MODIFIER_HOLD": 1, "LAYER_TOGGLE": 2 };
-    for (const cb of cfg.combos.slice(0, MAX_COMBOS)) {
+    for (const cb of combos) {
       const bCode = bMap[cb.behavior] ?? 0;
       const actCode = actionCodeToNumeric(cb.action);
       await sendConfirmed(`ADD_COMBO ${cb.key1.r} ${cb.key1.c} ${cb.key2.r} ${cb.key2.c} ${bCode} ${actCode}`, "ADD_COMBO");
@@ -178,6 +177,37 @@ async function writeConfigToESP32(options = {}) {
       if (progressBar) progressBar.style.width = "0%";
     }, 600);
   }
+}
+
+// Einstellungs-Befehle des vollen Syncs, in Sende-Reihenfolge. optional: ältere Firmware ohne diesen Befehl
+// antwortet "ERR UNKNOWN"; der Sync läuft dann weiter (SET_TAPPING_TERM kam nach den anderen Einstellungen).
+function buildSettingCommands(s, profile) {
+  return [
+    { cmd: `SET_STANDBY ${clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5)}`, ack: "SET_STANDBY" },
+    { cmd: `SET_SLEEP ${clampSetting("sleepTimeoutMinutes", s.sleepTimeoutMinutes ?? 60)}`, ack: "SET_SLEEP" },
+    { cmd: `SET_DEV_NAME ${sanitizeCommandText(s.deviceName, profile.deviceName)}`, ack: "SET_DEV_NAME" },
+    { cmd: `SET_DEBOUNCE ${clampSetting("debounceMs", s.debounceMs ?? 5)}`, ack: "SET_DEBOUNCE" },
+    { cmd: `SET_COMBO_TIMEOUT ${clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40)}`, ack: "SET_COMBO_TIMEOUT" },
+    { cmd: `SET_TAPPING_TERM ${clampSetting("tappingTermMs", s.tappingTermMs ?? 200)}`, ack: "SET_TAPPING_TERM", optional: true }
+  ];
+}
+
+// Fortschrittsschritte des vollen Syncs: Einstellungen, Ebenen-Namen, Tasten (SET_K), SAVE_NVS,
+// Combos, SAVE_COMBOS und die Tastenpaar-Phase. Muss zu den updateProgress()-Aufrufen passen.
+function countSyncSteps(settingCount, layerCount, comboCount) {
+  return settingCount + NUM_LAYERS + layerCount * NUM_ROWS * NUM_COLS + 1 + comboCount + 1 + 1;
+}
+
+// One-Shot-Auto-Sync (BLE-Verbindung nach der Config-Combo). Während des Layout-Diffs nicht übertragen:
+// die GET_CONFIG-Zeilen fließen noch in den Snapshot, und der Benutzer entscheidet im Dialog selbst.
+// Bei autoDisconnectAfter kehrt die Tastatur trotzdem sofort in den Tastaturmodus zurück (EXIT_CONFIG).
+async function runAutoSync(options) {
+  if (deviceSnapshotRead || diffFlowActive) {
+    showToast("Der Vergleich vor dem Speichern läuft noch. Automatische Übertragung übersprungen.");
+    if (options && options.autoDisconnectAfter && bleConfigChar) await disconnectBle();
+    return;
+  }
+  return writeConfigToESP32(options);
 }
 
 // =============================================================================
@@ -233,6 +263,8 @@ async function readDeviceSnapshot(side) {
   const result = new Promise(resolve => {
     read = {
       side,
+      // Weg der Abfrage ("ble" oder "usb"): fällt genau dieser Weg weg, endet die Abfrage
+      route: Dactyl.routeCommand(side, connectionState()),
       snapshot: createDeviceSnapshot(),
       stale: false,
       // Ergebnis liefern und Abfrage beenden
@@ -253,6 +285,18 @@ async function readDeviceSnapshot(side) {
   });
   if (!(await sendDeviceCommand("GET_CONFIG", side))) read.finish(null);
   return result;
+}
+
+// Nach einer BLE- oder USB-Trennung: eine Abfrage, deren Weg weggefallen ist, sofort beenden statt bis zum
+// Timeout zu warten. Auch wenn die Hälfte noch über den anderen Weg verbunden ist: die Antwort kommt nur auf
+// dem Weg der Anfrage. writeConfigWithDiff meldet danach die Unterbrechung oder fragt nach.
+function abortDeviceSnapshotReadIfDisconnected() {
+  const read = deviceSnapshotRead;
+  if (!read || read.stale) return;
+  const conn = connectionState();
+  const routeUp = read.route === "ble" ? conn.bleUp && conn.bleSide === read.side
+    : read.route === "usb" && conn.serialUp && conn.serialSide === read.side;
+  if (!routeUp) read.finish(null);
 }
 
 // Zeigt den Diff im Dialog. Rückgabe: true = übertragen, false = abbrechen.
@@ -306,7 +350,11 @@ function showSyncDiffDialog(profile, diff) {
 
 // "Auf ESP32 speichern": zuerst Diff zeigen, dann übertragen
 async function writeConfigWithDiff() {
-  if (isAutoSyncing || deviceSnapshotRead || diffFlowActive) return;
+  if (isAutoSyncing || diffFlowActive) return;
+  if (deviceSnapshotRead) {
+    showToast("Die Tastatur sendet noch die Antwort einer früheren Abfrage. Bitte gleich erneut versuchen.");
+    return;
+  }
   const side = connectedSide();
   if (!side) return writeConfigToESP32({ autoDisconnectAfter: false });
   const profile = SIDE_PROFILES[side];

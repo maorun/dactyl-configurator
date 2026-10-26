@@ -477,10 +477,13 @@ void processSplitEvents() {
   bool hostReady = !isConfigMode && bleKeyboard.isConnected();
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
                                      hostReady, now, onSplitApplied, onSplitKeyEvent);
-  if (rep.applied) {
+  // Auch ein KEY_EVENT (linke Taste mit Aktion 0) hält den Master wach
+  if (rep.applied || rep.keyEvents) {
     lastActivityTime = now;
     exitStandby();
   }
+  // Ein verlorenes Release löst die App nach SPLIT_KEY_STALE_MS; die Zeile macht den Verlust sichtbar
+  if (rep.keyEventsDropped) Serial.printf("SPLIT_KEY_RX_DROPPED (%u verworfen)\n", rep.keyEventsDropped);
   if (rep.hostLost) Serial.println("[SPLIT] Mac getrennt -> alle gehaltenen Eingaben gelöst");
   if (rep.overflow) Serial.println("[SPLIT] WARN: Empfangspuffer voll -> gehaltene Eingaben der linken Hälfte gelöst");
   if (rep.linkLost) Serial.println("[SPLIT] WARN: Linke Hälfte nicht erreichbar -> gehaltene Eingaben gelöst");
@@ -491,7 +494,7 @@ void sendSplitActivityIfDue() {
   if (!splitActivityPeerReady || isConfigMode) return;
   if (!splitActivityTake(splitActivity, millis())) return;
   SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_ACTIVITY);
-  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+  splitActivitySendResult(splitActivity, esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK);
 }
 
 void setup() {
@@ -612,9 +615,8 @@ void loop() {
 
         if (isPressed != keyState[r][c]) {
           keyState[r][c] = isPressed;
-          lastActivityTime = millis();
+          splitNoteLocalKeyChange(splitActivity, millis(), lastActivityTime);
           exitStandby();
-          splitActivityNote(splitActivity);
           onMatrixKeyChange(r, c, isPressed);
         }
       }

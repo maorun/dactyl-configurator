@@ -217,13 +217,13 @@ async function connectToBleDevice(device, isAutoTriggered = false, advName = "")
     if (shouldOneShotAutoSync) {
       // One-Shot Auto-Sync: Konfiguration übertragen, danach automatisch trennen & zurück zur Mac-Tastatur!
       await new Promise(r => setTimeout(r, 120));
-      await writeConfigToESP32({ autoDisconnectAfter: true });
+      await runAutoSync({ autoDisconnectAfter: true });
     } else {
       showToast("⚡ Konfig-Modus verbunden! Live-Remapping aktiv.");
       setTimeout(async () => {
         if (!bleConfigChar) return;
         if (pendingFor(bleSide).length > 0) {
-          await writeConfigToESP32({ autoDisconnectAfter: false });
+          await runAutoSync({ autoDisconnectAfter: false });
         } else {
           await sendBleCommand("GET_NAMES");
         }
@@ -350,6 +350,7 @@ function onBleDisconnected() {
   bleServer = null;
   bleDevice = null;
   bleSide = null;
+  abortDeviceSnapshotReadIfDisconnected();
   updateBleUI(false);
   updateConfigModeUI(false, false);
   showToast("⌨️ Konfig-Modus beendet -> Tastatur wieder mit Mac verbunden.");
@@ -426,7 +427,8 @@ function sendBleCommand(cmd) {
 // Wartende Bestätigungen tragen die Hälfte, von der die Antwort kommen muss (js/side-routing.js)
 const ackRegistry = Dactyl.createAckRegistry();
 // Löst mit true (OK), false (ERR) oder null (Timeout) auf. side: erwartete Hälfte (null = jede Hälfte).
-const waitForAck = (okPrefix, timeoutMs = 2500, side = null) => ackRegistry.wait(okPrefix, timeoutMs, side);
+const waitForAck = (okPrefix, timeoutMs = 2500, side = null, unknownOk = false) =>
+  ackRegistry.wait(okPrefix, timeoutMs, side, unknownOk);
 const resolveAcksForLine = (line, side = null) => ackRegistry.resolveLine(line, side);
 const rejectAllPendingAcks = (reason, side = null) => ackRegistry.reject(reason, side);
 

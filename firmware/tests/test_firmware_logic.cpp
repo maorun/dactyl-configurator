@@ -2075,6 +2075,32 @@ TEST(test_configurable_tapping_term) {
   assert(countPresses('j') == 0);
 }
 
+// Grenzen des Tapping-Terms: 100 und 500 sind gültig, ein gespeicherter Wert außerhalb gilt nicht
+TEST(test_tapping_term_bounds_and_stored_out_of_range) {
+  resetState();
+  handleConfigCommand("SET_TAPPING_TERM 100", false);
+  assert(mockChar.value == "OK SET_TAPPING_TERM 100");
+  assert(tappingTermMs == 100);
+  handleConfigCommand("SET_TAPPING_TERM 500", false);
+  assert(mockChar.value == "OK SET_TAPPING_TERM 500");
+  assert(tappingTermMs == 500);
+
+  // Ein gespeicherter Wert außerhalb des Bereichs (alte oder defekte NVS) lässt den Standardwert stehen
+  resetState();
+  Preferences::uintStore["tap_term"] = 50;
+  assert(preferences.isKey("tap_term") && preferences.getUShort("tap_term", 0) == 50);
+  tappingTermMs = 300; // ein angewendeter Wert 50 wäre sichtbar, ein ungeprüfter Rückfall ebenso
+  loadKeymapFromNVS();
+  assert(tappingTermMs == 300);
+  Preferences::uintStore["tap_term"] = 501;
+  loadKeymapFromNVS();
+  assert(tappingTermMs == 300);
+  // Gegenprobe: ein gültiger gespeicherter Wert wird übernommen
+  Preferences::uintStore["tap_term"] = 450;
+  loadKeymapFromNVS();
+  assert(tappingTermMs == 450);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

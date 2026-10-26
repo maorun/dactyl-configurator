@@ -511,6 +511,15 @@ test("Layout-Diff: geänderte Taste und Ebenen-Name erscheinen mit Geräte- und 
   assert.strictEqual(api.describeKeyActions({ tapCode: 0, holdCode: 0, dtapCode: 0 }), "—");
 });
 
+test("Layout-Diff: Beschriftung für Tastenpaare und unbekannte Codes", () => {
+  const pair = api.ACT_KEY_PAIR_BASE + 3;
+  assert.strictEqual(api.describeKeyActions({ tapCode: pair, holdCode: 0, dtapCode: 0 }), "Paar 3");
+  assert.strictEqual(api.describeKeyActions({ tapCode: 97, holdCode: pair, dtapCode: 0 }), "A · Halten: Paar 3");
+  // Unbekannter Code (z. B. neuere Firmware): Zahl statt leerer Beschriftung
+  assert.strictEqual(api.describeKeyActions({ tapCode: 0x1FF, holdCode: 0, dtapCode: 0 }), "Key 511");
+  assert.strictEqual(api.describeKeyActions({ tapCode: 97, holdCode: 0, dtapCode: 0x1FE }), "A · 2×: Key 510");
+});
+
 test("Layout-Diff: Halten ohne Tap auf dem Gerät gleicht einer normalen Taste", () => {
   const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
   const snap = snapshotOf(cfg);
@@ -534,12 +543,109 @@ test("Layout-Diff: nicht vorhandene Tasten zählen nicht, unvollständige Snapsh
   assert.deepStrictEqual([...partial.tap[0][0]], [0, 0, 0, 97, 0, 0, 0]);
 });
 
-test("Layout-Diff: serial.js leitet GET_CONFIG-Zeilen vor der Übernahme in den Snapshot um", () => {
-  const src = read("js/serial.js");
-  const capture = src.indexOf("captureDeviceSnapshotLine(line, side)");
-  assert.ok(capture > 0 && capture < src.indexOf('line.startsWith("LAYER_DATA:")'));
-  assert.ok(capture < src.indexOf('line.startsWith("LAYER_NAMES:")'));
-  assert.ok(capture < src.indexOf('line.startsWith("CONFIG_SYNC_DONE")'));
+// handleSerialLine aus js/serial.js in einem eigenen Kontext mit Stubs für DOM, Anzeige und Verbindungen.
+// conn: Verbindungszustand (bleUp, bleSide, serialUp, serialSide), wie connectionState() in js/ble.js.
+function serialLineHarness(conn = {}) {
+  const calls = { press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [] };
+  const s = {
+    calls, console: { log() {}, warn() {} },
+    document: { getElementById: () => null },
+    conn: { bleUp: false, bleSide: null, serialUp: true, serialSide: "R", ...conn },
+    snapshotActive: false,
+    // Stale-Timer des SPLIT_KEY-Trackers laufen im Test nie ab
+    setTimeout: () => 0, clearTimeout: () => {}
+  };
+  vm.createContext(s);
+  vm.runInContext(`${code}
+${read("js/side-routing.js")}
+var editSide = "R", activeLayerIndex = 0, serialSide = null, isAutoSyncing = false, bleConfigChar = null;
+const configs = { R: normalizeConfig(JSON.parse(JSON.stringify(SIDE_PROFILES.R.defaultConfig)), SIDE_PROFILES.R),
+                  L: normalizeConfig(JSON.parse(JSON.stringify(SIDE_PROFILES.L.defaultConfig)), SIDE_PROFILES.L) };
+const tests = { R: createMatrixTest(SIDE_PROFILES.R), L: createMatrixTest(SIDE_PROFILES.L) };
+const stats = { R: createTypingStats({}, SIDE_PROFILES.R), L: createTypingStats({}, SIDE_PROFILES.L) };
+function configFor(side) { return configs[side]; }
+function matrixTestFor(side) { return tests[side]; }
+function typingStatsFor(side) { return stats[side]; }
+function connectionState() { return conn; }
+function resolveAcksForLine() {}
+function resolveBleInfoWaiters() {}
+function captureDeviceSnapshotLine(line, side) { calls.captured.push(side); return snapshotActive; }
+function showToast() {}
+function updateConfigModeUI() {}
+function updateBatteryUI() {}
+function switchLayerUI() {}
+function renderMatrix() { calls.applied++; }
+function renderMatrixTest() { calls.rendered++; }
+function renderLayerButtons() {}
+function saveConfigToServer() {}
+function clearPendingSync() {}
+function onTypingStatsChanged(side) { calls.stats.push(side); }
+function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + c); }
+function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
+${section("js/serial.js", "// Gedrückte SPLIT_KEY-Tasten", "function switchLayerUI")}
+this.handle = handleSerialLine; this.tested = side => [...tests[side].tested];`, s);
+  // Arrays aus dem VM-Kontext haben einen anderen Prototyp: für deepStrictEqual in einfache Werte kopieren
+  const plain = v => JSON.parse(JSON.stringify(v));
+  return {
+    handle: (...a) => s.handle(...a), tested: side => plain(s.tested(side)),
+    calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
+    set snapshotActive(v) { s.snapshotActive = v; }
+  };
+}
+
+test("serial.js: GET_CONFIG-Zeilen gehen mit der aufgelösten Hälfte in den Snapshot", () => {
+  const s = serialLineHarness();
+  s.snapshotActive = true;
+  // Ohne bekannte Hälfte gilt der Master: der Snapshot erhält "R", nicht null
+  s.handle('LAYER_DATA:{"l":0,"k":[[97]]}', null, "usb");
+  s.handle('LAYER_DATA:{"l":0,"k":[[97]]}', "L", "usb");
+  assert.deepStrictEqual(s.calls.captured, ["R", "L"]);
+  // Verbrauchte Zeilen ändern die lokale Config nicht
+  assert.strictEqual(s.calls.applied, 0);
+  s.snapshotActive = false;
+  s.handle('LAYER_DATA:{"l":0,"k":[[98]]}', null, "usb");
+  assert.strictEqual(s.calls.applied, 1);
+});
+
+test("serial.js: MATRIX: markiert nur Drücken, je nach Hälfte der Verbindung", () => {
+  const s = serialLineHarness();
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":0}', "R", "usb");
+  assert.deepStrictEqual(s.tested("R"), []);
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":1}', "R", "usb");
+  assert.deepStrictEqual(s.tested("R"), ["2_1"]);
+  assert.strictEqual(s.calls.rendered, 1);           // bearbeitete Hälfte: neu zeichnen
+  // Linke Hälfte direkt an USB: MATRIX: zählt für links, ohne die Ansicht der rechten Hälfte zu zeichnen
+  s.handle('MATRIX:{"r":1,"c":1,"pressed":1}', "L", "usb");
+  assert.deepStrictEqual(s.tested("L"), ["1_1"]);
+  assert.strictEqual(s.calls.rendered, 1);
+  // Live-Monitor und Heatmap bleiben bei KEY_PRESS
+  assert.deepStrictEqual(s.calls.press, []);
+  assert.deepStrictEqual(s.calls.stats, []);
+});
+
+test("serial.js: SPLIT_KEY drückt und löst die Taste der linken Hälfte", () => {
+  const s = serialLineHarness();
+  s.handle('SPLIT_KEY:{"r":1,"c":2,"pressed":1,"layer":0}', "R", "usb");
+  assert.deepStrictEqual(s.calls.press, ["L12"]);
+  assert.deepStrictEqual(s.calls.stats, ["L"]);
+  assert.deepStrictEqual(s.tested("L"), ["1_2"]);
+  s.handle('SPLIT_KEY:{"r":1,"c":2,"pressed":0,"layer":0}', "R", "usb");
+  assert.deepStrictEqual(s.calls.release, ["L12"]);
+  assert.deepStrictEqual(s.calls.stats, ["L"]);       // Release zählt nicht
+  // Von der linken Hälfte selbst: verworfen
+  s.handle('SPLIT_KEY:{"r":1,"c":2,"pressed":1,"layer":0}', "L", "usb");
+  assert.deepStrictEqual(s.calls.press, ["L12"]);
+});
+
+test("serial.js: SPLIT_KEY zählt nicht doppelt, wenn die linke Hälfte selbst verbunden ist", () => {
+  // Master per BLE, linke Hälfte per USB: deren Tasten kommen als KEY_PRESS direkt
+  const s = serialLineHarness({ bleUp: true, bleSide: "R", serialUp: true, serialSide: "L" });
+  s.handle('SPLIT_KEY:{"r":1,"c":2,"pressed":1,"layer":0}', "R", "ble");
+  assert.deepStrictEqual(s.calls.press, []);
+  assert.deepStrictEqual(s.calls.stats, []);
+  s.handle('KEY_PRESS:{"r":1,"c":2,"key":"q","layer":0}', "L", "usb");
+  assert.deepStrictEqual(s.calls.press, ["L12"]);
+  assert.deepStrictEqual(s.calls.stats, ["L"]);
 });
 
 // Diff-Ablauf aus js/config-sync.js mit Fake-Timern, Fake-Gerät und Fake-Dialog
@@ -551,7 +657,9 @@ function diffFlowHarness() {
     NUM_LAYERS: 8, MATRIX_DATA_FIELDS: api.MATRIX_DATA_FIELDS, captureMatrixData: api.captureMatrixData,
     isDeviceSnapshotComplete: api.isDeviceSnapshotComplete, createDeviceSnapshot: api.createDeviceSnapshot,
     diffKeymap: api.diffKeymap, SIDE_PROFILES: api.SIDE_PROFILES, isAutoSyncing: false,
-    side: "R", sendOk: true, confirmAnswer: false, dialogAnswer: null,
+    side: "R", via: "usb", alsoBle: false, sendOk: true, confirmAnswer: false, dialogAnswer: null,
+    Dactyl: { routeCommand: (side, conn) => conn.bleUp && conn.bleSide === side ? "ble"
+      : (conn.serialUp && conn.serialSide === side ? "usb" : null) },
     setTimeout: (fn, ms) => { timers.push({ fn, ms, done: false }); return timers.length - 1; },
     clearTimeout: (id) => { if (timers[id]) timers[id].done = true; },
     showToast: (t) => calls.toasts.push(t), configFor: () => cfg
@@ -560,10 +668,20 @@ function diffFlowHarness() {
   vm.runInContext(`${section("js/config-sync.js", "const DEVICE_SNAPSHOT_TIMEOUT_MS", "// Zeigt den Diff im Dialog")}
     ${section("js/config-sync.js", '// "Auf ESP32 speichern": zuerst', "  if (bleConfigChar) {")}
     }
+    ${section("js/config-sync.js", "// One-Shot-Auto-Sync (BLE-Verbindung", "// =============================================================================\n// Layout-Diff")}
+    ${section("js/config-sync.js", "// Nach einer BLE- oder USB-Trennung", "// Zeigt den Diff im Dialog")}
     this.capture = captureDeviceSnapshotLine; this.write = writeConfigWithDiff; this.load = readConfigFromESP32;
+    this.autoSync = runAutoSync; this.abort = abortDeviceSnapshotReadIfDisconnected;
     this.state = () => ({ read: deviceSnapshotRead, active: diffFlowActive });`, h);
   h.bleConfigChar = null; h.serialPort = null;
   h.connectedSide = () => h.side;
+  // h.side über h.via ("usb"/"ble"); alsoBle = dieselbe Hälfte zusätzlich per BLE (BLE hat Vorrang)
+  h.connectionState = () => ({
+    bleUp: !!h.side && (h.via === "ble" || h.alsoBle), bleSide: h.side,
+    serialUp: !!h.side && h.via === "usb", serialSide: h.side
+  });
+  h.disconnects = 0;
+  h.disconnectBle = async () => { h.disconnects++; return true; };
   h.sendDeviceCommand = async (cmd, side) => { calls.sent.push(`${side}:${cmd}`); return h.sendOk; };
   h.writeConfigToESP32 = async (opts) => { calls.writes++; calls.lastWrite = opts; };
   h.confirm = () => { calls.confirms++; return h.confirmAnswer; };
@@ -655,6 +773,108 @@ asyncTests.push(["Layout-Diff: späte Zeilen nach dem Timeout ändern die lokale
   assert.strictEqual(calls.writes, 1);
 }]);
 
+asyncTests.push(["Layout-Diff: Verwerfen nach Timeout blockiert Laden und meldet einen zweiten Klick", async () => {
+  const { h, calls, fire, flush } = diffFlowHarness();
+  h.confirmAnswer = false;
+  const run = h.write();
+  await flush();
+  fire(8000);
+  await run;
+  assert.ok(h.state().read.stale);
+  // "Vom ESP32 laden" sendet während des Verwerfens kein GET_CONFIG
+  await h.load();
+  assert.deepStrictEqual(calls.sent, ["R:GET_CONFIG"]);
+  // Zweiter Klick auf "Auf ESP32 speichern": Hinweis statt stiller Rückkehr, keine neue Abfrage
+  const toastsBefore = calls.toasts.length;
+  await h.write();
+  assert.deepStrictEqual(calls.sent, ["R:GET_CONFIG"]);
+  assert.ok(calls.toasts.slice(toastsBefore).some(t => t.includes("früheren Abfrage")));
+}]);
+
+asyncTests.push(["Layout-Diff: One-Shot-Auto-Sync überträgt nicht in eine laufende Abfrage", async () => {
+  const { h, calls, flush, sendDevice, cfg } = diffFlowHarness();
+  const run = h.write();
+  await flush();
+  // BLE-Auto-Connect während der GET_CONFIG-Abfrage: keine Übertragung
+  await h.autoSync({ autoDisconnectAfter: true });
+  assert.strictEqual(calls.writes, 0);
+  sendDevice("R", cfg);
+  await flush();
+  // Dialog offen (diffFlowActive): ebenfalls keine Übertragung
+  await h.autoSync({ autoDisconnectAfter: true });
+  assert.strictEqual(calls.writes, 0);
+  h.dialogAnswer(false);
+  await run;
+  // Übersprungener One-Shot-Sync per BLE: Tastatur trotzdem zurück in den Tastaturmodus
+  assert.strictEqual(h.disconnects, 0);               // ohne BLE-Verbindung nichts zu trennen
+  // Ohne Diff-Ablauf überträgt der Auto-Sync
+  await h.autoSync({ autoDisconnectAfter: true });
+  assert.strictEqual(calls.writes, 1);
+  assert.strictEqual(calls.lastWrite.autoDisconnectAfter, true);
+  // Mit BLE-Verbindung: übersprungen und getrennt (EXIT_CONFIG); ohne autoDisconnectAfter bleibt sie bestehen
+  const b = diffFlowHarness();
+  b.h.bleConfigChar = {};
+  const runB = b.h.write();
+  await b.flush();
+  await b.h.autoSync({ autoDisconnectAfter: false });
+  assert.strictEqual(b.h.disconnects, 0);
+  await b.h.autoSync({ autoDisconnectAfter: true });
+  assert.strictEqual(b.h.disconnects, 1);
+  assert.strictEqual(b.calls.writes, 0);
+  b.h.side = null;
+  b.h.abort();
+  b.h.confirmAnswer = false;
+  await runB;
+  // ble.js startet den Auto-Sync nur über runAutoSync
+  const ble = read("js/ble.js");
+  assert.ok(!/writeConfigToESP32\(/.test(ble));
+  assert.ok(/runAutoSync\(\{ autoDisconnectAfter: true \}\)/.test(ble));
+}]);
+
+asyncTests.push(["Layout-Diff: Trennen während der Abfrage beendet sie sofort", async () => {
+  const { h, calls, flush } = diffFlowHarness();
+  const run = h.write();
+  await flush();
+  // Gleiche Hälfte noch verbunden: Abfrage läuft weiter
+  h.abort();
+  assert.ok(h.state().read);
+  // Verbindung weg: Abfrage endet ohne Timeout, der Ablauf meldet die Unterbrechung
+  h.side = null;
+  h.abort();
+  assert.strictEqual(h.state().read, null);
+  await run;
+  assert.strictEqual(calls.writes, 0);
+  assert.strictEqual(calls.confirms, 0);
+  assert.ok(calls.toasts.some(t => t.includes("unterbrochen")));
+
+  // Abfrage per BLE, BLE fällt weg, USB derselben Hälfte bleibt: die Antwort kommt nicht mehr, sofort beenden
+  const b = diffFlowHarness();
+  b.h.via = "usb"; b.h.alsoBle = true;
+  b.h.confirmAnswer = false;
+  const runB = b.h.write();
+  await b.flush();
+  b.h.alsoBle = false;
+  b.h.abort();
+  assert.strictEqual(b.h.state().read, null);
+  await runB;
+  assert.strictEqual(b.calls.confirms, 1);           // Rückfrage ohne Vergleich statt 8 s Warten
+  // Abfrage per USB, eine zusätzliche BLE-Verbindung ändert den Weg der Anfrage nicht
+  const u = diffFlowHarness();
+  const runU = u.h.write();
+  await u.flush();
+  u.h.alsoBle = true;
+  u.h.abort();
+  assert.ok(u.h.state().read);
+  u.h.alsoBle = false;
+  u.h.confirmAnswer = false;
+  u.h.side = null;
+  u.h.abort();
+  await runU;
+  // Beide Trennpfade rufen die Funktion auf
+  assert.ok(section("js/ble.js", "function onBleDisconnected", "function updateBleUI").includes("abortDeviceSnapshotReadIfDisconnected()"));
+  assert.ok(section("js/serial.js", "async function disconnectSerialNow", "function updateBatteryUI").includes("abortDeviceSnapshotReadIfDisconnected()"));
+}]);
+
 asyncTests.push(["Layout-Diff: writeConfigToESP32 überträgt nach einem Hälftenwechsel nichts", async () => {
   const toasts = [];
   let progressShown = false;
@@ -688,6 +908,102 @@ asyncTests.push(["Layout-Diff: Sendefehler und Verbindungswechsel übertragen ni
   await run;
   assert.strictEqual(calls.writes, 0);
   assert.strictEqual(calls.confirms, 1);
+}]);
+
+// Voller Sync aus js/config-sync.js mit Fake-USB-Verbindung. reply(cmd) liefert die Antwortzeile oder null.
+function fullSyncHarness(reply) {
+  const progress = [];
+  const toasts = [];
+  const sent = [];
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.combos = [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior: "KEY_PRESS", action: "KEY_ESC" }];
+  cfg.keyPairs = [{ first: "KEY_LEFT_ALT", second: "*" }];
+  const w = {
+    console: { error() {}, warn() {} }, sent, reply,
+    setTimeout: (fn) => { Promise.resolve().then(fn); return 0; }, clearTimeout: () => {},
+    document: { getElementById: id => id === "autoSyncProgressBar"
+      ? { style: { set width(v) { progress.push(parseInt(v, 10)); } } } : { style: {} } }
+  };
+  vm.createContext(w);
+  vm.runInContext(`${code}
+${read("js/side-routing.js")}
+var isAutoSyncing = false, isConfigModeActive = false, editSide = "R", bleConfigChar = null;
+var serialPort = { writable: true };
+function connectedSide() { return "R"; }
+function configFor() { return cfgRef; }
+function activeProfile() { return SIDE_PROFILES.R; }
+function alert() {}
+function showToast(t) { toastsRef.push(t); }
+function updateConfigModeUI() {}
+function pendingFor() { return []; }
+function clearPendingSync() {}
+function setPendingFor() {}
+function renderPendingSyncUI() {}
+async function disconnectBle() { return true; }
+async function sendBleCommand() { return false; }
+const ackRegistry = Dactyl.createAckRegistry({ set: () => 0, clear: () => {} });
+const waitForAck = (p, t, side, unknownOk) => ackRegistry.wait(p, t, side, unknownOk);
+const resolveAcksForLine = (line, side) => ackRegistry.resolveLine(line, side);
+const rejectAllPendingAcks = (reason, side) => ackRegistry.reject(reason, side);
+async function sendSerialCommand(cmd) {
+  sent.push(cmd);
+  const line = reply(cmd);
+  if (line) Promise.resolve().then(() => resolveAcksForLine(line, "R"));
+  return true;
+}
+${read("js/config-sync.js")}
+this.write = writeConfigToESP32;`, Object.assign(w, { cfgRef: cfg, toastsRef: toasts }));
+  return { w, progress, toasts, sent };
+}
+
+const okReply = cmd => cmd.startsWith("SET_K ") ? null : `OK ${cmd}`;
+
+asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async () => {
+  const { w, progress, sent } = fullSyncHarness(okReply);
+  await w.write();
+  assert.ok(sent.includes("SAVE_PAIRS"));
+  // Breite: 2 % beim Start, dann ein Wert pro Schritt, am Ende 0 % (Ausblenden). Ohne Kappung: zu viele
+  // Schritte enden unter 100 %, zu wenige laufen darüber
+  assert.strictEqual(progress[0], 2);
+  assert.strictEqual(progress.at(-1), 0);
+  const steps = progress.slice(1, -1);
+  const settings = sent.filter(c => /^SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM) /.test(c)).length;
+  const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
+  const keys = sent.filter(c => c.startsWith("SET_K ")).length;
+  const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
+  // SAVE_NVS, SAVE_COMBOS und die Tastenpaar-Phase zählen je einen Schritt
+  assert.strictEqual(steps.length, settings + names + keys + 1 + combos + 1 + 1);
+  assert.strictEqual(steps.at(-1), 100);
+  assert.ok(steps.every(p => p <= 100), `Fortschritt über 100 %: ${Math.max(...steps)}`);
+}]);
+
+test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () => {
+  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, sanitizeCommandText: api.sanitizeCommandText };
+  vm.createContext(ctx);
+  vm.runInContext(`${section("js/config-sync.js", "// Einstellungs-Befehle des vollen Syncs", "// One-Shot-Auto-Sync")}
+    this.count = countSyncSteps; this.build = buildSettingCommands;`, ctx);
+  // Eine weitere Einstellung erhöht die Schrittzahl (früher fest "+ 9")
+  assert.strictEqual(ctx.count(7, 8, 2) - ctx.count(6, 8, 2), 1);
+  assert.strictEqual(ctx.count(6, 8, 3) - ctx.count(6, 8, 2), 1);
+  assert.strictEqual(ctx.count(6, 8, 0), 6 + 8 + 8 * 6 * 7 + 3);
+  const cmds = ctx.build({}, R);
+  assert.strictEqual(cmds.length, 6);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM"]);
+});
+
+asyncTests.push(["Sync: Firmware ohne SET_TAPPING_TERM bricht den Sync nicht ab", async () => {
+  const { w, toasts, sent } = fullSyncHarness(cmd =>
+    cmd.startsWith("SET_TAPPING_TERM") ? `ERR UNKNOWN ${cmd}` : okReply(cmd));
+  await w.write();
+  assert.ok(sent.some(c => c.startsWith("SET_K ")));
+  assert.ok(sent.includes("SAVE_PAIRS"));
+  assert.ok(toasts.some(t => t.includes("SET_TAPPING_TERM") && t.includes("flashen")));
+  assert.ok(toasts.some(t => t.includes("Vollständige Konfiguration")));
+  // Andere Befehle bleiben Pflicht
+  const strict = fullSyncHarness(cmd => cmd.startsWith("SET_DEBOUNCE") ? `ERR UNKNOWN ${cmd}` : okReply(cmd));
+  await strict.w.write();
+  assert.ok(!strict.sent.some(c => c.startsWith("SET_K ")));
+  assert.ok(strict.toasts.some(t => t.includes("Fehler beim Übertragen")));
 }]);
 
 // Zeichen, die dactylAsciiToHid (DactylKeycodes.h) in einen HID-Code übersetzt

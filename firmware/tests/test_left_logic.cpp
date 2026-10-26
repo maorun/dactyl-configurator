@@ -423,6 +423,87 @@ TEST(test_restart_across_millis_wrap) {
   assert(shouldRestartEspNow(g, nearWrap + ESPNOW_RESTART_DOWN_MS, true));
 }
 
+TEST(test_restart_gate_blocks_config_mode_sleep_and_missing_espnow) {
+  assert(espNowRestartAllowed(false, false, true));
+  assert(!espNowRestartAllowed(true, false, true));   // Config Mode
+  assert(!espNowRestartAllowed(false, true, true));   // Deep-Sleep-Vorbereitung
+  assert(!espNowRestartAllowed(false, false, false)); // ESP-NOW nicht bereit
+  EspNowRestartGuard g;
+  restartGuardReset(g);
+  unsigned long t = dropEvents(g, ESPNOW_RESTART_DROPS, 0, 1000) + ESPNOW_RESTART_DOWN_MS;
+  assert(!shouldRestartEspNow(g, t, espNowRestartAllowed(true, false, true)));
+  assert(shouldRestartEspNow(g, t, espNowRestartAllowed(false, false, true)));
+}
+
+TEST(test_dropped_key_event_does_not_count_for_restart) {
+  EspNowRestartGuard g;
+  restartGuardReset(g);
+  for (int i = 0; i < ESPNOW_RESTART_DROPS * 2; i++) {
+    restartGuardOnOutcome(g, SEND_DROPPED, (unsigned long)i * 1000, SPLIT_OP_KEY_EVENT);
+  }
+  assert(g.consecutiveDrops == 0);
+  assert(!shouldRestartEspNow(g, 100000, true));
+  // HID-Verluste zählen weiter
+  restartGuardOnOutcome(g, SEND_DROPPED, 100000, SPLIT_OP_KEY_RELEASE);
+  assert(g.consecutiveDrops == 1);
+
+  // queueHeadOp liefert die Op des Pakets, dessen Ergebnis gleich verbucht wird
+  SplitSendQueue q;
+  queueReset(q);
+  assert(queueHeadOp(q) == SPLIT_OP_HEARTBEAT);
+  queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(1, 2, true, 0)));
+  queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  assert(queueHeadOp(q) == SPLIT_OP_KEY_EVENT);
+}
+
+TEST(test_restart_backoff_grows_without_delivery) {
+  EspNowRestartGuard g;
+  restartGuardReset(g);
+  unsigned long t = dropEvents(g, ESPNOW_RESTART_DROPS, 0, 1000) + ESPNOW_RESTART_DOWN_MS;
+  unsigned long expected = ESPNOW_RESTART_BACKOFF_MS;
+  for (int i = 0; i < 6; i++) {
+    assert(shouldRestartEspNow(g, t, true));
+    restartGuardOnRestart(g, t);
+    assert(restartBackoffMs(g) == expected);
+    dropEvents(g, ESPNOW_RESTART_DROPS, t + 1, 1);
+    assert(!shouldRestartEspNow(g, t + expected - 1, true));
+    t += expected;
+    expected = expected * 2 < ESPNOW_RESTART_BACKOFF_MAX_MS ? expected * 2 : ESPNOW_RESTART_BACKOFF_MAX_MS;
+  }
+  assert(restartBackoffMs(g) == ESPNOW_RESTART_BACKOFF_MAX_MS);
+  // Eine Zustellung setzt den Backoff zurück
+  restartGuardOnOutcome(g, SEND_DELIVERED, t);
+  assert(restartBackoffMs(g) == ESPNOW_RESTART_BACKOFF_MS);
+}
+
+TEST(test_master_activity_resets_inactivity_timer) {
+  volatile bool received = false;
+  unsigned long last = 100;
+  assert(!consumeMasterActivity(received, 5000, last));
+  assert(last == 100);
+  received = true;
+  assert(consumeMasterActivity(received, 5000, last));
+  assert(last == 5000 && !received);
+  assert(!consumeMasterActivity(received, 6000, last));
+  assert(last == 5000);
+}
+
+TEST(test_key_event_diagnostic_needs_link_and_counts_drops) {
+  SplitSendQueue q;
+  queueReset(q);
+  uint32_t dropped = 0;
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(2, 3, true, 1));
+  // Ohne Link: nichts eingereiht, kein Verlust gezählt
+  assert(!queueKeyEventDiagnostic(q, false, ev, dropped));
+  assert(q.count == 0 && dropped == 0);
+  for (int i = 0; i < SPLIT_DIAG_QUEUE_LIMIT; i++) assert(queueKeyEventDiagnostic(q, true, ev, dropped));
+  assert(q.count == SPLIT_DIAG_QUEUE_LIMIT && dropped == 0);
+  // Grenze erreicht: verworfen und gezählt
+  assert(!queueKeyEventDiagnostic(q, true, ev, dropped));
+  assert(!queueKeyEventDiagnostic(q, true, ev, dropped));
+  assert(q.count == SPLIT_DIAG_QUEUE_LIMIT && dropped == 2);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Firmware Unit Test Suite" << std::endl;

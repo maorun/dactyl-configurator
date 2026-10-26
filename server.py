@@ -38,16 +38,27 @@ os.environ["PATH"] = os.pathsep.join(_current_paths)
 
 PORT = 8088
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+# Schreibbarer Laufzeitzustand. Die Desktop-App setzt DACTYL_DATA_DIR, weil ihr Paket signiert und schreibgeschützt
+# ist; ohne die Variable (python3 server.py im Repository) liegt alles neben server.py.
+DATA_DIR = os.path.abspath(os.environ.get("DACTYL_DATA_DIR") or DIRECTORY)
+SOURCE_FIRMWARE_DIR = os.path.join(DIRECTORY, "firmware")
+FIRMWARE_DIR = os.path.join(DATA_DIR, "firmware")
+FIRMWARE_SKETCHES = ("dactyl_right", "dactyl_left")
 # current_config*.json ist lokaler Laufzeitzustand der App (in .gitignore); default_config*.json die versionierte Vorlage.
 # Jede Tastaturhälfte hat eigene Dateien und einen eigenen Sketch. Die Tests ersetzen diese Pfade.
-CONFIG_FILE = os.path.join(DIRECTORY, "current_config.json")
+CONFIG_FILE = os.path.join(DATA_DIR, "current_config.json")
 DEFAULT_CONFIG_FILE = os.path.join(DIRECTORY, "default_config.json")
-INO_FILE = os.path.join(DIRECTORY, "firmware", "dactyl_right", "dactyl_right.ino")
-SKETCH_DIR = os.path.join(DIRECTORY, "firmware", "dactyl_right")
-LEFT_CONFIG_FILE = os.path.join(DIRECTORY, "current_config_left.json")
+INO_FILE = os.path.join(FIRMWARE_DIR, "dactyl_right", "dactyl_right.ino")
+SKETCH_DIR = os.path.join(FIRMWARE_DIR, "dactyl_right")
+LEFT_CONFIG_FILE = os.path.join(DATA_DIR, "current_config_left.json")
 LEFT_DEFAULT_CONFIG_FILE = os.path.join(DIRECTORY, "default_config_left.json")
-LEFT_INO_FILE = os.path.join(DIRECTORY, "firmware", "dactyl_left", "dactyl_left.ino")
-LEFT_SKETCH_DIR = os.path.join(DIRECTORY, "firmware", "dactyl_left")
+LEFT_INO_FILE = os.path.join(FIRMWARE_DIR, "dactyl_left", "dactyl_left.ino")
+LEFT_SKETCH_DIR = os.path.join(FIRMWARE_DIR, "dactyl_left")
+# Mit eigenem Datenverzeichnis ist die .ino aus dem Paket die Vorlage; gerendert und kompiliert wird eine Kopie.
+# None: die .ino wird an Ort und Stelle gerendert (Repository).
+SEPARATE_FIRMWARE = FIRMWARE_DIR != SOURCE_FIRMWARE_DIR
+INO_TEMPLATE_FILE = os.path.join(SOURCE_FIRMWARE_DIR, "dactyl_right", "dactyl_right.ino") if SEPARATE_FIRMWARE else None
+LEFT_INO_TEMPLATE_FILE = os.path.join(SOURCE_FIRMWARE_DIR, "dactyl_left", "dactyl_left.ino") if SEPARATE_FIRMWARE else None
 
 SIDES = ("R", "L")
 # Physisch nicht vorhandene Tasten (rechts R4C0/R5C5, links gespiegelt R4C5/R5C0): dort darf keine Aktion liegen
@@ -58,8 +69,19 @@ DEFAULT_DEVICE_NAMES = {"R": "Dactyl Keyboard", "L": "Dactyl Links"}
 def side_paths(side):
     """Dateien einer Hälfte. Liest die Modulvariablen bei jedem Aufruf (Tests ersetzen sie)."""
     if side == "L":
-        return {"config": LEFT_CONFIG_FILE, "default": LEFT_DEFAULT_CONFIG_FILE, "ino": LEFT_INO_FILE, "sketch": LEFT_SKETCH_DIR}
-    return {"config": CONFIG_FILE, "default": DEFAULT_CONFIG_FILE, "ino": INO_FILE, "sketch": SKETCH_DIR}
+        return {"config": LEFT_CONFIG_FILE, "default": LEFT_DEFAULT_CONFIG_FILE, "ino": LEFT_INO_FILE,
+                "template": LEFT_INO_TEMPLATE_FILE or LEFT_INO_FILE, "sketch": LEFT_SKETCH_DIR}
+    return {"config": CONFIG_FILE, "default": DEFAULT_CONFIG_FILE, "ino": INO_FILE,
+            "template": INO_TEMPLATE_FILE or INO_FILE, "sketch": SKETCH_DIR}
+
+
+def sync_firmware_sources():
+    """Kopiert die Firmware-Quellen des Pakets in das Datenverzeichnis (beide Sketches: links bindet
+    ../dactyl_right/ ein). So kompiliert ein Flash nach einem App-Update immer die Quellen dieser Version."""
+    if not SEPARATE_FIRMWARE:
+        return
+    for name in FIRMWARE_SKETCHES:
+        shutil.copytree(os.path.join(SOURCE_FIRMWARE_DIR, name), os.path.join(FIRMWARE_DIR, name), dirs_exist_ok=True)
 
 
 def parse_side(path):
@@ -600,11 +622,12 @@ def save_config_and_firmware(config, side="R"):
     config = strip_response_metadata(config)
     validate_config(config, side)
     paths = side_paths(side)
-    if not os.path.exists(paths["ino"]):
-        raise FileNotFoundError(f"Firmware Datei nicht gefunden: {paths['ino']}")
-    with open(paths["ino"], "r", encoding="utf-8") as f:
+    if not os.path.exists(paths["template"]):
+        raise FileNotFoundError(f"Firmware Datei nicht gefunden: {paths['template']}")
+    with open(paths["template"], "r", encoding="utf-8") as f:
         # Neue Kennung: ein Flash aus der App überschreibt die Belegung auf der Tastatur immer
         new_ino = render_ino_content(f.read(), config, defaults_id=new_defaults_id(), side=side)
+    sync_firmware_sources()
     write_files_atomic([(paths["ino"], new_ino), (paths["config"], json.dumps(config, indent=2))])
 
 def find_arduino_cli():
@@ -923,6 +946,7 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def main():
+    os.makedirs(DATA_DIR, exist_ok=True)
     os.chdir(DIRECTORY)
     # Allow port reuse
     socketserver.TCPServer.allow_reuse_address = True

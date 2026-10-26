@@ -42,11 +42,11 @@ new_server_up() {
   [ -n "$pid" ] && [ "$pid" != "$OLD_PID" ]
 }
 
-# Die App liefert index.html, app.js, js/ und server.py aus dem Haupt-Checkout. Aus einem Worktree gebaut,
-# hätte das Bundle dessen main.js, die Oberfläche käme aber weiter aus dem Haupt-Checkout.
+# build-app.sh kopiert server.py, Oberfläche und Firmware des aufrufenden Checkouts in das Paket.
+# Aus einem Worktree gebaut, enthält die installierte App dessen Branch-Stand statt master.
 # In einem Git-Worktree ist .git eine Datei, im Haupt-Checkout ein Verzeichnis.
 if [ -f "$REPO_DIR/.git" ]; then
-  echo "WARNUNG: $REPO_DIR ist ein Worktree, nicht der Haupt-Checkout. Die App lädt die Oberfläche weiter aus dem Haupt-Checkout." >&2
+  echo "WARNUNG: $REPO_DIR ist ein Worktree, nicht der Haupt-Checkout. Die App enthält danach den Stand dieses Branches." >&2
 fi
 
 OLD_PID="$(server_pid)"

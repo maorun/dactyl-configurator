@@ -580,18 +580,138 @@ class TestServerAndCodegen(unittest.TestCase):
             finally:
                 server.CONFIG_FILE, server.INO_FILE, server.LEFT_CONFIG_FILE, server.LEFT_INO_FILE = old
 
-    def test_build_app_script_copies_main_js_and_resigns(self):
+    def test_build_app_script_bundles_server_ui_and_firmware(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
             pkg = json.load(f)
         self.assertEqual(pkg["main"], "main.js")
         self.assertEqual(pkg["scripts"]["build:app"], "bash scripts/build-app.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            # Repository-Kopie mit einer Nutzer-Config, Electron-Paket mit einer veralteten Datei
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(os.path.join(repo, "scripts"))
+            shutil.copy(os.path.join(root, "scripts", "build-app.sh"), os.path.join(repo, "scripts"))
+            for name in ("main.js", "package.json", "server.py", "index.html", "app.js", "style.css",
+                         "default_config.json", "default_config_left.json"):
+                shutil.copy(os.path.join(root, name), repo)
+            shutil.copytree(os.path.join(root, "js"), os.path.join(repo, "js"))
+            for name in ("dactyl_right", "dactyl_left"):
+                shutil.copytree(os.path.join(root, "firmware", name), os.path.join(repo, "firmware", name))
+            with open(os.path.join(repo, "current_config.json"), "w", encoding="utf-8") as f:
+                f.write('{"layers": "repo"}')
+            app_path = os.path.join(tmp, "Dactyl.app")
+            os.makedirs(os.path.join(app_path, "Contents", "Frameworks", "Electron Framework.framework"))
+            app_dir = os.path.join(app_path, "Contents", "Resources", "app")
+            os.makedirs(app_dir)
+            with open(os.path.join(app_dir, "veraltet.js"), "w", encoding="utf-8") as f:
+                f.write("alt")
+            data_dir = os.path.join(tmp, "data")
+            bin_dir = os.path.join(tmp, "bin")
+            os.makedirs(bin_dir)
+
+            def stub(name, body):
+                path = os.path.join(bin_dir, name)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/bash\n{body}\n")
+                os.chmod(path, 0o755)
+
+            stub("pgrep", "exit 1")
+            stub("codesign", f'echo "$@" >> "{tmp}/codesign"')
+            env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "DACTYL_APP": app_path,
+                   "DACTYL_DATA_DIR": data_dir}
+
+            def build():
+                return subprocess.run(["bash", os.path.join(repo, "scripts", "build-app.sh")], env=env,
+                                      capture_output=True, text=True, timeout=60)
+
+            proc = build()
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            for rel in ("main.js", "package.json", "server.py", "index.html", "app.js", "style.css",
+                        "default_config.json", "default_config_left.json", "js/side-profiles.js",
+                        "js/config-sync.js", "firmware/dactyl_right/dactyl_right.ino",
+                        "firmware/dactyl_right/DactylLogic.h", "firmware/dactyl_left/dactyl_left.ino"):
+                self.assertTrue(os.path.isfile(os.path.join(app_dir, rel)), rel)
+            # Kein Laufzeitzustand und keine Altlasten im signierten Paket
+            self.assertFalse(os.path.exists(os.path.join(app_dir, "current_config.json")))
+            self.assertFalse(os.path.exists(os.path.join(app_dir, "veraltet.js")))
+            self.assertFalse(os.path.exists(app_dir + ".new"))
+            with open(os.path.join(tmp, "codesign"), encoding="utf-8") as f:
+                self.assertIn(f"--force --deep --sign - {app_path}", f.read())
+            # Nutzer-Config wird einmalig übernommen, eine vorhandene nie überschrieben
+            with open(os.path.join(data_dir, "current_config.json"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), '{"layers": "repo"}')
+            self.assertFalse(os.path.exists(os.path.join(data_dir, "current_config_left.json")))
+            with open(os.path.join(data_dir, "current_config.json"), "w", encoding="utf-8") as f:
+                f.write('{"layers": "app"}')
+            proc = build()
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(os.path.join(data_dir, "current_config.json"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), '{"layers": "app"}')
+            # Läuft die App, baut das Skript nicht
+            stub("pgrep", "exit 0")
+            proc = build()
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("läuft noch", proc.stderr)
+
+    def test_main_js_starts_bundled_server_with_data_dir(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with open(os.path.join(root, "main.js"), encoding="utf-8") as f:
+            main_js = f.read()
+        # Kein fest eingetragener Checkout-Pfad: server.py liegt im Paket neben main.js
+        self.assertNotIn("/Users/", main_js)
+        self.assertNotIn("REPO_DIR", main_js)
+        self.assertIn("const SERVER_DIR = __dirname;", main_js)
+        self.assertIn("path.join(SERVER_DIR, 'server.py')", main_js)
+        self.assertIn("DACTYL_DATA_DIR: DATA_DIR", main_js)
+        # build-app.sh nutzt denselben Datenpfad wie main.js (userData = Name aus package.json)
+        with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
+            name = json.load(f)["name"]
+        self.assertIn("path.join(app.getPath('userData'), 'data')", main_js)
         with open(os.path.join(root, "scripts", "build-app.sh"), encoding="utf-8") as f:
-            script = f.read()
-        self.assertIn("set -euo pipefail", script)
-        self.assertIn('cp "$REPO_DIR/main.js" "$REPO_DIR/package.json" "$APP_DIR/"', script)
-        self.assertIn('codesign --force --deep --sign - "$APP"', script)
-        self.assertIn("pgrep", script)  # baut nicht in eine laufende App
+            self.assertIn(f"$HOME/Library/Application Support/{name}/data", f.read())
+
+    def test_data_dir_keeps_bundle_unchanged_and_flashes_a_copy(self):
+        # server.py mit DACTYL_DATA_DIR wie in der App: Configs und gerenderte .ino nur im Datenverzeichnis
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = os.path.join(tmp, "bundle")
+            os.makedirs(bundle)
+            for name in ("server.py", "default_config.json", "default_config_left.json"):
+                shutil.copy(os.path.join(root, name), bundle)
+            for name in ("dactyl_right", "dactyl_left"):
+                shutil.copytree(os.path.join(root, "firmware", name), os.path.join(bundle, "firmware", name))
+            data = os.path.join(tmp, "data")
+            script = "\n".join([
+                "import json, sys",
+                f"sys.path.insert(0, {bundle!r})",
+                "import server",
+                "server.save_config_and_firmware({'layers': [[[{'tap': 'KEY_Z'}]]]}, 'L')",
+                "server.save_config_atomic({'layers': [[[{'tap': 'KEY_Q'}]]]}, 'R')",
+                "print(json.dumps({'sketch': server.side_paths('L')['sketch'],"
+                " 'user': server.load_config_for_app('R').get('source')}))",
+            ])
+            env = {**os.environ, "DACTYL_DATA_DIR": data}
+            proc = subprocess.run([sys.executable, "-c", script], env=env, capture_output=True, text=True,
+                                  timeout=30, cwd=tmp)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            result = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(result["sketch"], os.path.join(data, "firmware", "dactyl_left"))
+            self.assertEqual(result["user"], "user")
+            # Gerenderte linke .ino im Datenverzeichnis; die Vorlage im Paket bleibt unverändert
+            with open(os.path.join(data, "firmware", "dactyl_left", "dactyl_left.ino"), encoding="utf-8") as f:
+                rendered = f.read()
+            self.assertIn("'z'", rendered)
+            self.assertNotIn("#define KEYMAP_DEFAULTS_ID 0UL", rendered)
+            for name in ("dactyl_left/dactyl_left.ino", "dactyl_right/dactyl_right.ino"):
+                with open(os.path.join(bundle, "firmware", name), encoding="utf-8") as f, \
+                        open(os.path.join(root, "firmware", name), encoding="utf-8") as g:
+                    self.assertEqual(f.read(), g.read(), name)
+            # Der linke Sketch bindet ../dactyl_right/ ein: beide Sketches liegen im Datenverzeichnis
+            self.assertTrue(os.path.isfile(os.path.join(data, "firmware", "dactyl_right", "DactylLogic.h")))
+            self.assertTrue(os.path.isfile(os.path.join(data, "current_config_left.json")))
+            self.assertTrue(os.path.isfile(os.path.join(data, "current_config.json")))
+            self.assertFalse(os.path.exists(os.path.join(bundle, "current_config.json")))
+            self.assertFalse(os.path.exists(os.path.join(bundle, "current_config_left.json")))
 
     def test_rebuild_app_script_quits_builds_and_restarts(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")

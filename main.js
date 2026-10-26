@@ -24,20 +24,10 @@ let serverProcess = null;
 const PORT = 8088;
 const APP_URL = `http://localhost:${PORT}`;
 
-function resolveRepoDir() {
-  if (process.env.REPO_DIR && fs.existsSync(path.join(process.env.REPO_DIR, 'server.py'))) {
-    return process.env.REPO_DIR;
-  }
-  if (fs.existsSync(path.join(__dirname, 'server.py'))) {
-    return __dirname;
-  }
-  const candidateParent = path.resolve(__dirname, '../../../..');
-  if (fs.existsSync(path.join(candidateParent, 'server.py'))) {
-    return candidateParent;
-  }
-  return '/Users/mdriemel/repos/rovodev-system/dactyl_configurator';
-}
-const REPO_DIR = resolveRepoDir();
+// server.py, die Weboberfläche und die Firmware-Quellen liegen im App-Paket neben main.js (scripts/build-app.sh).
+// Das signierte Paket bleibt unverändert: Configs und gerenderte Firmware schreibt server.py in DACTYL_DATA_DIR.
+const SERVER_DIR = __dirname;
+const DATA_DIR = path.join(app.getPath('userData'), 'data');
 
 const extraPaths = ['/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin'];
 const currentPath = process.env.PATH || '';
@@ -79,10 +69,10 @@ function ensureServer(callback) {
 }
 
 function startServer(callback) {
-  const serverScript = path.join(REPO_DIR, 'server.py');
+  const serverScript = path.join(SERVER_DIR, 'server.py');
   serverProcess = spawn('python3', [serverScript], {
-    cwd: REPO_DIR,
-    env: process.env,
+    cwd: SERVER_DIR,
+    env: { ...process.env, DACTYL_DATA_DIR: DATA_DIR },
     detached: false,
     stdio: 'ignore'
   });

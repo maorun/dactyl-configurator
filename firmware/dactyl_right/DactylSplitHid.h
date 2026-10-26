@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "DactylKeycodes.h" // dactylAsciiToHid, KEY_LEFT_SHIFT (implizites Shift großer/gesetzter Zeichen)
+#include "DactylOneShot.h"  // One-Shot-Modifier und Caps Word (Zustand auf dem Master)
 
 #define SPLIT_ESPNOW_CHANNEL 1
 
@@ -34,7 +35,10 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_MOUSE_SCROLL = 11, // arg = Scrollschritte (int8, ungleich 0)
   SPLIT_OP_ACTIVITY = 12,     // nur Master -> links: Tippen am Master, setzt den Inaktivitäts-Timer links zurück
   SPLIT_OP_KEY_EVENT = 13,    // Diagnose: Matrix-Position links (splitKeyEventCode), ohne HID-Wirkung
-  SPLIT_OP_COUNT = 14
+  SPLIT_OP_ONE_SHOT_PRESS = 14,   // code = One-Shot-Modifier-Maske (1..255, Bit i = KEY_LEFT_CTRL + i)
+  SPLIT_OP_ONE_SHOT_RELEASE = 15,
+  SPLIT_OP_CAPS_WORD_TOGGLE = 16, // Caps Word umschalten, ohne Werte
+  SPLIT_OP_COUNT = 17
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -86,6 +90,11 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
       return ev.code >= 1 && ev.code <= 0x07 && ev.arg == 0;
     case SPLIT_OP_MOUSE_SCROLL:
       return ev.code == 0 && ev.arg != 0;
+    case SPLIT_OP_ONE_SHOT_PRESS:
+    case SPLIT_OP_ONE_SHOT_RELEASE:
+      return ev.code >= 1 && ev.code <= 0xFF && ev.arg == 0;
+    case SPLIT_OP_CAPS_WORD_TOGGLE:
+      return ev.code == 0 && ev.arg == 0;
     case SPLIT_OP_KEY_EVENT:
       return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_KEY_EVENT_MASK) == 0 &&
              splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
@@ -165,8 +174,9 @@ inline void splitNoteLocalKeyChange(SplitActivityThrottle &t, unsigned long nowM
 // Scrollen hat keinen Zustand: ein doppelt zugestelltes Retry-Paket scrollte doppelt. Ein verlorener
 // Scrollschritt ist harmloser, deshalb wiederholt die linke Hälfte MOUSE_SCROLL nicht. Ein doppeltes
 // KEY_EVENT zählte in Heatmap und Statistik doppelt; ein verlorenes kostet nur eine Anzeige.
+// CAPS_WORD_TOGGLE schaltet um: ein Duplikat nähme das Umschalten zurück, ein verlorenes Paket tippt man neu.
 inline bool splitEventRetryable(const SplitHidEvent &ev) {
-  return ev.op != SPLIT_OP_MOUSE_SCROLL && ev.op != SPLIT_OP_KEY_EVENT;
+  return ev.op != SPLIT_OP_MOUSE_SCROLL && ev.op != SPLIT_OP_KEY_EVENT && ev.op != SPLIT_OP_CAPS_WORD_TOGGLE;
 }
 
 inline uint16_t splitMediaBits(const uint8_t report[2]) {
@@ -190,6 +200,7 @@ struct SplitHeldSet {
   uint8_t keys[32];     // Bitfeld für Tastatur-Codes 0..255
   uint16_t media;       // Media-Bitmaske
   uint8_t mouse;        // Maus-Buttons
+  uint8_t oneShot;      // gehaltene One-Shot-Modifier-Tasten (kein HID-Report, nur Zustand)
 };
 
 inline void splitSetClear(SplitHeldSet &s) {
@@ -208,7 +219,7 @@ inline void splitSetKey(SplitHeldSet &s, uint8_t code, bool held) {
 
 inline bool splitSetAny(const SplitHeldSet &s) {
   for (uint8_t b : s.keys) if (b) return true;
-  return s.media != 0 || s.mouse != 0;
+  return s.media != 0 || s.mouse != 0 || s.oneShot != 0;
 }
 
 struct SplitLeftHeld {
@@ -239,6 +250,10 @@ struct SplitHidSink {
   virtual void leftMouseRelease(uint8_t buttons) = 0;
   virtual void leftMouseClick(uint8_t buttons) = 0;
   virtual void leftMouseScroll(int8_t steps) = 0;
+  // arm = false: Loslassen durch RELEASE_ALL oder Link-Ausfall merkt nichts vor
+  virtual void leftOneShotPress(uint8_t mask) = 0;
+  virtual void leftOneShotRelease(uint8_t mask, bool arm) = 0;
+  virtual void leftCapsWordToggle() = 0;
   virtual ~SplitHidSink() {}
 };
 
@@ -253,6 +268,7 @@ inline void splitReleaseHeld(SplitLeftHeld &h, SplitHidSink &sink) {
     if (held.media & (1u << bit)) sink.leftMediaRelease((uint16_t)(1u << bit));
   }
   if (held.mouse) sink.leftMouseRelease(held.mouse);
+  if (held.oneShot) sink.leftOneShotRelease(held.oneShot, false);
 }
 
 // Führt ein bereits geprüftes Ereignis aus. Liefert true, wenn eine HID-Ausgabe erfolgte.
@@ -325,6 +341,23 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
     case SPLIT_OP_MOUSE_SCROLL:
       sink.leftMouseScroll(ev.arg);
       return true;
+    case SPLIT_OP_ONE_SHOT_PRESS: {
+      uint8_t add = (uint8_t)(code8 & ~s.oneShot);
+      if (!add) return false;
+      s.oneShot |= add;
+      sink.leftOneShotPress(add);
+      return true;
+    }
+    case SPLIT_OP_ONE_SHOT_RELEASE: {
+      uint8_t rel = (uint8_t)(code8 & s.oneShot);
+      if (!rel) return false;
+      s.oneShot &= (uint8_t)~rel;
+      sink.leftOneShotRelease(rel, true);
+      return true;
+    }
+    case SPLIT_OP_CAPS_WORD_TOGGLE:
+      sink.leftCapsWordToggle();
+      return true;
     default:
       return false;
   }
@@ -356,10 +389,14 @@ public:
   // Gehaltene Eingaben der linken Hälfte inkl. Link-Zustand (für splitApplyHidEvent)
   SplitLeftHeld splitLeft = {};
 
+  // One-Shot-Modifier und Caps Word beider Hälften (DactylOneShot.h)
+  OneShotState oneShot = {};
+
   // --- Rechte Hälfte (DactylLogic.h) ---
   size_t press(uint8_t k) {
+    uint8_t mods = oneShotModsForKey(oneShot, heldOneShot(), k, altInReport());
     splitSetKey(right, k, true);
-    return Hid::press(k);
+    return pressWithMods(k, mods);
   }
   size_t release(uint8_t k) {
     splitSetKey(right, k, false);
@@ -390,8 +427,11 @@ public:
     return p;
   }
   void mousePress(uint8_t b) {
+    uint8_t mods = oneShotModsForInput(oneShot, heldOneShot(), altInReport());
     right.mouse |= b;
+    uint8_t added = beginMods(mods);
     Hid::mousePress(b);
+    endMods(added);
   }
   void mouseRelease(uint8_t b) {
     right.mouse &= (uint8_t)~b;
@@ -401,9 +441,25 @@ public:
   void mouseClick(uint8_t b) {
     // Ein Klick löste einen von der anderen Hälfte gehaltenen Button
     if (b & splitLeft.set.mouse) return;
+    uint8_t mods = oneShotModsForInput(oneShot, heldOneShot(), altInReport());
+    uint8_t added = beginMods(mods);
     Hid::mouseClick(b);
+    endMods(added);
   }
+  void oneShotPress(uint8_t mask) {
+    uint8_t add = (uint8_t)(mask & ~right.oneShot);
+    right.oneShot |= add;
+    if (add) oneShotKeyDown(oneShot, add);
+  }
+  void oneShotRelease(uint8_t mask) {
+    uint8_t rel = (uint8_t)(mask & right.oneShot);
+    right.oneShot &= (uint8_t)~rel;
+    if (rel) oneShotKeyUp(oneShot, rel, true);
+  }
+  void capsWordToggle() { oneShot.capsWord = !oneShot.capsWord; }
   void releaseAll() {
+    // Eine gehaltene One-Shot-Taste gilt danach als gelöst, ohne etwas vorzumerken (Combo hat sie verbraucht)
+    if (right.oneShot) oneShotKeyUp(oneShot, right.oneShot, false);
     splitSetClear(right);
     if (!splitSetAny(splitLeft.set)) {
       Hid::releaseAll();
@@ -420,13 +476,16 @@ public:
   void splitResetForHostLoss() {
     splitSetClear(right);
     splitSetClear(splitLeft.set);
+    oneShotReset(oneShot);
     Hid::releaseAll();
   }
 
   const SplitHeldSet &rightHeld() const { return right; }
 
   // --- Linke Hälfte (SplitHidSink, Zustand ist vorher aktualisiert) ---
-  void leftKeyPress(uint8_t code) override { Hid::press(code); }
+  void leftKeyPress(uint8_t code) override {
+    pressWithMods(code, oneShotModsForKey(oneShot, heldOneShot(), code, altInReport()));
+  }
   void leftKeyRelease(uint8_t code) override {
     if (!splitSetHasKey(right, code)) releaseKeepingShift(code, right);
   }
@@ -442,19 +501,74 @@ public:
     splitMediaReport(rel, r);
     Hid::release(r);
   }
-  void leftMousePress(uint8_t b) override { Hid::mousePress(b); }
+  void leftMousePress(uint8_t b) override {
+    uint8_t added = beginMods(oneShotModsForInput(oneShot, heldOneShot(), altInReport()));
+    Hid::mousePress(b);
+    endMods(added);
+  }
   void leftMouseRelease(uint8_t b) override {
     uint8_t rel = (uint8_t)(b & ~right.mouse);
     if (rel) Hid::mouseRelease(rel);
   }
   void leftMouseClick(uint8_t b) override {
     if (b & right.mouse) return;
+    uint8_t added = beginMods(oneShotModsForInput(oneShot, heldOneShot(), altInReport()));
     Hid::mouseClick(b);
+    endMods(added);
   }
   void leftMouseScroll(int8_t steps) override { Hid::mouseScroll(steps); }
+  void leftOneShotPress(uint8_t mask) override { oneShotKeyDown(oneShot, mask); }
+  void leftOneShotRelease(uint8_t mask, bool arm) override { oneShotKeyUp(oneShot, mask, arm); }
+  void leftCapsWordToggle() override { oneShot.capsWord = !oneShot.capsWord; }
 
 private:
   SplitHeldSet right = {};
+
+  uint8_t heldOneShot() const { return (uint8_t)(right.oneShot | splitLeft.set.oneShot); }
+
+  // Modifier, die eine Hälfte im Report hält (Modifier-Tasten, implizites Shift gesetzter Zeichen)
+  uint8_t reportMods() const {
+    uint8_t m = 0;
+    for (uint8_t i = 0; i < 8; i++) {
+      uint8_t code = (uint8_t)(KEY_LEFT_CTRL + i);
+      if (splitSetHasKey(right, code) || splitSetHasKey(splitLeft.set, code)) m |= (uint8_t)(1u << i);
+    }
+    if (needsShift(right) || needsShift(splitLeft.set)) m |= ONE_SHOT_SHIFT_BIT;
+    return m;
+  }
+  // Alt im Report: Tottaste einer Umlaut-Folge oder Tastenpaar mit Alt. Solche Drücke verbrauchen nichts.
+  bool altInReport() const {
+    return (reportMods() & (uint8_t)((1u << (KEY_LEFT_ALT - KEY_LEFT_CTRL)) | (1u << (KEY_RIGHT_ALT - KEY_LEFT_CTRL)))) != 0;
+  }
+  // Startet einen Report mit den One-Shot-Modifiern, die noch nicht im Report sind. Liefert diese Bits.
+  uint8_t beginMods(uint8_t mods) {
+    uint8_t added = (uint8_t)(mods & ~reportMods());
+    if (!added) return 0;
+    Hid::beginReportBatch();
+    for (uint8_t i = 0; i < 8; i++) {
+      if (added & (1u << i)) Hid::press((uint8_t)(KEY_LEFT_CTRL + i));
+    }
+    return added;
+  }
+  // Sendet den Report mit Modifier und Druck, danach einen Report ohne die Bits rel
+  void endMods(uint8_t added, uint8_t rel) {
+    if (!added) return;
+    Hid::endReportBatch();
+    if (!rel) return;
+    Hid::beginReportBatch();
+    for (uint8_t i = 0; i < 8; i++) {
+      if (rel & (1u << i)) Hid::release((uint8_t)(KEY_LEFT_CTRL + i));
+    }
+    Hid::endReportBatch();
+  }
+  void endMods(uint8_t added) { endMods(added, added); }
+  // Ein gesetztes Zeichen ('A') hält Shift selbst: sein eigenes Release löst es später
+  size_t pressWithMods(uint8_t k, uint8_t mods) {
+    uint8_t added = beginMods(mods);
+    size_t n = Hid::press(k);
+    endMods(added, (uint8_t)(added & ~(impliesShift(k) ? ONE_SHOT_SHIFT_BIT : 0)));
+    return n;
+  }
 
   // Große und gesetzte ASCII-Zeichen ('A', '!') drücken implizit Shift; ihr Release löscht im Report das
   // Shift-Bit (DactylBleComposite::release), auch wenn die andere Hälfte Shift noch braucht.

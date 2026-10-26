@@ -18,7 +18,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Rangliste
 
-- **One-Shot-Modifier / Caps Word** `[Firmware]` — *Nutzen: mittel · Aufwand: mittel* — Häufige Komfortfunktionen ergänzend zu Mod-Tap. Neue Aktionscodes in Firmware, App und `server.py`.
 - **Makros (Firmware und App)** `[Firmware/App]` — *Nutzen: mittel · Aufwand: groß* — Firmware: Aktionscode-Bereich für Tastenfolgen, Speicherung in NVS, Ausführung nicht blockierend (auf der linken Hälfte über die Sendewarteschlange). App: Editor für Tastenfolgen mit Verzögerung. Großer Aufwand über alle Schichten, deshalb hinter den kleineren Komfortfunktionen.
 - **Profilverwaltung** `[App]` — *Nutzen: mittel · Aufwand: mittel* — Mehrere benannte Layouts lokal speichern und umschalten (heute nur ein `current_config.json` pro Hälfte plus JSON-Export/Import). Der Export deckt den Bedarf heute teilweise ab.
 - **ESP-NOW härten bzw. verschlüsseln** `[Split]` — *Nutzen: gering · Aufwand: mittel* — Unverschlüsseltes ESP-NOW ist eine bewusst akzeptierte Designentscheidung (Latenz, `AGENTS.md` 2a). Ein Angriff braucht Nähe und die gefälschte linke MAC. Verschlüsselung mit PMK/LMK kostet Airtime; vorher die Latenz messen.
@@ -41,6 +40,10 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 - Hardware-Prüfung offen: Tottaste Alt + u eines Umlauts auf der linken Hälfte am Mac testen. Der Host-Test prüft nur die Reihenfolge der `SplitHidEvent`s; der Master sendet sie ohne Abstand.
 - Hardware-Prüfung offen: ESP-NOW-Neustart der linken Hälfte. Den Master per Reset-Taste neu starten, während links getippt wird. Erwartet: `ESPNOW_RESTART` höchstens einmal pro Backoff (30 s, dann 60 s, 120 s ... bis 8 Min), danach `Master erreichbar=1` ohne Reset der linken Hälfte. Zusätzlich prüfen: `STATUS` meldet `ActivityRx=1`.
 - Hardware-Prüfung offen: Synchronisierte Inaktivitäts-Timer. 6 Min nur rechts tippen; links darf nicht in Standby gehen (Serial `[POWER]`), und linke Tasten kommen ohne Verzögerung an. Der Host-Test prüft nur Parser und Drosselung, nicht den Funkweg Master -> links.
+- `firmware/dactyl_right/DactylLogic.h` (`dispatchPress`, Zweig One-Shot/Caps Word): Eine One-Shot- oder Caps-Word-Taste, die Combo-Kandidat ist, sendet sofort und wird nicht gepuffert. Folge: Löst die Combo aus, ruft `releaseAll()` die gehaltene One-Shot-Taste ohne Vormerken ab; ein Caps-Word-Umschalten bleibt aber bestehen. Korrektur: Caps Word als Combo-Kandidat puffern (`isComboCandidateKey`) und in `processDeferredKeys` / `activateTapHoldAsHold` nachsenden.
+- `firmware/dactyl_right/DactylLogic.h` (`checkUserCombos`, `MODIFIER_HOLD`): Combo-Verhalten `MODIFIER_HOLD` mit `OSM_*` oder `CAPS_WORD` sendet nichts (Code > 0xFF). Folge: stille Fehlkonfiguration. Korrektur: In App und `server.py` diese Aktionen für `MODIFIER_HOLD` ablehnen oder sie dort als gehaltenen Modifier ausführen.
+- `firmware/dactyl_right/DactylLogic.h` (`heldModifierMask`): Gehaltene One-Shot-Tasten zählen nicht. Folge: Ein Umlaut, während eine One-Shot-Taste gehalten ist, bekommt den Modifier nicht (Alt im Report blockt den Verbrauch) — gewollt, aber undokumentiert. Korrektur: Verhalten in `AGENTS.md` dokumentieren und mit Test absichern.
+- Hardware-Prüfung offen: One-Shot-Shift links, dann Taste rechts (und umgekehrt); Caps Word über beide Hälften; One-Shot-Shift vor `UMLAUT_AE` ergibt `Ä`.
 
 ## Detailpläne
 
@@ -65,3 +68,4 @@ Derzeit kein offener Plan.
 - **Linke Tasten im Live-Monitor über den Master:** Die linke Hälfte meldet jede Matrix-Änderung als Diagnose-Op `SPLIT_OP_KEY_EVENT` (ohne HID-Wirkung, ohne Retry, höchstens halbe Sendewarteschlange); der Master gibt sie per USB als `SPLIT_KEY:` aus, und die App zeigt sie im Live-Monitor, in der Heatmap und im Matrix-Test der linken Hälfte.
 - **LOW-Befunde aus Code-Reviews (Sammellauf):** 36 Befunde aus PR #17 bis #24 behoben, jeder mit Regressionstest (App-Sync, Layout-Diff, Split-Diagnose, ESP-NOW-Neustart, Inaktivitäts-Timer, `rebuild-app.sh`).
 - **Matrix-Test für leere Tasten:** Jede Matrix-Änderung erzeugt eine `MATRIX:`-Zeile auf USB-Serial, unabhängig von Belegung, Ebene und Tap-Hold; der Matrix-Test zählt damit auch Tasten mit Aktion `0`. Die Zeile geht nur über USB, nie über BLE (Keylogger-Schutz, keine Last neben den Sync-Acks).
+- **One-Shot-Modifier und Caps Word:** Aktionen `OSM_*` (`0x160`..`0x167`) und `CAPS_WORD` (`0x168`). Der Master führt den Zustand für beide Hälften (neue Split-Ops `ONE_SHOT_PRESS/RELEASE`, `CAPS_WORD_TOGGLE`); One-Shot-Shift links wirkt auf die nächste Taste rechts.

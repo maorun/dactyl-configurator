@@ -36,6 +36,9 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertEqual(server.code_to_cpp("KEY_NON_US_BACKSLASH"), "KEY_NON_US_BACKSLASH")
         self.assertEqual(server.code_to_cpp("UMLAUT_OE"), "ACT_UMLAUT_OE")
         self.assertEqual(server.code_to_cpp("UMLAUT_SZ"), "ACT_UMLAUT_SZ")
+        self.assertEqual(server.code_to_cpp("OSM_LSHIFT"), "ACT_OSM_LSHIFT")
+        self.assertEqual(server.code_to_cpp("OSM_RGUI"), "ACT_OSM_RGUI")
+        self.assertEqual(server.code_to_cpp("CAPS_WORD"), "ACT_CAPS_WORD")
         self.assertEqual(server.code_to_cpp("NONE"), "0")
         self.assertEqual(server.code_to_cpp(""), "0")
 
@@ -289,7 +292,7 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("{ ':', 'a' }", server.generate_key_pairs_cpp([{"first": ":", "second": "KEY_A"}]))
         self.assertIn("{ KEY_LEFT_SHIFT, KEY_NON_US_BACKSLASH }",
                       server.generate_key_pairs_cpp([{"first": "KEY_LEFT_SHIFT", "second": "KEY_NON_US_BACKSLASH"}]))
-        for bad in ("MO_1", "MEDIA_MUTE", "UMLAUT_AE", "MOUSE_LEFT", "PAIR_0", "NONE", "", None, 5, "KEY_A; evil",
+        for bad in ("MO_1", "MEDIA_MUTE", "UMLAUT_AE", "OSM_LSHIFT", "CAPS_WORD", "MOUSE_LEFT", "PAIR_0", "NONE", "", None, 5, "KEY_A; evil",
                     "KEY_0256", "KEY_256", "KEY_300", "KEY_FOO", "\x01"):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 server.generate_key_pairs_cpp([{"first": "KEY_A", "second": bad}])

@@ -20,6 +20,9 @@ struct RecordingSink : SplitHidSink {
   void leftMouseRelease(uint8_t b) override { log.push_back("br" + std::to_string(b)); }
   void leftMouseClick(uint8_t b) override { log.push_back("bc" + std::to_string(b)); }
   void leftMouseScroll(int8_t s) override { log.push_back("sc" + std::to_string(s)); }
+  void leftOneShotPress(uint8_t m) override { log.push_back("op" + std::to_string(m)); }
+  void leftOneShotRelease(uint8_t m, bool arm) override { log.push_back((arm ? "or" : "ox") + std::to_string(m)); }
+  void leftCapsWordToggle() override { log.push_back("cw"); }
 };
 
 static SplitLeftHeld held;
@@ -75,6 +78,9 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_CLICK, 4),
     makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, -1),
     makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(5, 6, true, 7)),
+    makeSplitHidEvent(SPLIT_OP_ONE_SHOT_PRESS, 0x02),
+    makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 0xFF),
+    makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE),
   };
   // Alle Ops links -> Master; ACTIVITY ist die einzige Op der Rückrichtung
   assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 1);
@@ -99,6 +105,11 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(0, 7, true, 0)), // Spalte 7 existiert nicht
     makeSplitHidEvent(SPLIT_OP_KEY_EVENT, 0x0008),                           // Bit außerhalb der Maske
     makeSplitHidEvent(SPLIT_OP_KEY_EVENT, 0, 1),
+    makeSplitHidEvent(SPLIT_OP_ONE_SHOT_PRESS, 0),
+    makeSplitHidEvent(SPLIT_OP_ONE_SHOT_PRESS, 0x100),
+    makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 2, 1),
+    makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE, 1),
+    makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE, 0, 1),
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -628,6 +639,209 @@ TEST(test_activity_throttle_survives_millis_wrap) {
   splitActivityNote(t);
   assert(!splitActivityTake(t, start + 200)); // Überlauf: 200 ms später, nicht ein Intervall
   assert(splitActivityTake(t, start + SPLIT_ACTIVITY_INTERVAL_MS));
+}
+
+
+// -----------------------------------------------------------------------------
+// One-Shot-Modifier und Caps Word (Zustand auf dem Master, beide Hälften)
+// -----------------------------------------------------------------------------
+static const uint8_t OS_SHIFT = 0x02; // Bit von KEY_LEFT_SHIFT
+static const uint8_t OS_CTRL = 0x01;
+
+TEST(test_one_shot_tap_applies_to_next_key_only) {
+  Kbd k;
+  k.oneShotPress(OS_SHIFT);
+  k.oneShotRelease(OS_SHIFT);
+  assert(k.log.empty()); // Tippen allein sendet nichts
+  k.press((uint8_t)'a');
+  k.release((uint8_t)'a');
+  // Shift im selben Report wie 'a', im nächsten Report wieder gelöst
+  assert((k.log == Log{"BEGIN", "P129", "P97", "END", "BEGIN", "R129", "END", "R97"}));
+  k.log.clear();
+  k.press((uint8_t)'b');
+  assert((k.log == Log{"P98"}));
+}
+
+TEST(test_one_shot_left_tap_shifts_right_key) {
+  // One-Shot-Shift am linken Daumen, Buchstabe rechts
+  Kbd k;
+  left(k, SPLIT_OP_ONE_SHOT_PRESS, OS_SHIFT);
+  left(k, SPLIT_OP_ONE_SHOT_RELEASE, OS_SHIFT);
+  assert(k.log.empty());
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"BEGIN", "P129", "P97", "END", "BEGIN", "R129", "END"}));
+}
+
+TEST(test_one_shot_right_tap_shifts_left_key) {
+  Kbd k;
+  k.oneShotPress(OS_CTRL);
+  k.oneShotRelease(OS_CTRL);
+  left(k, SPLIT_OP_KEY_PRESS, 'c');
+  assert((k.log == Log{"BEGIN", "P128", "P99", "END", "BEGIN", "R128", "END"}));
+  k.log.clear();
+  left(k, SPLIT_OP_KEY_PRESS, 'v');
+  assert((k.log == Log{"P118"}));
+}
+
+TEST(test_one_shot_held_acts_as_modifier_and_does_not_arm) {
+  Kbd k;
+  k.oneShotPress(OS_SHIFT);
+  k.press((uint8_t)'a');
+  k.press((uint8_t)'b');
+  k.oneShotRelease(OS_SHIFT);
+  // Jeder Druck während des Haltens bekommt Shift
+  assert((k.log == Log{"BEGIN", "P129", "P97", "END", "BEGIN", "R129", "END",
+                       "BEGIN", "P129", "P98", "END", "BEGIN", "R129", "END"}));
+  k.log.clear();
+  k.press((uint8_t)'c'); // nach dem Loslassen nichts vorgemerkt
+  assert((k.log == Log{"P99"}));
+}
+
+TEST(test_one_shot_second_tap_cancels) {
+  Kbd k;
+  for (int i = 0; i < 2; i++) {
+    k.oneShotPress(OS_SHIFT);
+    k.oneShotRelease(OS_SHIFT);
+  }
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"P97"}));
+}
+
+TEST(test_one_shot_stacks_modifiers) {
+  Kbd k;
+  k.oneShotPress(OS_CTRL);
+  k.oneShotRelease(OS_CTRL);
+  left(k, SPLIT_OP_ONE_SHOT_PRESS, OS_SHIFT);
+  left(k, SPLIT_OP_ONE_SHOT_RELEASE, OS_SHIFT);
+  k.press((uint8_t)'t');
+  assert((k.log == Log{"BEGIN", "P128", "P129", "P116", "END", "BEGIN", "R128", "R129", "END"}));
+}
+
+TEST(test_one_shot_modifier_key_does_not_consume) {
+  // Ein normaler Modifier (z. B. Cmd) zwischen One-Shot und Taste verbraucht die Vormerkung nicht
+  Kbd k;
+  k.oneShotPress(OS_SHIFT);
+  k.oneShotRelease(OS_SHIFT);
+  k.press((uint8_t)KEY_LEFT_GUI);
+  k.press((uint8_t)'z');
+  assert((k.log == Log{"P131", "BEGIN", "P129", "P122", "END", "BEGIN", "R129", "END"}));
+}
+
+TEST(test_one_shot_skips_modifier_already_in_report) {
+  Kbd k;
+  left(k, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  k.oneShotPress(OS_SHIFT);
+  k.oneShotRelease(OS_SHIFT);
+  k.log.clear();
+  k.press((uint8_t)'a');
+  // Shift ist schon im Report (links gehalten): kein zusätzliches Press/Release, das es lösen würde
+  assert((k.log == Log{"P97"}));
+}
+
+TEST(test_one_shot_shift_with_umlaut_dead_key) {
+  // Umlaut-Folge: Alt + u (Tottaste), dann 'a'. Die Tottaste verbraucht nichts, der Vokal bekommt Shift (Ä)
+  Kbd k;
+  k.oneShotPress(OS_SHIFT);
+  k.oneShotRelease(OS_SHIFT);
+  k.press((uint8_t)KEY_LEFT_ALT);
+  k.press((uint8_t)'u');
+  k.release((uint8_t)'u');
+  k.release((uint8_t)KEY_LEFT_ALT);
+  k.log.clear();
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"BEGIN", "P129", "P97", "END", "BEGIN", "R129", "END"}));
+}
+
+TEST(test_one_shot_applies_to_mouse_click) {
+  Kbd k;
+  k.oneShotPress(OS_CTRL);
+  k.oneShotRelease(OS_CTRL);
+  k.mouseClick(1);
+  assert((k.log == Log{"BEGIN", "P128", "BC1", "END", "BEGIN", "R128", "END"}));
+  k.log.clear();
+  k.mouseClick(1);
+  assert((k.log == Log{"BC1"}));
+}
+
+TEST(test_one_shot_release_all_and_link_loss_do_not_arm) {
+  Kbd k;
+  // Rechts: Combo (releaseAll) während One-Shot gehalten
+  k.oneShotPress(OS_SHIFT);
+  k.releaseAll();
+  k.oneShotRelease(OS_SHIFT);
+  // Links: Link-Ausfall während gehalten
+  left(k, SPLIT_OP_ONE_SHOT_PRESS, OS_CTRL, 0, 0);
+  assert(splitCheckLinkTimeout(k.splitLeft, SPLIT_LINK_TIMEOUT_MS, k));
+  k.log.clear();
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"P97"}));
+  assert(k.oneShot.armed == 0);
+}
+
+TEST(test_one_shot_left_press_retry_is_idempotent) {
+  Kbd k;
+  left(k, SPLIT_OP_ONE_SHOT_PRESS, OS_SHIFT);
+  left(k, SPLIT_OP_ONE_SHOT_PRESS, OS_SHIFT); // Retry-Duplikat
+  left(k, SPLIT_OP_ONE_SHOT_RELEASE, OS_SHIFT);
+  left(k, SPLIT_OP_ONE_SHOT_RELEASE, OS_SHIFT); // Retry-Duplikat
+  assert(k.oneShot.armed == OS_SHIFT);
+}
+
+TEST(test_host_loss_clears_one_shot_and_caps_word) {
+  Kbd k;
+  k.oneShotPress(OS_SHIFT);
+  k.oneShotRelease(OS_SHIFT);
+  k.capsWordToggle();
+  k.splitResetForHostLoss();
+  k.log.clear();
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"P97"}));
+}
+
+TEST(test_caps_word_shifts_letters_until_word_ends) {
+  Kbd k;
+  left(k, SPLIT_OP_CAPS_WORD_TOGGLE);
+  k.write((uint8_t)'a');
+  left(k, SPLIT_OP_KEY_WRITE, 'b');
+  k.write((uint8_t)'-');
+  k.write((uint8_t)'1');
+  k.write((uint8_t)KEY_BACKSPACE);
+  assert(k.oneShot.capsWord);
+  k.log.clear();
+  k.write((uint8_t)' '); // Leertaste beendet Caps Word
+  assert(!k.oneShot.capsWord);
+  assert((k.log == Log{"P32", "R32"}));
+  k.log.clear();
+  k.write((uint8_t)'c');
+  assert((k.log == Log{"P99", "R99"}));
+}
+
+TEST(test_caps_word_letter_report) {
+  Kbd k;
+  k.capsWordToggle();
+  k.write((uint8_t)'a');
+  assert((k.log == Log{"BEGIN", "P129", "P97", "END", "BEGIN", "R129", "END", "R97"}));
+  k.log.clear();
+  k.write((uint8_t)'1'); // Ziffern bleiben ungeshiftet und lassen Caps Word an
+  assert((k.log == Log{"P49", "R49"}) && k.oneShot.capsWord);
+}
+
+TEST(test_caps_word_toggle_off_and_modifier_keeps_it) {
+  Kbd k;
+  k.capsWordToggle();
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.release((uint8_t)KEY_LEFT_SHIFT);
+  assert(k.oneShot.capsWord);
+  k.capsWordToggle();
+  k.log.clear();
+  k.write((uint8_t)'a');
+  assert((k.log == Log{"P97", "R97"}));
+}
+
+TEST(test_caps_word_toggle_is_not_retried) {
+  assert(!splitEventRetryable(makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE)));
+  assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_ONE_SHOT_PRESS, 2)));
+  assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 2)));
 }
 
 int main() {

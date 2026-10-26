@@ -296,4 +296,10 @@ public:
     mouseScrolls.clear();
   }
   void setDisconnected() { connected = false; }
+
+  // One-Shot-Modifier und Caps Word: der Master führt den Zustand; der Mock protokolliert nur die Aufrufe
+  std::vector<int> oneShotEvents; // +mask = press, -mask = release, 0 = Caps Word umschalten
+  void oneShotPress(uint8_t mask) { oneShotEvents.push_back(mask); }
+  void oneShotRelease(uint8_t mask) { oneShotEvents.push_back(-(int)mask); }
+  void capsWordToggle() { oneShotEvents.push_back(0); }
 };

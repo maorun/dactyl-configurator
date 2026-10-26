@@ -1,0 +1,67 @@
+#!/bin/bash
+# Baut die installierte Desktop-App neu und startet sie neu: beendet die laufende App sauber (der before-quit-Hook
+# in main.js stoppt server.py), baut sie mit build-app.sh und öffnet sie wieder. Prüft danach, dass ein neuer
+# server.py auf Port 8088 läuft und antwortet. Beendet nie einen Prozess mit kill.
+# Aufruf: npm run rebuild:app   (Ziel ändern: DACTYL_APP=/pfad/zur/App.app npm run rebuild:app)
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP="${DACTYL_APP:-$HOME/Applications/Dactyl Configurator.app}"
+QUIT_TIMEOUT="${DACTYL_QUIT_TIMEOUT:-20}"
+START_TIMEOUT="${DACTYL_START_TIMEOUT:-30}"
+PORT=8088
+
+app_running() { pgrep -f "$APP/Contents/MacOS/" > /dev/null; }
+server_pid() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -n 1 || true; }
+
+# Wartet bis zu $1 Sekunden, bis Befehl $2 erfolgreich ist
+wait_for() {
+  local limit=$(( $1 * 2 )) i=0
+  while [ "$i" -lt "$limit" ]; do
+    if "$2"; then return 0; fi
+    sleep 0.5
+    i=$(( i + 1 ))
+  done
+  "$2"
+}
+
+app_stopped() { ! app_running; }
+port_free() { [ -z "$(server_pid)" ]; }
+new_server_up() {
+  local pid
+  pid="$(server_pid)"
+  [ -n "$pid" ] && [ "$pid" != "$OLD_PID" ]
+}
+
+OLD_PID="$(server_pid)"
+if app_running; then
+  echo "Beende die App: $APP"
+  osascript -e "tell application \"$APP\" to quit"
+  if ! wait_for "$QUIT_TIMEOUT" app_stopped; then
+    echo "Die App läuft nach ${QUIT_TIMEOUT} s noch. Bitte von Hand beenden: $APP" >&2
+    exit 1
+  fi
+fi
+# main.js verwendet einen laufenden Server weiter (ensureServer): ohne freien Port lädt die App kein neues server.py
+if ! wait_for "$QUIT_TIMEOUT" port_free; then
+  echo "Port $PORT ist noch belegt (PID $(server_pid)), aber die App läuft nicht. Diesen Server bitte von Hand beenden." >&2
+  exit 1
+fi
+
+if ! bash "$REPO_DIR/scripts/build-app.sh"; then
+  echo "Build fehlgeschlagen. Die App ist beendet; nach der Korrektur erneut ausführen: npm run rebuild:app" >&2
+  exit 1
+fi
+
+echo "Starte die App: $APP"
+open -a "$APP"
+if ! wait_for "$START_TIMEOUT" new_server_up; then
+  echo "Kein neuer server.py auf Port $PORT nach ${START_TIMEOUT} s (alte PID: ${OLD_PID:-keine})." >&2
+  exit 1
+fi
+STATUS="$(curl -s --max-time 5 -o /dev/null -w "%{http_code}" -H "Host: localhost:$PORT" "http://127.0.0.1:$PORT/" || true)"
+if [ "$STATUS" != "200" ]; then
+  echo "server.py antwortet mit HTTP $STATUS statt 200." >&2
+  exit 1
+fi
+echo "App neu gestartet: server.py PID ${OLD_PID:-keine} -> $(server_pid), HTTP $STATUS"

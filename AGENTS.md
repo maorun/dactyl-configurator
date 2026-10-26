@@ -291,7 +291,9 @@ xmllint --noout docs/lolin32_lite_wiring.svg
 ### 3a. Rebuild the Desktop App
 ```bash
 npm run build:app   # copies main.js + package.json into ~/Applications/Dactyl Configurator.app and re-signs it ad hoc
+npm run rebuild:app # quits the running app, runs build:app, starts the app again and verifies the new server.py
 ```
+- `rebuild:app` (`scripts/rebuild-app.sh`) quits the app with `osascript` (so `before-quit` stops `server.py`), waits up to 20 s until the app has quit and port 8088 is free, runs `build-app.sh`, opens the app and waits up to 30 s for a new PID on port 8088 that answers HTTP 200. `main.js` reuses a server that already listens on 8088, so the script refuses to continue while a server without the app holds the port. It never kills a process; it fails if the app does not quit, the port stays busy or the build fails. Run it from the main checkout, because the app serves the web UI from there.
 - The installed Electron bundle keeps its own copy of `main.js` (BLE/serial device selection, server start). Run `build:app` after every change to `main.js`; quit the app first (the script refuses while it runs). `DACTYL_APP=<path>` selects another bundle.
 - The web UI (`index.html`, `app.js`, `js/`) and `server.py` are not in the bundle; the app loads them from the main checkout at runtime. After a change to `server.py`, restart the app. The app starts `server.py` itself and stops it on quit (`before-quit` in `main.js`), so the restart loads the new server. Do not stop the server process by hand. After the restart, verify that the PID on port 8088 changed and that the changed path answers.
 

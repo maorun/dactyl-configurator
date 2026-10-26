@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "build:app": "bash scripts/build-app.sh"
+    "build:app": "bash scripts/build-app.sh",
+    "rebuild:app": "bash scripts/rebuild-app.sh"
   }
 }

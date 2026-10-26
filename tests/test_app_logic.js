@@ -43,6 +43,9 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
              removeKeyPairAt, KEYCODES, UMLAUT_LABELS, ONE_SHOT_LABELS, holdSublabel,
              planKeyPairDeletion, hasPendingPairChange, keyNeedsStagedPairs,
+             ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
+             isValidMacroStep, isValidMacro, normalizeMacroStep, macroCommands, isMacroUsed, removeMacroAt,
+             keyNeedsStagedMacros, macroSaveIndex,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides };`, ctx);
 const api = ctx.api;
@@ -910,6 +913,109 @@ asyncTests.push(["Layout-Diff: Sendefehler und Verbindungswechsel übertragen ni
   assert.strictEqual(calls.confirms, 1);
 }]);
 
+test("Makros: Konstanten passen zu Firmware und server.py", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  const py = read("server.py");
+  const define = name => Number(new RegExp(`#define ${name}\\s+(0x[0-9A-Fa-f]+|\\d+)`).exec(common)[1]);
+  assert.strictEqual(define("ACT_MACRO_BASE"), api.ACT_MACRO_BASE);
+  assert.strictEqual(define("MAX_MACROS"), api.MAX_MACROS);
+  assert.strictEqual(define("MAX_MACRO_STEPS"), api.MAX_MACRO_STEPS);
+  assert.strictEqual(define("MACRO_MAX_PAUSE_MS"), api.MACRO_MAX_PAUSE_MS);
+  for (const [name, value] of Object.entries(api.MACRO_STEP_TYPES)) {
+    assert.strictEqual(define(`MACRO_STEP_${name.toUpperCase()}`), value);
+  }
+  assert.strictEqual(Number(/^MAX_MACROS = (\d+)/m.exec(py)[1]), api.MAX_MACROS);
+  // Kein anderer Aktionscode (Umlaut, One-Shot, Caps Word) liegt im Makro-Bereich
+  for (const m of common.matchAll(/#define (ACT_\w+)\s+(0x[0-9A-Fa-f]+)/g)) {
+    if (m[1] === "ACT_MACRO_BASE") continue;
+    const v = Number(m[2]);
+    assert.ok(v < api.ACT_MACRO_BASE || v >= api.ACT_MACRO_BASE + api.MAX_MACROS, `${m[1]} überlappt mit Makros`);
+  }
+});
+
+test("Makros: Aktionscode hin und zurück", () => {
+  assert.strictEqual(api.actionCodeToNumeric("MACRO_0"), api.ACT_MACRO_BASE);
+  assert.strictEqual(api.actionCodeToNumeric("MACRO_15"), api.ACT_MACRO_BASE + 15);
+  assert.strictEqual(api.macroIndexFromCode("MACRO_16"), -1);
+  assert.strictEqual(api.macroIndexFromCode("MACRO_x"), -1);
+  assert.deepStrictEqual({ ...api.findDefinitionByCode(api.ACT_MACRO_BASE + 3) }, { label: "Makro 3", tap: "MACRO_3" });
+  // Ein Makro ist kein Tastenpaar- oder Schritt-Mitglied
+  assert.strictEqual(api.isKeyPairMember("MACRO_0"), false);
+});
+
+test("Makros: Schritte, Validierung und Normalisierung", () => {
+  assert.ok(api.isValidMacroStep({ type: "tap", code: "KEY_A" }));
+  assert.ok(api.isValidMacroStep({ type: "down", code: "KEY_LEFT_GUI" }));
+  assert.ok(api.isValidMacroStep({ type: "pause", ms: 5000 }));
+  for (const bad of [{ type: "pause", ms: 0 }, { type: "pause", ms: 5001 }, { type: "pause", ms: "100" },
+                     { type: "tap", code: "MO_1" }, { type: "tap", code: "MACRO_0" }, { type: "tap", code: "PAIR_0" },
+                     { type: "click", code: "KEY_A" }, null, "tap"]) {
+    assert.strictEqual(api.isValidMacroStep(bad), false, JSON.stringify(bad));
+  }
+  const tooLong = { name: "x", steps: Array(api.MAX_MACRO_STEPS + 1).fill({ type: "tap", code: "KEY_A" }) };
+  assert.strictEqual(api.isValidMacro(tooLong), false);
+  const base = { layers: [[[]]] };
+  assert.throws(() => api.validateConfigShape({ ...base, macros: [tooLong] }, R), /Makro 0/);
+  assert.throws(() => api.validateConfigShape({ ...base, macros: Array(17).fill({ steps: [] }) }, R), /macros/);
+  assert.throws(() => api.validateConfigShape({ ...base, combos: [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, action: "MACRO_0" }] }, R), /Makros/);
+  const cfg = api.normalizeConfig({ layers: [[[]]], macros: [
+    { name: "Ok", steps: [{ type: "pause", ms: 10, code: "KEY_A" }, { type: "tap", code: "KEY_A", ms: 7 }] },
+    { name: "Kaputt", steps: [{ type: "pause", ms: 0 }] }
+  ] }, R);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cfg.macros)),
+    [{ name: "Ok", steps: [{ type: "pause", ms: 10 }, { type: "tap", code: "KEY_A" }] }]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.normalizeConfig({ layers: [[[]]] }, R).macros)), []);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.macroCommands(cfg.macros[0]))),
+    ["ADD_MACRO", "ADD_MACRO_STEP 4 0 10", "ADD_MACRO_STEP 1 97 0"]);
+});
+
+test("Makros: Speicher-Index des Editors bleibt in der Liste", () => {
+  const two = [{ name: "a", steps: [] }, { name: "b", steps: [] }];
+  assert.strictEqual(api.macroSaveIndex(two, -1), 2);          // neues Makro wird angehängt
+  assert.strictEqual(api.macroSaveIndex(two, 1), 1);           // vorhandenes Makro
+  // Index aus einer längeren Liste (andere Hälfte, Import, Undo): kein Speichern, keine Lücke
+  assert.strictEqual(api.macroSaveIndex(two, 2), null);
+  assert.strictEqual(api.macroSaveIndex(two, 5), null);
+  assert.strictEqual(api.macroSaveIndex([], 0), null);
+  assert.strictEqual(api.macroSaveIndex(Array(api.MAX_MACROS).fill({ steps: [] }), -1), null);
+  assert.strictEqual(api.macroSaveIndex(undefined, -1), 0);
+});
+
+test("Makros: Editor schließt beim Wechsel der Hälfte und bei geänderter Liste", () => {
+  const editor = read("js/editor.js");
+  const sw = editor.slice(editor.indexOf("function switchEditSide"), editor.indexOf("function updateSideLabels"));
+  assert.ok(/closeMacroEditor\(\)/.test(sw), "switchEditSide schließt den Makro-Editor nicht");
+  assert.ok(sw.indexOf("closeMacroEditor()") < sw.indexOf("editSide = side"), "Editor muss vor dem Wechsel schließen");
+  const ui = read("js/macros-ui.js");
+  const render = ui.slice(ui.indexOf("function renderMacros"), ui.indexOf("function renderMacroDraftSteps"));
+  assert.ok(/macroSaveIndex\(currentConfig\.macros, macroEditIndex\) === null/.test(render));
+  const save = ui.slice(ui.indexOf("function saveMacroFromUI"), ui.indexOf("function deleteMacro"));
+  assert.ok(/macroSaveIndex\(currentConfig\.macros, macroEditIndex\)/.test(save));
+  assert.ok(!/next\.macros\.length : macroEditIndex/.test(save), "alter ungeprüfter Index");
+});
+
+test("Makros: Löschen nummeriert Tasten neu und Staging", () => {
+  const key = (tap, hold = "NONE", dtap = "NONE") => ({ label: "", tap, hold, dtap });
+  const config = {
+    macros: [{ name: "a", steps: [] }, { name: "b", steps: [] }, { name: "c", steps: [] }],
+    layers: [[[key("MACRO_0"), key("KEY_A", "MACRO_1"), key("KEY_B", "NONE", "MACRO_2"), "MACRO_1"]]]
+  };
+  const next = api.removeMacroAt(config, 1);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(next.macros.map(m => m.name))), ["a", "c"]);
+  const row = next.layers[0][0];
+  assert.strictEqual(row[0].tap, "MACRO_0");
+  assert.strictEqual(row[1].hold, "NONE");
+  assert.strictEqual(row[2].dtap, "MACRO_1");
+  assert.strictEqual(row[3], "NONE");
+  assert.strictEqual(config.layers[0][0][1].hold, "MACRO_1");   // nicht in-place
+  assert.strictEqual(api.removeMacroAt(config, 3), null);
+  assert.ok(api.isMacroUsed(config.layers, 2));
+  assert.ok(!api.isMacroUsed(next.layers, 2));
+  assert.ok(api.keyNeedsStagedMacros({ tap: "MACRO_0" }, [{ macros: true }]));
+  assert.ok(!api.keyNeedsStagedMacros({ tap: "MACRO_0" }, [{ pairs: true }]));
+  assert.ok(!api.keyNeedsStagedMacros({ tap: "KEY_A" }, [{ macros: true }]));
+});
+
 // Voller Sync aus js/config-sync.js mit Fake-USB-Verbindung. reply(cmd) liefert die Antwortzeile oder null.
 function fullSyncHarness(reply) {
   const progress = [];
@@ -918,6 +1024,10 @@ function fullSyncHarness(reply) {
   const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
   cfg.combos = [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior: "KEY_PRESS", action: "KEY_ESC" }];
   cfg.keyPairs = [{ first: "KEY_LEFT_ALT", second: "*" }];
+  cfg.macros = [
+    { name: "Copy", steps: [{ type: "down", code: "KEY_LEFT_GUI" }, { type: "tap", code: "KEY_C" }, { type: "up", code: "KEY_LEFT_GUI" }] },
+    { name: "Warten", steps: [{ type: "pause", ms: 250 }, { type: "tap", code: "a" }] }
+  ];
   const w = {
     console: { error() {}, warn() {} }, sent, reply,
     setTimeout: (fn) => { Promise.resolve().then(fn); return 0; }, clearTimeout: () => {},
@@ -971,8 +1081,10 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
-  // SAVE_NVS, SAVE_COMBOS und die Tastenpaar-Phase zählen je einen Schritt
-  assert.strictEqual(steps.length, settings + names + keys + 1 + combos + 1 + 1);
+  const macros = sent.filter(c => c === "ADD_MACRO").length;
+  assert.strictEqual(macros, 2);
+  // SAVE_NVS, SAVE_COMBOS, die Tastenpaar-Phase, je Makro ein Schritt und SAVE_MACROS
+  assert.strictEqual(steps.length, settings + names + keys + 1 + combos + 1 + 1 + macros + 1);
   assert.strictEqual(steps.at(-1), 100);
   assert.ok(steps.every(p => p <= 100), `Fortschritt über 100 %: ${Math.max(...steps)}`);
 }]);
@@ -985,7 +1097,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   // Eine weitere Einstellung erhöht die Schrittzahl (früher fest "+ 9")
   assert.strictEqual(ctx.count(7, 8, 2) - ctx.count(6, 8, 2), 1);
   assert.strictEqual(ctx.count(6, 8, 3) - ctx.count(6, 8, 2), 1);
-  assert.strictEqual(ctx.count(6, 8, 0), 6 + 8 + 8 * 6 * 7 + 3);
+  assert.strictEqual(ctx.count(6, 8, 0), 6 + 8 + 8 * 6 * 7 + 4);
+  assert.strictEqual(ctx.count(6, 8, 0, 3) - ctx.count(6, 8, 0), 3);
   const cmds = ctx.build({}, R);
   assert.strictEqual(cmds.length, 6);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM"]);
@@ -1004,6 +1117,33 @@ asyncTests.push(["Sync: Firmware ohne SET_TAPPING_TERM bricht den Sync nicht ab"
   await strict.w.write();
   assert.ok(!strict.sent.some(c => c.startsWith("SET_K ")));
   assert.ok(strict.toasts.some(t => t.includes("Fehler beim Übertragen")));
+}]);
+
+asyncTests.push(["Sync: Makros gehen als CLEAR_MACROS, ADD_MACRO, ADD_MACRO_STEP und SAVE_MACROS", async () => {
+  const { w, sent } = fullSyncHarness(okReply);
+  await w.write();
+  const start = sent.indexOf("CLEAR_MACROS");
+  assert.ok(start > sent.indexOf("SAVE_PAIRS"));
+  assert.deepStrictEqual(sent.slice(start), [
+    "CLEAR_MACROS",
+    "ADD_MACRO", "ADD_MACRO_STEP 2 131 0", "ADD_MACRO_STEP 1 99 0", "ADD_MACRO_STEP 3 131 0",
+    "ADD_MACRO", "ADD_MACRO_STEP 4 0 250", "ADD_MACRO_STEP 1 97 0",
+    "SAVE_MACROS"
+  ]);
+}]);
+
+asyncTests.push(["Sync: Firmware ohne Makros überspringt die Makro-Phase mit Hinweis", async () => {
+  const { w, toasts, sent } = fullSyncHarness(cmd => cmd === "CLEAR_MACROS" ? `ERR UNKNOWN ${cmd}` : okReply(cmd));
+  await w.write();
+  assert.ok(sent.includes("CLEAR_MACROS"));
+  assert.ok(!sent.some(c => c.startsWith("ADD_MACRO") || c === "SAVE_MACROS"));
+  assert.ok(toasts.some(t => t.includes("CLEAR_MACROS") && t.includes("flashen")));
+  assert.ok(toasts.some(t => t.includes("Vollständige Konfiguration")));
+  // Ein abgelehnter Schritt bricht den Sync ab (kein stilles Abschneiden)
+  const bad = fullSyncHarness(cmd => cmd.startsWith("ADD_MACRO_STEP 4") ? `ERR ARGS ${cmd}` : okReply(cmd));
+  await bad.w.write();
+  assert.ok(!bad.sent.includes("SAVE_MACROS"));
+  assert.ok(bad.toasts.some(t => t.includes("Fehler beim Übertragen")));
 }]);
 
 // Zeichen, die dactylAsciiToHid (DactylKeycodes.h) in einen HID-Code übersetzt

@@ -279,6 +279,21 @@ const ONE_SHOT_LABELS = {
 const ACT_KEY_PAIR_BASE = 0x140;
 const MAX_KEY_PAIRS = 16;
 
+// Makro MACRO_<n>: Folge aus Tippen, Drücken, Loslassen und Pausen (Index in currentConfig.macros)
+const ACT_MACRO_BASE = 0x170;
+const MAX_MACROS = 16;
+const MAX_MACRO_STEPS = 32;
+const MACRO_MAX_PAUSE_MS = 5000;
+// Schritt-Typen wie MACRO_STEP_* in DactylCommon.h
+const MACRO_STEP_TYPES = { tap: 1, down: 2, up: 3, pause: 4 };
+
+function macroIndexFromCode(code) {
+  const m = /^MACRO_(\d{1,2})$/.exec(String(code || ""));
+  if (!m) return -1;
+  const idx = Number(m[1]);
+  return idx < MAX_MACROS ? idx : -1;
+}
+
 function pairIndexFromCode(code) {
   const m = /^PAIR_(\d{1,2})$/.exec(String(code || ""));
   if (!m) return -1;
@@ -380,6 +395,8 @@ function actionCodeToNumeric(code) {
   }
   const pairIdx = pairIndexFromCode(code);
   if (pairIdx >= 0) return ACT_KEY_PAIR_BASE + pairIdx;
+  const macroIdx = macroIndexFromCode(code);
+  if (macroIdx >= 0) return ACT_MACRO_BASE + macroIdx;
   // Single-character ASCII (z.B. 'a', '1', '~', '@')
   if (code.length === 1) {
     const c = code.charCodeAt(0);
@@ -459,6 +476,10 @@ function applyMatrixData(layers, field, data) {
 
 function findDefinitionByCode(numericCode) {
   if (!numericCode || numericCode === 0) return { label: "---", tap: "NONE" };
+  if (numericCode >= ACT_MACRO_BASE && numericCode < ACT_MACRO_BASE + MAX_MACROS) {
+    const idx = numericCode - ACT_MACRO_BASE;
+    return { label: `Makro ${idx}`, tap: `MACRO_${idx}` };
+  }
   if (numericCode >= ACT_KEY_PAIR_BASE && numericCode < ACT_KEY_PAIR_BASE + MAX_KEY_PAIRS) {
     const idx = numericCode - ACT_KEY_PAIR_BASE;
     return { label: `Paar ${idx}`, tap: `PAIR_${idx}` };

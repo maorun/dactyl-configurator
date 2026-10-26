@@ -96,3 +96,21 @@ struct KeyPair {
   uint8_t first;
   uint8_t second;
 };
+
+// Makro: eine Taste spielt eine Folge aus Tippen, Drücken, Loslassen und Pausen ab; Index in userMacros[]
+#define ACT_MACRO_BASE           0x170
+#define MAX_MACROS               16
+#define MAX_MACRO_STEPS          32
+#define MACRO_MAX_PAUSE_MS       5000
+
+#define MACRO_STEP_TAP           1   // Code drücken und im nächsten Schritt loslassen
+#define MACRO_STEP_DOWN          2   // Code drücken (bleibt bis UP oder Makro-Ende gedrückt)
+#define MACRO_STEP_UP            3   // Code loslassen
+#define MACRO_STEP_PAUSE         4   // ms warten
+
+// Makro-Schritt (exakt 4 Bytes, NVS-Format): Code 0x01..0xFF für TAP/DOWN/UP, ms 1..MACRO_MAX_PAUSE_MS für PAUSE
+struct MacroStep {
+  uint8_t type;
+  uint8_t code;
+  uint16_t ms;
+};

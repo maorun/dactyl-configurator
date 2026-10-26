@@ -478,6 +478,8 @@ function switchEditSide(side) {
   if (!sideStore.has(side)) return;
   if (side !== editSide) {
     sideStore.save(editSide, { config: currentConfig, pendingChanges });
+    // Ein offener Makro-Entwurf gehört zur bisherigen Hälfte
+    closeMacroEditor();
     editSide = side;
     const state = sideStore.get(side);
     currentConfig = state.config;
@@ -756,8 +758,9 @@ function setOptionalActionSelect(select, code) {
 }
 
 function renderCombosTable() {
-  // Tastenpaare liegen im selben Tab und ändern sich bei Laden, Import und Undo zusammen mit den Combos
+  // Tastenpaare und Makros liegen im selben Tab und ändern sich bei Laden, Import und Undo zusammen mit den Combos
   renderKeyPairs();
+  renderMacros();
   const tbody = document.getElementById("combosTableBody");
   const emptyState = document.getElementById("emptyCombosState");
   tbody.innerHTML = "";

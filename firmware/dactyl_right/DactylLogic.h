@@ -12,6 +12,7 @@
  *   KeyCombo, ComboRuntime, comboRuntime[], userCombos[], numCombos,
  *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], layerNames[],
  *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
+ *   MAX_MACROS, MAX_MACRO_STEPS, ACT_MACRO_BASE, MacroStep, userMacros[][], macroLengths[], numMacros,
  *   momentaryLayers[], toggleLayers[], keyState[][], pressedAction[][],
  *   keyPressTime[][], keySentToHost[][],
  *   isConfigMode, enterConfigRequested, exitConfigRequested, lastActivityTime,
@@ -221,6 +222,133 @@ uint8_t oneShotMaskForAction(uint16_t action) {
 }
 
 // -----------------------------------------------------------------------------
+// Makros (ACT_MACRO_BASE + Index): nicht blockierende Folge aus TAP, DOWN, UP und PAUSE
+// -----------------------------------------------------------------------------
+// Darf der nächste Makro-Schritt ein HID-Ereignis erzeugen? Die linke Hälfte prüft hier den Platz in der
+// Sendewarteschlange: ein Makro wartet, statt Ereignisse an einer vollen Warteschlange zu verlieren.
+#ifndef MACRO_OUTPUT_READY
+#define MACRO_OUTPUT_READY() true
+#endif
+// Abstand zwischen zwei HID-Ereignissen eines Makros (z. B. Drücken und Loslassen eines TAP)
+#define MACRO_STEP_GAP_MS 5
+
+struct MacroRun {
+  bool active;
+  uint8_t index;
+  uint8_t step;            // nächster Schritt in userMacros[index]
+  uint8_t tapCode;         // != 0: TAP gedrückt, sein Loslassen steht aus
+  uint8_t numHeld;
+  uint8_t held[MAX_MACRO_STEPS]; // mit DOWN gedrückte Codes, das Makro-Ende lässt sie los
+  unsigned long stepTime;  // Zeitpunkt des letzten Schritts
+  unsigned long waitMs;    // Wartezeit ab stepTime bis zum nächsten Schritt
+};
+MacroRun macroRun = {};
+
+bool isMacroAction(uint16_t action) {
+  return action >= ACT_MACRO_BASE && action < ACT_MACRO_BASE + MAX_MACROS;
+}
+
+// true, wenn der Schritt gültig ist: TAP/DOWN/UP mit Code 1..255 und ms 0, PAUSE mit Code 0 und ms 1..MACRO_MAX_PAUSE_MS
+bool isValidMacroStep(int type, int code, int ms) {
+  if (type == MACRO_STEP_TAP || type == MACRO_STEP_DOWN || type == MACRO_STEP_UP) {
+    return code >= 1 && code <= 0xFF && ms == 0;
+  }
+  if (type == MACRO_STEP_PAUSE) return code == 0 && ms >= 1 && ms <= MACRO_MAX_PAUSE_MS;
+  return false;
+}
+
+// Liefert den Index zur Aktion oder -1, wenn der Index nicht belegt oder das Makro leer ist
+int macroIndexForAction(uint16_t action) {
+  if (!isMacroAction(action)) return -1;
+  uint8_t idx = action - ACT_MACRO_BASE;
+  if (idx >= numMacros || macroLengths[idx] == 0) return -1;
+  return idx;
+}
+
+// Beendet ein laufendes Makro. releaseKeys: offene Codes loslassen; false, wenn der Aufrufer danach
+// ohnehin releaseAll() sendet.
+void stopMacro(bool releaseKeys) {
+  if (!macroRun.active) return;
+  if (releaseKeys && !isConfigMode && bleKeyboard.isConnected()) {
+    if (macroRun.tapCode) bleKeyboard.release(macroRun.tapCode);
+    while (macroRun.numHeld > 0) bleKeyboard.release(macroRun.held[--macroRun.numHeld]);
+  }
+  macroRun = {};
+}
+
+void macroTick(unsigned long now);
+void macroRunStep(const MacroStep &st);
+
+// Startet das Makro. Ein laufendes Makro läuft zu Ende: ein weiterer Start während des Laufs entfällt.
+bool startMacro(uint16_t action, unsigned long now) {
+  if (macroRun.active || isConfigMode || !bleKeyboard.isConnected()) return false;
+  int idx = macroIndexForAction(action);
+  if (idx < 0) return false;
+  macroRun = {};
+  macroRun.active = true;
+  macroRun.index = (uint8_t)idx;
+  macroRun.stepTime = now;
+  // Erster Schritt sofort, die weiteren aus processDeferredKeys()
+  macroTick(now);
+  return true;
+}
+
+// Höchstens ein HID-Ereignis pro Aufruf; Wartezeiten blockieren loop() nicht
+void macroTick(unsigned long now) {
+  if (!macroRun.active) return;
+  // Wie bei allen Tasten: ohne Host sendet die Hälfte nichts, auch kein Loslassen
+  if (isConfigMode || !bleKeyboard.isConnected()) {
+    macroRun = {};
+    return;
+  }
+  if ((unsigned long)(now - macroRun.stepTime) < macroRun.waitMs) return;
+  if (!MACRO_OUTPUT_READY()) return;
+  macroRun.stepTime = now;
+  macroRun.waitMs = MACRO_STEP_GAP_MS;
+  if (macroRun.tapCode) {
+    bleKeyboard.release(macroRun.tapCode);
+    macroRun.tapCode = 0;
+  } else if (macroRun.step >= macroLengths[macroRun.index]) {
+    // Ende: mit DOWN gedrückte Codes in umgekehrter Reihenfolge loslassen, einen pro Aufruf
+    if (macroRun.numHeld > 0) bleKeyboard.release(macroRun.held[--macroRun.numHeld]);
+  } else {
+    macroRunStep(userMacros[macroRun.index][macroRun.step++]);
+  }
+  // Nichts mehr offen: sofort beenden, damit ein neuer Druck das Makro ohne Verzögerung startet
+  if (macroRun.step >= macroLengths[macroRun.index] && !macroRun.tapCode && macroRun.numHeld == 0) {
+    macroRun = {};
+  }
+}
+
+// Führt einen Schritt aus (höchstens ein HID-Ereignis)
+void macroRunStep(const MacroStep &st) {
+  if (!isValidMacroStep(st.type, st.code, st.ms)) {
+    // Ungültiger Schritt (z. B. aus einem fremden Codegen): überspringen
+    macroRun.waitMs = 0;
+    return;
+  }
+  if (st.type == MACRO_STEP_TAP) {
+    bleKeyboard.press(st.code);
+    macroRun.tapCode = st.code;
+  } else if (st.type == MACRO_STEP_DOWN) {
+    bool already = false;
+    for (uint8_t i = 0; i < macroRun.numHeld; i++) already = already || macroRun.held[i] == st.code;
+    bleKeyboard.press(st.code);
+    if (!already && macroRun.numHeld < MAX_MACRO_STEPS) macroRun.held[macroRun.numHeld++] = st.code;
+  } else if (st.type == MACRO_STEP_UP) {
+    bleKeyboard.release(st.code);
+    for (uint8_t i = 0; i < macroRun.numHeld; i++) {
+      if (macroRun.held[i] != st.code) continue;
+      for (uint8_t j = i + 1; j < macroRun.numHeld; j++) macroRun.held[j - 1] = macroRun.held[j];
+      macroRun.numHeld--;
+      break;
+    }
+  } else {
+    macroRun.waitMs = st.ms;
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Aktionen ausführen (Tastendruck / Loslassen einer aufgelösten Aktion)
 // -----------------------------------------------------------------------------
 void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) {
@@ -309,6 +437,19 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     if (!isConfigMode && bleKeyboard.isConnected()) {
       if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
         if (pressKeyPair(action)) keySentToHost[r][c] = true;
+      }
+    }
+  } else if (isMacroAction(action)) {
+    uint8_t idx = action - ACT_MACRO_BASE;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Makro %d\",\"code\":%d,\"layer\":%d}", r, c, idx, action, currentLayer);
+    sendConfigNotification(String(buf));
+    Serial.printf("Makro gedrückt: [R%d, C%d] (L%d) -> Makro %d\n", r, c, currentLayer, idx);
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
+        // Auch ein ignorierter Start (Makro läuft schon) verbraucht die Taste: das Loslassen startet nichts
+        startMacro(action, millis());
+        keySentToHost[r][c] = true;
       }
     }
   } else if (isUmlautAction(action)) {
@@ -414,6 +555,15 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         keySentToHost[r][c] = false;
       } else if (!wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
         sendUmlaut(action);
+      }
+    }
+  } else if (isMacroAction(action)) {
+    // Das Makro läuft unabhängig vom Halten der Taste; nur ein gepufferter Combo-Kandidat startet jetzt
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      if (keySentToHost[r][c]) {
+        keySentToHost[r][c] = false;
+      } else if (!wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
+        startMacro(action, millis());
       }
     }
   } else if (isKeyPairAction(action)) {
@@ -576,6 +726,9 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
     } else if (isUmlautAction(act)) {
       sendUmlaut(act);
       keySentToHost[r][c] = true;
+    } else if (isMacroAction(act)) {
+      startMacro(act, millis());
+      keySentToHost[r][c] = true;
     } else if (act >= 0x130 && act <= 0x132) {
       if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
       else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
@@ -727,7 +880,7 @@ void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
   Serial.println(matrixBuf);
 }
 
-// Zeitgesteuerte Entscheidungen: Mod-Tap Tapping-Term und gepufferte Combo-Kandidaten
+// Zeitgesteuerte Entscheidungen: Mod-Tap Tapping-Term, gepufferte Combo-Kandidaten und laufende Makros
 void processDeferredKeys(unsigned long now) {
   tapHoldTick(now);
   doubleTapTick(now);
@@ -747,6 +900,9 @@ void processDeferredKeys(unsigned long now) {
             } else if (isUmlautAction(act)) {
               sendUmlaut(act);
               keySentToHost[r][c] = true;
+            } else if (isMacroAction(act)) {
+              startMacro(act, now);
+              keySentToHost[r][c] = true;
             } else if (act >= 0x130 && act <= 0x134) {
               if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
               else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
@@ -760,6 +916,7 @@ void processDeferredKeys(unsigned long now) {
       }
     }
   }
+  macroTick(now);
 }
 
 // -----------------------------------------------------------------------------
@@ -841,6 +998,10 @@ void loadKeymapFromNVS() {
     if (hasKeymap) {
       preferences.remove("num_pairs");
       preferences.remove("pairs_data");
+      // Makros ebenso: MACRO_n verweist auf die einkompilierten Makros
+      preferences.remove("num_macros");
+      preferences.remove("macro_lens");
+      preferences.remove("macros_data");
     }
     // Fingerprint zuletzt und nur nach vollständigem Schreiben: sonst beim nächsten Start erneut versuchen
     if (ok) {
@@ -904,6 +1065,39 @@ void loadKeymapFromNVS() {
       numKeyPairs = n;
     }
     Serial.printf("NVS: %d Tastenpaare geladen.\n", numKeyPairs);
+  }
+  // Makros: gespeicherte Liste (auch leer nach CLEAR_MACROS + SAVE_MACROS) überschreibt die einkompilierte.
+  // macros_data enthält nur die belegten Schritte hintereinander, macro_lens die Länge jedes Makros.
+  if (preferences.isKey("num_macros")) {
+    uint8_t n = preferences.getUChar("num_macros", 0);
+    uint8_t lens[MAX_MACROS] = {0};
+    bool valid = n <= MAX_MACROS;
+    size_t total = 0;
+    if (valid && n > 0) {
+      valid = preferences.isKey("macro_lens") && preferences.getBytesLength("macro_lens") == n &&
+              preferences.getBytes("macro_lens", lens, n) == n;
+      for (int i = 0; valid && i < n; i++) {
+        valid = lens[i] <= MAX_MACRO_STEPS;
+        total += lens[i];
+      }
+      size_t bytes = total * sizeof(MacroStep);
+      if (valid && bytes > 0) {
+        valid = preferences.isKey("macros_data") && preferences.getBytesLength("macros_data") == bytes;
+      } else if (valid) {
+        valid = !preferences.isKey("macros_data");
+      }
+    }
+    if (valid) {
+      static MacroStep packed[MAX_MACROS * MAX_MACRO_STEPS];
+      if (total > 0) preferences.getBytes("macros_data", packed, total * sizeof(MacroStep));
+      size_t pos = 0;
+      for (int i = 0; i < MAX_MACROS; i++) {
+        macroLengths[i] = i < n ? lens[i] : 0;
+        for (int j = 0; j < macroLengths[i]; j++) userMacros[i][j] = packed[pos++];
+      }
+      numMacros = n;
+    }
+    Serial.printf("NVS: %d Makros geladen.\n", numMacros);
   }
   if (preferences.isKey("num_combos")) {
     uint8_t n = preferences.getUChar("num_combos", 0);
@@ -1010,6 +1204,32 @@ bool saveKeyPairsToNVS() {
   }
   preferences.end();
   Serial.printf("NVS: %d Tastenpaare %s.\n", numKeyPairs, ok ? "gespeichert" : "FEHLER beim Speichern");
+  return ok;
+}
+
+// Nur die belegten Schritte speichern (kompakt), nicht das volle Array: spart NVS-Einträge
+bool saveMacrosToNVS() {
+  if (!preferences.begin("dactyl", false)) return false;
+  static MacroStep packed[MAX_MACROS * MAX_MACRO_STEPS];
+  size_t total = 0;
+  for (int i = 0; i < numMacros; i++) {
+    for (int j = 0; j < macroLengths[i]; j++) packed[total++] = userMacros[i][j];
+  }
+  bool ok = preferences.putUChar("num_macros", numMacros) > 0;
+  // Leere Daten: putBytes mit Länge 0 meldet 0 Bytes, deshalb den Schlüssel entfernen
+  if (numMacros > 0) {
+    ok = (preferences.putBytes("macro_lens", macroLengths, numMacros) == numMacros) && ok;
+  } else {
+    preferences.remove("macro_lens");
+  }
+  size_t bytes = total * sizeof(MacroStep);
+  if (bytes > 0) {
+    ok = (preferences.putBytes("macros_data", packed, bytes) == bytes) && ok;
+  } else {
+    preferences.remove("macros_data");
+  }
+  preferences.end();
+  Serial.printf("NVS: %d Makros %s.\n", numMacros, ok ? "gespeichert" : "FEHLER beim Speichern");
   return ok;
 }
 
@@ -1191,7 +1411,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
     if (sscanf(cmd.c_str(), "ADD_COMBO %d %d %d %d %d %d", &r1, &c1, &r2, &c2, &beh, &act) == 6 &&
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
-        beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF) {
+        beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act)) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;
       userCombos[numCombos].r2 = (uint8_t)r2;
@@ -1226,6 +1446,35 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
   } else if (cmd == "SAVE_PAIRS") {
     sendConfigNotification(saveKeyPairsToNVS() ? "OK SAVE_PAIRS" : "ERR NVS SAVE_PAIRS");
+  } else if (cmd == "CLEAR_MACROS") {
+    stopMacro(true);
+    numMacros = 0;
+    for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
+    sendConfigNotification("OK CLEAR_MACROS");
+  } else if (cmd == "ADD_MACRO") {
+    // Hängt ein leeres Makro an; ADD_MACRO_STEP füllt es
+    if (numMacros < MAX_MACROS) {
+      macroLengths[numMacros] = 0;
+      numMacros++;
+      sendConfigNotification("OK ADD_MACRO " + String(numMacros - 1));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd.startsWith("ADD_MACRO_STEP ")) {
+    // ADD_MACRO_STEP <typ> <code> <ms> an das letzte Makro: ein Schritt pro Befehl (Zeilen max. 256 Zeichen)
+    int type, code, ms;
+    char extra;
+    uint8_t idx = numMacros > 0 ? numMacros - 1 : 0;
+    if (sscanf(cmd.c_str(), "ADD_MACRO_STEP %d %d %d %c", &type, &code, &ms, &extra) == 3 &&
+        numMacros > 0 && macroLengths[idx] < MAX_MACRO_STEPS && isValidMacroStep(type, code, ms)) {
+      userMacros[idx][macroLengths[idx]] = { (uint8_t)type, (uint8_t)code, (uint16_t)ms };
+      macroLengths[idx]++;
+      sendConfigNotification("OK ADD_MACRO_STEP " + String(idx) + " " + String(macroLengths[idx] - 1));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd == "SAVE_MACROS") {
+    sendConfigNotification(saveMacrosToNVS() ? "OK SAVE_MACROS" : "ERR NVS SAVE_MACROS");
   } else if (cmd == "GET_NAMES" || cmd == "GET_CONFIG") {
     String out = "LAYER_NAMES:[";
     for (int i = 0; i < NUM_LAYERS; i++) {
@@ -1329,7 +1578,9 @@ void checkUserCombos() {
         keySentToHost[r1][c1] = true;
         keySentToHost[r2][c2] = true;
 
-        // Sofort Einzeltasten auf Mac loslassen, damit der Combo-Chord die Einzeltasten überschreibt
+        // Sofort Einzeltasten auf Mac loslassen, damit der Combo-Chord die Einzeltasten überschreibt.
+        // releaseAll() löst auch die Codes eines laufenden Makros; das Makro endet hier.
+        stopMacro(false);
         if (!isConfigMode && bleKeyboard.isConnected()) {
           bleKeyboard.releaseAll();
         }

@@ -1668,3 +1668,38 @@ body {
   width: auto;
   max-width: 100%;
 }
+
+/* Makros (1 Taste = Tastenfolge) */
+.macro-editor {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.8rem;
+  margin-bottom: 1rem;
+}
+
+.macro-editor h4 {
+  margin: 0 0 0.6rem;
+}
+
+.key-pair-form input[type="number"] {
+  width: 6rem;
+}
+
+.macro-steps {
+  margin: 0 0 1rem;
+  padding-left: 0;
+  list-style: none;
+}
+
+.macro-step {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0;
+}
+
+.macro-step span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

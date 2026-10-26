@@ -109,7 +109,7 @@ function normalizeKeyCell(cell) {
 
 // Ein Tastenpaar-Mitglied ist eine normale Taste oder ein Modifier (Code 1..255, wie in server.py/Firmware)
 function isKeyPairMember(code) {
-  if (typeof code !== "string" || pairIndexFromCode(code) >= 0) return false;
+  if (typeof code !== "string" || pairIndexFromCode(code) >= 0 || macroIndexFromCode(code) >= 0) return false;
   const n = actionCodeToNumeric(code);
   return n >= 1 && n <= 0xFF;
 }
@@ -184,6 +184,71 @@ function revertResolvedPairs(pairs, layers, firstIdx, count) {
   return removed;
 }
 
+// Makro-Schritt wie in server.py/Firmware: tap/down/up mit Tastatur-Code 1..255, pause mit ms 1..MACRO_MAX_PAUSE_MS
+function isValidMacroStep(step) {
+  if (!step || typeof step !== "object" || !(step.type in MACRO_STEP_TYPES)) return false;
+  if (step.type === "pause") return Number.isInteger(step.ms) && step.ms >= 1 && step.ms <= MACRO_MAX_PAUSE_MS;
+  return isKeyPairMember(step.code);
+}
+
+function isValidMacro(macro) {
+  return !!macro && typeof macro === "object" && Array.isArray(macro.steps) &&
+    macro.steps.length <= MAX_MACRO_STEPS && macro.steps.every(isValidMacroStep);
+}
+
+// Schritt in die gespeicherte Form bringen (nur die Felder seines Typs)
+function normalizeMacroStep(step) {
+  return step.type === "pause" ? { type: "pause", ms: step.ms } : { type: step.type, code: step.code };
+}
+
+// Firmware-Befehle eines Makros: ADD_MACRO, dann je Schritt ADD_MACRO_STEP <typ> <code> <ms>
+function macroCommands(macro) {
+  return ["ADD_MACRO", ...macro.steps.map(st => st.type === "pause"
+    ? `ADD_MACRO_STEP ${MACRO_STEP_TYPES.pause} 0 ${st.ms}`
+    : `ADD_MACRO_STEP ${MACRO_STEP_TYPES[st.type]} ${actionCodeToNumeric(st.code)} 0`)];
+}
+
+// Zielindex beim Speichern aus dem Makro-Editor: -1 = neues Makro (wird angehängt), sonst ein vorhandener Index.
+// null = Speichern nicht erlaubt (Liste voll, oder der Index gehört nicht mehr zur Liste, z. B. nach einem Wechsel
+// der Hälfte). Verhindert, dass ein Entwurf ein falsches Makro überschreibt oder Lücken in der Liste erzeugt.
+function macroSaveIndex(macros, editIndex) {
+  const list = Array.isArray(macros) ? macros : [];
+  if (editIndex === -1) return list.length < MAX_MACROS ? list.length : null;
+  return isValidIndex(editIndex, list.length) ? editIndex : null;
+}
+
+// true, wenn eine Taste einer Ebene MACRO_<idx> als Tap, Halten oder Doppel-Tipp nutzt
+function isMacroUsed(layers, idx) {
+  const code = `MACRO_${idx}`;
+  const uses = k => (typeof k === "string" ? k === code : !!k && (k.tap === code || k.hold === code || k.dtap === code));
+  return (layers || []).some(layer => (layer || []).some(row => (row || []).some(uses)));
+}
+
+// Entfernt das Makro idx und nummeriert die Verweise neu (wie removeKeyPairAt). Combos nutzen keine Makros.
+// Ändert nichts in-place; liefert { macros, layers } oder null bei ungültigem Index.
+function removeMacroAt(config, idx) {
+  const macros = (config && config.macros) || [];
+  if (!isValidIndex(idx, macros.length)) return null;
+  const remap = code => {
+    const n = macroIndexFromCode(code);
+    if (n < 0 || n < idx) return code;
+    return n === idx ? "NONE" : `MACRO_${n - 1}`;
+  };
+  const layers = JSON.parse(JSON.stringify(config.layers || []));
+  layers.forEach(layer => (layer || []).forEach(row => (row || []).forEach((k, c) => {
+    if (typeof k === "string") row[c] = remap(k);
+    else if (k && typeof k === "object") ["tap", "hold", "dtap"].forEach(f => { if (f in k) k[f] = remap(k[f]); });
+  })));
+  return { macros: JSON.parse(JSON.stringify(macros.filter((_, i) => i !== idx))), layers };
+}
+
+// true, wenn eine vorgemerkte Änderung die Makro-Liste ändert (Flag macros): das Gerät kennt die lokalen
+// MACRO_<n> dann erst nach dem nächsten Sync
+function keyNeedsStagedMacros(actions, changes) {
+  const usesMacro = Object.values(actions || {}).some(code => macroIndexFromCode(code) >= 0);
+  return usesMacro && (changes || []).some(ch => ch && ch.macros);
+}
+
 // Anzeigename eines Tastenpaars, z. B. "Umschalt (Links) + ."
 function keyPairLabel(pair, labelFor) {
   if (!pair) return "?";
@@ -221,6 +286,17 @@ function validateConfigShape(cfg, profile) {
       }
     });
   }
+  if (cfg.macros !== undefined) {
+    if (!Array.isArray(cfg.macros) || cfg.macros.length > MAX_MACROS) {
+      throw new Error(`'macros' muss eine Liste mit maximal ${MAX_MACROS} Einträgen sein.`);
+    }
+    cfg.macros.forEach((m, i) => {
+      if (!isValidMacro(m)) {
+        throw new Error(`Makro ${i} ist ungültig (max. ${MAX_MACRO_STEPS} Schritte; tap/down/up mit normaler Taste, pause 1..${MACRO_MAX_PAUSE_MS} ms).`);
+      }
+    });
+  }
+  if ((cfg.combos || []).some(cb => cb && macroIndexFromCode(cb.action) >= 0)) throw new Error("Combos unterstützen keine Makros.");
   if (cfg.layerNames !== undefined && !Array.isArray(cfg.layerNames)) throw new Error("'layerNames' muss eine Liste sein.");
   if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");
   const absent = Dactyl.absentKeyViolations(profile, cfg);
@@ -276,6 +352,12 @@ function normalizeConfig(cfg, profile) {
   cfg.keyPairs = Array.isArray(cfg.keyPairs)
     ? cfg.keyPairs.filter(p => p && isKeyPairMember(p.first) && isKeyPairMember(p.second))
         .slice(0, MAX_KEY_PAIRS).map(p => ({ first: p.first, second: p.second }))
+    : [];
+  cfg.macros = Array.isArray(cfg.macros)
+    ? cfg.macros.filter(isValidMacro).slice(0, MAX_MACROS).map((m, i) => ({
+        name: sanitizeCommandText(m.name, `Makro ${i}`),
+        steps: m.steps.map(normalizeMacroStep)
+      }))
     : [];
   const names = Array.isArray(cfg.layerNames) ? cfg.layerNames : [];
   cfg.layerNames = DEFAULT_LAYER_NAMES.map((def, i) => sanitizeCommandText(names[i], def));

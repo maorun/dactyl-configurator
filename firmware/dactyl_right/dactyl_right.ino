@@ -129,6 +129,14 @@ KeyPair userKeyPairs[MAX_KEY_PAIRS] = {
 };
 // [[[END_KEY_PAIRS]]]
 
+// [[[START_MACROS]]]
+uint8_t numMacros = 0;
+uint8_t macroLengths[MAX_MACROS] = { 0 };
+MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS] = {
+  { { 0, 0, 0 } }
+};
+// [[[END_MACROS]]]
+
 unsigned long lastActivityTime = 0;
 bool isStandby = false;
 
@@ -136,12 +144,14 @@ void exitConfigMode();
 void enterConfigMode();
 void toggleConfigMode();
 void checkUserCombos();
+void stopMacro(bool releaseKeys);
 
 void enterConfigMode() {
   if (isConfigMode) return;
   isBleTransitioning = true;
   enterConfigRequested = false;
 
+  stopMacro(false);
   bleKeyboard.releaseAll();
   Serial.println("\n=============================================");
   Serial.println("  [CONFIG MODE] AKTIVIERT -> Starte Config-BLE...");
@@ -251,6 +261,8 @@ void enterDeepSleep() {
   Serial.flush();
 
   sendConfigNotification("SLEEP_STARTING");
+  // Laufendes Makro beenden und seine Codes am Mac loslassen, bevor die Verbindung endet
+  stopMacro(true);
   delay(30);
 
   // 1. Spalten als OUTPUT HIGH halten (3.3V) - sowoh für RTC als auch normale GPIOs
@@ -594,7 +606,11 @@ void loop() {
     int bleConn = isConfigMode
       ? ((BLEDevice::getServer() && BLEDevice::getServer()->getConnectedCount() > 0) ? 1 : 0)
       : (bleKeyboard.isConnected() ? 1 : 0);
-    Serial.printf("STATUS: BLE verbunden=%d | ConfigMode=%d | Matrix aktiv\n", bleConn, isConfigMode ? 1 : 0);
+    // NVS-Füllstand (Einträge à 32 Byte): Makros, Combos und Paare teilen sich die 20-KB-Partition
+    nvs_stats_t nvsStats = {};
+    nvs_get_stats(NULL, &nvsStats);
+    Serial.printf("STATUS: BLE verbunden=%d | ConfigMode=%d | Matrix aktiv | NvsUsed=%u NvsFree=%u\n", bleConn, isConfigMode ? 1 : 0,
+      (unsigned)nvsStats.used_entries, (unsigned)nvsStats.free_entries);
     Serial.flush();
   }
 
@@ -636,6 +652,7 @@ void loop() {
       if (comboStartTime == 0) {
         comboStartTime = millis();
         // Item 11: Sofort Tasten auf Mac loslassen, damit während der 500ms kein Auto-Repeat "666..." getippt wird
+        stopMacro(false);
         if (!isConfigMode && bleKeyboard.isConnected()) {
           bleKeyboard.releaseAll();
         }

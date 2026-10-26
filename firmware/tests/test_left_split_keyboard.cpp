@@ -54,6 +54,9 @@ static uint8_t numCombos = 0;
 static KeyCombo userCombos[MAX_COMBOS];
 static uint8_t numKeyPairs = 0;
 static KeyPair userKeyPairs[MAX_KEY_PAIRS];
+static uint8_t numMacros = 0;
+static uint8_t macroLengths[MAX_MACROS] = {0};
+static MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS];
 
 static SemaphoreHandle_t configMutex = xSemaphoreCreateMutex();
 static Preferences preferences;
@@ -63,6 +66,8 @@ static BLECharacteristic* pConfigCharacteristic = &mockChar;
 void handleConfigCommand(String cmd, bool fromBle = false);
 void sendConfigNotification(String msg, bool addDelay = false);
 
+// Wie dactyl_left.ino: Makro-Schritte warten auf freien Platz in der Sendewarteschlange
+#define MACRO_OUTPUT_READY() queueHasRoomForMacro(sendQueue)
 #include "../dactyl_right/DactylLogic.h"
 
 static int testsRun = 0;
@@ -84,6 +89,9 @@ static void resetState() {
   resetDoubleTap();
   numCombos = 0;
   numKeyPairs = 0;
+  numMacros = 0;
+  for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
+  macroRun = {};
   isConfigMode = false;
   setMillis(1000);
   // Gehaltene Eingaben des vorigen Tests vergessen; Master hat einmal bestätigt: Proxy meldet "verbunden".
@@ -385,6 +393,42 @@ TEST(test_one_shot_held_is_released_by_release_all) {
   std::vector<SplitHidEvent> ev = drain();
   assert(ev.size() == 2);
   assert(is(ev[0], SPLIT_OP_ONE_SHOT_PRESS, 0x01) && is(ev[1], SPLIT_OP_RELEASE_ALL, 0));
+}
+// Ein langes Makro reiht nur bei freiem Platz ein: es wartet an einer fast vollen Warteschlange, statt
+// Ereignisse zu verwerfen, und lässt MACRO_QUEUE_RESERVE Plätze für die Tasten des Users frei.
+TEST(test_macro_waits_for_send_queue_room) {
+  handleConfigCommand("ADD_MACRO", false);
+  for (int i = 0; i < MAX_MACRO_STEPS; i++) handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  uint32_t droppedBefore = bleKeyboard.droppedEvents();
+  // Warteschlange bis knapp vor die Reserve füllen (z. B. ein hängender Versand)
+  while (queueHasRoomForMacro(sendQueue)) queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  uint8_t filled = sendQueue.count;
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  for (int i = 0; i < 200; i++) {
+    advanceMillis(1);
+    processDeferredKeys(millis());
+  }
+  assert(sendQueue.count == filled);                    // kein Makro-Ereignis, aber das Makro läuft weiter
+  assert(macroRun.active && macroRun.step == 0);
+  assert(bleKeyboard.droppedEvents() == droppedBefore);
+
+  // Der Master holt Pakete ab: das Makro setzt fort und verliert keinen Schritt
+  queueReset(sendQueue);
+  std::vector<SplitHidEvent> all;
+  for (int i = 0; i < 2000 && macroRun.active; i++) {
+    advanceMillis(1);
+    processDeferredKeys(millis());
+    std::vector<SplitHidEvent> ev = drain();
+    all.insert(all.end(), ev.begin(), ev.end());
+  }
+  assert(!macroRun.active);
+  assert(all.size() == 2 * MAX_MACRO_STEPS);
+  for (size_t i = 0; i < all.size(); i += 2) {
+    assert(is(all[i], SPLIT_OP_KEY_PRESS, 'a') && is(all[i + 1], SPLIT_OP_KEY_RELEASE, 'a'));
+  }
+  assert(bleKeyboard.droppedEvents() == droppedBefore);
 }
 
 int main() {

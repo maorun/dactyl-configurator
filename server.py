@@ -206,6 +206,10 @@ def code_to_cpp(code):
     m = re.match(r"^PAIR_(\d{1,2})$", code)
     if m and int(m.group(1)) < MAX_KEY_PAIRS:
         return f"(ACT_KEY_PAIR_BASE + {int(m.group(1))})"
+    # Makro MACRO_<n> -> ACT_MACRO_BASE + n (Index in userMacros)
+    m = re.match(r"^MACRO_(\d{1,2})$", code)
+    if m and int(m.group(1)) < MAX_MACROS:
+        return f"(ACT_MACRO_BASE + {int(m.group(1))})"
     if code.startswith("KEY_"):
         m = re.match(r"^KEY_(\d+)$", code)
         if m:
@@ -233,6 +237,11 @@ NUM_ROWS = 6
 NUM_COLS = 7
 MAX_COMBOS = 16
 MAX_KEY_PAIRS = 16
+MAX_MACROS = 16
+MAX_MACRO_STEPS = 32
+MACRO_MAX_PAUSE_MS = 5000
+# Schritt-Typen identisch zu MACRO_STEP_* in DactylCommon.h
+MACRO_STEP_TYPES = {"tap": 1, "down": 2, "up": 3, "pause": 4}
 MAX_BODY_BYTES = 2 * 1024 * 1024
 COMPILE_TIMEOUT_S = 300
 UPLOAD_TIMEOUT_S = 180
@@ -247,7 +256,7 @@ STATIC_ALLOWLIST = {
     "/js/side-right.js": "js/side-right.js", "/js/side-left.js": "js/side-left.js",
 }
 # Module der Web-App (Reihenfolge in index.html)
-APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "editor-events", "ble", "serial",
+APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "macros-ui", "editor-events", "ble", "serial",
                "live-monitor", "heatmap", "matrix-test", "keyboard-hooks", "config-sync")
 STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 
@@ -383,6 +392,8 @@ def generate_combos_cpp(combos):
         beh = beh_map.get(cb.get("behavior"), 0)
         action = cb.get("action", "0")
         act = code_to_cpp(action if isinstance(action, str) else "0")
+        if act.startswith("(ACT_MACRO_BASE"):
+            raise ValueError("Combos unterstützen keine Makros.")
         # KeyCombo hat exakt 6 Felder (r1, c1, r2, c2, behavior, action)
         cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act} }}")
     lines = [
@@ -432,6 +443,45 @@ def generate_key_pairs_cpp(pairs):
         ",\n".join(entries) if entries else "  { 0, 0 }",
         "};",
         "// [[[END_KEY_PAIRS]]]"
+    ]
+    return "\n".join(lines)
+
+def macro_step_cpp(step, label):
+    """Ein Makro-Schritt: tap/down/up mit Tastatur-Code 1..255, pause mit ms 1..MACRO_MAX_PAUSE_MS."""
+    if not isinstance(step, dict) or step.get("type") not in MACRO_STEP_TYPES:
+        raise ValueError(f"{label}: Typ tap, down, up oder pause erwartet.")
+    step_type = step["type"]
+    if step_type == "pause":
+        ms = validate_int(step.get("ms"), 1, MACRO_MAX_PAUSE_MS, f"{label} ms")
+        return f"{{ {MACRO_STEP_TYPES[step_type]}, 0, {ms} }}"
+    return f"{{ {MACRO_STEP_TYPES[step_type]}, {key_pair_member_cpp(step.get('code'), f'{label} code')}, 0 }}"
+
+def generate_macros_cpp(macros):
+    if macros is None:
+        macros = []
+    if not isinstance(macros, list):
+        raise ValueError("Ungültige Makros: Liste erwartet.")
+    if len(macros) > MAX_MACROS:
+        raise ValueError(f"Zu viele Makros: maximal {MAX_MACROS} erlaubt.")
+    lengths = []
+    rows = []
+    for m_idx, macro in enumerate(macros):
+        if not isinstance(macro, dict) or not isinstance(macro.get("steps"), list):
+            raise ValueError(f"Ungültiges Makro {m_idx}: Objekt mit 'steps'-Liste erwartet.")
+        steps = macro["steps"]
+        if len(steps) > MAX_MACRO_STEPS:
+            raise ValueError(f"Makro {m_idx}: maximal {MAX_MACRO_STEPS} Schritte erlaubt.")
+        lengths.append(str(len(steps)))
+        cells = [macro_step_cpp(st, f"Makro {m_idx} Schritt {s_idx}") for s_idx, st in enumerate(steps)]
+        rows.append("  { " + (", ".join(cells) if cells else "{ 0, 0, 0 }") + " }")
+    lines = [
+        "// [[[START_MACROS]]]",
+        f"uint8_t numMacros = {len(macros)};",
+        "uint8_t macroLengths[MAX_MACROS] = { " + (", ".join(lengths) if lengths else "0") + " };",
+        "MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS] = {",
+        ",\n".join(rows) if rows else "  { { 0, 0, 0 } }",
+        "};",
+        "// [[[END_MACROS]]]"
     ]
     return "\n".join(lines)
 
@@ -491,6 +541,8 @@ def render_ino_content(content, config, defaults_id=None, side="R"):
         content = replace_marked_block(content, "COMBOS", generate_combos_cpp(config.get("combos")))
     if "keyPairs" in config:
         content = replace_marked_block(content, "KEY_PAIRS", generate_key_pairs_cpp(config.get("keyPairs")))
+    if "macros" in config:
+        content = replace_marked_block(content, "MACROS", generate_macros_cpp(config.get("macros")))
     if "settings" in config:
         content = replace_marked_block(content, "SETTINGS", generate_settings_cpp(config.get("settings"), side))
     return content
@@ -581,6 +633,7 @@ def validate_config(config, side="R"):
     # Codegen prüft Combos und Einstellungen vollständig (Bereiche identisch zur Firmware)
     generate_combos_cpp(config.get("combos"))
     generate_key_pairs_cpp(config.get("keyPairs"))
+    generate_macros_cpp(config.get("macros"))
     generate_settings_cpp(config.get("settings"), side)
     for cb in config.get("combos") or []:
         for field in ("key1", "key2"):

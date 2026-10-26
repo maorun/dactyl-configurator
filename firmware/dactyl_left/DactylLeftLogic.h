@@ -129,6 +129,13 @@ bool queuePushDiagnostic(SplitSendQueue &q, const SplitHidEvent &ev) {
   return queuePush(q, ev);
 }
 
+// Ein Makro-Schritt reiht höchstens ein Ereignis ein und wartet, solange weniger als MACRO_QUEUE_RESERVE
+// Plätze frei sind: die Tasten des Users verlieren so nie ihren Platz an ein langes Makro.
+#define MACRO_QUEUE_RESERVE 16
+bool queueHasRoomForMacro(const SplitSendQueue &q) {
+  return q.count + MACRO_QUEUE_RESERVE < SPLIT_QUEUE_SIZE;
+}
+
 // Matrix-Position für den Live-Monitor am Master einreihen, nach den HID-Ereignissen der Taste.
 // Ohne Link sendet die Hälfte nichts (wie DactylLogic.h ohne Master). Ein Ereignis, das die
 // Warteschlangen-Grenze verwirft, zählt droppedCount. Rückgabe: true = eingereiht.

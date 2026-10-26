@@ -208,6 +208,12 @@ async function startSerialReadLoop(port) {
   }
 }
 
+// Gedrückte SPLIT_KEY-Tasten; ein verlorenes Release löst die Taste nach Dactyl.SPLIT_KEY_STALE_MS
+const splitKeyTracker = Dactyl.createSplitKeyTracker(id => {
+  const [side, r, c] = id.split("_");
+  triggerVisualKeyRelease(Number(r), Number(c), side);
+});
+
 // side: Hälfte, von der die Zeile kommt (BLE: aus dem Config-Namen, USB: aus DEVICE_INFO; null = noch unbekannt).
 // Rechts ist der Standard, damit ältere Firmware ohne "side" weiter funktioniert.
 function handleSerialLine(line, side = null, transport = "ble") {
@@ -334,10 +340,13 @@ function handleSerialLine(line, side = null, transport = "ble") {
   else if (line.startsWith("SPLIT_KEY:")) {
     const evt = Dactyl.parseSplitKeyLine(line, lineSide);
     if (!evt) return;
+    const id = `${evt.side}_${evt.r}_${evt.c}`;
     if (!evt.pressed) {
+      splitKeyTracker.release(id);
       triggerVisualKeyRelease(evt.r, evt.c, evt.side);
       return;
     }
+    splitKeyTracker.press(id);
     triggerVisualKeyPress(evt.r, evt.c, "", evt.side, evt.layer);
     if (recordKeyPress(typingStatsFor(evt.side), evt.r, evt.c, Date.now())) onTypingStatsChanged(evt.side);
     if (markMatrixKeyTested(matrixTestFor(evt.side), evt.r, evt.c) && evt.side === editSide) renderMatrixTest();

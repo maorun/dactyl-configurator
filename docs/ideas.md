@@ -73,6 +73,9 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 - `js/serial.js` (Zweig `SPLIT_KEY:`): Sind linke Hälfte und Master gleichzeitig per USB verbunden, kommt eine linke Taste als `KEY_PRESS` und als `SPLIT_KEY` an. Folge: Heatmap und Tipp-Statistik zählen die Taste doppelt. Korrektur: `SPLIT_KEY` ignorieren, solange die linke Hälfte direkt verbunden ist.
 - `tests/test_side_profiles.js` (Split-Diagnose): Kein Test führt den Zweig `SPLIT_KEY:` von `handleSerialLine` aus; der Test prüft nur Quelltext per Regex. Folge: Ein falscher Press- oder Release-Aufruf in `serial.js` fällt nicht auf. Korrektur: `handleSerialLine` mit Stubs für Press und Release in einem VM-Test ausführen.
 - `firmware/dactyl_right/DactylSplitHid.h` (`splitProcessRx`, `KEY_EVENT`): Ein `KEY_EVENT` setzt `lastActivityTime` am Master nicht zurück. Folge: Eine linke Taste mit Aktion `0` hält den Master nicht wach. Korrektur: Das Verhalten in `AGENTS.md` dokumentieren oder den Timer bei `KEY_EVENT` zurücksetzen.
+- `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_KEY_EVENTS_PER_RX`): Acht `SPLIT_KEY`-Zeilen pro Aufruf verzögern `loop()` bei einer Flut noch um etwa 30 ms. Folge: Das Tippen am Master stockt während eines Angriffs. Korrektur: `SPLIT_KEY_EVENTS_PER_RX` senken oder die Ausgabe zeitlich begrenzen.
+- `firmware/dactyl_left/dactyl_left.ino` (`reportOutcome`): Ein fehlgeschlagenes `KEY_EVENT` zählt als `SEND_DROPPED` für den ESP-NOW-Neustart. Folge: Diagnose-Pakete tragen zum Neustart-Zähler bei. Korrektur: `KEY_EVENT`-Verluste aus `restartGuardOnOutcome` ausnehmen.
+- `tests/test_side_profiles.js` (Split-Diagnose): Die Einreih-Bedingung links (Link aktiv, Warteschlangen-Grenze) prüft nur ein Regex. Folge: Ein falscher Guard um `queuePushDiagnostic` fällt nicht auf. Korrektur: Die Bedingung in eine reine Funktion verschieben und testen.
 
 ## Detailpläne
 

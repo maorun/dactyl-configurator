@@ -400,6 +400,32 @@ test("Split-Diagnose: SPLIT_KEY von der linken HÃ¤lfte, fehlende Tasten und ungÃ
   assert.strictEqual(D.parseSplitKeyLine("SPLIT_KEY:null", "R"), null);
 });
 
+test("Split-Diagnose: eine Taste ohne SPLIT_KEY-Release gilt nach dem Timeout als losgelassen", () => {
+  const pending = new Map();
+  let nextId = 1;
+  const timers = {
+    set: (fn, ms) => { const id = nextId++; pending.set(id, { fn, ms }); return id; },
+    clear: id => pending.delete(id)
+  };
+  const stale = [];
+  const tr = D.createSplitKeyTracker(id => stale.push(id), 5000, timers);
+  tr.press("L_1_1");
+  tr.press("L_2_2");
+  assert.strictEqual(tr.size(), 2);
+  // Normales Release: kein Timeout mehr
+  assert.strictEqual(tr.release("L_1_1"), true);
+  assert.strictEqual(tr.release("L_1_1"), false);
+  // Erneuter Druck ersetzt den alten Timer
+  tr.press("L_2_2");
+  assert.strictEqual(pending.size, 1);
+  const [{ fn, ms }] = pending.values();
+  assert.strictEqual(ms, 5000);
+  fn();
+  assert.deepStrictEqual(stale, ["L_2_2"]);
+  assert.strictEqual(tr.size(), 0);
+  assert.strictEqual(D.SPLIT_KEY_STALE_MS, 5000);
+});
+
 test("Split-Diagnose: Bitlayout von splitKeyEventCode und SPLIT_KEY-Ausgabe passen zur App", () => {
   const hid = read("firmware/dactyl_right/DactylSplitHid.h");
   assert.match(hid, /SPLIT_OP_KEY_EVENT = 13,/);

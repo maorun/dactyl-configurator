@@ -128,8 +128,31 @@
     return { side, r, c, pressed: evt.pressed === 1, layer };
   }
 
+  // SPLIT_KEY-Releases werden nicht wiederholt und können verloren gehen. Eine gedrückte Taste ohne Release
+  // gilt nach staleMs als losgelassen (onStale), damit Live-Monitor und Combo-Anzeige nicht hängen bleiben.
+  // Eine länger gehaltene Taste verliert dann nur ihre Hervorhebung. timers ersetzt setTimeout in Tests.
+  const SPLIT_KEY_STALE_MS = 5000;
+  function createSplitKeyTracker(onStale, staleMs = SPLIT_KEY_STALE_MS, timers) {
+    const t = timers || { set: (fn, ms) => setTimeout(fn, ms), clear: id => clearTimeout(id) };
+    const held = new Map();
+    function release(id) {
+      if (!held.has(id)) return false;
+      t.clear(held.get(id));
+      held.delete(id);
+      return true;
+    }
+    function press(id) {
+      release(id);
+      held.set(id, t.set(() => {
+        held.delete(id);
+        onStale(id);
+      }, staleMs));
+    }
+    return { press, release, size: () => held.size };
+  }
+
   root.Dactyl = Object.assign(root.Dactyl || {}, {
-    parseSplitKeyLine,
+    parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil
   });
 })(typeof window !== "undefined" ? window : globalThis);

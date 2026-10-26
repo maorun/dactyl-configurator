@@ -33,7 +33,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
-             isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest,
+             isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
@@ -282,6 +282,20 @@ test("Matrix-Test: Tasten werden einmalig und nur innerhalb der Matrix gezählt"
   assert.strictEqual(api.markMatrixKeyTested(t, 6, 0), false);
   assert.strictEqual(api.markMatrixKeyTested(t, 1, "1"), false);
   assert.strictEqual(api.summarizeMatrixTest(t).tested, 1);
+});
+
+test("Matrix-Test: MATRIX:-Zeile der Firmware wird streng geprüft", () => {
+  assert.deepStrictEqual({ ...api.parseMatrixLine('MATRIX:{"r":2,"c":1,"pressed":1}') }, { r: 2, c: 1, pressed: true });
+  assert.deepStrictEqual({ ...api.parseMatrixLine('MATRIX:{"r":5,"c":6,"pressed":0}') }, { r: 5, c: 6, pressed: false });
+  assert.strictEqual(api.parseMatrixLine('MATRIX:{"r":6,"c":0,"pressed":1}'), null);
+  assert.strictEqual(api.parseMatrixLine('MATRIX:{"r":0,"c":7,"pressed":1}'), null);
+  assert.strictEqual(api.parseMatrixLine('MATRIX:{"r":"1","c":0,"pressed":1}'), null);
+  assert.strictEqual(api.parseMatrixLine('MATRIX:{"r":1,"c":0,"pressed":true}'), null);
+  assert.strictEqual(api.parseMatrixLine('MATRIX:{"r":1,"c":0}'), null);
+  assert.strictEqual(api.parseMatrixLine("MATRIX:null"), null);
+  assert.strictEqual(api.parseMatrixLine("MATRIX:{kaputt"), null);
+  assert.strictEqual(api.parseMatrixLine('KEY_PRESS:{"r":1,"c":0,"pressed":1}'), null);
+  assert.strictEqual(api.parseMatrixLine(undefined), null);
 });
 
 test("Matrix-Test: Zeilen und Spalten ohne Treffer gelten als verdächtig", () => {

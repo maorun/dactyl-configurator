@@ -48,6 +48,21 @@ function markMatrixKeyTested(test, r, c) {
   return true;
 }
 
+// MATRIX:-Zeile der Firmware: reines Matrix-Ereignis, auch für Tasten ohne Aktion. Rückgabe { r, c, pressed } oder null.
+function parseMatrixLine(line) {
+  if (typeof line !== "string" || !line.startsWith("MATRIX:")) return null;
+  let evt;
+  try {
+    evt = JSON.parse(line.substring(7));
+  } catch (_) {
+    return null;
+  }
+  if (!evt || typeof evt !== "object") return null;
+  if (!isValidIndex(evt.r, NUM_ROWS) || !isValidIndex(evt.c, NUM_COLS)) return null;
+  if (evt.pressed !== 0 && evt.pressed !== 1) return null;
+  return { r: evt.r, c: evt.c, pressed: evt.pressed === 1 };
+}
+
 // Fortschritt und verdächtige Leitungen: Zeile/Spalte ohne erkannte Taste, obwohl andere Tasten funktionieren
 function summarizeMatrixTest(test) {
   const rowHits = new Array(NUM_ROWS).fill(0);

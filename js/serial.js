@@ -336,6 +336,14 @@ function handleSerialLine(line, side = null, transport = "ble") {
     }
   }
 
+  // 2. Reines Matrix-Ereignis (auch Tasten ohne Aktion): nur für den Matrix-Test
+  else if (line.startsWith("MATRIX:")) {
+    const evt = parseMatrixLine(line);
+    if (evt && evt.pressed && markMatrixKeyTested(matrixTestFor(lineSide), evt.r, evt.c) && isEditSide) {
+      renderMatrixTest();
+    }
+  }
+
   // 2a. Taste der Sender-Hälfte, vom Master über ESP-NOW empfangen (SPLIT_KEY)
   else if (line.startsWith("SPLIT_KEY:")) {
     const evt = Dactyl.parseSplitKeyLine(line, lineSide);

@@ -456,6 +456,24 @@ TEST(test_process_rx_reports_key_events_without_host) {
   assert(k.splitLeft.linkUp && k.splitLeft.lastRxMs == 500);
 }
 
+TEST(test_process_rx_limits_key_events_per_call) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  appliedCodes.clear();
+  keyEventCodes.clear();
+  for (int i = 0; i < SPLIT_KEY_EVENTS_PER_RX + 4; i++) {
+    splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(0, 0, (i & 1) == 0, 0)));
+  }
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, recordApplied, recordKeyEvent);
+  // Überzählige Diagnose-Ereignisse entfallen; das HID-Ereignis dahinter läuft trotzdem
+  assert(keyEventCodes.size() == SPLIT_KEY_EVENTS_PER_RX);
+  assert(rep.applied == 1 && (k.log == Log{"P97"}));
+  SplitHidEvent out;
+  assert(!splitRxPop(rxq, out));
+}
+
 TEST(test_process_rx_without_host_keeps_link_but_sends_nothing) {
   Kbd k;
   uint32_t droppedSeen = 0;

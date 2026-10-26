@@ -540,6 +540,9 @@ typedef void (*SplitRxAppliedFn)(const SplitHidEvent &ev);
 //   "Host bereit -> nicht bereit" werden alle Zustände geleert (keine hängende Taste nach Reconnect).
 // - Ein neu verworfenes Paket (voller Ring) kann ein Release gewesen sein: alle linken Eingaben lösen.
 // - KEY_EVENT ist reine Diagnose: onKeyEvent meldet es auch ohne Host, es zählt nicht als ausgeführt.
+//   Höchstens SPLIT_KEY_EVENTS_PER_RX pro Aufruf: Jede Serial-Zeile blockiert loop(), eine Flut mit gefälschter
+//   linker MAC soll das Tippen am Master nicht bremsen. Normales Tippen bleibt weit darunter.
+#define SPLIT_KEY_EVENTS_PER_RX 8
 template <class Kbd>
 SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, bool &hostWasReady,
                              bool hostReady, unsigned long nowMs, SplitRxAppliedFn onApplied,
@@ -556,11 +559,15 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   uint32_t dropped = q.dropped;
 
   SplitHidEvent ev;
+  uint8_t keyEvents = 0;
   while (splitRxPop(q, ev)) {
     if (ev.op == SPLIT_OP_KEY_EVENT) {
       kbd.splitLeft.lastRxMs = nowMs;
       kbd.splitLeft.linkUp = true;
-      if (onKeyEvent) onKeyEvent(ev);
+      if (onKeyEvent && keyEvents < SPLIT_KEY_EVENTS_PER_RX) {
+        keyEvents++;
+        onKeyEvent(ev);
+      }
       continue;
     }
     if (!hostReady) {

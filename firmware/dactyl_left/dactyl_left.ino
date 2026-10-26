@@ -509,7 +509,14 @@ void loop() {
           keyState[r][c] = leftKeys[r][c].stable;
           lastActivityTime = millis();
           exitStandby();
+          // Ebene vor der Aktion lesen: ein MO/TG auf dieser Taste wechselt sie erst
+          uint8_t layer = getActiveLayer();
           onMatrixKeyChange(r, c, keyState[r][c]);
+          // Matrix-Position für den Live-Monitor am Master, nach den HID-Ereignissen dieser Taste
+          if (bleKeyboard.isConnected()) {
+            queuePushDiagnostic(sendQueue, makeSplitHidEvent(SPLIT_OP_KEY_EVENT,
+              splitKeyEventCode((uint8_t)r, (uint8_t)c, keyState[r][c], layer)));
+          }
         }
       }
 

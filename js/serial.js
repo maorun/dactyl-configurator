@@ -330,6 +330,19 @@ function handleSerialLine(line, side = null, transport = "ble") {
     }
   }
 
+  // 2a. Taste der Sender-Hälfte, vom Master über ESP-NOW empfangen (SPLIT_KEY)
+  else if (line.startsWith("SPLIT_KEY:")) {
+    const evt = Dactyl.parseSplitKeyLine(line, lineSide);
+    if (!evt) return;
+    if (!evt.pressed) {
+      triggerVisualKeyRelease(evt.r, evt.c, evt.side);
+      return;
+    }
+    triggerVisualKeyPress(evt.r, evt.c, "", evt.side, evt.layer);
+    if (recordKeyPress(typingStatsFor(evt.side), evt.r, evt.c, Date.now())) onTypingStatsChanged(evt.side);
+    if (markMatrixKeyTested(matrixTestFor(evt.side), evt.r, evt.c) && evt.side === editSide) renderMatrixTest();
+  }
+
   // 3. Taste losgelassen (Key Release Event)
   else if (line.startsWith("KEY_RELEASE:")) {
     try {

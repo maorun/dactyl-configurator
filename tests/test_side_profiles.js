@@ -378,6 +378,37 @@ test("GET_INFO-Wiederholung: bis die Hälfte bekannt ist, höchstens bis zum Tim
   assert.strictEqual(t.count(), 0);
 });
 
+test("Split-Diagnose: SPLIT_KEY vom Master gehört zur linken Hälfte", () => {
+  assert.strictEqual(D.getSplitSenderSide(), "L");
+  const evt = D.parseSplitKeyLine('SPLIT_KEY:{"r":5,"c":6,"pressed":1,"layer":2}', "R");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(evt)), { side: "L", r: 5, c: 6, pressed: true, layer: 2 });
+  const up = D.parseSplitKeyLine('SPLIT_KEY:{"r":0,"c":5,"pressed":0,"layer":0}', "R");
+  assert.strictEqual(up.pressed, false);
+});
+
+test("Split-Diagnose: SPLIT_KEY von der linken Hälfte, fehlende Tasten und ungültige Werte werden verworfen", () => {
+  const ok = '{"r":1,"c":1,"pressed":1,"layer":0}';
+  assert.strictEqual(D.parseSplitKeyLine(`SPLIT_KEY:${ok}`, "L"), null); // nur der Master empfängt ESP-NOW
+  assert.strictEqual(D.parseSplitKeyLine(`KEY_PRESS:${ok}`, "R"), null);
+  assert.strictEqual(D.parseSplitKeyLine('SPLIT_KEY:{"r":4,"c":5,"pressed":1,"layer":0}', "R"), null); // fehlt links
+  assert.strictEqual(D.parseSplitKeyLine('SPLIT_KEY:{"r":5,"c":0,"pressed":1,"layer":0}', "R"), null); // fehlt links
+  assert.strictEqual(D.parseSplitKeyLine('SPLIT_KEY:{"r":0,"c":6,"pressed":1,"layer":0}', "R"), null); // C6 nur Daumen
+  assert.strictEqual(D.parseSplitKeyLine('SPLIT_KEY:{"r":1,"c":1,"pressed":1,"layer":8}', "R"), null);
+  assert.strictEqual(D.parseSplitKeyLine('SPLIT_KEY:{"r":1,"c":1,"pressed":2,"layer":0}', "R"), null);
+  assert.strictEqual(D.parseSplitKeyLine('SPLIT_KEY:{"r":1,"c":1}', "R"), null);
+  assert.strictEqual(D.parseSplitKeyLine("SPLIT_KEY:kaputt", "R"), null);
+  assert.strictEqual(D.parseSplitKeyLine("SPLIT_KEY:null", "R"), null);
+});
+
+test("Split-Diagnose: Bitlayout von splitKeyEventCode und SPLIT_KEY-Ausgabe passen zur App", () => {
+  const hid = read("firmware/dactyl_right/DactylSplitHid.h");
+  assert.match(hid, /SPLIT_OP_KEY_EVENT = 13,/);
+  assert.match(hid, /#define SPLIT_KEY_EVENT_ROWS 6/);
+  assert.match(hid, /#define SPLIT_KEY_EVENT_COLS 7/);
+  assert.match(rightIno, /SPLIT_KEY:\{\\"r\\":%u,\\"c\\":%u,\\"pressed\\":%d,\\"layer\\":%u\}/);
+  assert.match(leftIno, /queuePushDiagnostic\(sendQueue, makeSplitHidEvent\(SPLIT_OP_KEY_EVENT/);
+});
+
 runAll().catch((err) => {
   console.error(err);
   process.exit(1);

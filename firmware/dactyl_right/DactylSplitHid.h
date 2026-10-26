@@ -33,7 +33,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_MOUSE_CLICK = 10,
   SPLIT_OP_MOUSE_SCROLL = 11, // arg = Scrollschritte (int8, ungleich 0)
   SPLIT_OP_ACTIVITY = 12,     // nur Master -> links: Tippen am Master, setzt den Inaktivitäts-Timer links zurück
-  SPLIT_OP_COUNT = 13
+  SPLIT_OP_KEY_EVENT = 13,    // Diagnose: Matrix-Position links (splitKeyEventCode), ohne HID-Wirkung
+  SPLIT_OP_COUNT = 14
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -50,6 +51,20 @@ inline SplitHidEvent makeSplitHidEvent(uint8_t op, uint16_t code = 0, int8_t arg
   ev.code = code;
   return ev;
 }
+
+// Matrix-Ereignis der linken Hälfte für den Live-Monitor der App. code: Bit 15 = gedrückt,
+// Bits 8..10 = aktive Ebene beim Ereignis, Bits 4..6 = Zeile, Bits 0..2 = Spalte; alle übrigen Bits 0.
+#define SPLIT_KEY_EVENT_ROWS 6
+#define SPLIT_KEY_EVENT_COLS 7
+#define SPLIT_KEY_EVENT_MASK 0x8777
+
+inline uint16_t splitKeyEventCode(uint8_t row, uint8_t col, bool pressed, uint8_t layer) {
+  return (uint16_t)((pressed ? 0x8000 : 0) | ((layer & 7) << 8) | ((row & 7) << 4) | (col & 7));
+}
+inline uint8_t splitKeyEventRow(uint16_t code) { return (uint8_t)((code >> 4) & 7); }
+inline uint8_t splitKeyEventCol(uint16_t code) { return (uint8_t)(code & 7); }
+inline uint8_t splitKeyEventLayer(uint16_t code) { return (uint8_t)((code >> 8) & 7); }
+inline bool splitKeyEventPressed(uint16_t code) { return (code & 0x8000) != 0; }
 
 // Wertebereich je Operation prüfen. Ungültige Pakete führt der Master nie aus.
 inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
@@ -71,6 +86,9 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
       return ev.code >= 1 && ev.code <= 0x07 && ev.arg == 0;
     case SPLIT_OP_MOUSE_SCROLL:
       return ev.code == 0 && ev.arg != 0;
+    case SPLIT_OP_KEY_EVENT:
+      return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_KEY_EVENT_MASK) == 0 &&
+             splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
     default:
       return false;
   }
@@ -133,9 +151,10 @@ inline bool splitActivityTake(SplitActivityThrottle &t, unsigned long nowMs) {
 }
 
 // Scrollen hat keinen Zustand: ein doppelt zugestelltes Retry-Paket scrollte doppelt. Ein verlorener
-// Scrollschritt ist harmloser, deshalb wiederholt die linke Hälfte MOUSE_SCROLL nicht.
+// Scrollschritt ist harmloser, deshalb wiederholt die linke Hälfte MOUSE_SCROLL nicht. Ein doppeltes
+// KEY_EVENT zählte in Heatmap und Statistik doppelt; ein verlorenes kostet nur eine Anzeige.
 inline bool splitEventRetryable(const SplitHidEvent &ev) {
-  return ev.op != SPLIT_OP_MOUSE_SCROLL;
+  return ev.op != SPLIT_OP_MOUSE_SCROLL && ev.op != SPLIT_OP_KEY_EVENT;
 }
 
 inline uint16_t splitMediaBits(const uint8_t report[2]) {
@@ -520,9 +539,11 @@ typedef void (*SplitRxAppliedFn)(const SplitHidEvent &ev);
 // - Ohne Host wird nichts ausgeführt; der Link gilt trotzdem als lebendig. Beim Übergang
 //   "Host bereit -> nicht bereit" werden alle Zustände geleert (keine hängende Taste nach Reconnect).
 // - Ein neu verworfenes Paket (voller Ring) kann ein Release gewesen sein: alle linken Eingaben lösen.
+// - KEY_EVENT ist reine Diagnose: onKeyEvent meldet es auch ohne Host, es zählt nicht als ausgeführt.
 template <class Kbd>
 SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, bool &hostWasReady,
-                             bool hostReady, unsigned long nowMs, SplitRxAppliedFn onApplied) {
+                             bool hostReady, unsigned long nowMs, SplitRxAppliedFn onApplied,
+                             SplitRxAppliedFn onKeyEvent = nullptr) {
   SplitRxReport rep = {0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -536,6 +557,12 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
 
   SplitHidEvent ev;
   while (splitRxPop(q, ev)) {
+    if (ev.op == SPLIT_OP_KEY_EVENT) {
+      kbd.splitLeft.lastRxMs = nowMs;
+      kbd.splitLeft.linkUp = true;
+      if (onKeyEvent) onKeyEvent(ev);
+      continue;
+    }
     if (!hostReady) {
       kbd.splitLeft.lastRxMs = nowMs;
       kbd.splitLeft.linkUp = true;

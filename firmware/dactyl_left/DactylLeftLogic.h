@@ -121,6 +121,14 @@ bool queuePush(SplitSendQueue &q, const SplitHidEvent &ev) {
   return true;
 }
 
+// Diagnose-Ereignisse (KEY_EVENT) belegen höchstens die erste Hälfte der Warteschlange, damit sie
+// nie den Platz für HID-Ereignisse verbrauchen. false = nicht eingereiht.
+#define SPLIT_DIAG_QUEUE_LIMIT (SPLIT_QUEUE_SIZE / 2)
+bool queuePushDiagnostic(SplitSendQueue &q, const SplitHidEvent &ev) {
+  if (q.count >= SPLIT_DIAG_QUEUE_LIMIT) return false;
+  return queuePush(q, ev);
+}
+
 // Liefert das nächste zu sendende Paket, wenn keines unterwegs ist und keine Retry-Wartezeit läuft
 bool queueNextToSend(SplitSendQueue &q, unsigned long nowMs, SplitHidEvent &out) {
   if (q.inFlight || q.count == 0) return false;

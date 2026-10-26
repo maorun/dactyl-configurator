@@ -185,8 +185,31 @@ TEST(test_scroll_is_not_retried) {
   assert(queueNextToSend(q, 0, ev) && ev.op == SPLIT_OP_KEY_PRESS);
   // Alle anderen Ops bleiben wiederholbar (idempotent auf dem Master)
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
-    assert(splitEventRetryable(makeSplitHidEvent(op, 1)) == (op != SPLIT_OP_MOUSE_SCROLL));
+    bool expected = op != SPLIT_OP_MOUSE_SCROLL && op != SPLIT_OP_KEY_EVENT;
+    assert(splitEventRetryable(makeSplitHidEvent(op, 1)) == expected);
   }
+}
+
+TEST(test_key_event_is_not_retried) {
+  // Ein doppelt zugestelltes Matrix-Ereignis zählte in Heatmap und Statistik doppelt
+  queueReset(q);
+  queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(0, 0, true, 0)));
+  SplitHidEvent ev;
+  assert(queueNextToSend(q, 0, ev) && ev.op == SPLIT_OP_KEY_EVENT);
+  assert(queueOnSendResult(q, false, 0) == SEND_DROPPED);
+  assert(q.count == 0);
+}
+
+TEST(test_diagnostic_events_keep_room_for_hid_events) {
+  queueReset(q);
+  SplitHidEvent diag = makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(0, 0, true, 0));
+  for (int i = 0; i < SPLIT_DIAG_QUEUE_LIMIT; i++) assert(queuePushDiagnostic(q, diag));
+  assert(!queuePushDiagnostic(q, diag));
+  // HID-Ereignisse füllen den Rest der Warteschlange
+  for (int i = SPLIT_DIAG_QUEUE_LIMIT; i < SPLIT_QUEUE_SIZE; i++) {
+    assert(queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a')));
+  }
+  assert(q.count == SPLIT_QUEUE_SIZE);
 }
 
 TEST(test_retry_waits_for_delay) {

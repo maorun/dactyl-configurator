@@ -6,6 +6,8 @@
 (function (root) {
   "use strict";
 
+  const NUM_LAYERS = 8;
+
   // Hälfte der aktiven Verbindung (BLE bevorzugt), null ohne Verbindung oder bei unbekannter USB-Hälfte
   function connectedSide(conn) {
     if (conn.bleUp) return conn.bleSide || null;
@@ -104,7 +106,30 @@
     };
   }
 
+  // SPLIT_KEY-Zeile des Masters: Matrix-Ereignis der Sender-Hälfte, per ESP-NOW empfangen.
+  // Nur eine Zeile vom Master zählt. Rückgabe { side, r, c, pressed, layer } oder null.
+  function parseSplitKeyLine(line, lineSide) {
+    const D = root.Dactyl;
+    if (typeof line !== "string" || !line.startsWith("SPLIT_KEY:")) return null;
+    if (lineSide !== D.getMasterSide()) return null;
+    const side = D.getSplitSenderSide();
+    if (!side) return null;
+    let evt;
+    try {
+      evt = JSON.parse(line.substring(10));
+    } catch (_) {
+      return null;
+    }
+    if (!evt || typeof evt !== "object") return null;
+    const { r, c, layer } = evt;
+    if (!D.isWiredSwitch(D.SIDE_PROFILES[side], r, c)) return null;
+    if (!Number.isInteger(layer) || layer < 0 || layer >= NUM_LAYERS) return null;
+    if (evt.pressed !== 0 && evt.pressed !== 1) return null;
+    return { side, r, c, pressed: evt.pressed === 1, layer };
+  }
+
   root.Dactyl = Object.assign(root.Dactyl || {}, {
+    parseSplitKeyLine,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil
   });
 })(typeof window !== "undefined" ? window : globalThis);

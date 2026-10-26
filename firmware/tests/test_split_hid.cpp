@@ -75,7 +75,8 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_CLICK, 4),
     makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, -1),
   };
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT);
+  // Alle Ops links -> Master; ACTIVITY ist die einzige Op der Rückrichtung
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 1);
   for (const SplitHidEvent &ev : ok) assert(parse(SPLIT_LEFT_MAC, ev, out) && out.op == ev.op);
 }
 
@@ -92,6 +93,7 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_CLICK, 8),
     makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, 0),
     makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 1, 1),
+    makeSplitHidEvent(SPLIT_OP_ACTIVITY), // nur Master -> links, der Master führt sie nie aus
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -477,6 +479,60 @@ TEST(test_process_rx_link_timeout_releases_left_inputs) {
   SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1000 + SPLIT_LINK_TIMEOUT_MS, nullptr);
   assert(rep.linkLost);
   assert((k.log == Log{"R113"}));
+}
+
+// -----------------------------------------------------------------------------
+// Rückrichtung Master -> links (ACTIVITY)
+// -----------------------------------------------------------------------------
+static bool parseActivity(const uint8_t *mac, SplitHidEvent ev, int len = (int)sizeof(SplitHidEvent)) {
+  return parseSplitActivityPacket(mac, reinterpret_cast<const uint8_t *>(&ev), len);
+}
+
+TEST(test_activity_packet_accepts_only_master_activity) {
+  assert(SPLIT_OP_ACTIVITY == 12); // append-only: Nummer nie ändern
+  assert(parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_ACTIVITY)));
+  assert(!parseActivity(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_ACTIVITY)));
+  assert(!parseActivity(nullptr, makeSplitHidEvent(SPLIT_OP_ACTIVITY)));
+  assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_ACTIVITY), 3));
+  assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_ACTIVITY), 5));
+  assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_ACTIVITY, 1)));
+  assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_ACTIVITY, 0, 1)));
+  assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HEARTBEAT)));
+  assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a')));
+  assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(0xFF)));
+  assert(!parseSplitActivityPacket(SPLIT_MASTER_MAC, nullptr, 4));
+}
+
+TEST(test_activity_throttle_sends_first_note_immediately) {
+  SplitActivityThrottle t;
+  splitActivityReset(t);
+  assert(!splitActivityTake(t, 0)); // ohne Tippen kein Paket
+  splitActivityNote(t);
+  assert(splitActivityTake(t, 5));
+  assert(!splitActivityTake(t, 6)); // vorgemerktes Tippen ist verbraucht
+}
+
+TEST(test_activity_throttle_limits_rate_and_keeps_last_note) {
+  SplitActivityThrottle t;
+  splitActivityReset(t);
+  splitActivityNote(t);
+  assert(splitActivityTake(t, 1000));
+  splitActivityNote(t);
+  assert(!splitActivityTake(t, 1000 + SPLIT_ACTIVITY_INTERVAL_MS - 1));
+  // Das Tippen im Intervall geht nach dessen Ablauf raus, auch ohne neuen Tastendruck
+  assert(splitActivityTake(t, 1000 + SPLIT_ACTIVITY_INTERVAL_MS));
+  assert(!splitActivityTake(t, 1000 + 3 * SPLIT_ACTIVITY_INTERVAL_MS));
+}
+
+TEST(test_activity_throttle_survives_millis_wrap) {
+  SplitActivityThrottle t;
+  splitActivityReset(t);
+  unsigned long start = (unsigned long)-1 - 100;
+  splitActivityNote(t);
+  assert(splitActivityTake(t, start));
+  splitActivityNote(t);
+  assert(!splitActivityTake(t, start + 200)); // Überlauf: 200 ms später, nicht ein Intervall
+  assert(splitActivityTake(t, start + SPLIT_ACTIVITY_INTERVAL_MS));
 }
 
 int main() {

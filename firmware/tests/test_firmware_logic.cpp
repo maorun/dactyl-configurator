@@ -290,6 +290,88 @@ TEST(test_security_ble_notification_suppression) {
 }
 
 // -----------------------------------------------------------------------------
+// Test 3a: Reines Matrix-Ereignis auch für Tasten ohne Aktion (Matrix-Test)
+// -----------------------------------------------------------------------------
+static size_t countOutput(const std::string& line) {
+  size_t n = 0;
+  for (const auto& l : Serial.outputLines) if (l == line) n++;
+  return n;
+}
+
+static bool hasOutputPrefix(const std::string& prefix) {
+  for (const auto& l : Serial.outputLines) if (l.rfind(prefix, 0) == 0) return true;
+  return false;
+}
+
+TEST(test_matrix_event_for_key_without_action) {
+  resetState();
+  for (int l = 0; l < NUM_LAYERS; l++) { KEYMAP[l][2][1] = 0; HOLDMAP[l][2][1] = 0; DTAPMAP[l][2][1] = 0; }
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1050);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":1}") == 1);
+  assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":0}") == 1);
+  assert(!hasOutputPrefix("KEY_PRESS:")); // Aktion 0 sendet weiterhin kein KEY_PRESS
+  assert(bleKeyboard.pressHistory.empty());
+}
+
+// Die MATRIX:-Zeile kommt nach den HID-Ereignissen der Taste, damit sie den Tastendruck nicht verzögert
+TEST(test_matrix_event_after_hid_press) {
+  resetState();
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = 0;
+  DTAPMAP[0][2][1] = 0;
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  assert(!bleKeyboard.pressHistory.empty());
+  assert(!Serial.outputLines.empty());
+  assert(Serial.outputLines.back() == "MATRIX:{\"r\":2,\"c\":1,\"pressed\":1}");
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(Serial.outputLines.back() == "MATRIX:{\"r\":2,\"c\":1,\"pressed\":0}");
+}
+
+// MATRIX: geht nur auf USB-Serial, auch im Config-Modus nie als BLE-Notification
+TEST(test_matrix_event_never_over_ble) {
+  for (int mode = 0; mode < 2; mode++) {
+    resetState();
+    isConfigMode = (mode == 1);
+    KEYMAP[0][2][1] = 0;
+    HOLDMAP[0][2][1] = 0;
+    DTAPMAP[0][2][1] = 0;
+    setMillis(1000);
+    keyState[2][1] = true;
+    onMatrixKeyChange(2, 1, true);
+    keyState[2][1] = false;
+    onMatrixKeyChange(2, 1, false);
+    assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":1}") == 1);
+    for (const auto& n : mockChar.notifications) assert(n.rfind("MATRIX:", 0) != 0);
+  }
+  isConfigMode = false;
+}
+
+TEST(test_matrix_event_on_physical_change_for_tap_hold_key) {
+  resetState();
+  KEYMAP[0][5][3] = ' ';
+  HOLDMAP[0][5][3] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[5][3] = true;
+  onMatrixKeyChange(5, 3, true);
+  // Die Tap-Hold-Entscheidung ist offen, das Matrix-Ereignis kommt trotzdem sofort
+  assert(countOutput("MATRIX:{\"r\":5,\"c\":3,\"pressed\":1}") == 1);
+  assert(!hasOutputPrefix("KEY_PRESS:"));
+  setMillis(1050);
+  keyState[5][3] = false;
+  onMatrixKeyChange(5, 3, false);
+  assert(countOutput("MATRIX:{\"r\":5,\"c\":3,\"pressed\":0}") == 1);
+  HOLDMAP[0][5][3] = 0;
+}
+
+// -----------------------------------------------------------------------------
 // Test 4: Hardware Config Combo Immediate Release (Finding #11)
 // -----------------------------------------------------------------------------
 TEST(test_config_combo_immediate_release) {

@@ -18,8 +18,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Rangliste
 
-- **Reines Matrix-Event für Diagnose** `[Firmware]` — *Nutzen: mittel · Aufwand: klein* — Eine `MATRIX:`-Zeile unabhängig von der Belegung; heute sendet `dispatchPress` kein `KEY_PRESS` für Tasten mit Aktion `0`. Voraussetzung für den nächsten Eintrag.
-- **Matrix-Test für leere Tasten** `[App]` — *Nutzen: mittel · Aufwand: klein* — Im Test-Modus das reine Matrix-Event der Firmware nutzen (oder Ebene 0 erzwingen). Hilft beim Löten und bei Wackelkontakten. Hängt vom Matrix-Event ab.
 - **One-Shot-Modifier / Caps Word** `[Firmware]` — *Nutzen: mittel · Aufwand: mittel* — Häufige Komfortfunktionen ergänzend zu Mod-Tap. Neue Aktionscodes in Firmware, App und `server.py`.
 - **Makros (Firmware und App)** `[Firmware/App]` — *Nutzen: mittel · Aufwand: groß* — Firmware: Aktionscode-Bereich für Tastenfolgen, Speicherung in NVS, Ausführung nicht blockierend (auf der linken Hälfte über die Sendewarteschlange). App: Editor für Tastenfolgen mit Verzögerung. Großer Aufwand über alle Schichten, deshalb hinter den kleineren Komfortfunktionen.
 - **Profilverwaltung** `[App]` — *Nutzen: mittel · Aufwand: mittel* — Mehrere benannte Layouts lokal speichern und umschalten (heute nur ein `current_config.json` pro Hälfte plus JSON-Export/Import). Der Export deckt den Bedarf heute teilweise ab.
@@ -40,6 +38,9 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht beim Umsetzen einen Regressionstest.
 
+- `js/serial.js:339`: Der `MATRIX:`-Zweig in `handleSerialLine` hat keinen Test. Folge: Die Zuordnung zur Hälfte (`lineSide`/`isEditSide`) und der Filter auf Drücken sind ungeprüft; nur `parseMatrixLine` ist getestet. Korrektur: Einen Test für `MATRIX:` auf beiden Hälften ergänzen, auch mit einer Release-Zeile.
+- `firmware/dactyl_left/dactyl_left.ino:514`: Die linke Hälfte gibt `MATRIX:` auf ihrem eigenen USB aus, und kein Test prüft das. Folge: Die App ordnet die Zeile über die USB-Hälfte zu, aber dieser Pfad hat keinen Regressionstest. Korrektur: Einen Test für `MATRIX:` der linken Hälfte ergänzen, ohne Doppelzählung mit `SPLIT_KEY`.
+- `AGENTS.md:340`: Der Text nennt `MATRIX:` als Quelle des Matrix-Tests, aber `KEY_PRESS` und `SPLIT_KEY` markieren Tasten weiterhin. Folge: Der Text führt in die Irre; das Markieren ist idempotent, die Zählung stimmt. Korrektur: Den Eintrag umformulieren: `KEY_PRESS` und `SPLIT_KEY` markieren weiterhin Tasten.
 - `tests/test_side_profiles.js:231`: Der Test der Preset-Auswahl filtert die Optionen in `index.html` mit den festen Schlüsseln `us_qwerty` und `de_qwertz`. Folge: Ein neues Preset in `R.presets` ohne Option in `index.html` fällt nicht auf. Korrektur: Die festen Schlüssel entfernen und die Optionen von `layoutPresetSelect` mit `Object.keys(R.presets)` vergleichen.
 - `js/config-sync.js:76`: Die Schrittzahl des Syncs (`+ 9`) entspricht jetzt genau den festen Schritten. Folge: Eine weitere Einstellung lässt den Fortschritt über 100 % laufen; `Math.min` verdeckt das. Korrektur: Die Schrittzahl aus einer gezählten Befehlsliste ableiten.
 - `js/config-sync.js:96`: Der volle Sync sendet `SET_TAPPING_TERM` auch an Firmware ohne diesen Befehl. Folge: Alte Firmware antwortet `ERR UNKNOWN`, und der Sync bricht vor den Tasten ab. Korrektur: `ERR UNKNOWN` für diesen Befehl tolerieren oder dokumentieren, dass zuerst ein Flash nötig ist.
@@ -98,3 +99,4 @@ Derzeit kein offener Plan.
 - **Layout-Diff vor dem Sync:** "Auf ESP32 speichern" liest die Gerätebelegung mit `GET_CONFIG` und zeigt pro Taste und Ebenen-Name, was sich ändert; erst nach Bestätigung wird übertragen.
 - **Synchronisierte Inaktivitäts-Timer:** Tippen am Master meldet `SPLIT_OP_ACTIVITY` (höchstens alle 10 s) an die linke Hälfte; sie geht nicht mehr in Standby oder Deep Sleep, solange rechts getippt wird.
 - **Linke Tasten im Live-Monitor über den Master:** Die linke Hälfte meldet jede Matrix-Änderung als Diagnose-Op `SPLIT_OP_KEY_EVENT` (ohne HID-Wirkung, ohne Retry, höchstens halbe Sendewarteschlange); der Master gibt sie per USB als `SPLIT_KEY:` aus, und die App zeigt sie im Live-Monitor, in der Heatmap und im Matrix-Test der linken Hälfte.
+- **Matrix-Test für leere Tasten:** Jede Matrix-Änderung erzeugt eine `MATRIX:`-Zeile auf USB-Serial, unabhängig von Belegung, Ebene und Tap-Hold; der Matrix-Test zählt damit auch Tasten mit Aktion `0`. Die Zeile geht nur über USB, nie über BLE (Keylogger-Schutz, keine Last neben den Sync-Acks).

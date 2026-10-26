@@ -639,7 +639,7 @@ void tapHoldTick(unsigned long now) {
 // -----------------------------------------------------------------------------
 // Matrix-Ereignisse (vom Scan in loop() aufgerufen)
 // -----------------------------------------------------------------------------
-void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
+void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
   unsigned long now = millis();
   if (isPressed) {
     // Wartende Einzel-Tipps anderer Tasten zuerst senden, damit die Reihenfolge der Zeichen stimmt
@@ -683,6 +683,16 @@ void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
     // damit der echte Anschlag-Zeitstempel für den Grace-Period-Check erhalten bleibt!
     keyPressTime[r][c] = 0;
   }
+}
+
+void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
+  applyMatrixKeyChange(r, c, isPressed);
+  // Reines Matrix-Ereignis für die Diagnose (Matrix-Test), unabhängig von Belegung, Ebene und Tap-Hold.
+  // Erst nach den HID-Ereignissen senden: die serielle Ausgabe verzögert den Tastendruck nicht.
+  // Nur USB-Serial, nie BLE: kein Keylogger-Kanal und keine zusätzliche Last neben den Sync-Acks.
+  char matrixBuf[48];
+  snprintf(matrixBuf, sizeof(matrixBuf), "MATRIX:{\"r\":%d,\"c\":%d,\"pressed\":%d}", r, c, isPressed ? 1 : 0);
+  Serial.println(matrixBuf);
 }
 
 // Zeitgesteuerte Entscheidungen: Mod-Tap Tapping-Term und gepufferte Combo-Kandidaten

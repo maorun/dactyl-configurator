@@ -335,6 +335,11 @@ python3 server.py
    - Upgrade: checkouts from before the untracking lose their local `current_config.json` on `git pull`. Back up the file before the pull and restore it afterwards.
    - A missing `holdmap` or `dtapmap` next to a kept user `keymap` (older schema or interrupted write) is filled with the compiled-in `HOLDMAP` / `DTAPMAP`; `defaults_fp` is written only after these writes succeed.
 
+3b. **Raw Matrix Event (`MATRIX:`):**
+   - `onMatrixKeyChange()` sends `MATRIX:{"r":..,"c":..,"pressed":0|1}` for each physical change, independent of layer, tap-hold and combo logic. It sends the line after the HID events of that change (`applyMatrixKeyChange`), so the serial output does not delay the key press. A key with action `0` also sends it; `KEY_PRESS` stays limited to keys with an action.
+   - The firmware prints `MATRIX:` only on USB serial (`Serial.println`), never over BLE, also not in config mode: no keylogger channel and no extra BLE load next to the sync acks. The matrix test for keys with action `0` therefore needs USB; over BLE the matrix test still counts keys with an action through `KEY_PRESS`.
+   - The app uses `MATRIX:` only for the matrix test (`parseMatrixLine`, `js/config-model.js`). Live monitor and heatmap keep using `KEY_PRESS`. Left keys reach the master's USB as `SPLIT_KEY:`, which also covers keys with action `0`.
+
 4. **Live Monitor Layer Filtering:**
    - Visual keypress indicators in the configurator must compare `pressedLayer` with `activeLayerIndex`. Keys pressed on a different layer must not highlight keycaps on the currently viewed layer.
    - Browser key events (`js/keyboard-hooks.js`) carry no half, because macOS sees both halves as one keyboard. The split view resolves the code in each half with that half's config, held layer and scancode table (`resolveKeyForSide`, `browserKeySides`). A code that exists on both halves (for example `Space`) highlights on both. The single view resolves only the edited half. Combo alerts follow the same rule. USB `KEY_PRESS` lines carry their half and are not affected.

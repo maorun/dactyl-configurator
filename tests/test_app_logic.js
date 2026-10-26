@@ -152,6 +152,8 @@ test("Config-Normalisierung: Namen, Einstellungen und Zellen werden bereinigt", 
   assert.strictEqual(n.layerNames[0], "AB");
   assert.strictEqual(n.layerNames[1], "Nav & Pfeile");
   assert.strictEqual(n.settings.debounceMs, 1);
+  assert.strictEqual(n.settings.tappingTermMs, 200);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { tappingTermMs: 900 } }, R).settings.tappingTermMs, 500);
   assert.strictEqual(n.settings.deviceName, "Dactyl");
   assert.strictEqual(n.layers[0][0][0].label, "");
   assert.strictEqual(n.layers[0][0][0].hold, "NONE");

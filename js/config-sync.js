@@ -93,6 +93,8 @@ async function writeConfigToESP32(options = {}) {
     updateProgress();
     await sendConfirmed(`SET_COMBO_TIMEOUT ${clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40)}`, "SET_COMBO_TIMEOUT");
     updateProgress();
+    await sendConfirmed(`SET_TAPPING_TERM ${clampSetting("tappingTermMs", s.tappingTermMs ?? 200)}`, "SET_TAPPING_TERM");
+    updateProgress();
 
     for (let l = 0; l < NUM_LAYERS; l++) {
       const name = sanitizeCommandText(cfg.layerNames[l], DEFAULT_LAYER_NAMES[l]);

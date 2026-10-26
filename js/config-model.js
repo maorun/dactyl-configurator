@@ -12,6 +12,7 @@ const MAX_NAME_LENGTH = 31;
 const SETTINGS_RANGES = {
   debounceMs: [1, 50, 5],
   comboTimeoutMs: [10, 200, 40],
+  tappingTermMs: [100, 500, 200],
   standbyTimeoutMinutes: [0, 120, 5],
   sleepTimeoutMinutes: [0, 240, 60]
 };
@@ -268,6 +269,7 @@ function normalizeConfig(cfg, profile) {
     deviceName: sanitizeCommandText(s.deviceName, profile.deviceName),
     debounceMs: clampSetting("debounceMs", s.debounceMs ?? 5),
     comboTimeoutMs: clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40),
+    tappingTermMs: clampSetting("tappingTermMs", s.tappingTermMs ?? 200),
     standbyTimeoutMinutes: clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5),
     sleepTimeoutMinutes: clampSetting("sleepTimeoutMinutes", s.sleepTimeoutMinutes ?? 60)
   };

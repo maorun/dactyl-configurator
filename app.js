@@ -430,6 +430,7 @@ function applySettingsToInputs(settings) {
   setVal("deviceNameInput", settings.deviceName);
   setVal("debounceInput", settings.debounceMs);
   setVal("comboTimeoutInput", settings.comboTimeoutMs);
+  setVal("tappingTermInput", settings.tappingTermMs);
   setVal("standbyTimeoutSelect", settings.standbyTimeoutMinutes);
   setVal("sleepTimeoutSelect", settings.sleepTimeoutMinutes);
 }

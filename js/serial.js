@@ -297,6 +297,10 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("comboTimeoutInput", info.combo_timeout_ms);
         if (cfg.settings) cfg.settings.comboTimeoutMs = info.combo_timeout_ms;
       }
+      if (info.tapping_term_ms !== undefined) {
+        setInput("tappingTermInput", info.tapping_term_ms);
+        if (cfg.settings) cfg.settings.tappingTermMs = info.tapping_term_ms;
+      }
       if (info.name && !info.name.includes("Config")) {
         setInput("deviceNameInput", info.name);
         if (cfg.settings) cfg.settings.deviceName = info.name;

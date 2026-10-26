@@ -46,6 +46,7 @@ static unsigned long lastActivityTime = 0;
 static String deviceName = DEFAULT_DEVICE_NAME;
 static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
+static uint16_t tappingTermMs = 200;
 static uint32_t standbyTimeoutMinutes = 5;
 static uint32_t deepSleepTimeoutMinutes = 60;
 

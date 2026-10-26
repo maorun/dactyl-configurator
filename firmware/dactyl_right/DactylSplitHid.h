@@ -32,7 +32,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_MOUSE_RELEASE = 9,
   SPLIT_OP_MOUSE_CLICK = 10,
   SPLIT_OP_MOUSE_SCROLL = 11, // arg = Scrollschritte (int8, ungleich 0)
-  SPLIT_OP_COUNT = 12
+  SPLIT_OP_ACTIVITY = 12,     // nur Master -> links: Tippen am Master, setzt den Inaktivitäts-Timer links zurück
+  SPLIT_OP_COUNT = 13
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -84,6 +85,50 @@ inline bool parseSplitHidPacket(const uint8_t *srcMac, const uint8_t *data, int 
   memcpy(&ev, data, sizeof(ev));
   if (!isValidSplitHidEvent(ev)) return false;
   out = ev;
+  return true;
+}
+
+// -----------------------------------------------------------------------------
+// Rückrichtung Master -> links: Aktivität für synchronisierte Inaktivitäts-Timer
+// -----------------------------------------------------------------------------
+// Der Master meldet eigenes Tippen höchstens alle SPLIT_ACTIVITY_INTERVAL_MS. Links setzt ein gültiges
+// ACTIVITY-Paket den Timer für Standby und Deep Sleep zurück, ohne HID-Wirkung. Kein Retry: Ein verlorenes
+// Paket verschiebt das Einschlafen nur um ein Intervall.
+#define SPLIT_ACTIVITY_INTERVAL_MS 10000
+
+// Prüft ein Paket an die linke Hälfte: nur vom Master, nur ACTIVITY ohne Werte
+inline bool parseSplitActivityPacket(const uint8_t *srcMac, const uint8_t *data, int len) {
+  if (srcMac == nullptr || data == nullptr) return false;
+  if (memcmp(srcMac, SPLIT_MASTER_MAC, sizeof(SPLIT_MASTER_MAC)) != 0) return false;
+  if (len != (int)sizeof(SplitHidEvent)) return false;
+  SplitHidEvent ev;
+  memcpy(&ev, data, sizeof(ev));
+  return ev.op == SPLIT_OP_ACTIVITY && ev.code == 0 && ev.arg == 0;
+}
+
+// Drosselung auf dem Master. Eine Taste innerhalb des Intervalls bleibt vorgemerkt und geht nach seinem
+// Ablauf raus, damit die letzte Aktivität die linke Hälfte erreicht.
+struct SplitActivityThrottle {
+  bool pending;
+  bool sentOnce;
+  unsigned long lastSentMs;
+};
+
+inline void splitActivityReset(SplitActivityThrottle &t) {
+  memset(&t, 0, sizeof(t));
+}
+
+inline void splitActivityNote(SplitActivityThrottle &t) {
+  t.pending = true;
+}
+
+// Liefert true, wenn jetzt ein ACTIVITY-Paket zu senden ist (und merkt den Versand vor)
+inline bool splitActivityTake(SplitActivityThrottle &t, unsigned long nowMs) {
+  if (!t.pending) return false;
+  if (t.sentOnce && (nowMs - t.lastSentMs) < SPLIT_ACTIVITY_INTERVAL_MS) return false;
+  t.pending = false;
+  t.sentOnce = true;
+  t.lastSentMs = nowMs;
   return true;
 }
 

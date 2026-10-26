@@ -19,7 +19,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 ## Rangliste
 
 - **ESP-NOW-Neustart nach wiederholten Sendefehlern (linke Hälfte)** `[Split]` — *Nutzen: hoch · Aufwand: mittel* — Am 2026-10-25 kam keine linke Taste am Mac an, bis beide Boards neu starteten. Das ist ein echter Ausfall beim Tippen. Der Plan ist eine Absicherung ohne bekannte Ursache. Plan: [ESP-NOW-Neustart](#plan-esp-now-neustart-nach-wiederholten-sendefehlern-linke-hälfte).
-- **Synchronisierte Inaktivitäts-Timer (Standby und Deep Sleep)** `[Split]` — *Nutzen: hoch · Aufwand: mittel* — Wer 60 Min nur rechts tippt, schickt die linke Hälfte in Deep Sleep; die nächste linke Taste geht verloren. Der Fehler tritt im Alltag regelmäßig auf. Plan: [Synchronisierte Timer](#plan-synchronisierte-inaktivitäts-timer-standby-und-deep-sleep).
 - **Echte LiPo-Spannungsmessung** `[Firmware]` — *Nutzen: hoch · Aufwand: mittel* — `BAT_SENSE` (GPIO 35) mit externem Spannungsteiler auswerten und den BLE-Batteriestand setzen; die App zeigt heute keinen Akku an (`updateBatteryUI` ist deaktiviert). Ohne Anzeige fällt die Tastatur ohne Vorwarnung aus. Braucht einen Hardware-Umbau (Spannungsteiler), deshalb unter den Split-Fehlern.
 - **Konfigurierbarer Tapping-Term** `[Firmware]` — *Nutzen: mittel · Aufwand: klein* — `TAPPING_TERM_MS` (200 ms) als Einstellung in NVS und App. Der Wert steuert Mod-Tap und Tap-Dance; ein unpassender Wert erzeugt Fehltipper. Kleiner Aufwand, weil das Muster der Sleep-Einstellungen existiert.
 - **Layout-Diff vor dem Sync** `[App]` — *Nutzen: mittel · Aufwand: mittel* — Pro Taste anzeigen, was sich gegenüber dem Gerät ändert (`GET_CONFIG` mit lokalem Stand vergleichen). Verhindert, dass ein Sync eine Gerätebelegung unbemerkt überschreibt.
@@ -44,6 +43,12 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 
 - `tests/test_side_profiles.js:231`: Der Test der Preset-Auswahl filtert die Optionen in `index.html` mit den festen Schlüsseln `us_qwerty` und `de_qwertz`. Folge: Ein neues Preset in `R.presets` ohne Option in `index.html` fällt nicht auf. Korrektur: Die festen Schlüssel entfernen und die Optionen von `layoutPresetSelect` mit `Object.keys(R.presets)` vergleichen.
 - Hardware-Prüfung offen: Tottaste Alt + u eines Umlauts auf der linken Hälfte am Mac testen. Der Host-Test prüft nur die Reihenfolge der `SplitHidEvent`s; der Master sendet sie ohne Abstand.
+- `firmware/dactyl_right/dactyl_right.ino` (`sendSplitActivityIfDue`): Der Master prüft den Rückgabewert von `esp_now_send` nicht. Folge: Ein fehlgeschlagener Versand verbraucht die Vormerkung; das nächste `ACTIVITY` folgt erst nach dem nächsten Tastendruck und Intervall. Korrektur: Rückgabewert prüfen und bei Fehler `splitActivityNote` erneut aufrufen.
+- `firmware/dactyl_left/dactyl_left.ino` (`loop`, Block `masterActivityReceived`): Kein Host-Test deckt das Rücksetzen des Timers links ab. Folge: Ein entfernter oder verschobener Block fällt in keinem Test auf. Korrektur: Das Rücksetzen in eine reine Funktion in einem Header verschieben und testen.
+- `firmware/dactyl_right/dactyl_right.ino` (Matrix-Scan, `splitActivityNote`): Kein Test prüft, dass ein Tastenwechsel am Master `ACTIVITY` vormerkt. Folge: Ein fehlender Aufruf fällt nur auf der Hardware auf. Korrektur: Den Aufruf in eine testbare Funktion auslagern oder in der Hardware-Prüfung unten abdecken.
+- `AGENTS.md` (Abschnitt 2a): Ein Sender mit gefälschter Master-MAC hält die linke Hälfte per `ACTIVITY` wach. Folge: nur Stromverbrauch, keine HID-Wirkung; passt zur akzeptierten Designentscheidung. Korrektur: Einen Satz zu diesem Risiko in Abschnitt 2a ergänzen.
+- `firmware/dactyl_left/dactyl_left.ino` (`loop`): Das Rücksetzen läuft nur außerhalb des Config Mode; ein vorher gesetztes `masterActivityReceived` bleibt stehen. Folge: keine, weil der Config Mode mit `ESP.restart()` endet. Korrektur: Einen Code-Kommentar ergänzen.
+- Hardware-Prüfung offen: Synchronisierte Inaktivitäts-Timer. 6 Min nur rechts tippen; links darf nicht in Standby gehen (Serial `[POWER]`), und linke Tasten kommen ohne Verzögerung an. Der Host-Test prüft nur Parser und Drosselung, nicht den Funkweg Master -> links.
 
 ## Detailpläne
 
@@ -65,31 +70,6 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 - Soll auch der Master etwas tun (z. B. ESP-NOW neu starten, wenn `SPLIT_LINK_TIMEOUT_MS` lange anhält)? Heute weiß der Master nicht, ob die linke Hälfte schläft oder hängt.
 - Reproduktion: Der Fehlerzustand trat ohne bekannten Auslöser auf. Vor dem Fix den Master-Log bei `[SPLIT] WARN: Linke Hälfte nicht erreichbar` mitschneiden.
 
-### Plan: Synchronisierte Inaktivitäts-Timer (Standby und Deep Sleep)
-
-**Heute:**
-- Rechts (`dactyl_right.ino:461`): angewendete linke Ereignisse setzen `lastActivityTime` zurück. Der Master schläft nicht ein, solange links getippt wird.
-- Links (`dactyl_left.ino:475`): nur eigene Tasten setzen `lastActivityTime` zurück. Bei 60 Min nur rechts tippen geht die linke Hälfte in Deep Sleep.
-- Aufwachen: Eine Hälfte im Deep Sleep empfängt kein Funksignal; die andere Hälfte kann sie nicht wecken. Nach dem Deep Sleep braucht jede Hälfte einen eigenen Tastendruck. Das bleibt so (Hardware-Grenze).
-
-**Ziel:** Beide Hälften gehen erst in Standby / Deep Sleep, wenn auf **keiner** Hälfte getippt wurde.
-
-**Umsetzung:**
-1. Neue Rückrichtung Master -> links. Protokoll in `DactylSplitHid.h` append-only erweitern, z. B. Op `SPLIT_OP_ACTIVITY` (nur Master -> links, ohne HID-Wirkung). `parseSplitHidPacket` auf dem Master lehnt sie ab; ein eigener Parser links prüft Absender-MAC `…:A6` und Länge.
-2. Master: Bei eigener Taste höchstens alle `SPLIT_ACTIVITY_INTERVAL_MS` (Vorschlag 10 s) ein `ACTIVITY`-Paket senden. Dafür braucht der Master einen Peer auf die linke MAC `…:B0`; kein Retry, ein verlorenes Paket ist unkritisch.
-3. Links: Empfangs-Callback registrieren; ein gültiges `ACTIVITY` setzt `lastActivityTime` zurück und beendet Standby. Kein Tastendruck, keine HID-Wirkung.
-4. `AGENTS.md`: Abschnitt "Config mode, NVS, power" und "Known limit" anpassen.
-
-**Tests:**
-- Host-Test: Parser links (gültig, falsche MAC, falsche Länge, unbekannter Op), Drosselung auf dem Master, Rücksetzen des Timers links.
-- Hardware: 6 Min nur rechts tippen; links darf nicht in Standby gehen (Serial `[POWER]`), und linke Tasten kommen ohne Verzögerung an.
-
-**Offene Fragen:**
-- Soll `ACTIVITY` auch den Standby der linken Hälfte verhindern oder nur den Deep Sleep? Ohne Standby verbraucht links mehr Strom, reagiert aber ohne gedrosselten Scan (40 ms).
-- Funkzeit: Ein Paket alle 10 s ist gering, teilt sich aber das 2,4-GHz-Radio mit BLE. Intervall auf Hardware prüfen.
-- Soll auch der umgekehrte Fall (Master bleibt wach wegen links) unverändert bleiben? Heute ja.
-- Sollen beide Hälften dieselben Timeout-Werte erzwingen (heute getrennt pro Hälfte in NVS)?
-
 ## Umgesetzt
 
 - **Tasten-Heatmap & WPM-Anzeige** im Live-Monitor — PR #2.
@@ -102,3 +82,4 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 - **Deutsche Zeichen im Keycode-Picker:** Gruppe "Deutsche Zeichen (macOS)" mit Shift-Zeichen (`:`, `+`, `*`, `?` …) als Einzelcode und Option-Zeichen (`@`, `€`, `{` …) als automatisch angelegtes Tastenpaar; Suchfeld über jeder Aktions-Auswahl.
 - **Weitere deutsche Zeichen:** `<` (ISO-Taste `KEY_NON_US_BACKSLASH`, HID `0x64`), `>` (Tastenpaar Shift + ISO-Taste), `^`, `°`, `´` und `` ` `` in "Deutsche Zeichen (macOS)"; Zuordnung für den macOS-Tastaturtyp ISO.
 - **macOS-Layout "U.S.":** Gruppe "Sonderzeichen (macOS US)" mit US-Zeichen, `§` über die ISO-Taste, `° € ´` als Tastenpaar; eigene Umlaut-Aktionen `UMLAUT_AE` … `UMLAUT_SZ` (Tottaste Alt + u, dann Vokal; ß = Alt + s); Preset und Vorlagen mit US-Beschriftung.
+- **Synchronisierte Inaktivitäts-Timer:** Tippen am Master meldet `SPLIT_OP_ACTIVITY` (höchstens alle 10 s) an die linke Hälfte; sie geht nicht mehr in Standby oder Deep Sleep, solange rechts getippt wird.

@@ -106,6 +106,7 @@ const int NUM_COLS = 7;
 String deviceName = "Dactyl Keyboard";
 uint8_t debounceMs = 5;
 uint16_t comboTimeoutMs = 40;
+uint16_t tappingTermMs = 200;
 uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, gedrosselter Scan, BLE bleibt an)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
 // [[[END_SETTINGS]]]

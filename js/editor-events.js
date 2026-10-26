@@ -288,12 +288,14 @@ function setupEventListeners() {
       const devName = sanitizeCommandText(document.getElementById("deviceNameInput")?.value, activeProfile().deviceName);
       const debounce = clampSetting("debounceMs", parseInt(document.getElementById("debounceInput")?.value, 10));
       const comboTimeout = clampSetting("comboTimeoutMs", parseInt(document.getElementById("comboTimeoutInput")?.value, 10));
+      const tappingTerm = clampSetting("tappingTermMs", parseInt(document.getElementById("tappingTermInput")?.value, 10));
       const standbyMinutes = clampSetting("standbyTimeoutMinutes", parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10));
       const sleepMinutes = clampSetting("sleepTimeoutMinutes", parseInt(document.getElementById("sleepTimeoutSelect")?.value, 10));
       const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = String(v); };
       setVal("deviceNameInput", devName);
       setVal("debounceInput", debounce);
       setVal("comboTimeoutInput", comboTimeout);
+      setVal("tappingTermInput", tappingTerm);
 
       const oldSettings = JSON.parse(JSON.stringify(currentConfig.settings || {}));
 
@@ -301,6 +303,7 @@ function setupEventListeners() {
         deviceName: devName,
         debounceMs: debounce,
         comboTimeoutMs: comboTimeout,
+        tappingTermMs: tappingTerm,
         standbyTimeoutMinutes: standbyMinutes,
         sleepTimeoutMinutes: sleepMinutes
       };
@@ -325,7 +328,8 @@ function setupEventListeners() {
           `SET_SLEEP ${sleepMinutes}`,
           `SET_DEV_NAME ${devName}`,
           `SET_DEBOUNCE ${debounce}`,
-          `SET_COMBO_TIMEOUT ${comboTimeout}`
+          `SET_COMBO_TIMEOUT ${comboTimeout}`,
+          `SET_TAPPING_TERM ${tappingTerm}`
         ];
         let allOk = true;
         for (const cmd of cmds) {

@@ -41,7 +41,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              createDeviceSnapshot, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
-             removeKeyPairAt, KEYCODES, UMLAUT_LABELS, holdSublabel,
+             removeKeyPairAt, KEYCODES, UMLAUT_LABELS, ONE_SHOT_LABELS, holdSublabel,
              planKeyPairDeletion, hasPendingPairChange, keyNeedsStagedPairs,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides };`, ctx);
@@ -1063,6 +1063,27 @@ test("Umlaute: Aktionscodes 0x150..0x156 wie DactylCommon.h, Labels und Rückweg
   const all = api.KEYCODES.flatMap(g => g.keys);
   for (const code of Object.keys(expected)) assert.ok(all.some(k => k.code === code), code);
   assert.ok(!all.some(k => /\(Ger\)/.test(k.label)));
+});
+
+test("One-Shot-Modifier und Caps Word: Aktionscodes wie DactylCommon.h, Labels und Rückweg", () => {
+  const common = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylCommon.h"), "utf8");
+  const fw = name => Number(new RegExp(`#define ACT_${name}\\s+(0x[0-9A-F]+)`).exec(common)[1]);
+  const codes = ["OSM_LCTRL", "OSM_LSHIFT", "OSM_LALT", "OSM_LGUI", "OSM_RCTRL", "OSM_RSHIFT", "OSM_RALT", "OSM_RGUI"];
+  assert.strictEqual(Number(/#define NUM_ONE_SHOT_ACTIONS\s+(\d+)/.exec(common)[1]), codes.length);
+  // Reihenfolge = Modifier-Bit (KEY_LEFT_CTRL + i), wie oneShotMaskForAction in der Firmware
+  codes.forEach((code, i) => assert.strictEqual(api.actionCodeToNumeric(code), fw("ONE_SHOT_BASE") + i, code));
+  const all = api.KEYCODES.flatMap(g => g.keys);
+  for (const code of [...codes, "CAPS_WORD"]) {
+    const n = api.actionCodeToNumeric(code);
+    assert.strictEqual(n, fw(code), code);
+    const label = api.ONE_SHOT_LABELS[code];
+    assert.ok(label && label.length <= 8, code);
+    assert.deepStrictEqual({ ...api.findDefinitionByCode(n) }, { label, tap: code });
+    assert.strictEqual(api.holdSublabel(code), label);
+    assert.ok(!api.isKeyPairMember(code), `${code} ist kein Paar-Mitglied`);
+    assert.ok(all.some(k => k.code === code), `${code} in der Auswahl`);
+  }
+  assert.strictEqual(fw("CAPS_WORD"), 0x168);
 });
 
 test("Preset Deutsch QWERTZ: Umlaut-Aktionen und US-Codes, keine deutschen Beschriftungen auf US-Tasten", () => {

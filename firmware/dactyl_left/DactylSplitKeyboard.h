@@ -87,6 +87,17 @@ public:
     if (wheel != 0) pushEvent(makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, wheel));
   }
 
+  // One-Shot-Modifier und Caps Word: den Zustand führt der Master
+  void oneShotPress(uint8_t mask) {
+    held.oneShot |= mask;
+    push(SPLIT_OP_ONE_SHOT_PRESS, mask);
+  }
+  void oneShotRelease(uint8_t mask) {
+    held.oneShot &= (uint8_t)~mask;
+    push(SPLIT_OP_ONE_SHOT_RELEASE, mask);
+  }
+  void capsWordToggle() { pushEvent(makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE)); }
+
   void releaseAll() {
     splitSetClear(held);
     pushEvent(makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));

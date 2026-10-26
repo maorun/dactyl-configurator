@@ -56,6 +56,21 @@
 #define ACT_UMLAUT_SZ            0x156
 #define NUM_UMLAUT_ACTIONS       7
 
+// One-Shot-Modifier: Tippen gibt den Modifier nur der nächsten Taste (beider Hälften) mit; Halten wirkt wie
+// ein normaler Modifier. Bit i der Maske = Code KEY_LEFT_CTRL + i. Der Master führt den Zustand.
+#define ACT_ONE_SHOT_BASE        0x160
+#define ACT_OSM_LCTRL            0x160
+#define ACT_OSM_LSHIFT           0x161
+#define ACT_OSM_LALT             0x162
+#define ACT_OSM_LGUI             0x163
+#define ACT_OSM_RCTRL            0x164
+#define ACT_OSM_RSHIFT           0x165
+#define ACT_OSM_RALT             0x166
+#define ACT_OSM_RGUI             0x167
+#define NUM_ONE_SHOT_ACTIONS     8
+// Caps Word: Buchstaben groß, bis eine Taste außer Buchstabe, Ziffer, -, _, Backspace, Delete kommt
+#define ACT_CAPS_WORD            0x168
+
 #define NUM_LAYERS 8
 
 #define MAX_COMBOS 16

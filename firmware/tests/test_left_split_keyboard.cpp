@@ -362,6 +362,31 @@ TEST(test_umlaut_sequence_is_queued_in_order) {
   assert(drain().empty());                              // das Loslassen sendet nichts nach
 }
 
+
+// One-Shot-Modifier und Caps Word gehen als eigene Ops an den Master, der den Zustand führt
+TEST(test_one_shot_and_caps_word_are_forwarded) {
+  KEYMAP[0][5][1] = ACT_OSM_LSHIFT;
+  KEYMAP[0][5][2] = ACT_CAPS_WORD;
+  tap(5, 1);
+  tap(5, 2);
+  std::vector<SplitHidEvent> ev = drain();
+  for (const SplitHidEvent &e : ev) assert(isValidSplitHidEvent(e));
+  assert(ev.size() == 3);
+  assert(is(ev[0], SPLIT_OP_ONE_SHOT_PRESS, 0x02) && is(ev[1], SPLIT_OP_ONE_SHOT_RELEASE, 0x02));
+  assert(is(ev[2], SPLIT_OP_CAPS_WORD_TOGGLE, 0));
+}
+
+// RELEASE_ALL löst eine gehaltene One-Shot-Taste auf dem Master (splitReleaseHeld, ohne Vormerken)
+TEST(test_one_shot_held_is_released_by_release_all) {
+  KEYMAP[0][5][1] = ACT_OSM_LCTRL;
+  keyState[5][1] = true;
+  onMatrixKeyChange(5, 1, true);
+  bleKeyboard.releaseAll();
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 2);
+  assert(is(ev[0], SPLIT_OP_ONE_SHOT_PRESS, 0x01) && is(ev[1], SPLIT_OP_RELEASE_ALL, 0));
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Split-Keyboard Proxy Test Suite" << std::endl;

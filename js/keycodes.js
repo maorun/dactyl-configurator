@@ -63,6 +63,17 @@ const KEYCODES = [
     { code: "KEY_RIGHT_ALT", label: "Alt/Option (Rechts)", char: "" },
     { code: "KEY_RIGHT_GUI", label: "Cmd/Win (Rechts)", char: "" }
   ]},
+  { group: "One-Shot & Caps Word", keys: [
+    { code: "OSM_LSHIFT", label: "One-Shot Umschalt (nächste Taste)", char: "" },
+    { code: "OSM_LCTRL", label: "One-Shot Strg (nächste Taste)", char: "" },
+    { code: "OSM_LALT", label: "One-Shot Alt/Option (nächste Taste)", char: "" },
+    { code: "OSM_LGUI", label: "One-Shot Cmd/Win (nächste Taste)", char: "" },
+    { code: "OSM_RSHIFT", label: "One-Shot Umschalt rechts (nächste Taste)", char: "" },
+    { code: "OSM_RCTRL", label: "One-Shot Strg rechts (nächste Taste)", char: "" },
+    { code: "OSM_RALT", label: "One-Shot Alt/Option rechts (nächste Taste)", char: "" },
+    { code: "OSM_RGUI", label: "One-Shot Cmd/Win rechts (nächste Taste)", char: "" },
+    { code: "CAPS_WORD", label: "Caps Word (ein Wort in Großbuchstaben)", char: "" }
+  ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
     { code: "KEY_F3", label: "F3", char: "" }, { code: "KEY_F4", label: "F4", char: "" },
@@ -234,6 +245,11 @@ const ACTION_TO_NUMERIC = {
   "UMLAUT_AE_UPPER": 0x153, "UMLAUT_OE_UPPER": 0x154, "UMLAUT_UE_UPPER": 0x155,
   "UMLAUT_SZ": 0x156,
 
+  // One-Shot-Modifier (0x160..0x167) und Caps Word (0x168); den Zustand führt der Master für beide Hälften
+  "OSM_LCTRL": 0x160, "OSM_LSHIFT": 0x161, "OSM_LALT": 0x162, "OSM_LGUI": 0x163,
+  "OSM_RCTRL": 0x164, "OSM_RSHIFT": 0x165, "OSM_RALT": 0x166, "OSM_RGUI": 0x167,
+  "CAPS_WORD": 0x168,
+
   // Mouse Actions (0x130..0x134)
   "MOUSE_LEFT": 0x130,
   "MOUSE_RIGHT": 0x131,
@@ -250,6 +266,13 @@ const ACTION_TO_NUMERIC = {
 // Beschriftung der Umlaut-Aktionen (Keycap, GET_CONFIG-Rückweg)
 const UMLAUT_LABELS = {
   UMLAUT_AE: "ä", UMLAUT_OE: "ö", UMLAUT_UE: "ü", UMLAUT_AE_UPPER: "Ä", UMLAUT_OE_UPPER: "Ö", UMLAUT_UE_UPPER: "Ü", UMLAUT_SZ: "ß"
+};
+
+// Kurze Beschriftung der One-Shot- und Caps-Word-Aktionen (Keycap, GET_CONFIG-Rückweg, Halte-Unterzeile)
+const ONE_SHOT_LABELS = {
+  OSM_LCTRL: "OS Ctrl", OSM_LSHIFT: "OS Shift", OSM_LALT: "OS Alt", OSM_LGUI: "OS Cmd",
+  OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
+  CAPS_WORD: "CapsWd"
 };
 
 // Tastenpaar PAIR_<n>: eine Taste drückt zwei Tasten gleichzeitig (Index in currentConfig.keyPairs)
@@ -448,6 +471,7 @@ function findDefinitionByCode(numericCode) {
       else if (key === "LAYER_DOWN") lbl = "Layer ▼";
       else if (key === "KEY_NON_US_BACKSLASH") lbl = "§";
       else if (UMLAUT_LABELS[key]) lbl = UMLAUT_LABELS[key];
+      else if (ONE_SHOT_LABELS[key]) lbl = ONE_SHOT_LABELS[key];
       return { label: lbl, tap: key };
     }
   }

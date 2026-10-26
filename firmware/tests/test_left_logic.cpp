@@ -185,7 +185,7 @@ TEST(test_scroll_is_not_retried) {
   assert(queueNextToSend(q, 0, ev) && ev.op == SPLIT_OP_KEY_PRESS);
   // Alle anderen Ops bleiben wiederholbar (idempotent auf dem Master)
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
-    bool expected = op != SPLIT_OP_MOUSE_SCROLL && op != SPLIT_OP_KEY_EVENT;
+    bool expected = op != SPLIT_OP_MOUSE_SCROLL && op != SPLIT_OP_KEY_EVENT && op != SPLIT_OP_CAPS_WORD_TOGGLE;
     assert(splitEventRetryable(makeSplitHidEvent(op, 1)) == expected);
   }
 }

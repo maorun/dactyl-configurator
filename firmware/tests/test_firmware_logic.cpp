@@ -80,6 +80,12 @@ static KeyCombo userCombos[MAX_COMBOS];
 #define ACT_UMLAUT_UE_UPPER  0x155
 #define ACT_UMLAUT_SZ        0x156
 #define NUM_UMLAUT_ACTIONS   7
+// One-Shot-Modifier und Caps Word (wie DactylCommon.h)
+#define ACT_ONE_SHOT_BASE    0x160
+#define ACT_OSM_LCTRL        0x160
+#define ACT_OSM_LSHIFT       0x161
+#define NUM_ONE_SHOT_ACTIONS 8
+#define ACT_CAPS_WORD        0x168
 #define MAX_KEY_PAIRS 16
 struct KeyPair {
   uint8_t first;
@@ -164,6 +170,7 @@ void resetState() {
   bleKeyboard.writtenKeys.clear();
   bleKeyboard.pressHistory.clear();
   bleKeyboard.keyEvents.clear();
+  bleKeyboard.oneShotEvents.clear();
   isConfigMode = false;
   enterConfigRequested = false;
   exitConfigRequested = false;
@@ -2099,6 +2106,70 @@ TEST(test_tapping_term_bounds_and_stored_out_of_range) {
   Preferences::uintStore["tap_term"] = 450;
   loadKeymapFromNVS();
   assert(tappingTermMs == 450);
+}
+
+
+// -----------------------------------------------------------------------------
+// One-Shot-Modifier und Caps Word: DactylLogic.h meldet Drücken/Loslassen an den Master-Zustand
+// -----------------------------------------------------------------------------
+TEST(test_one_shot_key_reports_press_and_release) {
+  resetState();
+  KEYMAP[0][5][1] = ACT_OSM_LSHIFT;
+  KEYMAP[0][5][2] = ACT_OSM_LCTRL;
+  tapKeyAt(5, 1, 1000, 1050);
+  tapKeyAt(5, 2, 1100, 1150);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{2, -2, 1, -1}));
+  assert(bleKeyboard.pressHistory.empty()); // kein normaler Tastendruck
+  bool sawName = false;
+  for (const std::string &n : Serial.outputLines) sawName = sawName || n.find("\"key\":\"OSM Ctrl\"") != std::string::npos;
+  assert(sawName);
+}
+
+TEST(test_caps_word_key_toggles_once_per_press) {
+  resetState();
+  KEYMAP[0][5][1] = ACT_CAPS_WORD;
+  tapKeyAt(5, 1, 1000, 1050);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));
+}
+
+TEST(test_one_shot_as_hold_action_and_combo_action) {
+  resetState();
+  // Mod-Tap: Tap = 'f', Halten = One-Shot-Shift (wirkt beim Halten wie Shift auf dem Master)
+  KEYMAP[0][2][1] = 'f';
+  HOLDMAP[0][2][1] = ACT_OSM_LSHIFT;
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1000 + TAPPING_TERM_MS + 1);
+  processDeferredKeys(millis());
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{2, -2}));
+  // Combo mit KEY_PRESS-Aktion One-Shot-Ctrl: Press + Release (tippen)
+  bleKeyboard.oneShotEvents.clear();
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("ADD_COMBO 1 1 1 2 0 352", false); // 352 = 0x160 (ACT_OSM_LCTRL)
+  KEYMAP[0][1][1] = 'w';
+  KEYMAP[0][1][2] = 'e';
+  setMillis(2000);
+  keyState[1][1] = true;
+  onMatrixKeyChange(1, 1, true);
+  keyState[1][2] = true;
+  onMatrixKeyChange(1, 2, true);
+  checkUserCombos();
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{1, -1}));
+}
+
+TEST(test_one_shot_not_sent_without_host_or_in_config_mode) {
+  resetState();
+  KEYMAP[0][5][1] = ACT_OSM_LSHIFT;
+  isConfigMode = true;
+  tapKeyAt(5, 1, 1000, 1050);
+  isConfigMode = false;
+  bleKeyboard.connected = false;
+  tapKeyAt(5, 1, 1100, 1150);
+  bleKeyboard.connected = true;
+  assert(bleKeyboard.oneShotEvents.empty());
 }
 
 int main() {

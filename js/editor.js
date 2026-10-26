@@ -296,7 +296,7 @@ function normalizeHoldCode(code) {
 const HOLD_SUBLABEL_SHORT = {
   KEY_LEFT_CTRL: "Ctrl", KEY_RIGHT_CTRL: "Ctrl", KEY_LEFT_SHIFT: "Shift", KEY_RIGHT_SHIFT: "Shift",
   KEY_LEFT_ALT: "Alt", KEY_RIGHT_ALT: "Alt", KEY_LEFT_GUI: "Cmd", KEY_RIGHT_GUI: "Cmd",
-  LAYER_UP: "L+1", LAYER_DOWN: "L-1", MAC_GLOBE: "Globe", ...UMLAUT_LABELS
+  LAYER_UP: "L+1", LAYER_DOWN: "L-1", MAC_GLOBE: "Globe", ...UMLAUT_LABELS, ...ONE_SHOT_LABELS
 };
 
 function holdSublabel(code) {

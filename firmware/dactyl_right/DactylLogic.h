@@ -210,6 +210,17 @@ void sendUmlaut(uint16_t action) {
 }
 
 // -----------------------------------------------------------------------------
+// One-Shot-Modifier und Caps Word: den Zustand führt der Master (DactylOneShot.h, SplitArbitratedKeyboard)
+// -----------------------------------------------------------------------------
+bool isOneShotAction(uint16_t action) {
+  return action >= ACT_ONE_SHOT_BASE && action < ACT_ONE_SHOT_BASE + NUM_ONE_SHOT_ACTIONS;
+}
+
+uint8_t oneShotMaskForAction(uint16_t action) {
+  return isOneShotAction(action) ? (uint8_t)(1u << (action - ACT_ONE_SHOT_BASE)) : 0;
+}
+
+// -----------------------------------------------------------------------------
 // Aktionen ausführen (Tastendruck / Loslassen einer aufgelösten Aktion)
 // -----------------------------------------------------------------------------
 void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) {
@@ -311,6 +322,20 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         keySentToHost[r][c] = true;
       }
     }
+  } else if (isOneShotAction(action) || action == ACT_CAPS_WORD) {
+    static const char* const osmNames[NUM_ONE_SHOT_ACTIONS] = {
+      "OSM Ctrl", "OSM Shift", "OSM Alt", "OSM Cmd", "OSM RCtrl", "OSM RShift", "OSM RAlt", "OSM RCmd"
+    };
+    const char* name = action == ACT_CAPS_WORD ? "Caps Word" : osmNames[action - ACT_ONE_SHOT_BASE];
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, name, action, currentLayer);
+    sendConfigNotification(String(buf));
+    Serial.printf("%s gedrückt: [R%d, C%d] (L%d)\n", name, r, c, currentLayer);
+    if (!isConfigMode && bleKeyboard.isConnected() && !isConfigComboSuppressed(r, c)) {
+      if (action == ACT_CAPS_WORD) bleKeyboard.capsWordToggle();
+      else bleKeyboard.oneShotPress(oneShotMaskForAction(action));
+      keySentToHost[r][c] = true;
+    }
   } else if (action > 0 && action <= 0xFF) {
     String keyLabel = "";
     if (action >= 'a' && action <= 'z') keyLabel = String((char)toupper(action));
@@ -375,6 +400,13 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         else if (action == 0x134) bleKeyboard.mouseScroll(-1);
       }
     }
+  } else if (isOneShotAction(action)) {
+    if (keySentToHost[r][c]) {
+      if (bleKeyboard.isConnected()) bleKeyboard.oneShotRelease(oneShotMaskForAction(action));
+      keySentToHost[r][c] = false;
+    }
+  } else if (action == ACT_CAPS_WORD) {
+    keySentToHost[r][c] = false;
   } else if (isUmlautAction(action)) {
     // Die Folge ist beim Drücken schon vollständig gesendet; nur ein gepufferter Combo-Kandidat sendet jetzt
     if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -1321,6 +1353,11 @@ void checkUserCombos() {
               else if (act == 0x134) bleKeyboard.mouseScroll(-1);
             } else if (isUmlautAction(act)) {
               sendUmlaut(act);
+            } else if (isOneShotAction(act)) {
+              bleKeyboard.oneShotPress(oneShotMaskForAction(act));
+              bleKeyboard.oneShotRelease(oneShotMaskForAction(act));
+            } else if (act == ACT_CAPS_WORD) {
+              bleKeyboard.capsWordToggle();
             } else if (act <= 0xFF) {
               bleKeyboard.write((uint8_t)act);
             }

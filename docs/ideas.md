@@ -18,7 +18,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Rangliste
 
-- **Linke Tasten im Live-Monitor über den Master** `[Split]` — *Nutzen: mittel · Aufwand: mittel* — `SPLIT_HID`-Zeilen tragen keine Matrix-Position. Heute zeigt die App linke Tasten nur über eine direkte Verbindung zur linken Hälfte (BLE im Config Mode oder USB). Braucht ein Protokollfeld oder eine eigene Diagnose-Op (append-only).
 - **Reines Matrix-Event für Diagnose** `[Firmware]` — *Nutzen: mittel · Aufwand: klein* — Eine `MATRIX:`-Zeile unabhängig von der Belegung; heute sendet `dispatchPress` kein `KEY_PRESS` für Tasten mit Aktion `0`. Voraussetzung für den nächsten Eintrag.
 - **Matrix-Test für leere Tasten** `[App]` — *Nutzen: mittel · Aufwand: klein* — Im Test-Modus das reine Matrix-Event der Firmware nutzen (oder Ebene 0 erzwingen). Hilft beim Löten und bei Wackelkontakten. Hängt vom Matrix-Event ab.
 - **One-Shot-Modifier / Caps Word** `[Firmware]` — *Nutzen: mittel · Aufwand: mittel* — Häufige Komfortfunktionen ergänzend zu Mod-Tap. Neue Aktionscodes in Firmware, App und `server.py`.
@@ -70,6 +69,13 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 - `docs/ideas.md` (Einträge zu `dactyl_left.ino:339` und `:574`): Der Merge von PR #18 verschiebt `restartEspNow()` und den Aufruf von `shouldRestartEspNow` in `loop()` um etwa 6 Zeilen. Folge: Die Zeilennummern stimmen nicht mehr. Korrektur: Die Einträge auf Funktionsnamen statt Zeilennummern umstellen.
 - `firmware/dactyl_left/dactyl_left.ino` (`setupEspNow`, `esp_now_register_recv_cb`): Ein Fehler beim Registrieren des Empfangs-Callbacks erzeugt nur eine Serial-Zeile. Folge: Die linke Hälfte schläft dann ohne Meldung nach eigener Inaktivität ein. Korrektur: Den Fehler als Setup-Fehler behandeln oder im Status melden.
 - Hardware-Prüfung offen: Synchronisierte Inaktivitäts-Timer. 6 Min nur rechts tippen; links darf nicht in Standby gehen (Serial `[POWER]`), und linke Tasten kommen ohne Verzögerung an. Der Host-Test prüft nur Parser und Drosselung, nicht den Funkweg Master -> links.
+- `firmware/dactyl_left/dactyl_left.ino` (Matrix-Scan, `queuePushDiagnostic`): Ein verworfenes Diagnose-Ereignis wird nicht gezählt. Folge: Der Live-Monitor verliert Tasten ohne Hinweis. Korrektur: Verworfene Diagnose-Ereignisse zählen und per Serial melden.
+- `js/serial.js` (Zweig `SPLIT_KEY:`): Sind linke Hälfte und Master gleichzeitig per USB verbunden, kommt eine linke Taste als `KEY_PRESS` und als `SPLIT_KEY` an. Folge: Heatmap und Tipp-Statistik zählen die Taste doppelt. Korrektur: `SPLIT_KEY` ignorieren, solange die linke Hälfte direkt verbunden ist.
+- `tests/test_side_profiles.js` (Split-Diagnose): Kein Test führt den Zweig `SPLIT_KEY:` von `handleSerialLine` aus; der Test prüft nur Quelltext per Regex. Folge: Ein falscher Press- oder Release-Aufruf in `serial.js` fällt nicht auf. Korrektur: `handleSerialLine` mit Stubs für Press und Release in einem VM-Test ausführen.
+- `firmware/dactyl_right/DactylSplitHid.h` (`splitProcessRx`, `KEY_EVENT`): Ein `KEY_EVENT` setzt `lastActivityTime` am Master nicht zurück. Folge: Eine linke Taste mit Aktion `0` hält den Master nicht wach. Korrektur: Das Verhalten in `AGENTS.md` dokumentieren oder den Timer bei `KEY_EVENT` zurücksetzen.
+- `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_KEY_EVENTS_PER_RX`): Acht `SPLIT_KEY`-Zeilen pro Aufruf verzögern `loop()` bei einer Flut noch um etwa 30 ms. Folge: Das Tippen am Master stockt während eines Angriffs. Korrektur: `SPLIT_KEY_EVENTS_PER_RX` senken oder die Ausgabe zeitlich begrenzen.
+- `firmware/dactyl_left/dactyl_left.ino` (`reportOutcome`): Ein fehlgeschlagenes `KEY_EVENT` zählt als `SEND_DROPPED` für den ESP-NOW-Neustart. Folge: Diagnose-Pakete tragen zum Neustart-Zähler bei. Korrektur: `KEY_EVENT`-Verluste aus `restartGuardOnOutcome` ausnehmen.
+- `tests/test_side_profiles.js` (Split-Diagnose): Die Einreih-Bedingung links (Link aktiv, Warteschlangen-Grenze) prüft nur ein Regex. Folge: Ein falscher Guard um `queuePushDiagnostic` fällt nicht auf. Korrektur: Die Bedingung in eine reine Funktion verschieben und testen.
 
 ## Detailpläne
 
@@ -91,3 +97,4 @@ Derzeit kein offener Plan.
 - **ESP-NOW-Neustart nach wiederholten Sendefehlern (linke Hälfte):** Nach 5 verworfenen Ereignissen in Folge und 5 s ohne Zustellung startet die linke Hälfte ESP-NOW neu (`ESPNOW_RESTART`, höchstens einmal pro 30 s). Scheitert der Neustart, startet das Board neu. Offen: Reaktion des Masters auf einen langen Link-Ausfall — PR #17.
 - **Layout-Diff vor dem Sync:** "Auf ESP32 speichern" liest die Gerätebelegung mit `GET_CONFIG` und zeigt pro Taste und Ebenen-Name, was sich ändert; erst nach Bestätigung wird übertragen.
 - **Synchronisierte Inaktivitäts-Timer:** Tippen am Master meldet `SPLIT_OP_ACTIVITY` (höchstens alle 10 s) an die linke Hälfte; sie geht nicht mehr in Standby oder Deep Sleep, solange rechts getippt wird.
+- **Linke Tasten im Live-Monitor über den Master:** Die linke Hälfte meldet jede Matrix-Änderung als Diagnose-Op `SPLIT_OP_KEY_EVENT` (ohne HID-Wirkung, ohne Retry, höchstens halbe Sendewarteschlange); der Master gibt sie per USB als `SPLIT_KEY:` aus, und die App zeigt sie im Live-Monitor, in der Heatmap und im Matrix-Test der linken Hälfte.

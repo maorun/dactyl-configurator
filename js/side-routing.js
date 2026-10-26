@@ -6,6 +6,8 @@
 (function (root) {
   "use strict";
 
+  const NUM_LAYERS = 8;
+
   // Hälfte der aktiven Verbindung (BLE bevorzugt), null ohne Verbindung oder bei unbekannter USB-Hälfte
   function connectedSide(conn) {
     if (conn.bleUp) return conn.bleSide || null;
@@ -104,7 +106,53 @@
     };
   }
 
+  // SPLIT_KEY-Zeile des Masters: Matrix-Ereignis der Sender-Hälfte, per ESP-NOW empfangen.
+  // Nur eine Zeile vom Master zählt. Rückgabe { side, r, c, pressed, layer } oder null.
+  function parseSplitKeyLine(line, lineSide) {
+    const D = root.Dactyl;
+    if (typeof line !== "string" || !line.startsWith("SPLIT_KEY:")) return null;
+    if (lineSide !== D.getMasterSide()) return null;
+    const side = D.getSplitSenderSide();
+    if (!side) return null;
+    let evt;
+    try {
+      evt = JSON.parse(line.substring(10));
+    } catch (_) {
+      return null;
+    }
+    if (!evt || typeof evt !== "object") return null;
+    const { r, c, layer } = evt;
+    if (!D.isWiredSwitch(D.SIDE_PROFILES[side], r, c)) return null;
+    if (!Number.isInteger(layer) || layer < 0 || layer >= NUM_LAYERS) return null;
+    if (evt.pressed !== 0 && evt.pressed !== 1) return null;
+    return { side, r, c, pressed: evt.pressed === 1, layer };
+  }
+
+  // SPLIT_KEY-Releases werden nicht wiederholt und können verloren gehen. Eine gedrückte Taste ohne Release
+  // gilt nach staleMs als losgelassen (onStale), damit Live-Monitor und Combo-Anzeige nicht hängen bleiben.
+  // Eine länger gehaltene Taste verliert dann nur ihre Hervorhebung. timers ersetzt setTimeout in Tests.
+  const SPLIT_KEY_STALE_MS = 5000;
+  function createSplitKeyTracker(onStale, staleMs = SPLIT_KEY_STALE_MS, timers) {
+    const t = timers || { set: (fn, ms) => setTimeout(fn, ms), clear: id => clearTimeout(id) };
+    const held = new Map();
+    function release(id) {
+      if (!held.has(id)) return false;
+      t.clear(held.get(id));
+      held.delete(id);
+      return true;
+    }
+    function press(id) {
+      release(id);
+      held.set(id, t.set(() => {
+        held.delete(id);
+        onStale(id);
+      }, staleMs));
+    }
+    return { press, release, size: () => held.size };
+  }
+
   root.Dactyl = Object.assign(root.Dactyl || {}, {
+    parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil
   });
 })(typeof window !== "undefined" ? window : globalThis);

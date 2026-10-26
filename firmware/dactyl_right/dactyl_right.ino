@@ -463,13 +463,20 @@ static void onSplitApplied(const SplitHidEvent &ev) {
   Serial.printf("SPLIT_HID:{\"op\":%u,\"code\":%u,\"arg\":%d}\n", ev.op, ev.code, ev.arg);
 }
 
+// Matrix-Position der linken Hälfte für den Live-Monitor der App (nur USB-Serial, nie über BLE)
+static void onSplitKeyEvent(const SplitHidEvent &ev) {
+  Serial.printf("SPLIT_KEY:{\"r\":%u,\"c\":%u,\"pressed\":%d,\"layer\":%u}\n",
+    splitKeyEventRow(ev.code), splitKeyEventCol(ev.code), splitKeyEventPressed(ev.code) ? 1 : 0,
+    splitKeyEventLayer(ev.code));
+}
+
 // Ereignisse der linken Hälfte aus loop() ausführen (Logik: splitProcessRx in DactylSplitHid.h)
 void processSplitEvents() {
   if (!splitRxReady) return;
   unsigned long now = millis();
   bool hostReady = !isConfigMode && bleKeyboard.isConnected();
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
-                                     hostReady, now, onSplitApplied);
+                                     hostReady, now, onSplitApplied, onSplitKeyEvent);
   if (rep.applied) {
     lastActivityTime = now;
     exitStandby();

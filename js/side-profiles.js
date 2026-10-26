@@ -33,6 +33,11 @@
     return masterSide;
   }
 
+  // Hälfte, die ihre HID-Ereignisse per ESP-NOW an den Master sendet (erste Hälfte ohne master); null = keine
+  function getSplitSenderSide() {
+    return SIDE_IDS.find(id => id !== masterSide) || null;
+  }
+
   // Hälften in der Reihenfolge der Split-Ansicht (displayOrder: links = 0)
   function sidesInDisplayOrder() {
     return [...SIDE_IDS].sort((a, b) => SIDE_PROFILES[a].displayOrder - SIDE_PROFILES[b].displayOrder);
@@ -115,7 +120,7 @@
   }
 
   root.Dactyl = Object.assign(root.Dactyl || {}, {
-    NUM_ROWS, NUM_COLS, SIDE_PROFILES, SIDE_IDS, registerSideProfile, getMasterSide, sidesInDisplayOrder,
+    NUM_ROWS, NUM_COLS, SIDE_PROFILES, SIDE_IDS, registerSideProfile, getMasterSide, getSplitSenderSide, sidesInDisplayOrder,
     sideFromHandView, isPhysicalKey, isWiredSwitch, isConfigComboKey, sideFromBleName, sideFromDeviceInfo,
     absentKeyViolations
   });

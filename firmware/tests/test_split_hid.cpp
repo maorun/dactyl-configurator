@@ -74,6 +74,7 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_RELEASE, 7),
     makeSplitHidEvent(SPLIT_OP_MOUSE_CLICK, 4),
     makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, -1),
+    makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(5, 6, true, 7)),
   };
   // Alle Ops links -> Master; ACTIVITY ist die einzige Op der Rückrichtung
   assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 1);
@@ -94,6 +95,10 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, 0),
     makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 1, 1),
     makeSplitHidEvent(SPLIT_OP_ACTIVITY), // nur Master -> links, der Master führt sie nie aus
+    makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(6, 0, true, 0)), // Zeile 6 existiert nicht
+    makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(0, 7, true, 0)), // Spalte 7 existiert nicht
+    makeSplitHidEvent(SPLIT_OP_KEY_EVENT, 0x0008),                           // Bit außerhalb der Maske
+    makeSplitHidEvent(SPLIT_OP_KEY_EVENT, 0, 1),
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -404,6 +409,69 @@ TEST(test_process_rx_applies_events_when_host_ready) {
   assert((appliedCodes == std::vector<uint16_t>{'a'}));
   assert((k.log == Log{"P97"}));
   assert(hostWas && k.splitLeft.linkUp && k.splitLeft.lastRxMs == 100);
+}
+
+TEST(test_key_event_code_round_trip) {
+  uint16_t code = splitKeyEventCode(3, 5, true, 2);
+  assert(splitKeyEventRow(code) == 3 && splitKeyEventCol(code) == 5);
+  assert(splitKeyEventLayer(code) == 2 && splitKeyEventPressed(code));
+  code = splitKeyEventCode(5, 0, false, 0);
+  assert(code == 0x0050 && !splitKeyEventPressed(code));
+}
+
+static std::vector<uint16_t> keyEventCodes;
+static void recordKeyEvent(const SplitHidEvent &ev) { keyEventCodes.push_back(ev.code); }
+
+TEST(test_process_rx_reports_key_events_without_hid_effect) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  appliedCodes.clear();
+  keyEventCodes.clear();
+  uint16_t down = splitKeyEventCode(1, 2, true, 0);
+  uint16_t up = splitKeyEventCode(1, 2, false, 0);
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, down));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, up));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, recordApplied, recordKeyEvent);
+  // Nur das HID-Ereignis zählt als ausgeführt; das Matrix-Ereignis erzeugt keine HID-Ausgabe
+  assert(rep.applied == 1);
+  assert((appliedCodes == std::vector<uint16_t>{'a'}));
+  assert((keyEventCodes == std::vector<uint16_t>{down, up}));
+  assert((k.log == Log{"P97"}));
+}
+
+TEST(test_process_rx_reports_key_events_without_host) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  keyEventCodes.clear();
+  uint16_t down = splitKeyEventCode(0, 0, true, 1);
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, down));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 500, nullptr, recordKeyEvent);
+  // Diagnose läuft auch ohne Mac (z. B. beim Löten); der Link gilt als lebendig
+  assert(rep.applied == 0);
+  assert((keyEventCodes == std::vector<uint16_t>{down}));
+  assert(k.log.empty());
+  assert(k.splitLeft.linkUp && k.splitLeft.lastRxMs == 500);
+}
+
+TEST(test_process_rx_limits_key_events_per_call) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  appliedCodes.clear();
+  keyEventCodes.clear();
+  for (int i = 0; i < SPLIT_KEY_EVENTS_PER_RX + 4; i++) {
+    splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(0, 0, (i & 1) == 0, 0)));
+  }
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, recordApplied, recordKeyEvent);
+  // Überzählige Diagnose-Ereignisse entfallen; das HID-Ereignis dahinter läuft trotzdem
+  assert(keyEventCodes.size() == SPLIT_KEY_EVENTS_PER_RX);
+  assert(rep.applied == 1 && (k.log == Log{"P97"}));
+  SplitHidEvent out;
+  assert(!splitRxPop(rxq, out));
 }
 
 TEST(test_process_rx_without_host_keeps_link_but_sends_nothing) {

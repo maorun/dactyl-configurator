@@ -984,6 +984,29 @@ body {
   background: var(--bg-input);
 }
 
+/* Layout-Diff vor dem Sync */
+.sync-diff-hint {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.sync-diff-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  margin: 0;
+  padding-left: 1.2rem;
+  font-size: 0.9rem;
+}
+
+.sync-diff-device {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.sync-diff-local {
+  color: var(--primary);
+}
+
 /* Toast */
 .toast {
   position: fixed;

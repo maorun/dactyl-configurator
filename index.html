@@ -487,6 +487,25 @@
       </div>
     </div>
 
+    <!-- Modal: Layout-Diff vor dem Sync -->
+    <div class="modal-backdrop" id="syncDiffModal" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h4>Änderungen gegenüber dem Gerät</h4>
+          <button class="modal-close" id="btnCloseSyncDiff">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p id="syncDiffSummary"></p>
+          <p class="sync-diff-hint">Links steht die Belegung auf dem Gerät, rechts die neue Belegung. Combos und Tastenpaare werden ohne Vergleich übertragen.</p>
+          <ul id="syncDiffList" class="sync-diff-list"></ul>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCancelSyncDiff">Abbrechen</button>
+          <button class="btn btn-primary" id="btnConfirmSyncDiff">Übertragen</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Toast Notification -->
     <div class="toast" id="toastNotification"></div>
   </div>
@@ -499,17 +518,17 @@
   <script src="js/side-routing.js?v=1"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=2"></script>
-  <script src="js/config-model.js?v=2"></script>
+  <script src="js/config-model.js?v=3"></script>
   <script src="js/editor.js?v=3"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
-  <script src="js/editor-events.js?v=2"></script>
+  <script src="js/editor-events.js?v=3"></script>
   <script src="js/ble.js?v=1"></script>
-  <script src="js/serial.js?v=2"></script>
+  <script src="js/serial.js?v=3"></script>
   <script src="js/live-monitor.js?v=2"></script>
   <script src="js/heatmap.js?v=1"></script>
   <script src="js/matrix-test.js?v=1"></script>
   <script src="js/keyboard-hooks.js?v=3"></script>
-  <script src="js/config-sync.js?v=1"></script>
+  <script src="js/config-sync.js?v=2"></script>
   <script src="app.js?v=39"></script>
 </body>
 </html>

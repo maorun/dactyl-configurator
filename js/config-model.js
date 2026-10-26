@@ -329,3 +329,75 @@ function maxKeyCount(stats) {
   for (const n of Object.values(stats.counts)) if (n > max) max = n;
   return max;
 }
+
+// =============================================================================
+// Layout-Diff vor dem Sync (lokale Belegung gegen GET_CONFIG des Geräts)
+// =============================================================================
+// GET_CONFIG liefert Ebenen-Namen und Tasten (Tap, Halten, Doppel-Tipp), keine Combos und Tastenpaare.
+
+function createDeviceSnapshot() {
+  return { names: null, tap: [], hold: [], dtap: [] };
+}
+
+// Speichert eine Matrix aus GET_CONFIG als Zahlencodes. Gibt true zurück, wenn übernommen.
+function captureMatrixData(snapshot, field, data) {
+  if (!snapshot || !["tap", "hold", "dtap"].includes(field)) return false;
+  if (!data || !isValidIndex(data.l, NUM_LAYERS) || !Array.isArray(data.k)) return false;
+  const matrix = [];
+  for (let r = 0; r < NUM_ROWS; r++) {
+    const row = Array.isArray(data.k[r]) ? data.k[r] : [];
+    matrix.push([]);
+    for (let c = 0; c < NUM_COLS; c++) {
+      const code = row[c];
+      matrix[r].push(Number.isInteger(code) && code >= 0 && code <= 0xFFFF ? code : 0);
+    }
+  }
+  snapshot[field][data.l] = matrix;
+  return true;
+}
+
+function isDeviceSnapshotComplete(snapshot) {
+  if (!snapshot || !Array.isArray(snapshot.names)) return false;
+  for (let l = 0; l < NUM_LAYERS; l++) {
+    if (!snapshot.tap[l] || !snapshot.hold[l] || !snapshot.dtap[l]) return false;
+  }
+  return true;
+}
+
+// Gleiche Regel wie keyToNumericActions: Halten ohne Tap wirkt als Tap, Doppel-Tipp braucht einen Tap
+function normalizeDeviceActions(tapCode, holdCode, dtapCode) {
+  if (!tapCode) return { tapCode: holdCode || 0, holdCode: 0, dtapCode: 0 };
+  return { tapCode, holdCode: holdCode || 0, dtapCode: dtapCode || 0 };
+}
+
+// Unterschiede pro physischer Taste und pro Ebenen-Name. device/local = { tapCode, holdCode, dtapCode }.
+function diffKeymap(cfg, snapshot, profile) {
+  const keys = [];
+  const names = [];
+  for (let l = 0; l < NUM_LAYERS; l++) {
+    const layer = (cfg.layers && cfg.layers[l]) || [];
+    for (let r = 0; r < NUM_ROWS; r++) {
+      for (let c = 0; c < NUM_COLS; c++) {
+        if (!isPhysicalKey(r, c, profile)) continue;
+        const local = keyToNumericActions((layer[r] || [])[c]);
+        const device = normalizeDeviceActions(snapshot.tap[l][r][c], snapshot.hold[l][r][c], snapshot.dtap[l][r][c]);
+        if (local.tapCode !== device.tapCode || local.holdCode !== device.holdCode || local.dtapCode !== device.dtapCode) {
+          keys.push({ l, r, c, device, local });
+        }
+      }
+    }
+    const localName = sanitizeCommandText(cfg.layerNames && cfg.layerNames[l], DEFAULT_LAYER_NAMES[l]);
+    const deviceName = sanitizeCommandText(snapshot.names[l], DEFAULT_LAYER_NAMES[l]);
+    if (localName !== deviceName) names.push({ l, device: deviceName, local: localName });
+  }
+  return { keys, names };
+}
+
+// Kurztext einer Tastenbelegung, z. B. "A · Halten: LEFT_CTRL · 2×: B"
+function describeKeyActions(actions) {
+  if (!actions.tapCode) return "—";
+  let text = findDefinitionByCode(actions.tapCode).label;
+  if (actions.holdCode) text += ` · Halten: ${findDefinitionByCode(actions.holdCode).label}`;
+  if (actions.dtapCode) text += ` · 2×: ${findDefinitionByCode(actions.dtapCode).label}`;
+  return text;
+}

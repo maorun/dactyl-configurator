@@ -18,6 +18,11 @@ async function writeConfigToESP32(options = {}) {
     alert("Die Hälfte am USB-Port ist noch nicht erkannt (DEVICE_INFO fehlt). Bitte USB neu verbinden.");
     return;
   }
+  // Nach dem Layout-Diff nur die verglichene Hälfte übertragen
+  if (options && options.expectedSide && options.expectedSide !== side) {
+    showToast(`Verbindung zur ${SIDE_PROFILES[options.expectedSide].label} unterbrochen. Nichts übertragen.`, 6000);
+    return;
+  }
   const cfg = configFor(side);
   const profile = SIDE_PROFILES[side];
 
@@ -175,7 +180,164 @@ async function writeConfigToESP32(options = {}) {
   }
 }
 
+// =============================================================================
+// Layout-Diff vor dem manuellen Sync ("Auf ESP32 speichern")
+// =============================================================================
+// Liest die Gerätebelegung mit GET_CONFIG in einen Snapshot (die lokale Config bleibt unverändert) und zeigt
+// die Unterschiede pro Taste. Der One-Shot-Auto-Sync nach der Config-Combo überträgt ohne diesen Dialog.
+
+const DEVICE_SNAPSHOT_TIMEOUT_MS = 8000;
+// Nach einem Timeout verwirft die App späte GET_CONFIG-Zeilen dieser Hälfte noch so lange (oder bis CONFIG_SYNC_DONE)
+const DEVICE_SNAPSHOT_DRAIN_MS = 30000;
+// Laufende Abfrage: { side, snapshot, finish, stale }. Solange sie besteht, übernimmt handleSerialLine die Daten nicht.
+// stale = true: Abfrage abgelaufen, späte Zeilen werden nur noch verworfen.
+let deviceSnapshotRead = null;
+// Diff-Ablauf von "Auf ESP32 speichern" läuft (Abfrage, Dialog oder Rückfrage)
+let diffFlowActive = false;
+
+// Leitet GET_CONFIG-Zeilen der abgefragten Hälfte in den Snapshot um. Gibt true zurück, wenn verbraucht.
+function captureDeviceSnapshotLine(line, side) {
+  const read = deviceSnapshotRead;
+  if (!read || side !== read.side) return false;
+  const prefix = line.substring(0, line.indexOf(":") + 1);
+  const isDone = line.startsWith("CONFIG_SYNC_DONE");
+  if (read.stale) {
+    if (isDone) read.finish(null);
+    return isDone || prefix === "LAYER_NAMES:" || !!MATRIX_DATA_FIELDS[prefix];
+  }
+  if (prefix === "LAYER_NAMES:") {
+    try {
+      const names = JSON.parse(line.substring(12));
+      if (Array.isArray(names)) read.snapshot.names = names.slice(0, NUM_LAYERS);
+    } catch (_) {}
+    return true;
+  }
+  if (MATRIX_DATA_FIELDS[prefix]) {
+    try {
+      captureMatrixData(read.snapshot, MATRIX_DATA_FIELDS[prefix], JSON.parse(line.substring(prefix.length)));
+    } catch (_) {}
+    return true;
+  }
+  if (isDone) {
+    read.finish(isDeviceSnapshotComplete(read.snapshot) ? read.snapshot : null);
+    return true;
+  }
+  return false;
+}
+
+// Liest die Belegung der verbundenen Hälfte. Rückgabe: Snapshot oder null (Timeout, Sendefehler, unvollständig).
+async function readDeviceSnapshot(side) {
+  if (deviceSnapshotRead) return null;
+  let timer = null;
+  let read = null;
+  const result = new Promise(resolve => {
+    read = {
+      side,
+      snapshot: createDeviceSnapshot(),
+      stale: false,
+      // Ergebnis liefern und Abfrage beenden
+      finish: (snap) => {
+        clearTimeout(timer);
+        if (deviceSnapshotRead === read) deviceSnapshotRead = null;
+        resolve(snap);
+      }
+    };
+    deviceSnapshotRead = read;
+    // Timeout: Ergebnis null, aber späte Zeilen bis CONFIG_SYNC_DONE oder DEVICE_SNAPSHOT_DRAIN_MS weiter verwerfen
+    timer = setTimeout(() => {
+      if (deviceSnapshotRead !== read) return;
+      read.stale = true;
+      resolve(null);
+      timer = setTimeout(() => read.finish(null), DEVICE_SNAPSHOT_DRAIN_MS);
+    }, DEVICE_SNAPSHOT_TIMEOUT_MS);
+  });
+  if (!(await sendDeviceCommand("GET_CONFIG", side))) read.finish(null);
+  return result;
+}
+
+// Zeigt den Diff im Dialog. Rückgabe: true = übertragen, false = abbrechen.
+function showSyncDiffDialog(profile, diff) {
+  const modal = document.getElementById("syncDiffModal");
+  const summary = document.getElementById("syncDiffSummary");
+  const list = document.getElementById("syncDiffList");
+  const btnConfirm = document.getElementById("btnConfirmSyncDiff");
+  const btnCancel = document.getElementById("btnCancelSyncDiff");
+  const btnClose = document.getElementById("btnCloseSyncDiff");
+  if (!modal || !summary || !list || !btnConfirm || !btnCancel || !btnClose) return Promise.resolve(true);
+
+  const total = diff.keys.length + diff.names.length;
+  summary.textContent = total === 0
+    ? `Tasten und Ebenen-Namen der ${profile.label} sind auf dem Gerät gleich.`
+    : `${diff.keys.length} Taste(n) und ${diff.names.length} Ebenen-Name(n) der ${profile.label} ändern sich.`;
+  list.replaceChildren();
+  const addRow = (where, before, after) => {
+    const li = document.createElement("li");
+    const pos = document.createElement("strong");
+    pos.textContent = where;
+    const from = document.createElement("span");
+    from.className = "sync-diff-device";
+    from.textContent = before;
+    const to = document.createElement("span");
+    to.className = "sync-diff-local";
+    to.textContent = after;
+    li.append(pos, " ", from, " → ", to);
+    list.appendChild(li);
+  };
+  for (const n of diff.names) addRow(`Name Ebene ${n.l}:`, n.device, n.local);
+  for (const k of diff.keys) addRow(`Ebene ${k.l} R${k.r}C${k.c}:`, describeKeyActions(k.device), describeKeyActions(k.local));
+  list.style.display = total === 0 ? "none" : "";
+
+  modal.style.display = "flex";
+  return new Promise(resolve => {
+    const done = (ok) => {
+      modal.style.display = "none";
+      btnConfirm.removeEventListener("click", onConfirm);
+      btnCancel.removeEventListener("click", onCancel);
+      btnClose.removeEventListener("click", onCancel);
+      resolve(ok);
+    };
+    const onConfirm = () => done(true);
+    const onCancel = () => done(false);
+    btnConfirm.addEventListener("click", onConfirm);
+    btnCancel.addEventListener("click", onCancel);
+    btnClose.addEventListener("click", onCancel);
+  });
+}
+
+// "Auf ESP32 speichern": zuerst Diff zeigen, dann übertragen
+async function writeConfigWithDiff() {
+  if (isAutoSyncing || deviceSnapshotRead || diffFlowActive) return;
+  const side = connectedSide();
+  if (!side) return writeConfigToESP32({ autoDisconnectAfter: false });
+  const profile = SIDE_PROFILES[side];
+
+  diffFlowActive = true;
+  let confirmed = false;
+  try {
+    showToast(`🔍 Lese Belegung der ${profile.label} für den Vergleich...`);
+    const snapshot = await readDeviceSnapshot(side);
+    if (connectedSide() !== side) {
+      showToast(`Verbindung zur ${profile.label} unterbrochen. Nichts übertragen.`, 6000);
+      return;
+    }
+    if (!snapshot) {
+      confirmed = confirm(`Die Belegung der ${profile.label} konnte nicht gelesen werden. Ohne Vergleich übertragen?`);
+    } else {
+      confirmed = await showSyncDiffDialog(profile, diffKeymap(configFor(side), snapshot, profile));
+      if (!confirmed) showToast("Übertragung abgebrochen. Die Änderungen bleiben vorgemerkt.");
+    }
+  } finally {
+    diffFlowActive = false;
+  }
+  if (confirmed) return writeConfigToESP32({ autoDisconnectAfter: false, expectedSide: side });
+}
+
 async function readConfigFromESP32() {
+  // Während des Diffs würden die GET_CONFIG-Zeilen den Snapshot verfälschen oder den Vergleich veralten lassen
+  if (diffFlowActive || deviceSnapshotRead) {
+    showToast("Der Vergleich vor dem Speichern läuft noch. Bitte danach erneut laden.");
+    return;
+  }
   if (bleConfigChar) {
     await sendBleCommand("GET_CONFIG");
     showToast("Konfigurations-Anfrage per Bluetooth an ESP32 gesendet...");

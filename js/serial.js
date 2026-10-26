@@ -230,6 +230,8 @@ function handleSerialLine(line, side = null, transport = "ble") {
 
   // Bestätigungen/Fehler zuerst an wartende Sync-Schritte weiterreichen
   resolveAcksForLine(line, side);
+  // GET_CONFIG für den Layout-Diff: Gerätedaten nicht in die lokale Config übernehmen (js/config-sync.js)
+  if (captureDeviceSnapshotLine(line, side)) return;
   if (line.startsWith("ERR ")) {
     console.warn("[ESP32 ERR]", line);
     if (!isAutoSyncing) showToast(`⚠️ Tastatur meldet Fehler: ${line}`, 6000);

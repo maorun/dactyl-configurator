@@ -38,6 +38,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell,
+             createDeviceSnapshot, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
              removeKeyPairAt, KEYCODES, UMLAUT_LABELS, holdSublabel,
@@ -54,6 +55,8 @@ function test(name, fn) {
   passed++;
   console.log(`[       OK ] ${name}`);
 }
+// Async-Tests laufen am Ende nacheinander; ein Fehler beendet den Lauf mit Exit-Code 1
+const asyncTests = [];
 
 test("Mod-Tap: Tap und Hold werden als Zahlencodes gesendet", () => {
   assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_SPACE", hold: "MOD_LCTRL" }) }, { tapCode: 32, holdCode: 0x80, dtapCode: 0 });
@@ -450,6 +453,228 @@ test("Doppel-Tipp: GET_CONFIG-Matrizen setzen Tap, Halten und Doppel-Tipp", () =
   api.applyMatrixData(layers, "dtap", { l: 1, k: [[70000, -1, 1.5]] });
   assert.strictEqual(layers[1][0][0].dtap, "NONE");
 });
+
+// Snapshot, der genau der lokalen Belegung entspricht (wie GET_CONFIG nach einem Sync)
+function snapshotOf(cfg) {
+  const snap = api.createDeviceSnapshot();
+  snap.names = cfg.layerNames.slice();
+  for (let l = 0; l < 8; l++) {
+    const m = { tap: [], hold: [], dtap: [] };
+    for (let r = 0; r < 6; r++) {
+      for (const f of ["tap", "hold", "dtap"]) m[f].push([]);
+      for (let c = 0; c < 7; c++) {
+        const a = api.keyToNumericActions((cfg.layers[l] || [])[r]?.[c]);
+        m.tap[r].push(a.tapCode); m.hold[r].push(a.holdCode); m.dtap[r].push(a.dtapCode);
+      }
+    }
+    for (const f of ["tap", "hold", "dtap"]) assert.ok(api.captureMatrixData(snap, f, { l, k: m[f] }));
+  }
+  return snap;
+}
+
+test("Layout-Diff: gleiche Belegung ergibt keinen Unterschied", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap = snapshotOf(cfg);
+  assert.ok(api.isDeviceSnapshotComplete(snap));
+  const diff = api.diffKeymap(cfg, snap, R);
+  assert.strictEqual(diff.keys.length, 0);
+  assert.strictEqual(diff.names.length, 0);
+});
+
+test("Layout-Diff: geänderte Taste und Ebenen-Name erscheinen mit Geräte- und Neuwert", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap = snapshotOf(cfg);
+  cfg.layers[2][1][3] = { label: "J", tap: "KEY_J", hold: "KEY_LEFT_CTRL", dtap: "KEY_ESC" };
+  cfg.layerNames[4] = "Neu";
+  const diff = api.diffKeymap(cfg, snap, R);
+  assert.strictEqual(diff.keys.length, 1);
+  const k = diff.keys[0];
+  assert.deepStrictEqual([k.l, k.r, k.c], [2, 1, 3]);
+  assert.deepStrictEqual({ ...k.local }, { tapCode: 106, holdCode: 0x80, dtapCode: 0xB1 });
+  assert.strictEqual(api.describeKeyActions(k.local), "J · Halten: LEFT_CTRL · 2×: ESC");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(diff.names)), [{ l: 4, device: snap.names[4], local: "Neu" }]);
+  assert.notStrictEqual(snap.names[4], "Neu");
+  assert.strictEqual(api.describeKeyActions({ tapCode: 0, holdCode: 0, dtapCode: 0 }), "—");
+});
+
+test("Layout-Diff: Halten ohne Tap auf dem Gerät gleicht einer normalen Taste", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap = snapshotOf(cfg);
+  cfg.layers[0][0][1] = { label: "Ctrl", tap: "NONE", hold: "KEY_LEFT_CTRL", dtap: "NONE" };
+  // Gerät meldet Tap 0 und Halten Ctrl: wirkt wie Tap Ctrl, kein Unterschied
+  snap.tap[0][0][1] = 0; snap.hold[0][0][1] = 0x80; snap.dtap[0][0][1] = 0;
+  assert.strictEqual(api.diffKeymap(cfg, snap, R).keys.length, 0);
+});
+
+test("Layout-Diff: nicht vorhandene Tasten zählen nicht, unvollständige Snapshots werden erkannt", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap = snapshotOf(cfg);
+  snap.tap[0][4][0] = 97; // R4C0 fehlt rechts physisch
+  assert.strictEqual(api.diffKeymap(cfg, snap, R).keys.length, 0);
+  const partial = api.createDeviceSnapshot();
+  partial.names = cfg.layerNames.slice();
+  assert.strictEqual(api.isDeviceSnapshotComplete(partial), false);
+  assert.strictEqual(api.captureMatrixData(partial, "names", { l: 0, k: [] }), false);
+  assert.strictEqual(api.captureMatrixData(partial, "tap", { l: 8, k: [] }), false);
+  api.captureMatrixData(partial, "tap", { l: 0, k: [[70000, -1, 1.5, 97]] });
+  assert.deepStrictEqual([...partial.tap[0][0]], [0, 0, 0, 97, 0, 0, 0]);
+});
+
+test("Layout-Diff: serial.js leitet GET_CONFIG-Zeilen vor der Übernahme in den Snapshot um", () => {
+  const src = read("js/serial.js");
+  const capture = src.indexOf("captureDeviceSnapshotLine(line, side)");
+  assert.ok(capture > 0 && capture < src.indexOf('line.startsWith("LAYER_DATA:")'));
+  assert.ok(capture < src.indexOf('line.startsWith("LAYER_NAMES:")'));
+  assert.ok(capture < src.indexOf('line.startsWith("CONFIG_SYNC_DONE")'));
+});
+
+// Diff-Ablauf aus js/config-sync.js mit Fake-Timern, Fake-Gerät und Fake-Dialog
+function diffFlowHarness() {
+  const timers = [];
+  const calls = { sent: [], writes: 0, dialogs: [], confirms: 0, toasts: [] };
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const h = {
+    NUM_LAYERS: 8, MATRIX_DATA_FIELDS: api.MATRIX_DATA_FIELDS, captureMatrixData: api.captureMatrixData,
+    isDeviceSnapshotComplete: api.isDeviceSnapshotComplete, createDeviceSnapshot: api.createDeviceSnapshot,
+    diffKeymap: api.diffKeymap, SIDE_PROFILES: api.SIDE_PROFILES, isAutoSyncing: false,
+    side: "R", sendOk: true, confirmAnswer: false, dialogAnswer: null,
+    setTimeout: (fn, ms) => { timers.push({ fn, ms, done: false }); return timers.length - 1; },
+    clearTimeout: (id) => { if (timers[id]) timers[id].done = true; },
+    showToast: (t) => calls.toasts.push(t), configFor: () => cfg
+  };
+  vm.createContext(h);
+  vm.runInContext(`${section("js/config-sync.js", "const DEVICE_SNAPSHOT_TIMEOUT_MS", "// Zeigt den Diff im Dialog")}
+    ${section("js/config-sync.js", '// "Auf ESP32 speichern": zuerst', "  if (bleConfigChar) {")}
+    }
+    this.capture = captureDeviceSnapshotLine; this.write = writeConfigWithDiff; this.load = readConfigFromESP32;
+    this.state = () => ({ read: deviceSnapshotRead, active: diffFlowActive });`, h);
+  h.bleConfigChar = null; h.serialPort = null;
+  h.connectedSide = () => h.side;
+  h.sendDeviceCommand = async (cmd, side) => { calls.sent.push(`${side}:${cmd}`); return h.sendOk; };
+  h.writeConfigToESP32 = async (opts) => { calls.writes++; calls.lastWrite = opts; };
+  h.confirm = () => { calls.confirms++; return h.confirmAnswer; };
+  h.showSyncDiffDialog = (profile, diff) => { calls.dialogs.push(diff); return new Promise(r => { h.dialogAnswer = r; }); };
+  h.alert = () => {};
+  const fire = (ms) => { const t = timers.find(x => !x.done && x.ms === ms); assert.ok(t, `kein Timer ${ms}`); t.done = true; t.fn(); };
+  const flush = () => new Promise(r => setImmediate(r));
+  const sendDevice = (side, c) => {
+    h.capture(`LAYER_NAMES:${JSON.stringify(c.layerNames)}`, side);
+    for (let l = 0; l < 8; l++) {
+      const m = { tap: [], hold: [], dtap: [] };
+      for (let r = 0; r < 6; r++) {
+        for (const f of ["tap", "hold", "dtap"]) m[f].push([]);
+        for (let col = 0; col < 7; col++) {
+          const a = api.keyToNumericActions(c.layers[l][r][col]);
+          m.tap[r].push(a.tapCode); m.hold[r].push(a.holdCode); m.dtap[r].push(a.dtapCode);
+        }
+      }
+      for (const [p, f] of Object.entries(api.MATRIX_DATA_FIELDS)) h.capture(`${p}${JSON.stringify({ l, k: m[f] })}`, side);
+    }
+    return h.capture("CONFIG_SYNC_DONE", side);
+  };
+  return { h, calls, cfg, fire, flush, sendDevice };
+}
+
+asyncTests.push(["Layout-Diff: Bestätigen überträgt, Abbrechen nicht; Zeilen der anderen Hälfte zählen nicht", async () => {
+  const { h, calls, cfg, flush, sendDevice } = diffFlowHarness();
+  const run = h.write();
+  await flush();
+  assert.deepStrictEqual(calls.sent, ["R:GET_CONFIG"]);
+  // Zeilen der linken Hälfte verbraucht die Abfrage nicht
+  assert.strictEqual(h.capture('LAYER_DATA:{"l":0,"k":[[97]]}', "L"), false);
+  const device = JSON.parse(JSON.stringify(cfg));
+  device.layerNames[3] = "Alt";
+  assert.ok(sendDevice("R", device));
+  await flush();
+  assert.strictEqual(calls.dialogs.length, 1);
+  assert.strictEqual(calls.dialogs[0].names.length, 1);
+  assert.strictEqual(calls.dialogs[0].names[0].device, "Alt");
+  // Zweiter Klick und "Vom ESP32 laden" während des offenen Dialogs: kein zweiter Ablauf, kein GET_CONFIG
+  await h.write();
+  await h.load();
+  assert.strictEqual(calls.sent.length, 1);
+  assert.strictEqual(calls.dialogs.length, 1);
+  h.dialogAnswer(true);
+  await run;
+  assert.strictEqual(calls.writes, 1);
+  // Der Sync überträgt nur die verglichene Hälfte
+  assert.strictEqual(calls.lastWrite.expectedSide, "R");
+  assert.strictEqual(calls.lastWrite.autoDisconnectAfter, false);
+  assert.strictEqual(h.state().active, false);
+  // Abbrechen
+  const run2 = h.write();
+  await flush();
+  sendDevice("R", device);
+  await flush();
+  h.dialogAnswer(false);
+  await run2;
+  assert.strictEqual(calls.writes, 1);
+}]);
+
+asyncTests.push(["Layout-Diff: späte Zeilen nach dem Timeout ändern die lokale Config nicht", async () => {
+  const { h, calls, cfg, fire, flush, sendDevice } = diffFlowHarness();
+  h.confirmAnswer = false;
+  const run = h.write();
+  await flush();
+  fire(8000);
+  await run;
+  assert.strictEqual(calls.confirms, 1);
+  assert.strictEqual(calls.writes, 0);
+  // Die Antwort kommt zu spät: alle GET_CONFIG-Zeilen werden verworfen, CONFIG_SYNC_DONE beendet das Verwerfen
+  assert.ok(h.state().read && h.state().read.stale);
+  assert.strictEqual(sendDevice("R", cfg), true);
+  assert.strictEqual(h.state().read, null);
+  assert.strictEqual(h.capture("CONFIG_SYNC_DONE", "R"), false);
+  // Ohne Antwort endet das Verwerfen nach der Drain-Zeit
+  const run2 = h.write();
+  await flush();
+  fire(8000);
+  await run2;
+  fire(30000);
+  assert.strictEqual(h.state().read, null);
+  // Rückfrage bejaht: ohne Vergleich übertragen
+  h.confirmAnswer = true;
+  const run3 = h.write();
+  await flush();
+  fire(8000);
+  await run3;
+  assert.strictEqual(calls.writes, 1);
+}]);
+
+asyncTests.push(["Layout-Diff: writeConfigToESP32 überträgt nach einem Hälftenwechsel nichts", async () => {
+  const toasts = [];
+  let progressShown = false;
+  const w = {
+    bleConfigChar: {}, serialPort: null, isAutoSyncing: false, SIDE_PROFILES: api.SIDE_PROFILES,
+    connectedSide: () => "L", showToast: (t) => toasts.push(t), alert: () => {},
+    activeProfile: () => R, configFor: () => { throw new Error("configFor darf nicht laufen"); },
+    document: { getElementById: () => { progressShown = true; return null; } }
+  };
+  vm.createContext(w);
+  vm.runInContext(`${section("js/config-sync.js", "async function writeConfigToESP32", "  const cfg = configFor(side);")}
+    }
+    this.write = writeConfigToESP32;`, w);
+  await w.write({ autoDisconnectAfter: false, expectedSide: "R" });
+  assert.strictEqual(progressShown, false);
+  assert.ok(toasts.some(t => t.includes(R.label)));
+}]);
+
+asyncTests.push(["Layout-Diff: Sendefehler und Verbindungswechsel übertragen nichts ohne Rückfrage", async () => {
+  const { h, calls, flush } = diffFlowHarness();
+  h.sendOk = false;
+  await h.write();
+  assert.strictEqual(calls.confirms, 1);
+  assert.strictEqual(h.state().read, null);
+  // Verbindung wechselt während der Abfrage zur anderen Hälfte
+  h.sendOk = true;
+  const run = h.write();
+  await flush();
+  h.side = "L";
+  h.capture("CONFIG_SYNC_DONE", "R");
+  await run;
+  assert.strictEqual(calls.writes, 0);
+  assert.strictEqual(calls.confirms, 1);
+}]);
 
 // Zeichen, die dactylAsciiToHid (DactylKeycodes.h) in einen HID-Code übersetzt
 const asciiHeader = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylKeycodes.h"), "utf8");
@@ -862,4 +1087,14 @@ test("Ansichtswechsel prüft den Combo-Hinweis neu", () => {
   assert.ok(/checkActiveCombos\(\)/.test(handler));
 });
 
-console.log(`\n${passed} App-Logik-Tests bestanden.`);
+(async () => {
+  for (const [name, fn] of asyncTests) {
+    await fn();
+    passed++;
+    console.log(`[       OK ] ${name}`);
+  }
+  console.log(`\n${passed} App-Logik-Tests bestanden.`);
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

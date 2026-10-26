@@ -271,7 +271,7 @@ function setupEventListeners() {
   });
 
   const btnWrite = document.getElementById("btnWriteConfig");
-  if (btnWrite) btnWrite.addEventListener("click", () => writeConfigToESP32({ autoDisconnectAfter: false }));
+  if (btnWrite) btnWrite.addEventListener("click", writeConfigWithDiff);
   const btnRead = document.getElementById("btnReadConfig");
   if (btnRead) btnRead.addEventListener("click", readConfigFromESP32);
 

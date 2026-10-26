@@ -71,6 +71,7 @@ const int NUM_COLS = LEFT_NUM_COLS;
 String deviceName = DEFAULT_DEVICE_NAME;
 uint8_t debounceMs = 5;
 uint16_t comboTimeoutMs = 40;
+uint16_t tappingTermMs = 200;
 uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, gedrosselter Scan)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
 // [[[END_SETTINGS]]]

@@ -391,6 +391,12 @@
         </div>
 
         <div class="form-group">
+          <label for="tappingTermInput">Tapping-Term (Millisekunden für Halten und Doppel-Tipp):</label>
+          <input type="number" id="tappingTermInput" class="form-control" value="200" min="100" max="500">
+          <small class="form-hint">Längeres Halten löst die Halte-Aktion aus. Ein zweiter Tipp innerhalb dieser Zeit löst die Doppel-Tipp-Aktion aus.</small>
+        </div>
+
+        <div class="form-group">
           <label for="standbyTimeoutSelect">Stufe 1: Standby-Timeout (Light Sleep, Verbindung bleibt aktiv):</label>
           <select id="standbyTimeoutSelect" class="form-control">
             <option value="1">1 Minute</option>

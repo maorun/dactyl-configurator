@@ -62,6 +62,7 @@ static unsigned long lastActivityTime = 0;
 static String deviceName = "Dactyl Keyboard";
 static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
+static uint16_t tappingTermMs = 200;
 static uint32_t standbyTimeoutMinutes = 5;
 static uint32_t deepSleepTimeoutMinutes = 60;
 
@@ -143,6 +144,7 @@ void resetState() {
   for (int i = 0; i < MAX_KEY_PAIRS; i++) userKeyPairs[i] = { 0, 0 };
   // Globale Settings und NVS-Mock zurücksetzen, damit Tests unabhängig von ihrer Reihenfolge sind
   comboTimeoutMs = 40;
+  tappingTermMs = 200;
   debounceMs = 5;
   standbyTimeoutMinutes = 5;
   deepSleepTimeoutMinutes = 60;
@@ -1935,6 +1937,60 @@ TEST(test_umlaut_as_double_tap_and_forced_hold) {
   keyState[2][3] = false; onMatrixKeyChange(2, 3, false);
   assert(bleKeyboard.pressHistory == expected);       // kein Tap 'l', keine zweite Folge
   assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Konfigurierbarer Tapping-Term: SET_TAPPING_TERM, NVS, GET_INFO, Mod-Tap und Doppel-Tipp
+// -----------------------------------------------------------------------------
+TEST(test_configurable_tapping_term) {
+  resetState();
+  handleConfigCommand("SET_TAPPING_TERM 99", false);
+  assert(mockChar.value == "ERR ARGS SET_TAPPING_TERM 99");
+  handleConfigCommand("SET_TAPPING_TERM 501", false);
+  assert(mockChar.value == "ERR ARGS SET_TAPPING_TERM 501");
+  assert(tappingTermMs == 200);
+
+  handleConfigCommand("SET_TAPPING_TERM 300", false);
+  assert(mockChar.value == "OK SET_TAPPING_TERM 300");
+  assert(tappingTermMs == 300);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"tapping_term_ms\":300") != std::string::npos);
+
+  // Neustart simulieren: der gespeicherte Wert überschreibt den einkompilierten
+  tappingTermMs = 200;
+  loadKeymapFromNVS();
+  assert(tappingTermMs == 300);
+
+  // Mod-Tap: Halten über 200 ms bleibt bei 300 ms noch unentschieden, Loslassen sendet den Tap
+  handleConfigCommand("SET_K 0 5 3 32 128", false); // Tap = Space, Hold = Left Ctrl
+  bleKeyboard.pressHistory.clear();
+  setMillis(1000);
+  keyState[5][3] = true;
+  onMatrixKeyChange(5, 3, true);
+  setMillis(1250);
+  processDeferredKeys(millis());
+  assert(bleKeyboard.pressHistory.empty());
+  keyState[5][3] = false;
+  onMatrixKeyChange(5, 3, false);
+  assert(countPresses(' ') == 1);
+  assert(countPresses(KEY_LEFT_CTRL) == 0);
+  // Ab 300 ms entscheidet die Taste als Hold
+  setMillis(2000);
+  keyState[5][3] = true;
+  onMatrixKeyChange(5, 3, true);
+  setMillis(2300);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 1);
+  keyState[5][3] = false;
+  onMatrixKeyChange(5, 3, false);
+
+  // Doppel-Tipp: zweiter Tipp nach 250 ms liegt im 300-ms-Fenster
+  handleConfigCommand("SET_K 0 2 1 106 0 177", false); // J: Tap = j, Doppel-Tipp = Esc
+  bleKeyboard.pressHistory.clear();
+  tapKeyAt(2, 1, 3000, 3050);
+  tapKeyAt(2, 1, 3300, 3350);
+  assert(countPresses(KEY_ESC) == 1);
+  assert(countPresses('j') == 0);
 }
 
 int main() {

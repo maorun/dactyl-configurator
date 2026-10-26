@@ -16,7 +16,7 @@
  *   keyPressTime[][], keySentToHost[][],
  *   isConfigMode, enterConfigRequested, exitConfigRequested, lastActivityTime,
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
- *   deviceName, debounceMs, comboTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -41,10 +41,12 @@
 #define DEVICE_SIDE "R"
 #endif
 
-// Maximale Haltezeit für ein Tap bei Mod-Tap-Tasten (Tap-Aktion + Halte-Aktion)
+// Standardwert des Tapping-Terms (Mod-Tap und Tap-Dance) ohne NVS-Eintrag; zur Laufzeit gilt tappingTermMs
 #ifndef TAPPING_TERM_MS
 #define TAPPING_TERM_MS 200
 #endif
+#define TAPPING_TERM_MIN_MS 100
+#define TAPPING_TERM_MAX_MS 500
 
 // -----------------------------------------------------------------------------
 // Layer-Auflösung
@@ -496,7 +498,7 @@ void flushDoubleTapsExcept(uint8_t exceptR, uint8_t exceptC) {
 void doubleTapTick(unsigned long now) {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      if (doubleTap[r][c].waiting && (unsigned long)(now - doubleTap[r][c].releaseTime) >= TAPPING_TERM_MS) {
+      if (doubleTap[r][c].waiting && (unsigned long)(now - doubleTap[r][c].releaseTime) >= tappingTermMs) {
         flushDoubleTap(r, c);
       }
     }
@@ -602,8 +604,8 @@ void resolvePendingTapHoldsAsHold(uint8_t exceptR, uint8_t exceptC) {
 bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct = 0) {
   TapHoldKey &k = tapHold[r][c];
   // Release wird vor dem Tick verarbeitet: Tapping-Term hier erneut prüfen,
-  // sonst würde ein Halten über TAPPING_TERM_MS noch als Tap gewertet.
-  if (k.pending && (unsigned long)(now - k.pressTime) >= TAPPING_TERM_MS) {
+  // sonst würde ein Halten über tappingTermMs noch als Tap gewertet.
+  if (k.pending && (unsigned long)(now - k.pressTime) >= tappingTermMs) {
     activateTapHoldAsHold(r, c);
   }
   if (k.pending) {
@@ -627,7 +629,7 @@ bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct 
 void tapHoldTick(unsigned long now) {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      if (tapHold[r][c].pending && (unsigned long)(now - tapHold[r][c].pressTime) >= TAPPING_TERM_MS) {
+      if (tapHold[r][c].pending && (unsigned long)(now - tapHold[r][c].pressTime) >= tappingTermMs) {
         activateTapHoldAsHold(r, c);
       }
     }
@@ -643,7 +645,7 @@ void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
     // Wartende Einzel-Tipps anderer Tasten zuerst senden, damit die Reihenfolge der Zeichen stimmt
     flushDoubleTapsExcept(r, c);
     DoubleTapKey &d = doubleTap[r][c];
-    bool isSecondTap = d.waiting && (unsigned long)(now - d.releaseTime) < TAPPING_TERM_MS;
+    bool isSecondTap = d.waiting && (unsigned long)(now - d.releaseTime) < tappingTermMs;
     // Fenster abgelaufen, aber noch kein Tick: ersten Tipp vor dem neuen Anschlag nachholen
     if (!isSecondTap) flushDoubleTap(r, c);
     keyPressTime[r][c] = now;
@@ -845,6 +847,10 @@ void loadKeymapFromNVS() {
   if (preferences.isKey("combo_to")) {
     comboTimeoutMs = preferences.getUShort("combo_to", 40);
   }
+  if (preferences.isKey("tap_term")) {
+    uint16_t tt = preferences.getUShort("tap_term", TAPPING_TERM_MS);
+    if (tt >= TAPPING_TERM_MIN_MS && tt <= TAPPING_TERM_MAX_MS) tappingTermMs = tt;
+  }
   // Tastenpaare: gespeicherte Liste (auch leer nach CLEAR_PAIRS + SAVE_PAIRS) überschreibt die einkompilierte
   if (preferences.isKey("num_pairs")) {
     uint8_t n = preferences.getUChar("num_pairs", 0);
@@ -876,8 +882,8 @@ void loadKeymapFromNVS() {
       }
     }
   }
-  Serial.printf("NVS: Timeouts & Settings geladen: Standby=%u Min, DeepSleep=%u Min, Debounce=%u ms, ComboTO=%u ms, Name='%s'\n",
-    standbyTimeoutMinutes, deepSleepTimeoutMinutes, debounceMs, comboTimeoutMs, deviceName.c_str());
+  Serial.printf("NVS: Timeouts & Settings geladen: Standby=%u Min, DeepSleep=%u Min, Debounce=%u ms, ComboTO=%u ms, TappingTerm=%u ms, Name='%s'\n",
+    standbyTimeoutMinutes, deepSleepTimeoutMinutes, debounceMs, comboTimeoutMs, tappingTermMs, deviceName.c_str());
   preferences.end();
 }
 
@@ -923,6 +929,15 @@ bool saveComboTimeoutToNVS(uint16_t ms) {
   preferences.end();
   if (ok) comboTimeoutMs = ms;
   Serial.printf("NVS: Combo-Timeout %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
+  return ok;
+}
+
+bool saveTappingTermToNVS(uint16_t ms) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUShort("tap_term", ms) > 0;
+  preferences.end();
+  if (ok) tappingTermMs = ms;
+  Serial.printf("NVS: Tapping-Term %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
   return ok;
 }
 
@@ -1119,6 +1134,13 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_TAPPING_TERM ")) {
+    int tt = cmd.substring(17).toInt();
+    if (tt >= TAPPING_TERM_MIN_MS && tt <= TAPPING_TERM_MAX_MS) {
+      sendConfigNotification(saveTappingTermToNVS((uint16_t)tt) ? "OK SET_TAPPING_TERM " + String(tt) : String("ERR NVS SET_TAPPING_TERM"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd == "CLEAR_COMBOS") {
     numCombos = 0;
     sendConfigNotification("OK CLEAR_COMBOS");
@@ -1183,11 +1205,11 @@ void handleConfigCommand(String cmd, bool fromBle) {
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
     char buf[288];
-    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"config_mode\":%s}",
+    snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"config_mode\":%s}",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(),
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
-      (unsigned)debounceMs, (unsigned)comboTimeoutMs,
+      (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
       isConfigMode ? "true" : "false");
     sendConfigNotification(String(buf));
   } else if (cmd == "RESET_CONFIG") {

@@ -3,6 +3,7 @@
     "deviceName": "Dactyl Links",
     "debounceMs": 5,
     "comboTimeoutMs": 40,
+    "tappingTermMs": 200,
     "standbyTimeoutMinutes": 5,
     "sleepTimeoutMinutes": 60
   },

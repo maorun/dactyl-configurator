@@ -66,6 +66,7 @@ class TestServerAndCodegen(unittest.TestCase):
             "deviceName": "Test Dactyl",
             "debounceMs": 8,
             "comboTimeoutMs": 65,
+            "tappingTermMs": 250,
             "standbyTimeoutMinutes": 15,
             "sleepTimeoutMinutes": 90
         }
@@ -73,6 +74,10 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn('String deviceName = "Test Dactyl";', cpp)
         self.assertIn("uint8_t debounceMs = 8;", cpp)
         self.assertIn("uint16_t comboTimeoutMs = 65;", cpp)
+        self.assertIn("uint16_t tappingTermMs = 250;", cpp)
+        self.assertIn("uint16_t tappingTermMs = 200;", server.generate_settings_cpp({}))
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"tappingTermMs": 99})
         self.assertIn("uint32_t standbyTimeoutMinutes = 15;", cpp)
         self.assertIn("uint32_t deepSleepTimeoutMinutes = 90;", cpp)
 

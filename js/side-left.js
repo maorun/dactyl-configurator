@@ -71,7 +71,8 @@
       settings: { deviceName: "Dactyl Links", debounceMs: 5, comboTimeoutMs: 40, standbyTimeoutMinutes: 5, sleepTimeoutMinutes: 60 },
       layers: leftDefaultLayers(),
       combos: [],
-      keyPairs: []
+      keyPairs: [],
+      macros: []
     }
   });
 })(typeof window !== "undefined" ? window : globalThis);

@@ -178,6 +178,17 @@ test("default_config_left.json entspricht der linken Standard-Belegung im Profil
   assert.strictEqual(file.settings.deviceName, L.deviceName);
 });
 
+test("Makros: Repository-Firmware beider Hälften hat leere Makros wie die Default-Configs", () => {
+  for (const [ino, json] of [["firmware/dactyl_left/dactyl_left.ino", "default_config_left.json"],
+                             ["firmware/dactyl_right/dactyl_right.ino", "default_config.json"]]) {
+    const block = /\/\/ \[\[\[START_MACROS\]\]\]([\s\S]*?)\/\/ \[\[\[END_MACROS\]\]\]/.exec(read(ino));
+    assert.ok(block, `${ino}: MACROS-Marker fehlen`);
+    assert.match(block[1], /uint8_t numMacros = 0;/);
+    assert.strictEqual((JSON.parse(read(json)).macros || []).length, 0, json);
+  }
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(L.defaultConfig.macros)), []);
+});
+
 test("Fehlende Tasten: links verboten (wie server.py), rechts nur für Combos", () => {
   const layer = () => Array.from({ length: 6 }, () => Array.from({ length: 7 }, () => ({ tap: "NONE", hold: "NONE", dtap: "NONE" })));
   const l = layer();

@@ -92,6 +92,14 @@ KeyPair userKeyPairs[MAX_KEY_PAIRS] = {
 };
 // [[[END_KEY_PAIRS]]]
 
+// [[[START_MACROS]]]
+uint8_t numMacros = 0;
+uint8_t macroLengths[MAX_MACROS] = { 0 };
+MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS] = {
+  { { 0, 0, 0 } }
+};
+// [[[END_MACROS]]]
+
 unsigned long lastActivityTime = 0;
 bool isStandby = false;
 
@@ -100,6 +108,7 @@ void enterConfigMode();
 void checkUserCombos();
 void serviceSendQueue();
 void flushSendQueue(unsigned long maxMs);
+void stopMacro(bool releaseKeys);
 
 // Im Gegensatz zur rechten Hälfte gibt es keinen macOS-HID-Bond: Config Mode startet per Soft-Reboot
 // in einem isolierten BLE-Stack, Keyboard Mode nutzt kein BLE (nur ESP-NOW).
@@ -108,6 +117,7 @@ void enterConfigMode() {
   isBleTransitioning = true;
   enterConfigRequested = false;
 
+  stopMacro(false);
   bleKeyboard.releaseAll();
   Serial.println("\n=============================================");
   Serial.println("  [CONFIG MODE] AKTIVIERT -> Starte Config-BLE...");
@@ -176,6 +186,7 @@ void enterDeepSleep() {
   Serial.flush();
 
   // Alles lösen, was die linke Hälfte am Master gedrückt hält, und kurz auf die Zustellung warten
+  stopMacro(false);
   bleKeyboard.releaseAll();
   flushSendQueue(300);
   esp_now_deinit();
@@ -273,6 +284,8 @@ bool keySentToHost[6][7] = {false};
 bool momentaryLayers[NUM_LAYERS] = {false};
 bool toggleLayers[NUM_LAYERS] = {false};
 
+// Makro-Schritte nur bei freiem Platz in der Sendewarteschlange (Reserve für die Tasten des Users)
+#define MACRO_OUTPUT_READY() queueHasRoomForMacro(sendQueue)
 #include "../dactyl_right/DactylLogic.h"
 #include "../dactyl_right/DactylConfigBle.h"
 
@@ -345,6 +358,8 @@ static bool setupEspNow() {
   // Nach einem Neustart hält der Master evtl. noch Eingaben dieser Hälfte (kein Link-Timeout bei kurzem
   // Reboot). RELEASE_ALL löst sie; die Bestätigung meldet zugleich den Link, ohne auf den Heartbeat zu warten.
   // releaseAll() leert auch die gehaltenen Eingaben des Proxys (nach restartEspNow nicht leer).
+  // Ein laufendes Makro endet: seine Codes löst dasselbe RELEASE_ALL.
+  stopMacro(false);
   bleKeyboard.releaseAll();
   return true;
 }
@@ -502,8 +517,11 @@ void loop() {
     int link = isConfigMode
       ? ((BLEDevice::getServer() && BLEDevice::getServer()->getConnectedCount() > 0) ? 1 : 0)
       : (bleKeyboard.isConnected() ? 1 : 0);
-    Serial.printf("STATUS: %s=%d | ConfigMode=%d | Matrix aktiv | ActivityRx=%d\n",
-      isConfigMode ? "BLE verbunden" : "Master erreichbar", link, isConfigMode ? 1 : 0, activityRxReady ? 1 : 0);
+    nvs_stats_t nvsStats = {};
+    nvs_get_stats(NULL, &nvsStats);
+    Serial.printf("STATUS: %s=%d | ConfigMode=%d | Matrix aktiv | ActivityRx=%d | NvsUsed=%u NvsFree=%u\n",
+      isConfigMode ? "BLE verbunden" : "Master erreichbar", link, isConfigMode ? 1 : 0, activityRxReady ? 1 : 0,
+      (unsigned)nvsStats.used_entries, (unsigned)nvsStats.free_entries);
     Serial.flush();
   }
 
@@ -546,6 +564,7 @@ void loop() {
     if (keyState[CONFIG_COMBO_R1][CONFIG_COMBO_C1] && keyState[CONFIG_COMBO_R2][CONFIG_COMBO_C2]) {
       if (comboStartTime == 0) {
         comboStartTime = millis();
+        stopMacro(false);
         if (!isConfigMode && bleKeyboard.isConnected()) {
           bleKeyboard.releaseAll();
         }

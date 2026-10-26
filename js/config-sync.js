@@ -77,7 +77,7 @@ async function writeConfigToESP32(options = {}) {
       const result = await ack;
       if (result === "unknown") {
         showToast(`⚠️ Die Firmware der ${profile.label} kennt ${okPrefix} nicht. Bitte neu flashen, um die Einstellung zu übernehmen.`, 7000);
-        return;
+        return "unknown";
       }
       if (result !== true) throw new Error(`Tastatur hat ${okPrefix} nicht bestätigt`);
     };
@@ -86,7 +86,8 @@ async function writeConfigToESP32(options = {}) {
     const settingCommands = buildSettingCommands(s, profile);
     const totalLayers = Math.min(cfg.layers.length, NUM_LAYERS);
     const combos = cfg.combos.slice(0, MAX_COMBOS);
-    const totalSteps = countSyncSteps(settingCommands.length, totalLayers, combos.length);
+    const macros = (cfg.macros || []).slice(0, MAX_MACROS);
+    const totalSteps = countSyncSteps(settingCommands.length, totalLayers, combos.length, macros.length);
     const updateProgress = () => {
       completedSteps++;
       if (progressBar) {
@@ -147,6 +148,20 @@ async function writeConfigToESP32(options = {}) {
     await sendConfirmed("SAVE_PAIRS", "SAVE_PAIRS", 5000);
     updateProgress();
 
+    // Makros synchronisieren (Index = Position in der Liste, MACRO_<n> verweist darauf).
+    // Firmware ohne Makros antwortet "ERR UNKNOWN CLEAR_MACROS": Hinweis zeigen und die Phase überspringen.
+    const macrosKnown = await sendConfirmed("CLEAR_MACROS", "CLEAR_MACROS", 3000, true);
+    if (macrosKnown !== "unknown") {
+      for (const macro of macros) {
+        for (const cmd of macroCommands(macro)) {
+          await sendConfirmed(cmd, cmd === "ADD_MACRO" ? "ADD_MACRO" : "ADD_MACRO_STEP");
+        }
+        updateProgress();
+      }
+      await sendConfirmed("SAVE_MACROS", "SAVE_MACROS", 5000);
+    }
+    updateProgress();
+
     // Nur die tatsächlich übertragenen Änderungen dieser Hälfte verwerfen
     const remaining = pendingFor(side).filter(c => !syncedChangeIds.has(c.id));
     if (remaining.length === 0) clearPendingSync(side);
@@ -193,9 +208,10 @@ function buildSettingCommands(s, profile) {
 }
 
 // Fortschrittsschritte des vollen Syncs: Einstellungen, Ebenen-Namen, Tasten (SET_K), SAVE_NVS,
-// Combos, SAVE_COMBOS und die Tastenpaar-Phase. Muss zu den updateProgress()-Aufrufen passen.
-function countSyncSteps(settingCount, layerCount, comboCount) {
-  return settingCount + NUM_LAYERS + layerCount * NUM_ROWS * NUM_COLS + 1 + comboCount + 1 + 1;
+// Combos, SAVE_COMBOS, die Tastenpaar-Phase, je Makro ein Schritt und SAVE_MACROS.
+// Muss zu den updateProgress()-Aufrufen passen.
+function countSyncSteps(settingCount, layerCount, comboCount, macroCount = 0) {
+  return settingCount + NUM_LAYERS + layerCount * NUM_ROWS * NUM_COLS + 1 + comboCount + 1 + 1 + macroCount + 1;
 }
 
 // One-Shot-Auto-Sync (BLE-Verbindung nach der Config-Combo). Während des Layout-Diffs nicht übertragen:

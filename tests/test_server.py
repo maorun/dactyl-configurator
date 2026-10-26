@@ -320,10 +320,70 @@ class TestServerAndCodegen(unittest.TestCase):
             cfg = json.load(f)
         server.validate_config(cfg)
         out = server.render_ino_content(content, cfg)
-        for marker in ("KEYMAP", "HOLDMAP", "DTAPMAP", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "SETTINGS"):
+        for marker in ("KEYMAP", "HOLDMAP", "DTAPMAP", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "MACROS", "SETTINGS"):
             self.assertEqual(out.count(f"// [[[START_{marker}]]]"), 1)
         out = server.render_ino_content(content, dict(cfg, keyPairs=[{"first": "KEY_LEFT_SHIFT", "second": "KEY_PERIOD"}]))
         self.assertIn("uint8_t numKeyPairs = 1;", out)
+        out = server.render_ino_content(content, dict(cfg, macros=[{"name": "x", "steps": [{"type": "tap", "code": "KEY_A"}]}]))
+        self.assertIn("uint8_t numMacros = 1;", out)
+        self.assertIn("{ { 1, 'a', 0 } }", out)
+
+    def test_macros_codegen_and_validation(self):
+        cpp = server.generate_macros_cpp([
+            {"name": "Copy", "steps": [
+                {"type": "down", "code": "KEY_LEFT_GUI"}, {"type": "tap", "code": "KEY_C"},
+                {"type": "up", "code": "KEY_LEFT_GUI"}, {"type": "pause", "ms": 100}]},
+            {"name": "leer", "steps": []},
+        ])
+        self.assertIn("uint8_t numMacros = 2;", cpp)
+        self.assertIn("uint8_t macroLengths[MAX_MACROS] = { 4, 0 };", cpp)
+        self.assertIn("{ { 2, KEY_LEFT_GUI, 0 }, { 1, 'c', 0 }, { 3, KEY_LEFT_GUI, 0 }, { 4, 0, 100 } }", cpp)
+        self.assertIn("{ { 0, 0, 0 } }", cpp)
+        self.assertIn("uint8_t numMacros = 0;", server.generate_macros_cpp(None))
+        self.assertIn("{ { 0, 0, 0 } }", server.generate_macros_cpp([]))
+        bad_steps = [
+            {"type": "tap", "code": "MO_1"}, {"type": "tap", "code": "MACRO_0"}, {"type": "tap", "code": "PAIR_0"},
+            {"type": "tap", "code": "UMLAUT_AE"}, {"type": "tap"}, {"type": "down", "code": "KEY_256"},
+            {"type": "pause", "ms": 0}, {"type": "pause", "ms": 5001}, {"type": "pause", "ms": "100"},
+            {"type": "pause", "ms": True}, {"type": "pause"}, {"type": "click", "code": "KEY_A"}, "tap", None,
+        ]
+        for bad in bad_steps:
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_macros_cpp([{"steps": [bad]}])
+        with self.assertRaises(ValueError):
+            server.generate_macros_cpp([{"steps": [{"type": "tap", "code": "KEY_A"}] * 33}])
+        server.generate_macros_cpp([{"steps": [{"type": "tap", "code": "KEY_A"}] * 32}])
+        with self.assertRaises(ValueError):
+            server.generate_macros_cpp([{"steps": []}] * 17)
+        for bad in ("kaputt", [None], [{"steps": "x"}], [{}]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_macros_cpp(bad)
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "macros": [{"steps": [{"type": "pause", "ms": 0}]}]})
+
+    def test_macro_action_code_and_combo_rejection(self):
+        self.assertEqual(server.code_to_cpp("MACRO_0"), "(ACT_MACRO_BASE + 0)")
+        self.assertEqual(server.code_to_cpp("MACRO_15"), "(ACT_MACRO_BASE + 15)")
+        self.assertEqual(server.code_to_cpp("MACRO_16"), "0")
+        cpp = server.generate_keymap_cpp([[[{"tap": "MACRO_2"}]]])
+        self.assertIn("(ACT_MACRO_BASE + 2)", cpp)
+        self.assertIn("(ACT_MACRO_BASE + 4)", server.generate_holdmap_cpp([[[{"tap": "KEY_A", "hold": "MACRO_4"}]]]))
+        self.assertIn("(ACT_MACRO_BASE + 5)", server.generate_dtapmap_cpp([[[{"tap": "KEY_A", "dtap": "MACRO_5"}]]]))
+        # Combos unterstützen keine Makros (die Firmware lehnt ADD_COMBO mit Makro-Code ab)
+        combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "KEY_PRESS", "action": "MACRO_0"}
+        with self.assertRaises(ValueError):
+            server.generate_combos_cpp([combo])
+
+    def test_macro_constants_match_firmware(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        def define(name):
+            return int(re.search(rf"#define {name}\s+(0x[0-9A-Fa-f]+|\d+)", common).group(1), 0)
+        self.assertEqual(define("MAX_MACROS"), server.MAX_MACROS)
+        self.assertEqual(define("MAX_MACRO_STEPS"), server.MAX_MACRO_STEPS)
+        self.assertEqual(define("MACRO_MAX_PAUSE_MS"), server.MACRO_MAX_PAUSE_MS)
+        for name, value in server.MACRO_STEP_TYPES.items():
+            self.assertEqual(define(f"MACRO_STEP_{name.upper()}"), value)
 
     def test_app_flash_sets_new_nonzero_defaults_id(self):
         with tempfile.TemporaryDirectory() as d:
@@ -548,7 +608,7 @@ class TestServerAndCodegen(unittest.TestCase):
             cfg = json.load(f)
         server.validate_config(cfg, "L")
         out = server.render_ino_content(content, cfg, defaults_id=7, side="L")
-        for marker in ("KEYMAP", "HOLDMAP", "DTAPMAP", "DEFAULTS_ID", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "SETTINGS"):
+        for marker in ("KEYMAP", "HOLDMAP", "DTAPMAP", "DEFAULTS_ID", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "MACROS", "SETTINGS"):
             self.assertEqual(out.count(f"// [[[START_{marker}]]]"), 1, marker)
         self.assertIn("#define KEYMAP_DEFAULTS_ID 7UL", out)
         self.assertIn('#define DEVICE_SIDE "L"', out)  # außerhalb der Marker, bleibt erhalten

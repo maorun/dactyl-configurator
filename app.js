@@ -107,6 +107,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initHeatmapUI();
   initMatrixTestUI();
   initKeyPairsUI();
+  initMacrosUI();
 });
 
 function updateConfigModeUI(active, syncing = false) {
@@ -342,7 +343,8 @@ function markPendingSync(changeOrSummary = "", side = editSide) {
         // Revert-Closures schreiben in currentConfig und gelten nur für die bearbeitete Hälfte
         revert: null,
         snapshot: !!changeOrSummary.snapshot,
-        pairs: !!changeOrSummary.pairs
+        pairs: !!changeOrSummary.pairs,
+        macros: !!changeOrSummary.macros
       });
     }
     return;
@@ -367,7 +369,8 @@ function markPendingSync(changeOrSummary = "", side = editSide) {
       description: changeOrSummary.description || "",
       revert: changeOrSummary.revert || null,
       snapshot: !!changeOrSummary.snapshot,
-      pairs: !!changeOrSummary.pairs
+      pairs: !!changeOrSummary.pairs,
+      macros: !!changeOrSummary.macros
     };
   }
   if (changeObj) {

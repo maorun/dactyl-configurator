@@ -110,6 +110,13 @@ function setupEventListeners() {
       saveConfigToServer(side);
       return;
     }
+    // Ein Makro aus einer noch vorgemerkten Makro-Liste kennt das Gerät erst nach dem nächsten Sync
+    if (keyNeedsStagedMacros({ tap, hold, dtap }, pendingFor(side))) {
+      markPendingSync(changeRecord, side);
+      showToast("Die Makros sind noch nicht synchronisiert. Die Taste wird mit dem nächsten Sync übertragen.");
+      saveConfigToServer(side);
+      return;
+    }
     // Ein wiederverwendetes Paar, dessen Tabelle noch vorgemerkt ist, kennt das Gerät ebenfalls noch nicht
     if (keyNeedsStagedPairs({ tap, hold, dtap }, pendingFor(side))) {
       markPendingSync(changeRecord, side);

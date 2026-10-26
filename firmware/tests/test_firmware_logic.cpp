@@ -94,6 +94,24 @@ struct KeyPair {
 static uint8_t numKeyPairs = 0;
 static KeyPair userKeyPairs[MAX_KEY_PAIRS];
 
+// Makros (wie DactylCommon.h)
+#define ACT_MACRO_BASE      0x170
+#define MAX_MACROS          16
+#define MAX_MACRO_STEPS     32
+#define MACRO_MAX_PAUSE_MS  5000
+#define MACRO_STEP_TAP      1
+#define MACRO_STEP_DOWN     2
+#define MACRO_STEP_UP       3
+#define MACRO_STEP_PAUSE    4
+struct MacroStep {
+  uint8_t type;
+  uint8_t code;
+  uint16_t ms;
+};
+static uint8_t numMacros = 0;
+static uint8_t macroLengths[MAX_MACROS] = {0};
+static MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS];
+
 static SemaphoreHandle_t configMutex = xSemaphoreCreateMutex();
 static Preferences preferences;
 static BLECharacteristic mockChar;
@@ -148,6 +166,9 @@ void resetState() {
   numCombos = 0;
   numKeyPairs = 0;
   for (int i = 0; i < MAX_KEY_PAIRS; i++) userKeyPairs[i] = { 0, 0 };
+  numMacros = 0;
+  for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
+  macroRun = {};
   // Globale Settings und NVS-Mock zurücksetzen, damit Tests unabhängig von ihrer Reihenfolge sind
   comboTimeoutMs = 40;
   tappingTermMs = 200;
@@ -2170,6 +2191,285 @@ TEST(test_one_shot_not_sent_without_host_or_in_config_mode) {
   tapKeyAt(5, 1, 1100, 1150);
   bleKeyboard.connected = true;
   assert(bleKeyboard.oneShotEvents.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Makros: nicht blockierende Folge aus TAP, DOWN, UP und PAUSE
+// -----------------------------------------------------------------------------
+// Ruft processDeferredKeys() in 1-ms-Schritten bis einschließlich untilMs auf (wie loop())
+static void runTicks(unsigned long untilMs) {
+  while (millis() < untilMs) {
+    advanceMillis(1);
+    processDeferredKeys(millis());
+  }
+}
+
+// Makro 0 aus Befehlen: Cmd drücken, 'c' tippen, Cmd loslassen, 100 ms Pause, 'v' tippen
+static void addCopyPasteMacro() {
+  handleConfigCommand("ADD_MACRO", false);
+  assert(mockChar.value == "OK ADD_MACRO 0");
+  handleConfigCommand("ADD_MACRO_STEP 2 131 0", false);   // DOWN Cmd
+  handleConfigCommand("ADD_MACRO_STEP 1 99 0", false);    // TAP 'c'
+  handleConfigCommand("ADD_MACRO_STEP 3 131 0", false);   // UP Cmd
+  handleConfigCommand("ADD_MACRO_STEP 4 0 100", false);   // PAUSE 100 ms
+  handleConfigCommand("ADD_MACRO_STEP 1 118 0", false);   // TAP 'v'
+  assert(mockChar.value == "OK ADD_MACRO_STEP 0 4");
+  assert(numMacros == 1 && macroLengths[0] == 5);
+}
+
+TEST(test_macro_plays_steps_without_blocking) {
+  resetState();
+  addCopyPasteMacro();
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  // Der Druck sendet nur den ersten Schritt sofort; der Rest folgt aus processDeferredKeys()
+  std::vector<int> expected = { 131 };
+  assert(bleKeyboard.keyEvents == expected);
+  assert(macroRun.active);
+
+  runTicks(1004);
+  assert(bleKeyboard.keyEvents == expected);           // MACRO_STEP_GAP_MS zwischen zwei Ereignissen
+  runTicks(1005);
+  expected = { 131, 'c' };
+  assert(bleKeyboard.keyEvents == expected);
+  runTicks(1015);
+  expected = { 131, 'c', -'c', -131 };
+  assert(bleKeyboard.keyEvents == expected);
+  // Pause: 100 ms nach dem PAUSE-Schritt kommt 'v'
+  runTicks(1100);
+  assert(bleKeyboard.keyEvents == expected);
+  runTicks(1125);
+  expected = { 131, 'c', -'c', -131, 'v', -'v' };
+  assert(bleKeyboard.keyEvents == expected);
+  assert(!macroRun.active);
+  assert(bleKeyboard.pressedKeys.empty());
+
+  // Das Loslassen der Taste sendet nichts
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1200);
+  assert(bleKeyboard.keyEvents == expected);
+}
+
+TEST(test_macro_releases_held_codes_at_end_and_ignores_restart) {
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 2 129 0", false);   // DOWN Shift, ohne UP
+  handleConfigCommand("ADD_MACRO_STEP 4 0 200", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1050);
+  // Zweiter Druck während des Laufs: wird ignoriert, das Makro startet nicht neu
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1400);
+  std::vector<int> expected = { 129, 'a', -'a', -129 };
+  assert(bleKeyboard.keyEvents == expected);           // Shift wird am Ende losgelassen, nur ein Lauf
+  assert(!macroRun.active);
+  assert(bleKeyboard.pressedKeys.empty());
+
+  // Nach dem Ende startet ein neuer Druck das Makro wieder
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1800);
+  assert(bleKeyboard.keyEvents.size() == 8);
+}
+
+TEST(test_macro_as_hold_and_double_tap_action) {
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 120 0", false);   // TAP 'x'
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1300);                                       // Tapping-Term abgelaufen: Halten startet das Makro
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1400);
+  std::vector<int> expected = { 'x', -'x' };
+  assert(bleKeyboard.keyEvents == expected);           // kein Tap 'j'
+
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 120 0", false);
+  KEYMAP[0][2][4] = 'l';
+  DTAPMAP[0][2][4] = ACT_MACRO_BASE + 0;
+  tapKeyAt(2, 4, 1000, 1050);
+  setMillis(1100);
+  keyState[2][4] = true; onMatrixKeyChange(2, 4, true);
+  keyState[2][4] = false; onMatrixKeyChange(2, 4, false);
+  runTicks(1600);
+  assert(bleKeyboard.keyEvents == expected);           // Doppel-Tipp startet das Makro, kein 'l'
+}
+
+TEST(test_macro_unknown_or_empty_index_sends_nothing) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 3;                 // nicht belegt
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1100);
+  handleConfigCommand("ADD_MACRO", false);              // leeres Makro 0
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1200);
+  assert(bleKeyboard.keyEvents.empty());
+  assert(!macroRun.active);
+}
+
+TEST(test_macro_cancel_paths_release_codes) {
+  // CLEAR_MACROS beendet ein laufendes Makro und lässt seine Codes los
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 2 130 0", false);   // DOWN Alt
+  handleConfigCommand("ADD_MACRO_STEP 4 0 1000", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1100);
+  handleConfigCommand("CLEAR_MACROS", false);
+  assert(mockChar.value == "OK CLEAR_MACROS");
+  assert(!macroRun.active && numMacros == 0);
+  std::vector<int> expected = { 130, -130 };
+  assert(bleKeyboard.keyEvents == expected);
+  runTicks(2200);
+  assert(bleKeyboard.keyEvents == expected);           // kein 'a' mehr
+
+  // Verbindungsverlust: das Makro endet ohne weitere Ereignisse
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  handleConfigCommand("ADD_MACRO_STEP 4 0 500", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 98 0", false);
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1100);
+  bleKeyboard.connected = false;
+  runTicks(1200);
+  assert(!macroRun.active);
+  bleKeyboard.connected = true;
+  runTicks(1800);
+  expected = { 'a', -'a' };
+  assert(bleKeyboard.keyEvents == expected);
+
+  // Eine ausgelöste Combo beendet das Makro (releaseAll löst seine Codes)
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 2 129 0", false);
+  handleConfigCommand("ADD_MACRO_STEP 4 0 1000", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  KEYMAP[0][3][1] = ACT_MACRO_BASE + 0;
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  keyState[3][1] = true; onMatrixKeyChange(3, 1, true);
+  keyState[3][1] = false; onMatrixKeyChange(3, 1, false);
+  runTicks(1100);
+  assert(macroRun.active);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true);
+  checkUserCombos();
+  assert(!macroRun.active);
+  assert(bleKeyboard.pressedKeys.empty());
+  runTicks(2500);
+  assert(countPresses('a') == 0);
+}
+
+TEST(test_macro_commands_validate_arguments) {
+  resetState();
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  assert(mockChar.value == "ERR ARGS ADD_MACRO_STEP 1 97 0");  // kein Makro vorhanden
+  handleConfigCommand("ADD_MACRO", false);
+  const char* bad[] = {
+    "ADD_MACRO_STEP 1 0 0", "ADD_MACRO_STEP 1 256 0", "ADD_MACRO_STEP 1 97 5",
+    "ADD_MACRO_STEP 4 0 0", "ADD_MACRO_STEP 4 0 5001", "ADD_MACRO_STEP 4 97 100",
+    "ADD_MACRO_STEP 5 97 0", "ADD_MACRO_STEP 0 97 0", "ADD_MACRO_STEP 1 97 0 9", "ADD_MACRO_STEP 1 97",
+  };
+  for (const char* cmd : bad) {
+    handleConfigCommand(cmd, false);
+    assert(mockChar.value == std::string("ERR ARGS ") + cmd);
+  }
+  assert(macroLengths[0] == 0);
+  handleConfigCommand("ADD_MACRO_STEP 4 0 5000", false);
+  assert(mockChar.value == "OK ADD_MACRO_STEP 0 0");
+  for (int i = 1; i < MAX_MACRO_STEPS; i++) handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  assert(macroLengths[0] == MAX_MACRO_STEPS);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  assert(mockChar.value == "ERR ARGS ADD_MACRO_STEP 1 97 0");  // max. 32 Schritte
+
+  for (int i = 1; i < MAX_MACROS; i++) handleConfigCommand("ADD_MACRO", false);
+  assert(mockChar.value == "OK ADD_MACRO 15");
+  handleConfigCommand("ADD_MACRO", false);
+  assert(mockChar.value == "ERR ARGS ADD_MACRO");                // max. 16 Makros
+
+  // Combos unterstützen keine Makros
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 368", false);
+  assert(mockChar.value == "ERR ARGS ADD_COMBO 2 1 2 2 0 368");
+  assert(numCombos == 0);
+}
+
+TEST(test_macros_persist_compact_in_nvs) {
+  resetState();
+  addCopyPasteMacro();
+  handleConfigCommand("ADD_MACRO", false);              // leeres Makro 1
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 120 0", false); // Makro 2
+  handleConfigCommand("SAVE_MACROS", false);
+  assert(mockChar.value == "OK SAVE_MACROS");
+  // Nur die belegten Schritte: 6 Schritte à 4 Byte, nicht das volle Array
+  assert(preferences.getBytesLength("macros_data") == 6 * sizeof(MacroStep));
+  assert(preferences.getBytesLength("macro_lens") == 3);
+
+  // Neustart: RAM leer, NVS lädt die Makros
+  numMacros = 0;
+  for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
+  userMacros[2][0] = { 0, 0, 0 };
+  loadKeymapFromNVS();
+  assert(numMacros == 3);
+  assert(macroLengths[0] == 5 && macroLengths[1] == 0 && macroLengths[2] == 1);
+  assert(userMacros[0][3].type == MACRO_STEP_PAUSE && userMacros[0][3].ms == 100);
+  assert(userMacros[2][0].type == MACRO_STEP_TAP && userMacros[2][0].code == 120);
+
+  // Defekte Daten (Länge passt nicht): die einkompilierten Makros bleiben
+  Preferences::bytesStore["macros_data"].resize(5 * sizeof(MacroStep));
+  numMacros = 1;
+  macroLengths[0] = 1;
+  macroLengths[2] = 0;
+  loadKeymapFromNVS();
+  assert(numMacros == 1 && macroLengths[0] == 1);
+
+  // Leere Liste gespeichert: überschreibt die einkompilierten Makros
+  handleConfigCommand("CLEAR_MACROS", false);
+  handleConfigCommand("SAVE_MACROS", false);
+  assert(mockChar.value == "OK SAVE_MACROS");
+  assert(!preferences.isKey("macros_data") && !preferences.isKey("macro_lens"));
+  numMacros = 2;
+  macroLengths[0] = 1;
+  loadKeymapFromNVS();
+  assert(numMacros == 0);
+}
+
+TEST(test_app_flash_discards_stored_macros) {
+  resetState();
+  addCopyPasteMacro();
+  handleConfigCommand("SAVE_MACROS", false);
+  loadKeymapFromNVS();                                  // Fingerprint der aktuellen Defaults speichern
+  testDefaultsId = 0xBEEF;                              // Flash aus der App mit einkompiliertem Makro
+  numMacros = 1;
+  macroLengths[0] = 1;
+  userMacros[0][0] = { MACRO_STEP_TAP, 'z', 0 };
+  loadKeymapFromNVS();
+  assert(numMacros == 1 && macroLengths[0] == 1 && userMacros[0][0].code == 'z');
+  assert(!preferences.isKey("num_macros") && !preferences.isKey("macros_data"));
 }
 
 int main() {

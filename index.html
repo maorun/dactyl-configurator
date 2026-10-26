@@ -349,6 +349,50 @@
             <p>Noch keine Tastenpaare definiert.</p>
           </div>
         </div>
+
+        <!-- Makros: eine Taste spielt eine Tastenfolge ab -->
+        <div class="combos-header key-pairs-header">
+          <div>
+            <h3>Makros (1 Taste = Tastenfolge)</h3>
+            <p class="subtitle">Ein Makro spielt Schritte nacheinander ab: Tippen, Drücken, Loslassen und Pausen (1 bis 5000 ms). Mit Drücken und Loslassen entstehen Kürzel, z. B. <code>Cmd</code> drücken, <code>c</code> tippen, <code>Cmd</code> loslassen. Weise das Makro danach im Tasten-Inspektor einer Taste als Tap-, Halte- oder Doppel-Tipp-Aktion zu. Ein Druck während des Ablaufs startet das Makro nicht erneut. Combos unterstützen keine Makros.</p>
+          </div>
+          <button id="btnNewMacro" class="btn btn-primary btn-sm" type="button">+ Neues Makro</button>
+        </div>
+        <div class="combos-list-card" id="macrosCard">
+          <div class="macro-editor" id="macroEditor" style="display: none;">
+            <h4 id="macroEditorTitle">Neues Makro</h4>
+            <div class="key-pair-form">
+              <label for="macroNameInput">Name</label>
+              <input id="macroNameInput" class="form-control" type="text" maxlength="31">
+            </div>
+            <div class="key-pair-form">
+              <select id="macroStepType" class="form-control" title="Art des Schritts">
+                <option value="tap">Tippen</option>
+                <option value="down">Drücken (halten)</option>
+                <option value="up">Loslassen</option>
+                <option value="pause">Pause</option>
+              </select>
+              <span id="macroStepCodeWrap"><select id="macroStepCode" class="form-control" title="Taste"></select></span>
+              <span id="macroStepMsWrap"><input id="macroStepMs" class="form-control" type="number" min="1" value="100" title="Pause in ms"> ms</span>
+              <button id="btnAddMacroStep" class="btn btn-secondary btn-sm" type="button">+ Schritt</button>
+              <span id="macroStepCount" class="subtitle"></span>
+            </div>
+            <ol class="macro-steps" id="macroStepsList"></ol>
+            <div class="key-pair-form">
+              <button id="btnSaveMacro" class="btn btn-primary btn-sm" type="button">Makro speichern</button>
+              <button id="btnCancelMacro" class="btn btn-secondary btn-sm" type="button">Abbrechen</button>
+            </div>
+          </div>
+          <table class="combos-table">
+            <thead>
+              <tr><th>Nr.</th><th>Name</th><th>Schritte</th><th>Code</th><th>Aktionen</th></tr>
+            </thead>
+            <tbody id="macrosTableBody"></tbody>
+          </table>
+          <div class="empty-state" id="emptyMacrosState" style="display: none;">
+            <p>Noch keine Makros definiert.</p>
+          </div>
+        </div>
       </div>
     </main>
 
@@ -513,22 +557,23 @@
   <script src="js/side-profiles.js?v=3"></script>
   <!-- Profile der Hälften: registrieren sich bei js/side-profiles.js; die erste Datei legt den Start fest -->
   <script src="js/side-right.js?v=2"></script>
-  <script src="js/side-left.js?v=1"></script>
+  <script src="js/side-left.js?v=2"></script>
   <script src="js/side-state.js?v=1"></script>
   <script src="js/side-routing.js?v=2"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
-  <script src="js/keycodes.js?v=2"></script>
-  <script src="js/config-model.js?v=3"></script>
-  <script src="js/editor.js?v=3"></script>
+  <script src="js/keycodes.js?v=3"></script>
+  <script src="js/config-model.js?v=4"></script>
+  <script src="js/editor.js?v=4"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
-  <script src="js/editor-events.js?v=3"></script>
+  <script src="js/macros-ui.js?v=1"></script>
+  <script src="js/editor-events.js?v=4"></script>
   <script src="js/ble.js?v=1"></script>
   <script src="js/serial.js?v=4"></script>
   <script src="js/live-monitor.js?v=2"></script>
   <script src="js/heatmap.js?v=1"></script>
   <script src="js/matrix-test.js?v=1"></script>
   <script src="js/keyboard-hooks.js?v=3"></script>
-  <script src="js/config-sync.js?v=2"></script>
-  <script src="app.js?v=39"></script>
+  <script src="js/config-sync.js?v=3"></script>
+  <script src="app.js?v=40"></script>
 </body>
 </html>

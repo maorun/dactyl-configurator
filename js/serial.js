@@ -106,6 +106,7 @@ async function disconnectSerialNow() {
   if (scope.reject) rejectAllPendingAcks("USB-Verbindung getrennt", scope.side);
   serialSide = null;
   serialReader = null;
+  abortDeviceSnapshotReadIfDisconnected();
   updateConnectionUI(false, "Nicht verbunden");
   showToast("ESP32 getrennt.");
 }
@@ -236,8 +237,9 @@ function handleSerialLine(line, side = null, transport = "ble") {
 
   // Bestätigungen/Fehler zuerst an wartende Sync-Schritte weiterreichen
   resolveAcksForLine(line, side);
-  // GET_CONFIG für den Layout-Diff: Gerätedaten nicht in die lokale Config übernehmen (js/config-sync.js)
-  if (captureDeviceSnapshotLine(line, side)) return;
+  // GET_CONFIG für den Layout-Diff: Gerätedaten nicht in die lokale Config übernehmen (js/config-sync.js).
+  // Aufgelöste Hälfte übergeben: dieselbe, deren Config die Zeile sonst ändern würde.
+  if (captureDeviceSnapshotLine(line, lineSide)) return;
   if (line.startsWith("ERR ")) {
     console.warn("[ESP32 ERR]", line);
     if (!isAutoSyncing) showToast(`⚠️ Tastatur meldet Fehler: ${line}`, 6000);
@@ -348,6 +350,8 @@ function handleSerialLine(line, side = null, transport = "ble") {
   else if (line.startsWith("SPLIT_KEY:")) {
     const evt = Dactyl.parseSplitKeyLine(line, lineSide);
     if (!evt) return;
+    // Ist die Sender-Hälfte selbst verbunden, meldet sie ihre Tasten direkt (KEY_PRESS): nicht doppelt zählen
+    if (Dactyl.routeCommand(evt.side, connectionState())) return;
     const id = `${evt.side}_${evt.r}_${evt.c}`;
     if (!evt.pressed) {
       splitKeyTracker.release(id);

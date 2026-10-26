@@ -227,8 +227,11 @@ test("Layout-Presets und Scancode-Tabelle nur im rechten Profil", () => {
   assert.strictEqual(R.scancodeMap.KeyJ.r, 2);
   assert.strictEqual(L.scancodeMap, null);
   // Die Preset-Auswahl in index.html bietet genau die Presets des Profils an
-  const options = [...read("index.html").matchAll(/<option value="([^"]+)">/g)].map(m => m[1])
-    .filter(v => v in R.presets || v === "us_qwerty" || v === "de_qwertz");
+  const html = read("index.html");
+  const start = html.indexOf('<select id="layoutPresetSelect"');
+  assert.ok(start >= 0, "layoutPresetSelect fehlt in index.html");
+  const select = html.slice(start, html.indexOf("</select>", start));
+  const options = [...select.matchAll(/<option value="([^"]+)">/g)].map(m => m[1]);
   assert.deepStrictEqual(options, Object.keys(R.presets));
 });
 
@@ -432,7 +435,9 @@ test("Split-Diagnose: Bitlayout von splitKeyEventCode und SPLIT_KEY-Ausgabe pass
   assert.match(hid, /#define SPLIT_KEY_EVENT_ROWS 6/);
   assert.match(hid, /#define SPLIT_KEY_EVENT_COLS 7/);
   assert.match(rightIno, /SPLIT_KEY:\{\\"r\\":%u,\\"c\\":%u,\\"pressed\\":%d,\\"layer\\":%u\}/);
-  assert.match(leftIno, /queuePushDiagnostic\(sendQueue, makeSplitHidEvent\(SPLIT_OP_KEY_EVENT/);
+  // Die Einreih-Bedingung (Link, Warteschlangen-Grenze, Zählung) liegt in queueKeyEventDiagnostic
+  // (DactylLeftLogic.h, Host-Test test_key_event_diagnostic_needs_link_and_counts_drops)
+  assert.match(leftIno, /queueKeyEventDiagnostic\(sendQueue, bleKeyboard\.isConnected\(\), makeSplitHidEvent\(SPLIT_OP_KEY_EVENT/);
 });
 
 runAll().catch((err) => {

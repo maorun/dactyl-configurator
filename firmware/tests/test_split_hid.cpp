@@ -436,6 +436,8 @@ TEST(test_process_rx_reports_key_events_without_hid_effect) {
   SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, recordApplied, recordKeyEvent);
   // Nur das HID-Ereignis zählt als ausgeführt; das Matrix-Ereignis erzeugt keine HID-Ausgabe
   assert(rep.applied == 1);
+  // Beide Matrix-Ereignisse zählen als Aktivität (Master bleibt bei linken Tasten mit Aktion 0 wach)
+  assert(rep.keyEvents == 2);
   assert((appliedCodes == std::vector<uint16_t>{'a'}));
   assert((keyEventCodes == std::vector<uint16_t>{down, up}));
   assert((k.log == Log{"P97"}));
@@ -450,7 +452,7 @@ TEST(test_process_rx_reports_key_events_without_host) {
   splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, down));
   SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 500, nullptr, recordKeyEvent);
   // Diagnose läuft auch ohne Mac (z. B. beim Löten); der Link gilt als lebendig
-  assert(rep.applied == 0);
+  assert(rep.applied == 0 && rep.keyEvents == 1);
   assert((keyEventCodes == std::vector<uint16_t>{down}));
   assert(k.log.empty());
   assert(k.splitLeft.linkUp && k.splitLeft.lastRxMs == 500);
@@ -469,6 +471,9 @@ TEST(test_process_rx_limits_key_events_per_call) {
   SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, recordApplied, recordKeyEvent);
   // Überzählige Diagnose-Ereignisse entfallen; das HID-Ereignis dahinter läuft trotzdem
   assert(keyEventCodes.size() == SPLIT_KEY_EVENTS_PER_RX);
+  // Überzählige Ereignisse werden gezählt (Sammelzeile), die Aktivität zählt jedes Ereignis
+  assert(rep.keyEventsDropped == 4);
+  assert(rep.keyEvents == SPLIT_KEY_EVENTS_PER_RX + 4);
   assert(rep.applied == 1 && (k.log == Log{"P97"}));
   SplitHidEvent out;
   assert(!splitRxPop(rxq, out));
@@ -590,6 +595,28 @@ TEST(test_activity_throttle_limits_rate_and_keeps_last_note) {
   // Das Tippen im Intervall geht nach dessen Ablauf raus, auch ohne neuen Tastendruck
   assert(splitActivityTake(t, 1000 + SPLIT_ACTIVITY_INTERVAL_MS));
   assert(!splitActivityTake(t, 1000 + 3 * SPLIT_ACTIVITY_INTERVAL_MS));
+}
+
+TEST(test_activity_send_failure_keeps_note) {
+  SplitActivityThrottle t;
+  splitActivityReset(t);
+  splitActivityNote(t);
+  assert(splitActivityTake(t, 1000));
+  splitActivitySendResult(t, false);
+  // Kein neuer Tastendruck nötig: nach dem Intervall geht das Paket erneut raus
+  assert(!splitActivityTake(t, 1000 + SPLIT_ACTIVITY_INTERVAL_MS - 1));
+  assert(splitActivityTake(t, 1000 + SPLIT_ACTIVITY_INTERVAL_MS));
+  splitActivitySendResult(t, true);
+  assert(!splitActivityTake(t, 1000 + 3 * SPLIT_ACTIVITY_INTERVAL_MS));
+}
+
+TEST(test_local_key_change_notes_activity) {
+  SplitActivityThrottle t;
+  splitActivityReset(t);
+  unsigned long last = 0;
+  splitNoteLocalKeyChange(t, 4242, last);
+  assert(last == 4242);
+  assert(splitActivityTake(t, 4242));
 }
 
 TEST(test_activity_throttle_survives_millis_wrap) {

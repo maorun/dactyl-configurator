@@ -38,10 +38,11 @@
     const t = timers || { set: (fn, ms) => setTimeout(fn, ms), clear: id => clearTimeout(id) };
     const pending = [];
 
-    // Löst mit true (OK), false (ERR oder verworfen) oder null (Timeout) auf
-    function wait(okPrefix, timeoutMs = 2500, side = null) {
+    // Löst mit true (OK), false (ERR oder verworfen) oder null (Timeout) auf.
+    // unknownOk: "ERR UNKNOWN <cmd>" (Firmware kennt den Befehl nicht) löst mit "unknown" statt false auf.
+    function wait(okPrefix, timeoutMs = 2500, side = null, unknownOk = false) {
       return new Promise((resolve) => {
-        const entry = { okPrefix, resolve, timer: null, side };
+        const entry = { okPrefix, resolve, timer: null, side, unknownOk };
         entry.timer = t.set(() => {
           const i = pending.indexOf(entry);
           if (i !== -1) pending.splice(i, 1);
@@ -64,7 +65,7 @@
         if (matches) {
           t.clear(entry.timer);
           pending.splice(i, 1);
-          entry.resolve(isOk);
+          entry.resolve(isOk ? true : (entry.unknownOk && line.startsWith("ERR UNKNOWN ") ? "unknown" : false));
           return;
         }
       }

@@ -281,6 +281,11 @@ bool toggleLayers[NUM_LAYERS] = {false};
 // -----------------------------------------------------------------------------
 static bool espNowReady = false;
 static uint32_t droppedReported = 0;
+// Von der Warteschlangen-Grenze verworfene Diagnose-Ereignisse (Live-Monitor am Master)
+static uint32_t diagDropped = 0;
+static uint32_t diagDroppedReported = 0;
+// Empfangs-Callback für ACTIVITY registriert (STATUS-Feld ActivityRx)
+static bool activityRxReady = false;
 static EspNowRestartGuard restartGuard;
 #define HEARTBEAT_INTERVAL_MS 1000
 
@@ -305,6 +310,8 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
 }
 
 static bool setupEspNow() {
+  // Erst nach erfolgreicher Registrierung wieder true (auch nach restartEspNow)
+  activityRxReady = false;
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   esp_wifi_set_channel(SPLIT_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
@@ -319,8 +326,10 @@ static bool setupEspNow() {
     return false;
   }
   esp_now_register_send_cb(onEspNowSent);
-  // Ohne Empfang schläft links weiter nach eigener Inaktivität ein (Verhalten vor ACTIVITY)
-  if (esp_now_register_recv_cb(onEspNowRecv) != ESP_OK) Serial.println("ERR ESPNOW_RECV_CB");
+  // Ohne Empfang schläft links weiter nach eigener Inaktivität ein (Verhalten vor ACTIVITY).
+  // Kein Setup-Fehler: das Senden funktioniert weiter. Die STATUS-Zeile meldet ActivityRx=0.
+  activityRxReady = (esp_now_register_recv_cb(onEspNowRecv) == ESP_OK);
+  if (!activityRxReady) Serial.println("ERR ESPNOW_RECV_CB");
 
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, SPLIT_MASTER_MAC, sizeof(SPLIT_MASTER_MAC));
@@ -341,7 +350,8 @@ static bool setupEspNow() {
 }
 
 // Neustart des Funk-Stacks, wenn jeder Versand scheitert (shouldRestartEspNow). Die Warteschlange wird
-// geleert; setupEspNow() stellt Kanal und Peer her und reiht RELEASE_ALL ein.
+// geleert; setupEspNow() stellt Kanal und Peer her und reiht RELEASE_ALL ein. Eine während des Neustarts
+// gehaltene Taste bleibt in DactylLogic.h gedrückt, ist am Master aber gelöst; erst ein neuer Druck sendet sie.
 static void restartEspNow() {
   Serial.println("ESPNOW_RESTART");
   espNowReady = false;
@@ -358,8 +368,9 @@ static void restartEspNow() {
   }
 }
 
-static void reportOutcome(SendOutcome outcome, unsigned long nowMs) {
-  restartGuardOnOutcome(restartGuard, outcome, nowMs);
+// op: Op des abgeschlossenen Pakets (queueHeadOp vor queueOnSendResult)
+static void reportOutcome(SendOutcome outcome, unsigned long nowMs, uint8_t op) {
+  restartGuardOnOutcome(restartGuard, outcome, nowMs, op);
   if (outcome == SEND_RETRY) Serial.println("ESPNOW_RETRY");
   else if (outcome == SEND_DROPPED) Serial.println("ESPNOW_FAIL");
 }
@@ -372,9 +383,11 @@ void serviceSendQueue() {
   bool ok = lastSendOk;
   if (queueCallbackIsCurrent(sendQueue, seq)) {
     bleKeyboard.onSendResult(ok, now);
-    reportOutcome(queueOnSendResult(sendQueue, ok, now), now);
+    uint8_t op = queueHeadOp(sendQueue);
+    reportOutcome(queueOnSendResult(sendQueue, ok, now), now, op);
   } else if (queueTimedOut(sendQueue, now)) {
-    reportOutcome(queueOnSendResult(sendQueue, false, now), now);
+    uint8_t op = queueHeadOp(sendQueue);
+    reportOutcome(queueOnSendResult(sendQueue, false, now), now, op);
   }
 
   SplitHidEvent ev;
@@ -383,7 +396,7 @@ void serviceSendQueue() {
     if (esp_now_send(SPLIT_MASTER_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK) {
       queueMarkSent(sendQueue, seqBeforeSend);
     } else {
-      reportOutcome(queueOnSendResult(sendQueue, false, now), now);
+      reportOutcome(queueOnSendResult(sendQueue, false, now), now, ev.op);
     }
   }
 
@@ -391,6 +404,10 @@ void serviceSendQueue() {
   if (dropped != droppedReported) {
     Serial.printf("ESPNOW_QUEUE_FULL (%lu verworfen)\n", (unsigned long)(dropped - droppedReported));
     droppedReported = dropped;
+  }
+  if (diagDropped != diagDroppedReported) {
+    Serial.printf("SPLIT_KEY_DROPPED (%lu verworfen)\n", (unsigned long)(diagDropped - diagDroppedReported));
+    diagDroppedReported = diagDropped;
   }
 }
 
@@ -485,8 +502,8 @@ void loop() {
     int link = isConfigMode
       ? ((BLEDevice::getServer() && BLEDevice::getServer()->getConnectedCount() > 0) ? 1 : 0)
       : (bleKeyboard.isConnected() ? 1 : 0);
-    Serial.printf("STATUS: %s=%d | ConfigMode=%d | Matrix aktiv\n",
-      isConfigMode ? "BLE verbunden" : "Master erreichbar", link, isConfigMode ? 1 : 0);
+    Serial.printf("STATUS: %s=%d | ConfigMode=%d | Matrix aktiv | ActivityRx=%d\n",
+      isConfigMode ? "BLE verbunden" : "Master erreichbar", link, isConfigMode ? 1 : 0, activityRxReady ? 1 : 0);
     Serial.flush();
   }
 
@@ -513,10 +530,8 @@ void loop() {
           uint8_t layer = getActiveLayer();
           onMatrixKeyChange(r, c, keyState[r][c]);
           // Matrix-Position für den Live-Monitor am Master, nach den HID-Ereignissen dieser Taste
-          if (bleKeyboard.isConnected()) {
-            queuePushDiagnostic(sendQueue, makeSplitHidEvent(SPLIT_OP_KEY_EVENT,
-              splitKeyEventCode((uint8_t)r, (uint8_t)c, keyState[r][c], layer)));
-          }
+          queueKeyEventDiagnostic(sendQueue, bleKeyboard.isConnected(), makeSplitHidEvent(SPLIT_OP_KEY_EVENT,
+            splitKeyEventCode((uint8_t)r, (uint8_t)c, keyState[r][c], layer)), diagDropped);
         }
       }
 
@@ -589,16 +604,18 @@ void loop() {
   if (!isConfigMode) {
     sendHeartbeatIfDue();
     serviceSendQueue();
-    // Tippen am Master zählt als Aktivität: Standby beenden, Deep Sleep verschieben
-    if (masterActivityReceived) {
-      masterActivityReceived = false;
-      lastActivityTime = millis();
-      exitStandby();
-    }
-    // Deep-Sleep-Vorbereitung und Config-Mode-Wechsel kehren nicht in loop() zurück
-    if (espNowReady && shouldRestartEspNow(restartGuard, millis(), true)) {
-      restartEspNow();
-    }
+    // Tippen am Master zählt als Aktivität: Standby beenden, Deep Sleep verschieben.
+    // Im Config Mode läuft dieser Block nicht; ein dort gesetztes Flag ist ohne Folge, weil der
+    // Config Mode mit ESP.restart() endet (ESP-NOW ist im Config Mode ohnehin aus).
+    if (consumeMasterActivity(masterActivityReceived, millis(), lastActivityTime)) exitStandby();
+  }
+
+  // ESP-NOW-Neustart: das Gate sperrt Config Mode, fälligen Deep Sleep (beginnt unten in diesem Durchlauf)
+  // und fehlendes ESP-NOW. Bewusst außerhalb des Blocks oben, damit das Gate selbst den Config Mode prüft.
+  bool deepSleepDue = !isConfigMode && deepSleepTimeoutMinutes > 0 &&
+    millis() - lastActivityTime > ((unsigned long)deepSleepTimeoutMinutes * 60UL * 1000UL);
+  if (shouldRestartEspNow(restartGuard, millis(), espNowRestartAllowed(isConfigMode, deepSleepDue, espNowReady))) {
+    restartEspNow();
   }
 
   if (enterConfigRequested) {

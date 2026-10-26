@@ -7,11 +7,20 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP="${DACTYL_APP:-$HOME/Applications/Dactyl Configurator.app}"
+# Schrägstriche am Ende entfernen, damit "$APP/Contents/MacOS/" kein "//" enthält
+while [ "${APP%/}" != "$APP" ]; do APP="${APP%/}"; done
+if [ -z "$APP" ]; then
+  echo "DACTYL_APP ergibt keinen App-Pfad (nur Schrägstriche)." >&2
+  exit 1
+fi
 QUIT_TIMEOUT="${DACTYL_QUIT_TIMEOUT:-20}"
 START_TIMEOUT="${DACTYL_START_TIMEOUT:-30}"
 PORT=8088
 
-app_running() { pgrep -f "$APP/Contents/MacOS/" > /dev/null; }
+# pgrep -f erwartet einen Regex: Sonderzeichen im App-Pfad (z. B. ".", "(", "+") wörtlich nehmen
+regex_escape() { printf '%s' "$1" | sed 's/[][\\.*^$+?(){}|]/\\&/g'; }
+APP_PATTERN="$(regex_escape "$APP/Contents/MacOS/")"
+app_running() { pgrep -f "$APP_PATTERN" > /dev/null; }
 server_pid() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -n 1 || true; }
 
 # Wartet bis zu $1 Sekunden, bis Befehl $2 erfolgreich ist
@@ -33,10 +42,20 @@ new_server_up() {
   [ -n "$pid" ] && [ "$pid" != "$OLD_PID" ]
 }
 
+# Die App liefert index.html, app.js, js/ und server.py aus dem Haupt-Checkout. Aus einem Worktree gebaut,
+# hätte das Bundle dessen main.js, die Oberfläche käme aber weiter aus dem Haupt-Checkout.
+# In einem Git-Worktree ist .git eine Datei, im Haupt-Checkout ein Verzeichnis.
+if [ -f "$REPO_DIR/.git" ]; then
+  echo "WARNUNG: $REPO_DIR ist ein Worktree, nicht der Haupt-Checkout. Die App lädt die Oberfläche weiter aus dem Haupt-Checkout." >&2
+fi
+
 OLD_PID="$(server_pid)"
 if app_running; then
   echo "Beende die App: $APP"
-  osascript -e "tell application \"$APP\" to quit"
+  if ! osascript -e "tell application \"$APP\" to quit"; then
+    echo "osascript konnte die App nicht beenden: $APP. Bitte die Automation-Berechtigung prüfen (Systemeinstellungen > Datenschutz & Sicherheit > Automation)." >&2
+    exit 1
+  fi
   if ! wait_for "$QUIT_TIMEOUT" app_stopped; then
     echo "Die App läuft nach ${QUIT_TIMEOUT} s noch. Bitte von Hand beenden: $APP" >&2
     exit 1

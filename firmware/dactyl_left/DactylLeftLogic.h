@@ -129,6 +129,21 @@ bool queuePushDiagnostic(SplitSendQueue &q, const SplitHidEvent &ev) {
   return queuePush(q, ev);
 }
 
+// Matrix-Position für den Live-Monitor am Master einreihen, nach den HID-Ereignissen der Taste.
+// Ohne Link sendet die Hälfte nichts (wie DactylLogic.h ohne Master). Ein Ereignis, das die
+// Warteschlangen-Grenze verwirft, zählt droppedCount. Rückgabe: true = eingereiht.
+bool queueKeyEventDiagnostic(SplitSendQueue &q, bool linkUp, const SplitHidEvent &ev, uint32_t &droppedCount) {
+  if (!linkUp) return false;
+  if (queuePushDiagnostic(q, ev)) return true;
+  droppedCount++;
+  return false;
+}
+
+// Op des Pakets am Kopf der Warteschlange (vor queueOnSendResult lesen), HEARTBEAT bei leerer Warteschlange
+uint8_t queueHeadOp(const SplitSendQueue &q) {
+  return q.count ? q.items[q.head].op : (uint8_t)SPLIT_OP_HEARTBEAT;
+}
+
 // Liefert das nächste zu sendende Paket, wenn keines unterwegs ist und keine Retry-Wartezeit läuft
 bool queueNextToSend(SplitSendQueue &q, unsigned long nowMs, SplitHidEvent &out) {
   if (q.inFlight || q.count == 0) return false;
@@ -161,10 +176,13 @@ SendOutcome queueOnSendResult(SplitSendQueue &q, bool success, unsigned long now
 // ESP-NOW-Neustart nach wiederholten Sendefehlern. Absicherung für einen Zustand, in dem jeder Versand
 // scheitert, obwohl der Master erreichbar ist; erst ein Neustart des Funk-Stacks stellt den Link her.
 // Auslöser: ESPNOW_RESTART_DROPS verworfene Ereignisse in Folge und Link seit ESPNOW_RESTART_DOWN_MS unten.
-// Danach höchstens ein Neustart pro ESPNOW_RESTART_BACKOFF_MS, damit kein Neustart-Kreislauf entsteht.
+// Danach höchstens ein Neustart pro Backoff, damit kein Neustart-Kreislauf entsteht. Der Backoff beginnt bei
+// ESPNOW_RESTART_BACKOFF_MS und verdoppelt sich mit jedem Neustart ohne Zustellung bis
+// ESPNOW_RESTART_BACKOFF_MAX_MS (Master aus oder im Deep Sleep: jeder Neustart kostet Strom und blockiert loop()).
 #define ESPNOW_RESTART_DROPS 5
 #define ESPNOW_RESTART_DOWN_MS 5000
-#define ESPNOW_RESTART_BACKOFF_MS 30000
+#define ESPNOW_RESTART_BACKOFF_MS 30000UL
+#define ESPNOW_RESTART_BACKOFF_MAX_MS 480000UL
 
 struct EspNowRestartGuard {
   uint8_t consecutiveDrops;
@@ -172,6 +190,8 @@ struct EspNowRestartGuard {
   unsigned long linkDownSinceMs;
   unsigned long lastRestartMs;
   bool everRestarted;
+  // Neustarts seit der letzten Zustellung (bestimmt den Backoff)
+  uint8_t restartsWithoutDelivery;
 };
 
 void restartGuardReset(EspNowRestartGuard &g) {
@@ -179,23 +199,39 @@ void restartGuardReset(EspNowRestartGuard &g) {
   g.linkDownSinceMs = 0;
   g.lastRestartMs = 0;
   g.everRestarted = false;
+  g.restartsWithoutDelivery = 0;
 }
 
-// Mit jedem Ergebnis aus queueOnSendResult aufrufen
-void restartGuardOnOutcome(EspNowRestartGuard &g, SendOutcome outcome, unsigned long nowMs) {
+// Mit jedem Ergebnis aus queueOnSendResult aufrufen; op = Op des Pakets (queueHeadOp vor queueOnSendResult).
+// Ein verworfenes Diagnose-Paket (KEY_EVENT) zählt nicht: es wird nie wiederholt und ist kein HID-Verlust.
+void restartGuardOnOutcome(EspNowRestartGuard &g, SendOutcome outcome, unsigned long nowMs,
+                           uint8_t op = SPLIT_OP_HEARTBEAT) {
   if (outcome == SEND_DELIVERED) {
     g.consecutiveDrops = 0;
-  } else if (outcome == SEND_DROPPED) {
+    g.restartsWithoutDelivery = 0;
+  } else if (outcome == SEND_DROPPED && op != SPLIT_OP_KEY_EVENT) {
     if (g.consecutiveDrops == 0) g.linkDownSinceMs = nowMs;
     if (g.consecutiveDrops < 255) g.consecutiveDrops++;
   }
 }
 
-// allowed = false im Config Mode und während der Deep-Sleep-Vorbereitung
+// Aktueller Backoff: ESPNOW_RESTART_BACKOFF_MS, verdoppelt je weiterem Neustart ohne Zustellung
+unsigned long restartBackoffMs(const EspNowRestartGuard &g) {
+  unsigned long ms = ESPNOW_RESTART_BACKOFF_MS;
+  for (uint8_t i = 1; i < g.restartsWithoutDelivery && ms < ESPNOW_RESTART_BACKOFF_MAX_MS; i++) ms *= 2;
+  return ms < ESPNOW_RESTART_BACKOFF_MAX_MS ? ms : ESPNOW_RESTART_BACKOFF_MAX_MS;
+}
+
+// Neustart nur im Tastaturmodus mit laufendem ESP-NOW und nicht während der Deep-Sleep-Vorbereitung
+bool espNowRestartAllowed(bool configMode, bool deepSleepPending, bool espNowReady) {
+  return !configMode && !deepSleepPending && espNowReady;
+}
+
+// allowed: Ergebnis von espNowRestartAllowed
 bool shouldRestartEspNow(const EspNowRestartGuard &g, unsigned long nowMs, bool allowed) {
   if (!allowed || g.consecutiveDrops < ESPNOW_RESTART_DROPS) return false;
   if (nowMs - g.linkDownSinceMs < ESPNOW_RESTART_DOWN_MS) return false;
-  return !g.everRestarted || (nowMs - g.lastRestartMs) >= ESPNOW_RESTART_BACKOFF_MS;
+  return !g.everRestarted || (nowMs - g.lastRestartMs) >= restartBackoffMs(g);
 }
 
 // Nach dem Neustart aufrufen: Fehlerzählung beginnt von vorn, der Backoff läuft ab nowMs
@@ -203,4 +239,14 @@ void restartGuardOnRestart(EspNowRestartGuard &g, unsigned long nowMs) {
   g.consecutiveDrops = 0;
   g.lastRestartMs = nowMs;
   g.everRestarted = true;
+  if (g.restartsWithoutDelivery < 255) g.restartsWithoutDelivery++;
+}
+
+// SPLIT_OP_ACTIVITY vom Master (Flag aus dem Empfangs-Callback) als eigene Aktivität übernehmen.
+// Rückgabe: true, wenn ein Paket eingetroffen ist; der Aufrufer beendet dann den Standby.
+bool consumeMasterActivity(volatile bool &received, unsigned long nowMs, unsigned long &lastActivityMs) {
+  if (!received) return false;
+  received = false;
+  lastActivityMs = nowMs;
+  return true;
 }

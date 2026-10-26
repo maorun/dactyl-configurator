@@ -150,6 +150,18 @@ inline bool splitActivityTake(SplitActivityThrottle &t, unsigned long nowMs) {
   return true;
 }
 
+// Ergebnis von esp_now_send für ein genommenes ACTIVITY-Paket: bei einem Fehler bleibt die Vormerkung
+// stehen, das Paket geht nach dem Intervall erneut raus (ohne neuen Tastendruck)
+inline void splitActivitySendResult(SplitActivityThrottle &t, bool sent) {
+  if (!sent) t.pending = true;
+}
+
+// Matrix-Wechsel am Master: eigene Aktivität (Inaktivitäts-Timer) und Vormerkung für die linke Hälfte
+inline void splitNoteLocalKeyChange(SplitActivityThrottle &t, unsigned long nowMs, unsigned long &lastActivityMs) {
+  lastActivityMs = nowMs;
+  splitActivityNote(t);
+}
+
 // Scrollen hat keinen Zustand: ein doppelt zugestelltes Retry-Paket scrollte doppelt. Ein verlorener
 // Scrollschritt ist harmloser, deshalb wiederholt die linke Hälfte MOUSE_SCROLL nicht. Ein doppeltes
 // KEY_EVENT zählte in Heatmap und Statistik doppelt; ein verlorenes kostet nur eine Anzeige.
@@ -527,6 +539,8 @@ inline bool splitRxPop(SplitRxQueue &q, SplitHidEvent &out) {
 // -----------------------------------------------------------------------------
 struct SplitRxReport {
   uint8_t applied;      // ausgeführte Ereignisse (für Aktivität und Ausgabe)
+  uint8_t keyEvents;    // empfangene KEY_EVENTs (Aktivität: auch eine linke Taste mit Aktion 0)
+  uint8_t keyEventsDropped; // KEY_EVENTs über SPLIT_KEY_EVENTS_PER_RX, nicht gemeldet (eine Sammelzeile)
   bool linkLost;        // Link gerade ausgefallen, linke Eingaben gelöst
   bool overflow;        // Empfangsring war voll, linke Eingaben gelöst
   bool hostLost;        // Mac-Verbindung gerade verloren, alle Eingaben gelöst
@@ -539,15 +553,16 @@ typedef void (*SplitRxAppliedFn)(const SplitHidEvent &ev);
 // - Ohne Host wird nichts ausgeführt; der Link gilt trotzdem als lebendig. Beim Übergang
 //   "Host bereit -> nicht bereit" werden alle Zustände geleert (keine hängende Taste nach Reconnect).
 // - Ein neu verworfenes Paket (voller Ring) kann ein Release gewesen sein: alle linken Eingaben lösen.
-// - KEY_EVENT ist reine Diagnose: onKeyEvent meldet es auch ohne Host, es zählt nicht als ausgeführt.
-//   Höchstens SPLIT_KEY_EVENTS_PER_RX pro Aufruf: Jede Serial-Zeile blockiert loop(), eine Flut mit gefälschter
-//   linker MAC soll das Tippen am Master nicht bremsen. Normales Tippen bleibt weit darunter.
-#define SPLIT_KEY_EVENTS_PER_RX 8
+// - KEY_EVENT ist reine Diagnose: onKeyEvent meldet es auch ohne Host, es zählt nicht als ausgeführt,
+//   aber in keyEvents (Aktivität). Höchstens SPLIT_KEY_EVENTS_PER_RX pro Aufruf: Jede Serial-Zeile blockiert
+//   loop() (etwa 4 ms bei 115200 Baud), eine Flut mit gefälschter linker MAC soll das Tippen am Master nicht
+//   bremsen. Die linke Hälfte sendet ein Paket nach dem anderen; normales Tippen bleibt weit darunter.
+#define SPLIT_KEY_EVENTS_PER_RX 4
 template <class Kbd>
 SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, bool &hostWasReady,
                              bool hostReady, unsigned long nowMs, SplitRxAppliedFn onApplied,
                              SplitRxAppliedFn onKeyEvent = nullptr) {
-  SplitRxReport rep = {0, false, false, false};
+  SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
     rep.hostLost = true;
@@ -564,9 +579,12 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
     if (ev.op == SPLIT_OP_KEY_EVENT) {
       kbd.splitLeft.lastRxMs = nowMs;
       kbd.splitLeft.linkUp = true;
+      if (rep.keyEvents < 255) rep.keyEvents++;
       if (onKeyEvent && keyEvents < SPLIT_KEY_EVENTS_PER_RX) {
         keyEvents++;
         onKeyEvent(ev);
+      } else if (onKeyEvent && rep.keyEventsDropped < 255) {
+        rep.keyEventsDropped++;
       }
       continue;
     }

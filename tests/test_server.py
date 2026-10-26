@@ -2,6 +2,8 @@ import unittest
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import http.client
@@ -587,6 +589,94 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn('cp "$REPO_DIR/main.js" "$REPO_DIR/package.json" "$APP_DIR/"', script)
         self.assertIn('codesign --force --deep --sign - "$APP"', script)
         self.assertIn("pgrep", script)  # baut nicht in eine laufende App
+
+    def test_rebuild_app_script_quits_builds_and_restarts(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
+            pkg = json.load(f)
+        self.assertEqual(pkg["scripts"]["rebuild:app"], "bash scripts/rebuild-app.sh")
+        with open(os.path.join(root, "scripts", "rebuild-app.sh"), encoding="utf-8") as f:
+            script = f.read()
+        self.assertIn("set -euo pipefail", script)
+        # Sauber beenden (before-quit stoppt server.py), nie per kill
+        quit_at = script.index('to quit"')
+        build_at = script.index('bash "$REPO_DIR/scripts/build-app.sh"')
+        open_at = script.index('open -a "$APP"')
+        self.assertLess(quit_at, build_at)
+        self.assertLess(build_at, open_at)
+        code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotRegex(code, r"\b(kill|pkill|killall)\b")
+        # Erfolg erst mit neuer server.py-PID und HTTP 200
+        self.assertIn('[ "$pid" != "$OLD_PID" ]', script)
+        self.assertIn('-H "Host: localhost:$PORT"', script)
+
+    def test_rebuild_app_script_paths_with_stubbed_commands(self):
+        # Führt rebuild-app.sh mit Stub-Befehlen aus: Zustand (App läuft, Server-PID) liegt in Dateien
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(os.path.join(repo, "scripts"))
+            shutil.copy(os.path.join(root, "scripts", "rebuild-app.sh"), os.path.join(repo, "scripts"))
+            state = os.path.join(tmp, "state")
+            os.makedirs(state)
+            with open(os.path.join(repo, "scripts", "build-app.sh"), "w", encoding="utf-8") as f:
+                f.write(f'echo build >> "{state}/log"\n[ ! -e "{state}/build_fails" ]\n')
+            bin_dir = os.path.join(tmp, "bin")
+            os.makedirs(bin_dir)
+            stubs = {
+                "pgrep": f'[ -e "{state}/app" ]',
+                "lsof": f'[ -e "{state}/pid" ] && cat "{state}/pid"; true',
+                # Sauberes Beenden: App und ihr Server enden (außer quit_hangs)
+                "osascript": f'echo quit >> "{state}/log"; [ -e "{state}/quit_hangs" ] || rm -f "{state}/app" "{state}/pid"',
+                "open": f'echo open >> "{state}/log"; touch "{state}/app"; echo 2222 > "{state}/pid"',
+                "curl": "printf 200",
+                "sleep": "true",
+            }
+            for name, body in stubs.items():
+                path = os.path.join(bin_dir, name)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(f"#!/bin/bash\n{body}\n")
+                os.chmod(path, 0o755)
+            env = {**os.environ, "PATH": f"{bin_dir}:/usr/bin:/bin", "DACTYL_APP": os.path.join(tmp, "Dactyl.app"),
+                   "DACTYL_QUIT_TIMEOUT": "1", "DACTYL_START_TIMEOUT": "1"}
+
+            def run(*present):
+                for name in ("app", "pid", "log", "quit_hangs", "build_fails"):
+                    p = os.path.join(state, name)
+                    if os.path.exists(p):
+                        os.remove(p)
+                for name in present:
+                    with open(os.path.join(state, name), "w", encoding="utf-8") as f:
+                        f.write("1111\n" if name == "pid" else "")
+                proc = subprocess.run(["bash", os.path.join(repo, "scripts", "rebuild-app.sh")], env=env,
+                                      capture_output=True, text=True, timeout=30)
+                log_path = os.path.join(state, "log")
+                log = open(log_path, encoding="utf-8").read().split() if os.path.exists(log_path) else []
+                return proc, log
+
+            # App läuft: beenden, bauen, starten, neue PID
+            proc, log = run("app", "pid")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(log, ["quit", "build", "open"])
+            self.assertIn("1111 -> 2222", proc.stdout)
+            # App läuft nicht, Port frei: bauen und starten ohne Quit
+            proc, log = run()
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(log, ["build", "open"])
+            # Fremder Server auf dem Port ohne App: nichts bauen, nichts starten
+            proc, log = run("pid")
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertEqual(log, [])
+            self.assertIn("Port 8088", proc.stderr)
+            # App lässt sich nicht beenden: nichts bauen
+            proc, log = run("app", "pid", "quit_hangs")
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertEqual(log, ["quit"])
+            # Build scheitert: nicht starten
+            proc, log = run("build_fails")
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertEqual(log, ["build"])
+            self.assertIn("rebuild:app", proc.stderr)
 
     def test_left_user_config_is_not_versioned(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")

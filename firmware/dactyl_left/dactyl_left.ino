@@ -280,6 +280,7 @@ bool toggleLayers[NUM_LAYERS] = {false};
 // -----------------------------------------------------------------------------
 static bool espNowReady = false;
 static uint32_t droppedReported = 0;
+static EspNowRestartGuard restartGuard;
 #define HEARTBEAT_INTERVAL_MS 1000
 
 // Vom Sende-Callback (Wi-Fi-Task) geschrieben, in loop() gelesen. Der Callback schreibt zuerst
@@ -293,7 +294,7 @@ static void onEspNowSent(const esp_now_send_info_t *info, esp_now_send_status_t 
   callbackSeq = callbackSeq + 1;
 }
 
-static void setupEspNow() {
+static bool setupEspNow() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   esp_wifi_set_channel(SPLIT_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
@@ -305,7 +306,7 @@ static void setupEspNow() {
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("ERR ESPNOW_INIT");
-    return;
+    return false;
   }
   esp_now_register_send_cb(onEspNowSent);
 
@@ -316,16 +317,37 @@ static void setupEspNow() {
   peer.encrypt = false;
   if (esp_now_add_peer(&peer) != ESP_OK) {
     Serial.println("ERR ESPNOW_PEER");
-    return;
+    return false;
   }
   espNowReady = true;
   Serial.println("ESP-NOW bereit (Kanal 1, Ziel 2E:BC:BB:81:61:A6)");
   // Nach einem Neustart hält der Master evtl. noch Eingaben dieser Hälfte (kein Link-Timeout bei kurzem
   // Reboot). RELEASE_ALL löst sie; die Bestätigung meldet zugleich den Link, ohne auf den Heartbeat zu warten.
-  queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
+  // releaseAll() leert auch die gehaltenen Eingaben des Proxys (nach restartEspNow nicht leer).
+  bleKeyboard.releaseAll();
+  return true;
 }
 
-static void reportOutcome(SendOutcome outcome) {
+// Neustart des Funk-Stacks, wenn jeder Versand scheitert (shouldRestartEspNow). Die Warteschlange wird
+// geleert; setupEspNow() stellt Kanal und Peer her und reiht RELEASE_ALL ein.
+static void restartEspNow() {
+  Serial.println("ESPNOW_RESTART");
+  espNowReady = false;
+  esp_now_deinit();
+  WiFi.mode(WIFI_OFF);
+  delay(20);
+  queueReset(sendQueue);
+  restartGuardOnRestart(restartGuard, millis());
+  if (!setupEspNow()) {
+    // Ohne ESP-NOW sendet diese Hälfte nichts mehr; die Keymap liegt in NVS
+    Serial.println("[ESPNOW] Neustart fehlgeschlagen -> Board-Neustart");
+    Serial.flush();
+    ESP.restart();
+  }
+}
+
+static void reportOutcome(SendOutcome outcome, unsigned long nowMs) {
+  restartGuardOnOutcome(restartGuard, outcome, nowMs);
   if (outcome == SEND_RETRY) Serial.println("ESPNOW_RETRY");
   else if (outcome == SEND_DROPPED) Serial.println("ESPNOW_FAIL");
 }
@@ -338,9 +360,9 @@ void serviceSendQueue() {
   bool ok = lastSendOk;
   if (queueCallbackIsCurrent(sendQueue, seq)) {
     bleKeyboard.onSendResult(ok, now);
-    reportOutcome(queueOnSendResult(sendQueue, ok, now));
+    reportOutcome(queueOnSendResult(sendQueue, ok, now), now);
   } else if (queueTimedOut(sendQueue, now)) {
-    reportOutcome(queueOnSendResult(sendQueue, false, now));
+    reportOutcome(queueOnSendResult(sendQueue, false, now), now);
   }
 
   SplitHidEvent ev;
@@ -349,7 +371,7 @@ void serviceSendQueue() {
     if (esp_now_send(SPLIT_MASTER_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK) {
       queueMarkSent(sendQueue, seqBeforeSend);
     } else {
-      reportOutcome(queueOnSendResult(sendQueue, false, now));
+      reportOutcome(queueOnSendResult(sendQueue, false, now), now);
     }
   }
 
@@ -407,6 +429,7 @@ void setup() {
   configMutex = xSemaphoreCreateMutex();
   lastActivityTime = millis();
   queueReset(sendQueue);
+  restartGuardReset(restartGuard);
   resetLeftKeys();
 
   Serial.println("\n=============================================");
@@ -547,6 +570,10 @@ void loop() {
   if (!isConfigMode) {
     sendHeartbeatIfDue();
     serviceSendQueue();
+    // Deep-Sleep-Vorbereitung und Config-Mode-Wechsel kehren nicht in loop() zurück
+    if (espNowReady && shouldRestartEspNow(restartGuard, millis(), true)) {
+      restartEspNow();
+    }
   }
 
   if (enterConfigRequested) {

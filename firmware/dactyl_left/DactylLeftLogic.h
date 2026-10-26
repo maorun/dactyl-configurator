@@ -149,3 +149,50 @@ SendOutcome queueOnSendResult(SplitSendQueue &q, bool success, unsigned long now
   q.attempts = 0;
   return success ? SEND_DELIVERED : SEND_DROPPED;
 }
+
+// ESP-NOW-Neustart nach wiederholten Sendefehlern. Absicherung für einen Zustand, in dem jeder Versand
+// scheitert, obwohl der Master erreichbar ist; erst ein Neustart des Funk-Stacks stellt den Link her.
+// Auslöser: ESPNOW_RESTART_DROPS verworfene Ereignisse in Folge und Link seit ESPNOW_RESTART_DOWN_MS unten.
+// Danach höchstens ein Neustart pro ESPNOW_RESTART_BACKOFF_MS, damit kein Neustart-Kreislauf entsteht.
+#define ESPNOW_RESTART_DROPS 5
+#define ESPNOW_RESTART_DOWN_MS 5000
+#define ESPNOW_RESTART_BACKOFF_MS 30000
+
+struct EspNowRestartGuard {
+  uint8_t consecutiveDrops;
+  // Zeitpunkt des ersten verworfenen Ereignisses nach dem letzten bestätigten Versand
+  unsigned long linkDownSinceMs;
+  unsigned long lastRestartMs;
+  bool everRestarted;
+};
+
+void restartGuardReset(EspNowRestartGuard &g) {
+  g.consecutiveDrops = 0;
+  g.linkDownSinceMs = 0;
+  g.lastRestartMs = 0;
+  g.everRestarted = false;
+}
+
+// Mit jedem Ergebnis aus queueOnSendResult aufrufen
+void restartGuardOnOutcome(EspNowRestartGuard &g, SendOutcome outcome, unsigned long nowMs) {
+  if (outcome == SEND_DELIVERED) {
+    g.consecutiveDrops = 0;
+  } else if (outcome == SEND_DROPPED) {
+    if (g.consecutiveDrops == 0) g.linkDownSinceMs = nowMs;
+    if (g.consecutiveDrops < 255) g.consecutiveDrops++;
+  }
+}
+
+// allowed = false im Config Mode und während der Deep-Sleep-Vorbereitung
+bool shouldRestartEspNow(const EspNowRestartGuard &g, unsigned long nowMs, bool allowed) {
+  if (!allowed || g.consecutiveDrops < ESPNOW_RESTART_DROPS) return false;
+  if (nowMs - g.linkDownSinceMs < ESPNOW_RESTART_DOWN_MS) return false;
+  return !g.everRestarted || (nowMs - g.lastRestartMs) >= ESPNOW_RESTART_BACKOFF_MS;
+}
+
+// Nach dem Neustart aufrufen: Fehlerzählung beginnt von vorn, der Backoff läuft ab nowMs
+void restartGuardOnRestart(EspNowRestartGuard &g, unsigned long nowMs) {
+  g.consecutiveDrops = 0;
+  g.lastRestartMs = nowMs;
+  g.everRestarted = true;
+}

@@ -328,6 +328,78 @@ TEST(test_callback_counter_wrap) {
   assert(queueCallbackIsCurrent(q, cb));
 }
 
+// Liefert n verworfene Ereignisse im Abstand stepMs ab startMs; Rückgabe: Zeitpunkt des letzten
+static unsigned long dropEvents(EspNowRestartGuard &g, int n, unsigned long startMs, unsigned long stepMs) {
+  unsigned long t = startMs;
+  for (int i = 0; i < n; i++) {
+    if (i > 0) t += stepMs;
+    restartGuardOnOutcome(g, SEND_DROPPED, t);
+  }
+  return t;
+}
+
+TEST(test_restart_needs_drop_threshold_and_down_time) {
+  EspNowRestartGuard g;
+  restartGuardReset(g);
+  unsigned long t = dropEvents(g, ESPNOW_RESTART_DROPS - 1, 1000, 2000);
+  // Genug Ausfallzeit, aber ein verworfenes Ereignis zu wenig
+  assert(!shouldRestartEspNow(g, t + ESPNOW_RESTART_DOWN_MS, true));
+  restartGuardOnOutcome(g, SEND_DROPPED, t + 1);
+  assert(shouldRestartEspNow(g, t + 1, true));
+
+  // Genug Ereignisse, aber der Link ist erst kurz unten
+  restartGuardReset(g);
+  t = dropEvents(g, ESPNOW_RESTART_DROPS, 1000, 100);
+  assert(!shouldRestartEspNow(g, 1000 + ESPNOW_RESTART_DOWN_MS - 1, true));
+  assert(shouldRestartEspNow(g, 1000 + ESPNOW_RESTART_DOWN_MS, true));
+}
+
+TEST(test_restart_counter_resets_after_delivery) {
+  EspNowRestartGuard g;
+  restartGuardReset(g);
+  unsigned long t = dropEvents(g, ESPNOW_RESTART_DROPS - 1, 0, 1000);
+  restartGuardOnOutcome(g, SEND_DELIVERED, t + 1);
+  // Ein Retry ist kein verworfenes Ereignis
+  restartGuardOnOutcome(g, SEND_RETRY, t + 2);
+  t = dropEvents(g, ESPNOW_RESTART_DROPS - 1, t + 1000, 1000);
+  assert(!shouldRestartEspNow(g, t + ESPNOW_RESTART_DOWN_MS, true));
+  // Die Ausfallzeit zählt ab dem ersten Drop nach der Zustellung
+  restartGuardOnOutcome(g, SEND_DROPPED, t + 1);
+  assert(!shouldRestartEspNow(g, t + 1, true));
+}
+
+TEST(test_restart_backoff) {
+  EspNowRestartGuard g;
+  restartGuardReset(g);
+  unsigned long t = dropEvents(g, ESPNOW_RESTART_DROPS, 0, 1000) + ESPNOW_RESTART_DOWN_MS;
+  assert(shouldRestartEspNow(g, t, true));
+  restartGuardOnRestart(g, t);
+  assert(!shouldRestartEspNow(g, t, true));
+  // Der Link bleibt unten: Schwelle und Ausfallzeit sind wieder erreicht, der Backoff läuft noch
+  unsigned long t2 = dropEvents(g, ESPNOW_RESTART_DROPS, t + 1000, 1000) + ESPNOW_RESTART_DOWN_MS;
+  assert(t2 - t < ESPNOW_RESTART_BACKOFF_MS);
+  assert(!shouldRestartEspNow(g, t2, true));
+  assert(!shouldRestartEspNow(g, t + ESPNOW_RESTART_BACKOFF_MS - 1, true));
+  assert(shouldRestartEspNow(g, t + ESPNOW_RESTART_BACKOFF_MS, true));
+}
+
+TEST(test_restart_not_allowed_in_config_mode_or_sleep) {
+  EspNowRestartGuard g;
+  restartGuardReset(g);
+  unsigned long t = dropEvents(g, ESPNOW_RESTART_DROPS, 0, 1000) + ESPNOW_RESTART_DOWN_MS;
+  assert(!shouldRestartEspNow(g, t, false));
+  assert(shouldRestartEspNow(g, t, true));
+}
+
+TEST(test_restart_across_millis_wrap) {
+  EspNowRestartGuard g;
+  restartGuardReset(g);
+  const unsigned long nearWrap = ~0UL - 1000;
+  unsigned long t = dropEvents(g, ESPNOW_RESTART_DROPS, nearWrap, 10);
+  assert(!shouldRestartEspNow(g, t, true));
+  assert(shouldRestartEspNow(g, nearWrap + ESPNOW_RESTART_DOWN_MS, true));
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Firmware Unit Test Suite" << std::endl;

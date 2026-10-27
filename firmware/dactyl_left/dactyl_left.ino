@@ -72,7 +72,7 @@ String deviceName = DEFAULT_DEVICE_NAME;
 uint8_t debounceMs = 5;
 uint16_t comboTimeoutMs = 40;
 uint16_t tappingTermMs = 200;
-uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, gedrosselter Scan)
+uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (gedrosselter Scan, CPU bleibt 240 MHz)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
 // [[[END_SETTINGS]]]
 
@@ -165,19 +165,19 @@ void exitConfigMode() {
   ESP.restart();
 }
 
+// Der Standby drosselt nur den Matrix-Scan. Kein setCpuFrequencyMhz(): ein Taktwechsel bei laufendem
+// Wi-Fi ließ jeden ESP-NOW-Versand scheitern, bis ESPNOW_RESTART griff (Tasten nach dem Aufwachen verloren).
 void exitStandby() {
   if (isStandby) {
     isStandby = false;
-    setCpuFrequencyMhz(240);
-    Serial.println("[POWER] Standby beendet -> CPU wieder auf 240 MHz");
+    Serial.println("[POWER] Standby beendet -> normaler Matrix-Scan");
   }
 }
 
 void enterStandby() {
   if (!isStandby) {
     isStandby = true;
-    setCpuFrequencyMhz(80);
-    Serial.println("[POWER] Inaktivität erreicht -> Standby aktiv (CPU 80 MHz, gedrosselter Matrix-Scan)");
+    Serial.println("[POWER] Inaktivität erreicht -> Standby aktiv (gedrosselter Matrix-Scan, CPU bleibt 240 MHz)");
   }
 }
 

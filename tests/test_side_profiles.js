@@ -451,6 +451,16 @@ test("Split-Diagnose: Bitlayout von splitKeyEventCode und SPLIT_KEY-Ausgabe pass
   assert.match(leftIno, /queueKeyEventDiagnostic\(sendQueue, bleKeyboard\.isConnected\(\), makeSplitHidEvent\(SPLIT_OP_KEY_EVENT/);
 });
 
+test("Links: Standby ändert den CPU-Takt nicht (Taktwechsel bei laufendem Wi-Fi stört ESP-NOW)", () => {
+  // Hardware-Befund: nach setCpuFrequencyMhz() scheiterte jeder Versand bis zum ESPNOW_RESTART,
+  // die ersten Tasten nach dem Aufwachen gingen verloren
+  for (const fn of ["enterStandby", "exitStandby"]) {
+    const m = leftIno.match(new RegExp(`void ${fn}\\(\\) \\{([\\s\\S]*?)\\n\\}`));
+    assert.ok(m, `${fn}() fehlt in dactyl_left.ino`);
+    assert.doesNotMatch(m[1], /setCpuFrequencyMhz/, `${fn}() darf den CPU-Takt nicht ändern`);
+  }
+});
+
 runAll().catch((err) => {
   console.error(err);
   process.exit(1);

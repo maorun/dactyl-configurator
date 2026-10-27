@@ -184,6 +184,10 @@ function setupEventListeners() {
       alert(`Maximal ${MAX_COMBOS} Combos werden von der Firmware unterstützt.`);
       return;
     }
+    if (behavior === "MODIFIER_HOLD" && isOneShotOrCapsWordCode(action)) {
+      alert("Modifier Hold unterstützt keine One-Shot- oder Caps-Word-Aktion. Bitte \"Einzeltaste senden\" wählen.");
+      return;
+    }
 
     const r1 = parseInt(k1Val[0], 10), c1 = parseInt(k1Val[1], 10);
     const r2 = parseInt(k2Val[0], 10), c2 = parseInt(k2Val[1], 10);
@@ -257,6 +261,7 @@ function setupEventListeners() {
           type: "import",
           snapshot: true,
           pairs: true,
+          macros: true,
           title: "JSON-Konfiguration importiert",
           description: `${file.name || "Backup"} geladen`,
           revert: () => {

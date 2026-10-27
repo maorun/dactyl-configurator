@@ -275,6 +275,13 @@ const ONE_SHOT_LABELS = {
   CAPS_WORD: "CapsWd"
 };
 
+// true für One-Shot- und Caps-Word-Codes (Combos nur mit KEY_PRESS, nicht mit MODIFIER_HOLD)
+function isOneShotOrCapsWordCode(code) {
+  // Der Server akzeptiert auch den Firmware-Namen (ACT_OSM_LSHIFT, ACT_CAPS_WORD)
+  const name = String(code || "").replace(/^ACT_/, "");
+  return Object.prototype.hasOwnProperty.call(ONE_SHOT_LABELS, name);
+}
+
 // Tastenpaar PAIR_<n>: eine Taste drückt zwei Tasten gleichzeitig (Index in currentConfig.keyPairs)
 const ACT_KEY_PAIR_BASE = 0x140;
 const MAX_KEY_PAIRS = 16;

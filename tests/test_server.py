@@ -9,6 +9,7 @@ import tempfile
 import http.client
 import socketserver
 import threading
+from unittest import mock
 
 # Add parent directory to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -374,6 +375,17 @@ class TestServerAndCodegen(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.generate_combos_cpp([combo])
 
+    def test_modifier_hold_combo_rejects_one_shot_and_caps_word(self):
+        # MODIFIER_HOLD hält nur Codes 1..255; One-Shot und Caps Word sendeten dort nichts (stille Fehlkonfiguration)
+        for action in ("OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD"):
+            combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "MODIFIER_HOLD", "action": action}
+            with self.subTest(action=action), self.assertRaises(ValueError):
+                server.generate_combos_cpp([combo])
+            # Mit KEY_PRESS bleibt die Aktion erlaubt (One-Shot = tippen)
+            self.assertIn("ACT_", server.generate_combos_cpp([{**combo, "behavior": "KEY_PRESS"}]))
+        self.assertIn("KEY_LEFT_SHIFT", server.generate_combos_cpp([
+            {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "MODIFIER_HOLD", "action": "KEY_LEFT_SHIFT"}]))
+
     def test_macro_constants_match_firmware(self):
         with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
             common = f.read()
@@ -707,11 +719,188 @@ class TestServerAndCodegen(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             with open(os.path.join(data_dir, "current_config.json"), encoding="utf-8") as f:
                 self.assertEqual(f.read(), '{"layers": "app"}')
+            # Das Backup liegt neben dem Paket, nicht darin: codesign versiegelt es sonst mit
+            backup = os.path.join(tmp, ".Dactyl.app.app-dir.old")
+            # Ein früherer Lauf wurde nach dem Verschieben ins Backup hart beendet: der nächste Lauf stellt es wieder her
+            os.rename(app_dir, backup)
+            proc = build()
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("Abgebrochener Lauf erkannt", proc.stderr)
+            self.assertTrue(os.path.isfile(os.path.join(app_dir, "main.js")))
+            self.assertFalse(os.path.exists(backup))
+            # Lauf nach dem Einsetzen der neuen App vor der Signaturprüfung beendet: Backup und App-Verzeichnis
+            # existieren beide. Ist das Paket nicht gültig signiert, bleibt das Backup die gültige App.
+            shutil.copytree(app_dir, backup)
+            with open(os.path.join(backup, "marker.txt"), "w", encoding="utf-8") as f:
+                f.write("gueltig-alt")
+            with open(os.path.join(app_dir, "marker.txt"), "w", encoding="utf-8") as f:
+                f.write("kaputt-neu")
+            stub("codesign", 'if [ "$1" = "--verify" ]; then exit 1; fi')
+            proc = build()
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("Abgebrochener Lauf erkannt", proc.stderr)
+            with open(os.path.join(app_dir, "marker.txt"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "gueltig-alt")
+            self.assertFalse(os.path.exists(backup))
+            # Ist das vorhandene Paket gültig signiert, wird das Backup nur gelöscht
+            shutil.copytree(app_dir, backup)
+            stub("codesign", "exit 0")
+            proc = build()
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("Abgebrochener Lauf erkannt", proc.stderr)
+            self.assertFalse(os.path.exists(backup))
+            # Während codesign läuft, liegt kein Backup im Paket (sein späteres Löschen bräche die Signatur)
+            stub("codesign", 'if [ "$1" = "--force" ]; then find "' + app_path + '" -name "*.old" >> "' + tmp + '/inside"; fi; exit 0')
+            proc = build()
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(os.path.join(tmp, "inside"), encoding="utf-8") as f:
+                self.assertEqual(f.read().strip(), "")
+            # SIGTERM während des Signierens: die vorherige App kommt zurück
+            with open(os.path.join(app_dir, "marker.txt"), "w", encoding="utf-8") as f:
+                f.write("vorher")
+            stub("codesign", 'if [ "$1" = "--force" ] && [ ! -f "' + tmp + '/sigterm-done" ]; then '
+                             'touch "' + tmp + '/sigterm-done"; kill -TERM $PPID; fi; exit 0')
+            proc = build()
+            self.assertEqual(proc.returncode, 143, proc.stderr)
+            with open(os.path.join(app_dir, "marker.txt"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "vorher")
+            self.assertFalse(os.path.exists(backup))
+            # Signaturprüfung scheitert: die vorherige App bleibt vollständig, kein .old oder .new bleibt liegen
+            with open(os.path.join(app_dir, "marker.txt"), "w", encoding="utf-8") as f:
+                f.write("vorher")
+            stub("codesign", 'if [ "$1" = "--verify" ]; then exit 1; fi')
+            proc = build()
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("wiederhergestellt", proc.stderr)
+            # Scheitert auch die Prüfung der wiederhergestellten App, bleibt das nicht stumm
+            self.assertIn("WARNUNG", proc.stderr)
+            with open(os.path.join(app_dir, "marker.txt"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "vorher")
+            self.assertFalse(os.path.exists(backup))
+            self.assertFalse(os.path.exists(app_dir + ".new"))
+            stub("codesign", "exit 0")
             # Läuft die App, baut das Skript nicht
             stub("pgrep", "exit 0")
             proc = build()
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("läuft noch", proc.stderr)
+
+    def test_sync_firmware_sources_rolls_back_both_sketches(self):
+        # Scheitert das Einsetzen des zweiten Sketches, kommen beide alten Sketches zurück
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "bundle")
+            data = os.path.join(tmp, "data")
+            for name in server.FIRMWARE_SKETCHES:
+                os.makedirs(os.path.join(source, name))
+                with open(os.path.join(source, name, "Neu.h"), "w", encoding="utf-8") as f:
+                    f.write("neu")
+                os.makedirs(os.path.join(data, name))
+                with open(os.path.join(data, name, "Alt.h"), "w", encoding="utf-8") as f:
+                    f.write("alt")
+            old = (server.SOURCE_FIRMWARE_DIR, server.FIRMWARE_DIR, server.SEPARATE_FIRMWARE)
+            real_replace = os.replace
+            calls = []
+
+            def failing_replace(src, dst):
+                calls.append(dst)
+                # Der vierte Aufruf setzt den zweiten neuen Sketch ein
+                if len(calls) == 4:
+                    raise OSError("Platte voll")
+                return real_replace(src, dst)
+
+            server.SOURCE_FIRMWARE_DIR, server.FIRMWARE_DIR, server.SEPARATE_FIRMWARE = source, data, True
+            try:
+                with mock.patch.object(server.os, "replace", failing_replace):
+                    with self.assertRaises(OSError):
+                        server.sync_firmware_sources()
+            finally:
+                server.SOURCE_FIRMWARE_DIR, server.FIRMWARE_DIR, server.SEPARATE_FIRMWARE = old
+            for name in server.FIRMWARE_SKETCHES:
+                self.assertEqual(sorted(os.listdir(os.path.join(data, name))), ["Alt.h"], name)
+            self.assertEqual(sorted(os.listdir(data)), sorted(server.FIRMWARE_SKETCHES))
+
+    def test_sync_firmware_sources_handles_readonly_dirs_orphans_and_missing_ino(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "bundle")
+            data = os.path.join(tmp, "data")
+            for name in server.FIRMWARE_SKETCHES:
+                os.makedirs(os.path.join(source, name, "sub"))
+                for rel in ("Neu.h", f"{name}.ino", "sub/x.h", f"sub/{name}.ino"):
+                    with open(os.path.join(source, name, rel), "w", encoding="utf-8") as f:
+                        f.write(rel)
+            # Gerenderte rechte .ino im Datenverzeichnis, links noch keine; ein Rest eines abgebrochenen Laufs
+            os.makedirs(os.path.join(data, "dactyl_right", "alt"))
+            with open(os.path.join(data, "dactyl_right", "dactyl_right.ino"), "w", encoding="utf-8") as f:
+                f.write("gerendert")
+            os.makedirs(os.path.join(data, ".dactyl_left.abc.new", "sub"))
+            os.makedirs(os.path.join(data, ".fremd.old"))
+            # Kopien älterer App-Versionen haben schreibgeschützte Verzeichnisse (0555)
+            for d in (os.path.join(data, "dactyl_right", "alt"), os.path.join(data, ".dactyl_left.abc.new", "sub"),
+                      os.path.join(data, ".dactyl_left.abc.new")):
+                os.chmod(d, 0o555)
+            # Signiertes Paket: Dateien und Verzeichnisse schreibgeschützt
+            for dirpath, dirs, files in os.walk(source, topdown=False):
+                for f in files:
+                    os.chmod(os.path.join(dirpath, f), 0o444)
+                os.chmod(dirpath, 0o555)
+            old = (server.SOURCE_FIRMWARE_DIR, server.FIRMWARE_DIR, server.SEPARATE_FIRMWARE)
+            server.SOURCE_FIRMWARE_DIR, server.FIRMWARE_DIR, server.SEPARATE_FIRMWARE = source, data, True
+            try:
+                server.sync_firmware_sources()
+                server.sync_firmware_sources()   # zweiter Lauf ersetzt die kopierten Verzeichnisse
+            finally:
+                server.SOURCE_FIRMWARE_DIR, server.FIRMWARE_DIR, server.SEPARATE_FIRMWARE = old
+                for dirpath, _, _ in os.walk(source):
+                    os.chmod(dirpath, 0o755)
+            with open(os.path.join(data, "dactyl_right", "dactyl_right.ino"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "gerendert")
+            with open(os.path.join(data, "dactyl_left", "dactyl_left.ino"), encoding="utf-8") as f:
+                self.assertEqual(f.read(), "dactyl_left.ino")    # Vorlage, weil noch nichts gerendert ist
+            self.assertTrue(os.path.isfile(os.path.join(data, "dactyl_left", "sub", "x.h")))
+            # Nur die .ino im Wurzelverzeichnis wird ausgelassen, eine gleichnamige Datei in einem Unterordner nicht
+            self.assertTrue(os.path.isfile(os.path.join(data, "dactyl_left", "sub", "dactyl_left.ino")))
+            # Nur Reste der eigenen Sketches werden entfernt, auch schreibgeschützte
+            self.assertEqual(sorted(os.listdir(data)), [".fremd.old", "dactyl_left", "dactyl_right"])
+            self.assertFalse(os.path.exists(os.path.join(data, "dactyl_right", "alt")))
+
+    def test_migrate_config_converts_modifier_hold_one_shot_combos(self):
+        cb = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "MODIFIER_HOLD", "action": "OSM_LSHIFT"}
+        keep = {**cb, "action": "KEY_LEFT_SHIFT"}
+        cfg = {"layers": [[[{"tap": "KEY_A"}]]], "combos": [cb, keep]}
+        migrated = server.migrate_config(cfg)
+        self.assertEqual([c["behavior"] for c in migrated["combos"]], ["KEY_PRESS", "MODIFIER_HOLD"])
+        self.assertEqual(cfg["combos"][0]["behavior"], "MODIFIER_HOLD")     # nicht in-place
+        server.validate_config(migrated)
+        self.assertEqual(server.migrate_config({"layers": []}), {"layers": []})
+        # Firmware-Namen (ACT_OSM_*, ACT_CAPS_WORD) gelten wie die App-Namen
+        for action in ("ACT_OSM_LSHIFT", "ACT_CAPS_WORD"):
+            raw = {**cb, "action": action}
+            with self.subTest(action=action):
+                with self.assertRaises(ValueError):
+                    server.generate_combos_cpp([raw])
+                self.assertEqual(server.migrate_config({"layers": [], "combos": [raw]})["combos"][0]["behavior"], "KEY_PRESS")
+        self.assertIsNone(server.migrate_config(None))
+        # Gespeicherte Config und Profil mit der alten Form bleiben ladbar
+        with tempfile.TemporaryDirectory() as tmp:
+            old = (server.CONFIG_FILE, server.PROFILES_FILE)
+            server.CONFIG_FILE = os.path.join(tmp, "c.json")
+            server.PROFILES_FILE = os.path.join(tmp, "p.json")
+            try:
+                with open(server.CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f)
+                with open(server.PROFILES_FILE, "w", encoding="utf-8") as f:
+                    json.dump({"profiles": [{"name": "Alt", "savedAt": "", "config": cfg}]}, f)
+                self.assertEqual(server.load_config_for_app("R")["combos"][0]["behavior"], "KEY_PRESS")
+                loaded = server.load_profiles("R")
+                self.assertEqual(loaded["skipped"], [])
+                self.assertEqual(loaded["profiles"][0]["config"]["combos"][0]["behavior"], "KEY_PRESS")
+                # Speichern mit der alten Form: abgelehnt wie bei /api/config, nicht still umgewandelt
+                with self.assertRaises(ValueError):
+                    server.save_profiles_atomic({"revision": 0, "profiles": [{"name": "Neu", "savedAt": "", "config": cfg}]})
+                with self.assertRaises(ValueError):
+                    server.save_config_atomic(cfg)
+            finally:
+                server.CONFIG_FILE, server.PROFILES_FILE = old
 
     def test_main_js_starts_bundled_server_with_data_dir(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -741,11 +930,19 @@ class TestServerAndCodegen(unittest.TestCase):
             for name in ("dactyl_right", "dactyl_left"):
                 shutil.copytree(os.path.join(root, "firmware", name), os.path.join(bundle, "firmware", name))
             data = os.path.join(tmp, "data")
+            # Das Paket ist signiert und schreibgeschützt: Kopien im Datenverzeichnis müssen trotzdem ersetzbar sein
+            for dirpath, _, files in os.walk(os.path.join(bundle, "firmware")):
+                for name in files:
+                    os.chmod(os.path.join(dirpath, name), 0o444)
+            stale = os.path.join(data, "firmware", "dactyl_right", "Veraltet.h")
             script = "\n".join([
-                "import json, sys",
+                "import json, os, sys",
                 f"sys.path.insert(0, {bundle!r})",
                 "import server",
                 "server.save_config_and_firmware({'layers': [[[{'tap': 'KEY_Z'}]]]}, 'L')",
+                # Eine ältere App-Version hat eine Datei hinterlassen, die das Paket nicht mehr enthält
+                f"open({stale!r}, 'w').write('alt')",
+                "server.save_config_and_firmware({'layers': [[[{'tap': 'KEY_Y'}]]]}, 'R')",
                 "server.save_config_atomic({'layers': [[[{'tap': 'KEY_Q'}]]]}, 'R')",
                 "print(json.dumps({'sketch': server.side_paths('L')['sketch'],"
                 " 'user': server.load_config_for_app('R').get('source')}))",
@@ -757,11 +954,16 @@ class TestServerAndCodegen(unittest.TestCase):
             result = json.loads(proc.stdout.strip().splitlines()[-1])
             self.assertEqual(result["sketch"], os.path.join(data, "firmware", "dactyl_left"))
             self.assertEqual(result["user"], "user")
-            # Gerenderte linke .ino im Datenverzeichnis; die Vorlage im Paket bleibt unverändert
+            # Gerenderte linke .ino im Datenverzeichnis; der spätere Flash der rechten Hälfte lässt sie stehen
             with open(os.path.join(data, "firmware", "dactyl_left", "dactyl_left.ino"), encoding="utf-8") as f:
                 rendered = f.read()
             self.assertIn("'z'", rendered)
             self.assertNotIn("#define KEYMAP_DEFAULTS_ID 0UL", rendered)
+            with open(os.path.join(data, "firmware", "dactyl_right", "dactyl_right.ino"), encoding="utf-8") as f:
+                self.assertIn("'y'", f.read())
+            # Der zweite Abgleich entfernt die veraltete Datei und lässt keine Temp-Verzeichnisse zurück
+            self.assertFalse(os.path.exists(stale))
+            self.assertEqual(sorted(os.listdir(os.path.join(data, "firmware"))), ["dactyl_left", "dactyl_right"])
             for name in ("dactyl_left/dactyl_left.ino", "dactyl_right/dactyl_right.ino"):
                 with open(os.path.join(bundle, "firmware", name), encoding="utf-8") as f, \
                         open(os.path.join(root, "firmware", name), encoding="utf-8") as g:
@@ -1022,17 +1224,27 @@ class TestServerHttp(unittest.TestCase):
         server.PROFILES_FILE = os.path.join(self.tmp.name, "roundtrip_profiles.json")
         server.LEFT_PROFILES_FILE = os.path.join(self.tmp.name, "roundtrip_profiles_left.json")
         try:
-            # Ohne Datei: leere Liste
-            self.assertEqual(json.loads(self.request("GET", "/api/profiles?side=R")[1]), {"profiles": []})
-            right = {"profiles": [{"name": "Gaming", "savedAt": "2026-10-27T10:00:00Z",
-                                   "config": {"layers": [[[{"tap": "KEY_P"}]]], "source": "user"}}]}
-            left = {"profiles": [{"name": "Code", "savedAt": "", "config": {"layers": [[[{"tap": "KEY_Q"}]]]}}]}
-            self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(right), headers=origin)[0], 200)
+            # Ohne Datei: leere Liste mit Revision 0
+            self.assertEqual(json.loads(self.request("GET", "/api/profiles?side=R")[1]),
+                             {"profiles": [], "revision": 0, "skipped": []})
+            right = {"revision": 0, "profiles": [{"name": "Gaming", "savedAt": "2026-10-27T10:00:00Z",
+                                                  "config": {"layers": [[[{"tap": "KEY_P"}]]], "source": "user"}}]}
+            left = {"revision": 0, "profiles": [{"name": "Code", "savedAt": "", "config": {"layers": [[[{"tap": "KEY_Q"}]]]}}]}
+            status, body = self.request("POST", "/api/profiles?side=R", body=json.dumps(right), headers=origin)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["revision"], 1)
             self.assertEqual(self.request("POST", "/api/profiles?side=L", body=json.dumps(left), headers=origin)[0], 200)
             got = json.loads(self.request("GET", "/api/profiles?side=R")[1])
             # "source" ist Server-Metadatum und wird nicht im Profil gespeichert
             self.assertEqual(got["profiles"][0]["config"], {"layers": [[[{"tap": "KEY_P"}]]]})
-            self.assertEqual(json.loads(self.request("GET", "/api/profiles?side=L")[1]), left)
+            self.assertEqual(got["revision"], 1)
+            self.assertEqual(json.loads(self.request("GET", "/api/profiles?side=L")[1])["profiles"], left["profiles"])
+            # Zweites Fenster mit veraltetem Stand (Revision 0): HTTP 409, die gespeicherte Liste bleibt
+            stale = {"revision": 0, "profiles": []}
+            self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(stale), headers=origin)[0], 409)
+            self.assertEqual(len(json.loads(self.request("GET", "/api/profiles?side=R")[1])["profiles"]), 1)
+            # Ohne Revision: HTTP 400
+            self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps({"profiles": []}), headers=origin)[0], 400)
             self.assertEqual(self.request("GET", "/api/profiles?side=X")[0], 400)
             self.assertEqual(self.request("POST", "/api/profiles?side=X", body=json.dumps(left), headers=origin)[0], 400)
         finally:
@@ -1042,21 +1254,84 @@ class TestServerHttp(unittest.TestCase):
         origin = {"Origin": "http://localhost:8088"}
         cfg = {"layers": [[[{"tap": "KEY_A"}]]]}
         bad_bodies = [
-            {"profiles": "x"},
-            {"profiles": [{"name": "", "config": cfg}]},
-            {"profiles": [{"name": 'A"B', "config": cfg}]},
-            {"profiles": [{"name": "A", "config": cfg}, {"name": "a", "config": cfg}]},
-            {"profiles": [{"name": "A", "config": {"layers": []}}]},
-            {"profiles": [{"name": "A", "savedAt": 5, "config": cfg}]},
-            {"profiles": [{"name": f"P{i}", "config": cfg} for i in range(server.MAX_PROFILES + 1)]},
+            {"revision": 0, "profiles": "x"},
+            {"revision": 0, "profiles": [{"name": "", "config": cfg}]},
+            {"revision": 0, "profiles": [{"name": 'A"B', "config": cfg}]},
+            {"revision": 0, "profiles": [{"name": "A", "config": cfg}, {"name": "a", "config": cfg}]},
+            {"revision": 0, "profiles": [{"name": "A", "config": {"layers": []}}]},
+            {"revision": 0, "profiles": [{"name": "A", "savedAt": 5, "config": cfg}]},
+            {"revision": 0, "profiles": [{"name": f"P{i}", "config": cfg} for i in range(server.MAX_PROFILES + 1)]},
+            {"revision": "0", "profiles": []},
+            {"revision": True, "profiles": []},
         ]
         for body in bad_bodies:
             with self.subTest(body=str(body)[:60]):
                 self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(body), headers=origin)[0], 400)
         # Links gelten die Regeln der fehlenden Tasten (R5C0 trägt keine Aktion)
-        bad_left = {"profiles": [{"name": "A", "config": {"layers": [[[], [], [], [], [], [{"tap": "KEY_A"}]]]}}]}
+        bad_left = {"revision": 0, "profiles": [{"name": "A", "config": {"layers": [[[], [], [], [], [], [{"tap": "KEY_A"}]]]}}]}
         self.assertEqual(self.request("POST", "/api/profiles?side=L", body=json.dumps(bad_left), headers=origin)[0], 400)
         self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(bad_left), headers=origin)[0], 200)
+
+    def test_layout_profiles_names_normalized_like_app(self):
+        origin = {"Origin": "http://localhost:8088"}
+        old = server.PROFILES_FILE
+        server.PROFILES_FILE = os.path.join(self.tmp.name, "names_profiles.json")
+        cfg = {"layers": [[[{"tap": "KEY_A"}]]]}
+        try:
+            # casefold: "Straße" und "STRASSE" sind derselbe Name (die App vergleicht ebenso)
+            dup = {"revision": 0, "profiles": [{"name": "Straße", "config": cfg}, {"name": "STRASSE", "config": cfg}]}
+            self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(dup), headers=origin)[0], 400)
+            # Ein Leerzeichen am Ende ist nach sanitize_name nicht unverändert: abgelehnt
+            trailing = {"revision": 0, "profiles": [{"name": "Gaming ", "config": cfg}]}
+            self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(trailing), headers=origin)[0], 400)
+            # 31 Zeichen nach dem Kürzen ohne Leerzeichen am Ende: gültig
+            ok = {"revision": 0, "profiles": [{"name": "a" * 30 + "b", "config": cfg}]}
+            self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(ok), headers=origin)[0], 200)
+        finally:
+            server.PROFILES_FILE = old
+
+    def test_layout_profiles_skip_invalid_entries_on_load(self):
+        old = server.PROFILES_FILE
+        server.PROFILES_FILE = os.path.join(self.tmp.name, "partly_invalid_profiles.json")
+        try:
+            with open(server.PROFILES_FILE, "w", encoding="utf-8") as f:
+                json.dump({"revision": 4, "profiles": [
+                    {"name": "Gut", "savedAt": "", "config": {"layers": [[[{"tap": "KEY_A"}]]]}},
+                    {"name": "Kaputt", "savedAt": "", "config": {"layers": []}},
+                ]}, f)
+            status, data = self.request("GET", "/api/profiles?side=R")
+            self.assertEqual(status, 200)
+            data = json.loads(data)
+            self.assertEqual([p["name"] for p in data["profiles"]], ["Gut"])
+            self.assertEqual(data["revision"], 4)
+            self.assertEqual(len(data["skipped"]), 1)
+            self.assertIn("Kaputt", data["skipped"][0])
+            # Speichern mit der gelesenen Revision repariert die Datei und behält die alte als Backup
+            body = json.dumps({"revision": 4, "profiles": data["profiles"]})
+            status, _ = self.request("POST", "/api/profiles?side=R", body=body, headers={"Origin": "http://localhost:8088"})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(self.request("GET", "/api/profiles?side=R")[1])["skipped"], [])
+            folder, base = os.path.split(server.PROFILES_FILE)
+            backups = [n for n in os.listdir(folder) if n.startswith(base + ".") and n.endswith(".bak")]
+            self.assertEqual(len(backups), 1)
+            with open(os.path.join(folder, backups[0]), encoding="utf-8") as f:
+                self.assertIn("Kaputt", f.read())
+            # Ohne übersprungene Profile entsteht kein weiteres Backup
+            body = json.dumps({"revision": 5, "profiles": data["profiles"]})
+            self.request("POST", "/api/profiles?side=R", body=body, headers={"Origin": "http://localhost:8088"})
+            self.assertEqual(len([n for n in os.listdir(folder) if n.startswith(base + ".") and n.endswith(".bak")]), 1)
+            # Doppelte Namen, zu viele Profile und eine ungültige Revision in der Datei
+            cfg = {"layers": [[[{"tap": "KEY_A"}]]]}
+            with open(server.PROFILES_FILE, "w", encoding="utf-8") as f:
+                json.dump({"revision": "x", "profiles": [{"name": "A", "config": cfg}, {"name": "a", "config": cfg}] +
+                           [{"name": f"P{i}", "config": cfg} for i in range(server.MAX_PROFILES)]}, f)
+            data = json.loads(self.request("GET", "/api/profiles?side=R")[1])
+            self.assertEqual(len(data["profiles"]), server.MAX_PROFILES)
+            self.assertEqual(data["revision"], 0)
+            self.assertTrue(any("doppelt" in s for s in data["skipped"]))
+            self.assertTrue(any("maximal" in s for s in data["skipped"]))
+        finally:
+            server.PROFILES_FILE = old
 
     def test_layout_profiles_corrupt_file_is_not_replaced(self):
         old = server.PROFILES_FILE
@@ -1076,6 +1351,10 @@ class TestServerHttp(unittest.TestCase):
             ignored = [line.strip() for line in f]
         self.assertIn("layout_profiles.json", ignored)
         self.assertIn("layout_profiles_left.json", ignored)
+        # Sperr- und Backup-Dateien von save_profiles_atomic
+        for name in ("layout_profiles.json.lock", "layout_profiles_left.json.lock"):
+            self.assertIn(name, ignored)
+        self.assertIn("layout_profiles*.json.*.bak", ignored)
 
     def test_save_config_atomic_validation(self):
         # Must reject non-dict or missing layers

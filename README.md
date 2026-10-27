@@ -174,7 +174,7 @@ Die Firmware löst dieses Problem zuverlässig ohne physischen Ein/Aus-Schalter:
 Für den echten kabellosen LiPo-Akkubetrieb verfügt die Firmware über eine intelligente, zweistufige Stromspararchitektur:
 
 1. **Stufe 1: Standby / Light Sleep (Standard: 5 Minuten)**
-   - Drosselt die ESP32-CPU von 240 MHz auf **80 MHz** und senkt den Matrix-Scan von 100 Hz auf 20 Hz.
+   - Senkt den Matrix-Scan auf ca. 25 Hz. Die rechte Hälfte drosselt die CPU zusätzlich von 240 MHz auf **80 MHz**. Die linke Hälfte bleibt auf 240 MHz, weil ein Taktwechsel bei laufendem Wi-Fi den ESP-NOW-Versand stört.
    - Die BLE-Verbindung zu macOS bleibt **vollständig aktiv** (kein Reconnect nötig).
    - **0 ms Latenz:** Der erste Tastenanschlag weckt die CPU sofort wieder auf 240 MHz auf.
    - Spart ca. 70% Energie bei kurzen Tipp-Pausen.

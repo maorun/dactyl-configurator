@@ -163,6 +163,7 @@ void resetState() {
       for (int c = 0; c < NUM_COLS; c++) { HOLDMAP[l][r][c] = 0; DTAPMAP[l][r][c] = 0; }
   resetTapHold();
   resetDoubleTap();
+  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) capsWordBuffered[r][c] = false;
   numCombos = 0;
   numKeyPairs = 0;
   for (int i = 0; i < MAX_KEY_PAIRS; i++) userKeyPairs[i] = { 0, 0 };
@@ -2470,6 +2471,298 @@ TEST(test_app_flash_discards_stored_macros) {
   loadKeymapFromNVS();
   assert(numMacros == 1 && macroLengths[0] == 1 && userMacros[0][0].code == 'z');
   assert(!preferences.isKey("num_macros") && !preferences.isKey("macros_data"));
+}
+
+
+// -----------------------------------------------------------------------------
+// LOW-Sammellauf: Makro-Grenzfälle, Caps Word als Combo-Kandidat, gehaltene One-Shot-Tasten
+// -----------------------------------------------------------------------------
+TEST(test_macro_pause_as_last_step_keeps_macro_running) {
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);    // TAP 'a'
+  handleConfigCommand("ADD_MACRO_STEP 4 0 300", false);   // PAUSE 300 ms am Ende
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1100);
+  // Die Pause läuft noch: das Makro ist aktiv, ein neuer Druck startet nichts
+  assert(macroRun.active);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  std::vector<int> expected = { 'a', -'a' };
+  assert(bleKeyboard.keyEvents == expected);
+  runTicks(1320);
+  assert(!macroRun.active);                              // Pause abgelaufen
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.keyEvents.size() == 3);             // neuer Lauf beginnt mit 'a'
+}
+
+TEST(test_running_macro_counts_as_activity) {
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 4 0 5000", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  lastActivityTime = 0;
+  runTicks(6010);
+  // Der Schritt nach der Pause setzt den Inaktivitäts-Timer zurück
+  assert(lastActivityTime >= 6000);
+}
+
+TEST(test_save_macros_writes_count_last) {
+  resetState();
+  addCopyPasteMacro();
+  handleConfigCommand("SAVE_MACROS", false);
+  assert(mockChar.value == "OK SAVE_MACROS");
+  assert(preferences.getUChar("num_macros", 0) == 1);
+  // Neue Liste mit gleicher Anzahl und Länge (5 Schritte), aber das Schreiben der Daten scheitert
+  handleConfigCommand("CLEAR_MACROS", false);
+  handleConfigCommand("ADD_MACRO", false);
+  for (int i = 0; i < 5; i++) handleConfigCommand("ADD_MACRO_STEP 1 120 0", false);
+  Preferences::failBytesKey = "macros_data";
+  handleConfigCommand("SAVE_MACROS", false);
+  assert(mockChar.value == "ERR NVS SAVE_MACROS");
+  // Ohne num_macros lädt der Start die einkompilierten Makros statt einer Mischung aus alt und neu
+  assert(!preferences.isKey("num_macros"));
+  Preferences::failBytesKey.clear();
+  numMacros = 1;
+  macroLengths[0] = 1;
+  userMacros[0][0] = { MACRO_STEP_TAP, 'z', 0 };
+  loadKeymapFromNVS();
+  // Ohne die Reihenfolge lüde der Start die alten Daten (DOWN Cmd) unter der alten Anzahl
+  assert(numMacros == 1 && macroLengths[0] == 1 && userMacros[0][0].code == 'z');
+}
+
+TEST(test_macro_live_edit_stops_running_macro) {
+  for (int variant = 0; variant < 2; variant++) {
+    resetState();
+    handleConfigCommand("ADD_MACRO", false);
+    handleConfigCommand("ADD_MACRO_STEP 2 129 0", false); // DOWN Shift
+    handleConfigCommand("ADD_MACRO_STEP 4 0 1000", false);
+    handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+    KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+    setMillis(1000);
+    keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+    runTicks(1100);
+    assert(macroRun.active);
+    handleConfigCommand(variant == 0 ? "ADD_MACRO" : "ADD_MACRO_STEP 1 98 0", false);
+    assert(!macroRun.active);
+    std::vector<int> expected = { 129, -129 };            // Shift losgelassen, kein 'a' und kein 'b'
+    runTicks(2500);
+    assert(bleKeyboard.keyEvents == expected);
+  }
+}
+
+TEST(test_macro_key_as_buffered_combo_candidate) {
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 120 0", false);   // TAP 'x'
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  KEYMAP[0][2][2] = 'k';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(!macroRun.active && bleKeyboard.keyEvents.empty()); // gepuffert
+  runTicks(1000 + comboTimeoutMs);
+  std::vector<int> expected = { 'x' };
+  assert(bleKeyboard.keyEvents == expected);              // Combo-Fenster abgelaufen: Makro startet
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1200);
+  expected = { 'x', -'x' };
+  assert(bleKeyboard.keyEvents == expected);              // das Loslassen startet nicht erneut
+}
+
+TEST(test_macros_invalid_nvs_shapes_are_ignored) {
+  resetState();
+  // macro_lens hat eine falsche Länge
+  Preferences::uintStore["num_macros"] = 2;
+  Preferences::bytesStore["macro_lens"] = { 1 };
+  Preferences::bytesStore["macros_data"] = std::vector<uint8_t>(sizeof(MacroStep), 0);
+  numMacros = 1; macroLengths[0] = 1; userMacros[0][0] = { MACRO_STEP_TAP, 'z', 0 };
+  loadKeymapFromNVS();
+  assert(numMacros == 1 && macroLengths[0] == 1 && userMacros[0][0].code == 'z');
+  // Eine Länge über MAX_MACRO_STEPS
+  Preferences::uintStore["num_macros"] = 1;
+  Preferences::bytesStore["macro_lens"] = { MAX_MACRO_STEPS + 1 };
+  Preferences::bytesStore["macros_data"] = std::vector<uint8_t>((MAX_MACRO_STEPS + 1) * sizeof(MacroStep), 0);
+  loadKeymapFromNVS();
+  assert(numMacros == 1 && macroLengths[0] == 1 && userMacros[0][0].code == 'z');
+  // Mehr Makros als MAX_MACROS
+  Preferences::uintStore["num_macros"] = MAX_MACROS + 1;
+  loadKeymapFromNVS();
+  assert(numMacros == 1);
+}
+
+// Dokumentierte Grenze: ein UP-Schritt löst den Modifier am Host, auch wenn der Nutzer ihn physisch hält
+TEST(test_macro_up_releases_physically_held_modifier) {
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 3 129 0", false);   // UP Shift
+  KEYMAP[0][3][0] = KEY_LEFT_SHIFT;
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[3][0] = true; onMatrixKeyChange(3, 0, true);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  std::vector<int> expected = { KEY_LEFT_SHIFT, -KEY_LEFT_SHIFT };
+  assert(bleKeyboard.keyEvents == expected);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(keySentToHost[3][0]);                            // die Taste gilt weiter als gehalten
+}
+
+TEST(test_caps_word_combo_candidate_is_buffered) {
+  // Ausgelöste Combo: Caps Word schaltet nicht um
+  resetState();
+  KEYMAP[0][2][1] = ACT_CAPS_WORD;
+  KEYMAP[0][2][2] = 'k';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(bleKeyboard.oneShotEvents.empty());
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true);
+  checkUserCombos();
+  setMillis(1100);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false);
+  checkUserCombos();
+  runTicks(1300);
+  assert(bleKeyboard.oneShotEvents.empty());
+
+  // Schneller Einzeltipp: das Loslassen schaltet genau einmal um
+  resetState();
+  KEYMAP[0][2][1] = ACT_CAPS_WORD;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  tapKeyAt(2, 1, 1000, 1010);
+  runTicks(1200);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));
+
+  // Gehalten über das Combo-Fenster: processDeferredKeys schaltet um, das Loslassen nicht noch einmal
+  resetState();
+  KEYMAP[0][2][1] = ACT_CAPS_WORD;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1000 + comboTimeoutMs);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));
+
+  // Halte-Aktion Caps Word als Combo-Kandidat: die Hold-Entscheidung schaltet einmal um
+  resetState();
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = ACT_CAPS_WORD;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1000 + TAPPING_TERM_MS + 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1500);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));
+}
+
+TEST(test_caps_word_press_without_host_does_not_toggle_on_release) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_CAPS_WORD;                         // kein Combo-Kandidat
+  bleKeyboard.connected = false;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  bleKeyboard.connected = true;                           // Host kommt zurück, bevor die Taste losgelassen wird
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.oneShotEvents.empty());
+}
+
+TEST(test_caps_word_combo_candidate_pressed_without_host_does_not_toggle) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_CAPS_WORD;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);   // Kandidat
+  bleKeyboard.connected = false;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  bleKeyboard.connected = true;
+  // Weder das Combo-Fenster noch das Loslassen schalten um
+  runTicks(1000 + comboTimeoutMs + 5);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.oneShotEvents.empty());
+  // Gegenprobe mit Host: schneller Tipp schaltet genau einmal um
+  tapKeyAt(2, 1, 2000, 2010);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));
+}
+
+TEST(test_caps_word_hold_combo_candidate_without_host_does_not_toggle) {
+  // Mod-Tap-Taste, Halten = Caps Word, Combo-Kandidat: dispatchPress der Hold-Aktion läuft ohne Host,
+  // der Host kommt zurück, bevor das Combo-Fenster die gepufferte Aktion nachsendet
+  resetState();
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = ACT_CAPS_WORD;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  bleKeyboard.connected = false;
+  setMillis(1000 + TAPPING_TERM_MS + 1);
+  processDeferredKeys(millis());
+  bleKeyboard.connected = true;
+  runTicks(1500);
+  assert(bleKeyboard.oneShotEvents.empty());
+
+  // Gegenprobe mit Host: die Hold-Entscheidung schaltet genau einmal um, das Loslassen nicht noch einmal
+  resetState();
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = ACT_CAPS_WORD;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1000 + TAPPING_TERM_MS + 1);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));
+}
+
+TEST(test_new_press_clears_stale_caps_word_flag) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  capsWordBuffered[2][1] = true;                          // Rest eines früheren Drucks
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(!capsWordBuffered[2][1]);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+}
+
+TEST(test_invalid_macro_commands_keep_running_macro) {
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 4 0 1000", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  for (int i = 1; i < MAX_MACROS; i++) handleConfigCommand("ADD_MACRO", false);
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(macroRun.active);
+  handleConfigCommand("ADD_MACRO_STEP 1 0 0", false);     // ungültiger Code
+  assert(mockChar.value == "ERR ARGS ADD_MACRO_STEP 1 0 0");
+  handleConfigCommand("ADD_MACRO", false);                // Liste voll
+  assert(mockChar.value == "ERR ARGS ADD_MACRO");
+  assert(macroRun.active);
+  runTicks(2100);
+  assert(countPresses('a') == 1);                         // das Makro lief zu Ende
+}
+
+// Gehaltene One-Shot-Tasten zählen nicht in heldModifierMask: das Umlaut löst und drückt keinen Modifier
+TEST(test_umlaut_while_one_shot_key_held_sends_plain_sequence) {
+  resetState();
+  KEYMAP[0][5][1] = ACT_OSM_LSHIFT;
+  KEYMAP[0][2][4] = ACT_UMLAUT_AE;
+  setMillis(1000);
+  keyState[5][1] = true; onMatrixKeyChange(5, 1, true);
+  assert(heldModifierMask() == 0);
+  keyState[2][4] = true; onMatrixKeyChange(2, 4, true);
+  std::vector<int> expected = { KEY_LEFT_ALT, 'u', -'u', -KEY_LEFT_ALT, 'a', -'a' };
+  assert(bleKeyboard.keyEvents == expected);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{2}));
 }
 
 int main() {

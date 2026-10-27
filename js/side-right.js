@@ -204,6 +204,8 @@
       { gpio: 25, color: "Rot" }
     ],
     diodeHint: "Dioden: Kathode zur Zeile",
+    // Hinweis zum Standby-Timeout (README "Power Management": Schätzung nach ESP32-Datenblatt)
+    standbyHint: "Drosselt die CPU auf 80 MHz und verlangsamt den Matrix-Scan. Spart laut Datenblatt (CPU ohne Funk) ca. 10–37 mA (Schätzung, nicht gemessen); der Funk bleibt an, die Tastatur tippt bei Berührung sofort weiter.",
     heatmapStorageKey: "dactyl_key_heatmap_v1",
     // Ebenennamen und fehlende Einstellungen ergänzt normalizeConfig
     defaultConfig: {

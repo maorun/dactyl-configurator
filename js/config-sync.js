@@ -159,6 +159,9 @@ async function writeConfigToESP32(options = {}) {
         updateProgress();
       }
       await sendConfirmed("SAVE_MACROS", "SAVE_MACROS", 5000);
+    } else {
+      // Übersprungene Phase: ihre Schritte trotzdem zählen, damit der Balken 100 % erreicht
+      macros.forEach(() => updateProgress());
     }
     updateProgress();
 

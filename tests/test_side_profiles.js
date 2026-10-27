@@ -461,6 +461,50 @@ test("Links: Standby ändert den CPU-Takt nicht (Taktwechsel bei laufendem Wi-Fi
   }
 });
 
+test("Standby-Hinweise: pro Hälfte passend zum CPU-Takt der Firmware", () => {
+  // Rechts drosselt enterStandby() auf 80 MHz, links bleibt der Takt (Test oben)
+  const rightStandby = rightIno.match(/void enterStandby\(\) \{([\s\S]*?)\n\}/);
+  assert.ok(rightStandby && /setCpuFrequencyMhz\(80\)/.test(rightStandby[1]), "rechts: enterStandby() drosselt nicht auf 80 MHz");
+  assert.match(R.standbyHint, /80 MHz/);
+  // Die mA-Werte sind Datenblattwerte der CPU ohne Funk und tragen diesen Vorbehalt in App und README
+  assert.match(R.standbyHint, /CPU ohne Funk/);
+  assert.match(R.standbyHint, /nicht gemessen/);
+  assert.match(read("README.md"), /Datenblattwerte gelten für die CPU \*\*ohne Funk\*\*/);
+  assert.match(L.standbyHint, /240 MHz/);
+  assert.doesNotMatch(L.standbyHint, /80 MHz|70\s?%/);
+  // Kein fester Text für beide Hälften im HTML; updateSideLabels setzt den Hinweis aus dem Profil
+  const html = read("index.html");
+  const hint = html.match(/<small[^>]*id="standbyTimeoutHint"[^>]*>([^<]*)<\/small>/);
+  assert.ok(hint, "standbyTimeoutHint fehlt");
+  assert.doesNotMatch(hint[1], /80 MHz|70\s?%/);
+  // updateSideLabels aus js/editor.js mit DOM-Stub ausführen: der Hinweis folgt der bearbeiteten Hälfte
+  const editor = read("js/editor.js");
+  const fn = editor.slice(editor.indexOf("function updateSideLabels"), editor.indexOf("function renderMatrix"));
+  const els = {};
+  const ui = { SIDE_PROFILES: D.SIDE_PROFILES, side: "R",
+    document: { getElementById: id => (els[id] = els[id] || { textContent: "", title: "", disabled: false }) } };
+  vm.createContext(ui);
+  vm.runInContext(`function activeProfile() { return SIDE_PROFILES[side]; }\n${fn}\nthis.update = updateSideLabels;`, ui);
+  ui.update();
+  assert.strictEqual(els.standbyTimeoutHint.textContent, `${R.label}: ${R.standbyHint}`);
+  ui.side = "L";
+  ui.update();
+  assert.strictEqual(els.standbyTimeoutHint.textContent, `${L.label}: ${L.standbyHint}`);
+  // README und Diagramm nennen 80 MHz nur für die rechte Hälfte
+  const readme = read("README.md");
+  assert.doesNotMatch(readme, /Spart ca\. 70% Energie/);
+  assert.doesNotMatch(readme, /weckt die CPU sofort wieder auf 240 MHz/);
+  const svg = read("docs/lolin32_lite_wiring.svg");
+  assert.doesNotMatch(svg, /80 MHz Standby/);
+  assert.match(svg, /rechts 80 MHz, links 240 MHz/);
+});
+
+test("README: Aktionscode-Tabelle nennt den Makro-Bereich", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(common, /#define ACT_MACRO_BASE\s+0x170/);
+  assert.match(read("README.md"), /\| `0x170` \.\. `0x17F` \| Makro \|/);
+});
+
 runAll().catch((err) => {
   console.error(err);
   process.exit(1);

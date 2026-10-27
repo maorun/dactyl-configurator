@@ -5,4 +5,7 @@ current_config.json
 current_config_left.json
 layout_profiles.json
 layout_profiles_left.json
+layout_profiles.json.lock
+layout_profiles_left.json.lock
+layout_profiles*.json.*.bak
 .claude

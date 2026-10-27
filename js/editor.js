@@ -508,6 +508,8 @@ function updateSideLabels() {
   if (comboBadge) comboBadge.textContent = `${profile.label} · Combo: ${profile.comboLabel} (0,5s)`;
   const diode = document.getElementById("matrixTestSideHint");
   if (diode) diode.textContent = `${profile.label} · ${profile.diodeHint}`;
+  const standby = document.getElementById("standbyTimeoutHint");
+  if (standby) standby.textContent = `${profile.label}: ${profile.standbyHint}`;
   const flashBtn = document.getElementById("btnSaveToDactyl");
   if (flashBtn) flashBtn.title = `Tastenbelegung der ${profile.label} kompilieren und per USB auf diese Hälfte flashen`;
   const presetBtn = document.getElementById("btnApplyPreset");

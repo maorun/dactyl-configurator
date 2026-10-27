@@ -210,8 +210,8 @@ function deleteMacro(idx) {
   if (!next) return;
   if (isMacroUsed(currentConfig.layers, idx) &&
       !confirm(`Makro ${idx} ist noch Tasten zugewiesen. Diese Belegungen werden geleert. Trotzdem löschen?`)) return;
-  const removed = currentConfig.macros[idx];
-  const old = JSON.parse(JSON.stringify({ macros: currentConfig.macros, layers: currentConfig.layers }));
+  const removed = JSON.parse(JSON.stringify(currentConfig.macros[idx]));
+  const hadFollowers = idx < currentConfig.macros.length - 1;
   if (macroEditIndex >= 0) closeMacroEditor();
   applyMacroState(next);
   markPendingSync({
@@ -219,8 +219,14 @@ function deleteMacro(idx) {
     snapshot: true,
     macros: true,
     title: `Makro ${idx} gelöscht`,
-    description: `${removed.name}${idx < old.macros.length - 1 ? "; folgende Makros rücken auf" : ""}`,
-    revert: () => applyMacroState(old)
+    description: `${removed.name}${hadFollowers ? "; folgende Makros rücken auf" : ""}`,
+    // Nur die geleerten Verweise zurücksetzen: Tastenänderungen nach dem Löschen bleiben erhalten
+    revert: () => {
+      const restored = restoreMacroAt(currentConfig, idx, removed, next.cleared);
+      if (restored) applyMacroState(restored);
+      else if (currentConfig.macros.length >= MAX_MACROS) showToast(`Makro ${idx} kann nicht zurückkommen: die Liste hat schon ${MAX_MACROS} Makros.`);
+      else showToast(`Makro ${idx} kann nicht zurückkommen: die Makro-Liste hat sich geändert.`);
+    }
   });
 }
 

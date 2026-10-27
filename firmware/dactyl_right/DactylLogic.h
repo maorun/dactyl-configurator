@@ -213,6 +213,9 @@ void sendUmlaut(uint16_t action) {
 // -----------------------------------------------------------------------------
 // One-Shot-Modifier und Caps Word: den Zustand führt der Master (DactylOneShot.h, SplitArbitratedKeyboard)
 // -----------------------------------------------------------------------------
+// Caps Word als Combo-Kandidat: Druck mit Host gepuffert, Umschalten steht aus (Loslassen oder Combo-Fenster)
+bool capsWordBuffered[NUM_ROWS][NUM_COLS] = {};
+
 bool isOneShotAction(uint16_t action) {
   return action >= ACT_ONE_SHOT_BASE && action < ACT_ONE_SHOT_BASE + NUM_ONE_SHOT_ACTIONS;
 }
@@ -277,7 +280,7 @@ void stopMacro(bool releaseKeys) {
 }
 
 void macroTick(unsigned long now);
-void macroRunStep(const MacroStep &st);
+bool macroRunStep(const MacroStep &st);
 
 // Startet das Makro. Ein laufendes Makro läuft zu Ende: ein weiterer Start während des Laufs entfällt.
 bool startMacro(uint16_t action, unsigned long now) {
@@ -303,8 +306,11 @@ void macroTick(unsigned long now) {
   }
   if ((unsigned long)(now - macroRun.stepTime) < macroRun.waitMs) return;
   if (!MACRO_OUTPUT_READY()) return;
+  // Ein laufendes Makro gilt als Aktivität: Standby (langsamer Scan) darf seine Schritte nicht verzögern
+  lastActivityTime = now;
   macroRun.stepTime = now;
   macroRun.waitMs = MACRO_STEP_GAP_MS;
+  bool pausing = false;
   if (macroRun.tapCode) {
     bleKeyboard.release(macroRun.tapCode);
     macroRun.tapCode = 0;
@@ -312,20 +318,21 @@ void macroTick(unsigned long now) {
     // Ende: mit DOWN gedrückte Codes in umgekehrter Reihenfolge loslassen, einen pro Aufruf
     if (macroRun.numHeld > 0) bleKeyboard.release(macroRun.held[--macroRun.numHeld]);
   } else {
-    macroRunStep(userMacros[macroRun.index][macroRun.step++]);
+    pausing = macroRunStep(userMacros[macroRun.index][macroRun.step++]);
   }
-  // Nichts mehr offen: sofort beenden, damit ein neuer Druck das Makro ohne Verzögerung startet
-  if (macroRun.step >= macroLengths[macroRun.index] && !macroRun.tapCode && macroRun.numHeld == 0) {
+  // Nichts mehr offen: sofort beenden, damit ein neuer Druck das Makro ohne Verzögerung startet.
+  // Eine Pause als letzter Schritt läuft erst ab; das Ende folgt im ersten Aufruf danach.
+  if (!pausing && macroRun.step >= macroLengths[macroRun.index] && !macroRun.tapCode && macroRun.numHeld == 0) {
     macroRun = {};
   }
 }
 
-// Führt einen Schritt aus (höchstens ein HID-Ereignis)
-void macroRunStep(const MacroStep &st) {
+// Führt einen Schritt aus (höchstens ein HID-Ereignis). true = PAUSE, das Makro wartet jetzt.
+bool macroRunStep(const MacroStep &st) {
   if (!isValidMacroStep(st.type, st.code, st.ms)) {
     // Ungültiger Schritt (z. B. aus einem fremden Codegen): überspringen
     macroRun.waitMs = 0;
-    return;
+    return false;
   }
   if (st.type == MACRO_STEP_TAP) {
     bleKeyboard.press(st.code);
@@ -345,7 +352,9 @@ void macroRunStep(const MacroStep &st) {
     }
   } else {
     macroRun.waitMs = st.ms;
+    return true;
   }
+  return false;
 }
 
 // -----------------------------------------------------------------------------
@@ -472,10 +481,18 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, name, action, currentLayer);
     sendConfigNotification(String(buf));
     Serial.printf("%s gedrückt: [R%d, C%d] (L%d)\n", name, r, c, currentLayer);
+    // Caps Word als Combo-Kandidat wird gepuffert: eine ausgelöste Combo schaltet es sonst bleibend um.
+    // One-Shot-Tasten senden sofort; releaseAll() einer Combo lässt sie ohne Vormerken los.
+    capsWordBuffered[r][c] = false;
     if (!isConfigMode && bleKeyboard.isConnected() && !isConfigComboSuppressed(r, c)) {
-      if (action == ACT_CAPS_WORD) bleKeyboard.capsWordToggle();
-      else bleKeyboard.oneShotPress(oneShotMaskForAction(action));
-      keySentToHost[r][c] = true;
+      if (action == ACT_CAPS_WORD && isComboCandidateKey(r, c)) {
+        // Gepuffert: nur ein Druck mit Host darf beim Loslassen oder nach dem Combo-Fenster umschalten
+        capsWordBuffered[r][c] = true;
+      } else {
+        if (action == ACT_CAPS_WORD) bleKeyboard.capsWordToggle();
+        else bleKeyboard.oneShotPress(oneShotMaskForAction(action));
+        keySentToHost[r][c] = true;
+      }
     }
   } else if (action > 0 && action <= 0xFF) {
     String keyLabel = "";
@@ -547,7 +564,15 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
       keySentToHost[r][c] = false;
     }
   } else if (action == ACT_CAPS_WORD) {
-    keySentToHost[r][c] = false;
+    // Nur ein gepufferter Combo-Kandidat schaltet jetzt um (schneller Einzeltipp)
+    // Ein Druck ohne Host (keySentToHost false, kein Combo-Kandidat) schaltet beim Loslassen nichts um
+    if (keySentToHost[r][c]) {
+      keySentToHost[r][c] = false;
+    } else if (!isConfigMode && bleKeyboard.isConnected() && capsWordBuffered[r][c] &&
+               !wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
+      bleKeyboard.capsWordToggle();
+    }
+    capsWordBuffered[r][c] = false;
   } else if (isUmlautAction(action)) {
     // Die Folge ist beim Drücken schon vollständig gesendet; nur ein gepufferter Combo-Kandidat sendet jetzt
     if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -729,6 +754,11 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
     } else if (isMacroAction(act)) {
       startMacro(act, millis());
       keySentToHost[r][c] = true;
+    } else if (act == ACT_CAPS_WORD) {
+      // dispatchPress hat den Druck nur mit Host gepuffert; ohne ihn schaltet die Hold-Entscheidung nichts um
+      if (capsWordBuffered[r][c]) bleKeyboard.capsWordToggle();
+      capsWordBuffered[r][c] = false;
+      keySentToHost[r][c] = true;
     } else if (act >= 0x130 && act <= 0x132) {
       if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
       else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
@@ -835,6 +865,7 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
     if (!isSecondTap) flushDoubleTap(r, c);
     keyPressTime[r][c] = now;
     keySentToHost[r][c] = false;
+    capsWordBuffered[r][c] = false;
     // Ein weiterer Tastendruck entscheidet offene Mod-Tap-Tasten sofort als Hold
     resolvePendingTapHoldsAsHold(r, c);
     uint8_t layer = getActiveLayer();
@@ -902,6 +933,10 @@ void processDeferredKeys(unsigned long now) {
               keySentToHost[r][c] = true;
             } else if (isMacroAction(act)) {
               startMacro(act, now);
+              keySentToHost[r][c] = true;
+            } else if (act == ACT_CAPS_WORD) {
+              if (capsWordBuffered[r][c]) bleKeyboard.capsWordToggle();
+              capsWordBuffered[r][c] = false;
               keySentToHost[r][c] = true;
             } else if (act >= 0x130 && act <= 0x134) {
               if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
@@ -1215,10 +1250,13 @@ bool saveMacrosToNVS() {
   for (int i = 0; i < numMacros; i++) {
     for (int j = 0; j < macroLengths[i]; j++) packed[total++] = userMacros[i][j];
   }
-  bool ok = preferences.putUChar("num_macros", numMacros) > 0;
+  // num_macros zuerst entfernen und zuletzt schreiben: ein Abbruch dazwischen lädt beim Start die
+  // einkompilierten Makros, nie eine Mischung aus alter Anzahl und neuen Längen oder Daten
+  preferences.remove("num_macros");
+  bool ok = true;
   // Leere Daten: putBytes mit Länge 0 meldet 0 Bytes, deshalb den Schlüssel entfernen
   if (numMacros > 0) {
-    ok = (preferences.putBytes("macro_lens", macroLengths, numMacros) == numMacros) && ok;
+    ok = preferences.putBytes("macro_lens", macroLengths, numMacros) == numMacros;
   } else {
     preferences.remove("macro_lens");
   }
@@ -1228,6 +1266,7 @@ bool saveMacrosToNVS() {
   } else {
     preferences.remove("macros_data");
   }
+  if (ok) ok = preferences.putUChar("num_macros", numMacros) > 0;
   preferences.end();
   Serial.printf("NVS: %d Makros %s.\n", numMacros, ok ? "gespeichert" : "FEHLER beim Speichern");
   return ok;
@@ -1452,8 +1491,9 @@ void handleConfigCommand(String cmd, bool fromBle) {
     for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
     sendConfigNotification("OK CLEAR_MACROS");
   } else if (cmd == "ADD_MACRO") {
-    // Hängt ein leeres Makro an; ADD_MACRO_STEP füllt es
+    // Hängt ein leeres Makro an; ADD_MACRO_STEP füllt es. Ein laufendes Makro endet: die Liste ändert sich.
     if (numMacros < MAX_MACROS) {
+      stopMacro(true);
       macroLengths[numMacros] = 0;
       numMacros++;
       sendConfigNotification("OK ADD_MACRO " + String(numMacros - 1));
@@ -1467,6 +1507,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
     uint8_t idx = numMacros > 0 ? numMacros - 1 : 0;
     if (sscanf(cmd.c_str(), "ADD_MACRO_STEP %d %d %d %c", &type, &code, &ms, &extra) == 3 &&
         numMacros > 0 && macroLengths[idx] < MAX_MACRO_STEPS && isValidMacroStep(type, code, ms)) {
+      // Ein laufendes Makro endet, bevor sich seine Schritte ändern
+      stopMacro(true);
       userMacros[idx][macroLengths[idx]] = { (uint8_t)type, (uint8_t)code, (uint16_t)ms };
       macroLengths[idx]++;
       sendConfigNotification("OK ADD_MACRO_STEP " + String(idx) + " " + String(macroLengths[idx] - 1));

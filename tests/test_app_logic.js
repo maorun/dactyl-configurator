@@ -45,8 +45,8 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              planKeyPairDeletion, hasPendingPairChange, keyNeedsStagedPairs,
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
              isValidMacroStep, isValidMacro, normalizeMacroStep, macroCommands, isMacroUsed, removeMacroAt,
-             keyNeedsStagedMacros, macroSaveIndex,
-             MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, upsertLayoutProfile, removeLayoutProfile,
+             keyNeedsStagedMacros, macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode,
+             MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides };`, ctx);
 const api = ctx.api;
@@ -54,8 +54,18 @@ const R = api.SIDE_PROFILES.R;
 const L = api.SIDE_PROFILES.L;
 
 let passed = 0;
+let skipped = 0;
+// Ein Test ruft skipTest(grund) auf und kehrt zurück: er zählt als übersprungen, nicht als bestanden
+let skipReason = null;
+function skipTest(reason) { skipReason = reason; }
 function test(name, fn) {
+  skipReason = null;
   fn();
+  if (skipReason) {
+    skipped++;
+    console.log(`[      SKIP] ${name}: ${skipReason}`);
+    return;
+  }
   passed++;
   console.log(`[       OK ] ${name}`);
 }
@@ -950,7 +960,10 @@ test("Makros: Schritte, Validierung und Normalisierung", () => {
   assert.ok(api.isValidMacroStep({ type: "pause", ms: 5000 }));
   for (const bad of [{ type: "pause", ms: 0 }, { type: "pause", ms: 5001 }, { type: "pause", ms: "100" },
                      { type: "tap", code: "MO_1" }, { type: "tap", code: "MACRO_0" }, { type: "tap", code: "PAIR_0" },
-                     { type: "click", code: "KEY_A" }, null, "tap"]) {
+                     { type: "click", code: "KEY_A" }, null, "tap",
+                     // Geerbte Objekt-Namen sind keine Schritt-Typen
+                     { type: "constructor", code: "KEY_A" }, { type: "toString", code: "KEY_A" },
+                     { type: "__proto__", code: "KEY_A" }]) {
     assert.strictEqual(api.isValidMacroStep(bad), false, JSON.stringify(bad));
   }
   const tooLong = { name: "x", steps: Array(api.MAX_MACRO_STEPS + 1).fill({ type: "tap", code: "KEY_A" }) };
@@ -963,8 +976,17 @@ test("Makros: Schritte, Validierung und Normalisierung", () => {
     { name: "Ok", steps: [{ type: "pause", ms: 10, code: "KEY_A" }, { type: "tap", code: "KEY_A", ms: 7 }] },
     { name: "Kaputt", steps: [{ type: "pause", ms: 0 }] }
   ] }, R);
+  // Ein ungültiges Makro wird leer, nicht entfernt: spätere MACRO_<n>-Verweise behalten ihr Ziel
   assert.deepStrictEqual(JSON.parse(JSON.stringify(cfg.macros)),
-    [{ name: "Ok", steps: [{ type: "pause", ms: 10 }, { type: "tap", code: "KEY_A" }] }]);
+    [{ name: "Ok", steps: [{ type: "pause", ms: 10 }, { type: "tap", code: "KEY_A" }] }, { name: "Kaputt", steps: [] }]);
+  const shifted = api.normalizeConfig({ layers: [[[{ tap: "MACRO_1" }]]], macros: [
+    { name: "Kaputt", steps: [{ type: "constructor", code: "KEY_A" }] },
+    { name: "Ziel", steps: [{ type: "tap", code: "KEY_B" }] },
+    null
+  ] }, R);
+  assert.strictEqual(shifted.macros[1].name, "Ziel");
+  assert.strictEqual(shifted.macros[1].steps.length, 1);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(shifted.macros[2])), { name: "Makro 2", steps: [] });
   assert.deepStrictEqual(JSON.parse(JSON.stringify(api.normalizeConfig({ layers: [[[]]] }, R).macros)), []);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(api.macroCommands(cfg.macros[0]))),
     ["ADD_MACRO", "ADD_MACRO_STEP 4 0 10", "ADD_MACRO_STEP 1 97 0"]);
@@ -1013,6 +1035,18 @@ test("Makros: Löschen nummeriert Tasten neu und Staging", () => {
   assert.ok(api.isMacroUsed(config.layers, 2));
   assert.ok(!api.isMacroUsed(next.layers, 2));
   assert.ok(api.keyNeedsStagedMacros({ tap: "MACRO_0" }, [{ macros: true }]));
+  // Rückgängig: das Makro kommt zurück, nur die geleerten Verweise werden wieder gesetzt
+  next.layers[0][0][1].tap = "KEY_Q";                              // spätere Tastenänderung
+  next.layers[0][0][3] = "KEY_W";                                  // geleerte Position später neu belegt
+  const back = api.restoreMacroAt(next, 1, config.macros[1], next.cleared);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(back.macros.map(m => m.name))), ["a", "b", "c"]);
+  const brow = back.layers[0][0];
+  assert.strictEqual(brow[0].tap, "MACRO_0");
+  assert.strictEqual(brow[1].tap, "KEY_Q");                        // spätere Änderung bleibt
+  assert.strictEqual(brow[1].hold, "MACRO_1");                     // geleerter Verweis zurück
+  assert.strictEqual(brow[2].dtap, "MACRO_2");                     // nachgerückter Verweis zurück
+  assert.strictEqual(brow[3], "KEY_W");                            // neu belegt: bleibt
+  assert.strictEqual(api.restoreMacroAt({ macros: Array(api.MAX_MACROS).fill({ steps: [] }), layers: [] }, 0, { steps: [] }, []), null);
   assert.ok(!api.keyNeedsStagedMacros({ tap: "MACRO_0" }, [{ pairs: true }]));
   assert.ok(!api.keyNeedsStagedMacros({ tap: "KEY_A" }, [{ macros: true }]));
 });
@@ -1134,8 +1168,10 @@ asyncTests.push(["Sync: Makros gehen als CLEAR_MACROS, ADD_MACRO, ADD_MACRO_STEP
 }]);
 
 asyncTests.push(["Sync: Firmware ohne Makros überspringt die Makro-Phase mit Hinweis", async () => {
-  const { w, toasts, sent } = fullSyncHarness(cmd => cmd === "CLEAR_MACROS" ? `ERR UNKNOWN ${cmd}` : okReply(cmd));
+  const { w, toasts, sent, progress } = fullSyncHarness(cmd => cmd === "CLEAR_MACROS" ? `ERR UNKNOWN ${cmd}` : okReply(cmd));
   await w.write();
+  // Auch mit übersprungener Phase endet der Balken bei 100 %
+  assert.strictEqual(progress.at(-2), 100);
   assert.ok(sent.includes("CLEAR_MACROS"));
   assert.ok(!sent.some(c => c.startsWith("ADD_MACRO") || c === "SAVE_MACROS"));
   assert.ok(toasts.some(t => t.includes("CLEAR_MACROS") && t.includes("flashen")));
@@ -1606,6 +1642,80 @@ test("Layout-Profile: Speichern, Ersetzen, Löschen und Grenzen", () => {
   assert.strictEqual(api.removeLayoutProfile(res.profiles, "fehlt"), res.profiles);
 });
 
+test("Layout-Profile: Namen werden wie str.casefold() in server.py verglichen", () => {
+  const list = [{ name: "Straße", savedAt: "", config: {} }];
+  assert.strictEqual(api.findLayoutProfileIndex(list, "STRASSE"), 0);
+  assert.strictEqual(api.findLayoutProfileIndex(list, "strasse"), 0);
+  assert.strictEqual(api.upsertLayoutProfile(list, "STRASSE", { layers: [] }, "t").replaced, true);
+  assert.strictEqual(api.findLayoutProfileIndex([{ name: "Σ" }], "ς"), 0);
+  // Großes ẞ: casefold ergibt "ss", toUpperCase allein ließe es stehen
+  assert.strictEqual(api.findLayoutProfileIndex(list, "STRAẞE"), 0);
+  assert.strictEqual(api.findLayoutProfileIndex([{ name: "ẞ" }], "ss"), 0);
+  // ı ist für casefold nicht gleich i
+  assert.strictEqual(api.findLayoutProfileIndex([{ name: "ı" }], "i"), -1);
+  assert.strictEqual(api.findLayoutProfileIndex([{ name: "ı" }], "I"), -1);
+  // End-Sigma im Wort: zeichenweise gleich wie casefold
+  assert.strictEqual(api.findLayoutProfileIndex([{ name: "ΑΣ" }], "ασ"), 0);
+  assert.strictEqual(api.findLayoutProfileIndex(list, "Strase"), -1);
+});
+
+test("Combos: Modifier Hold mit One-Shot und Caps Word wird abgelehnt oder migriert", () => {
+  const combo = (behavior, action) => ({ layers: [[[]]], combos: [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior, action }] });
+  for (const action of ["OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD"]) {
+    assert.ok(api.isOneShotOrCapsWordCode(action));
+    const migrated = combo("MODIFIER_HOLD", action);
+    api.validateConfigShape(migrated, R);
+    assert.strictEqual(migrated.combos[0].behavior, "KEY_PRESS");
+    api.validateConfigShape(combo("KEY_PRESS", action), R);
+  }
+  assert.ok(!api.isOneShotOrCapsWordCode("KEY_LEFT_SHIFT"));
+  assert.ok(!api.isOneShotOrCapsWordCode("constructor"));
+  // Firmware-Namen, die server.py ebenfalls annimmt
+  assert.ok(api.isOneShotOrCapsWordCode("ACT_OSM_LSHIFT") && api.isOneShotOrCapsWordCode("ACT_CAPS_WORD"));
+  assert.ok(!api.isOneShotOrCapsWordCode("ACT_MOUSE_LEFT"));
+  // Gespeicherte Configs mit der alten Form: validateConfigShape wandelt die Combo in KEY_PRESS um, statt abzulehnen
+  const legacy = combo("MODIFIER_HOLD", "CAPS_WORD");
+  api.validateConfigShape(legacy, R);
+  assert.strictEqual(legacy.combos[0].behavior, "KEY_PRESS");
+  api.validateConfigShape(combo("MODIFIER_HOLD", "KEY_LEFT_SHIFT"), R);
+});
+
+test("Layout-Profile: Namensvergleich entspricht str.casefold() für jedes Unicode-Zeichen", () => {
+  // Unicode-Tabellen von Python und Node können sich unterscheiden: nur bei gleicher Version vergleichen
+  const py = require("child_process").spawnSync("python3", ["-I", "-c",
+    // Zeichen, deren casefold, upper oder lower abweicht, plus alle Faltungen: jedes andere Zeichen bildet auf sich selbst ab
+    "import json,sys,unicodedata\n"
+    + "s={chr(i) for i in range(0x110000) if not 0xD800<=i<=0xDFFF and (chr(i).casefold()!=chr(i) or chr(i).upper()!=chr(i) or chr(i).lower()!=chr(i))}\n"
+    + "t=set(s)\n"
+    + "for c in s: t.update(c.casefold())\n"
+    + "json.dump({'v': unicodedata.unidata_version, 'p': [[c, c.casefold()] for c in sorted(t)]}, sys.stdout)"],
+    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  assert.strictEqual(py.status, 0, py.stderr);
+  const { v, p: pairs } = JSON.parse(py.stdout);
+  if (v.split(".")[0] !== process.versions.unicode.split(".")[0]) {
+    skipTest(`Unicode ${v} (Python) und ${process.versions.unicode} (Node) unterscheiden sich`);
+    return;
+  }
+  // Beide Richtungen: gleiche App-Klasse bedeutet gleichen casefold, und umgekehrt
+  const foldOfKey = new Map(), keyOfFold = new Map(), mismatches = [];
+  for (const [ch, fold] of pairs) {
+    const key = api.layoutProfileNameKey(ch);
+    // Mehrzeichen-Faltungen (ß → ss, ﬃ → ffi): der Schlüssel des Zeichens entspricht dem Schlüssel seiner Faltung
+    if (api.layoutProfileNameKey(fold) !== key) mismatches.push(`${ch}: Schlüssel von Zeichen und Faltung verschieden`);
+    if (foldOfKey.has(key) && foldOfKey.get(key) !== fold) mismatches.push(`${ch} und ${foldOfKey.get(key)} haben gleichen Schlüssel, aber verschiedenen casefold`);
+    foldOfKey.set(key, fold);
+    if (keyOfFold.has(fold) && keyOfFold.get(fold) !== key) mismatches.push(`${ch}: gleicher casefold, aber verschiedener Schlüssel`);
+    keyOfFold.set(fold, key);
+  }
+  assert.deepStrictEqual(mismatches.slice(0, 10), []);
+  // Namen aus mehreren Zeichen: gleiche Schlüssel genau dann, wenn die casefold-Ergebnisse gleich sind
+  const foldOf = new Map(pairs);
+  const foldName = name => Array.from(name, c => foldOf.get(c) ?? c).join("");
+  for (const [a, b] of [["Straße", "STRASSE"], ["FFI", "ffi"], ["Mein ẞ", "mein ss"], ["Ωmega", "ωMEGA"], ["Ab ı", "AB I"]]) {
+    assert.strictEqual(api.layoutProfileNameKey(a) === api.layoutProfileNameKey(b), foldName(a) === foldName(b), `${a} / ${b}`);
+  }
+});
+
 test("Layout-Profile: Namen wie sanitize_name in server.py (unverändert gültig)", () => {
   // Kürzen auf 31 Zeichen darf kein Leerzeichen am Ende lassen
   assert.strictEqual(api.sanitizeLayoutProfileName(`${"a".repeat(30)} b`), "a".repeat(30));
@@ -1615,12 +1725,407 @@ test("Layout-Profile: Namen wie sanitize_name in server.py (unverändert gültig
   assert.strictEqual(Array.from(api.sanitizeLayoutProfileName("😀".repeat(40))).length, 31);
 });
 
-test("Layout-Profile: Laden ist eine geprüfte Snapshot-Änderung mit Tastenpaaren und Makros", () => {
-  const src = read("js/layout-profiles-ui.js");
-  const load = src.slice(src.indexOf("function loadLayoutProfile"), src.indexOf("async function deleteLayoutProfile"));
-  assert.ok(/validateConfigShape\(/.test(load));
-  assert.ok(/snapshot: true/.test(load) && /pairs: true/.test(load) && /macros: true/.test(load));
+
+// =============================================================================
+// DOM-Stub-Tests: js/macros-ui.js, Staging in js/editor-events.js und js/layout-profiles-ui.js
+// =============================================================================
+// Minimales DOM: Elemente nach ID, Listener, Kinder; nur was die getesteten Module nutzen
+function fakeDom() {
+  const byId = {};
+  const make = (tag = "div") => {
+    const el = {
+      tagName: tag.toUpperCase(), children: [], listeners: {}, style: {}, dataset: {}, disabled: false,
+      value: "", textContent: "", className: "", title: "", type: "", options: [], selectedIndex: 0,
+      get innerHTML() { return ""; }, set innerHTML(_) { this.children = []; },
+      appendChild(child) { this.children.push(child); return child; },
+      append(...nodes) { nodes.forEach(n => this.children.push(n)); },
+      replaceChildren() { this.children = []; },
+      remove() {},
+      addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+      async fire(type, ev = {}) { for (const fn of this.listeners[type] || []) await fn({ target: this, ...ev }); },
+      querySelectorAll(sel) {
+        if (sel !== ".modal-body button") return [];
+        const out = [];
+        const walk = n => { (n.children || []).forEach(c => { if (c.tagName === "BUTTON") out.push(c); walk(c); }); };
+        walk(this);
+        // Statische Knöpfe des Dialogs (Speichern) liegen nicht im Baum der Stubs
+        return out.concat(this.staticButtons || []);
+      },
+      click() { return this.fire("click"); }
+    };
+    return el;
+  };
+  const document = {
+    getElementById: id => byId[id] || (byId[id] = make()),
+    createElement: tag => make(tag),
+    addEventListener() {}
+  };
+  return { document, byId, make };
+}
+
+// Kontext mit dem gemeinsamen Kern (code), einer Config der rechten Hälfte und Stubs für Anzeige und Server
+function uiHarness(extra = "") {
+  const dom = fakeDom();
+  const log = { pending: [], toasts: [], alerts: [], saved: 0, sent: [], fetches: [], confirm: true };
+  const w = {
+    console: { log() {}, warn() {}, error() {} }, document: dom.document, log,
+    setTimeout: fn => { Promise.resolve().then(fn); return 0; }, clearTimeout() {}
+  };
+  w.confirm = () => log.confirm;
+  w.alert = msg => log.alerts.push(msg);
+  vm.createContext(w);
+  vm.runInContext(`${code}
+var editSide = "R", activeLayerIndex = 0, selectedKey = null;
+var currentConfig = normalizeConfig(JSON.parse(JSON.stringify(SIDE_PROFILES.R.defaultConfig)), SIDE_PROFILES.R);
+var pendingBySide = { R: [], L: [] };
+function activeProfile() { return SIDE_PROFILES[editSide]; }
+function markPendingSync(change, side = editSide) { change.id = pendingBySide[side].length + 1; pendingBySide[side].push(change); log.pending.push(change); }
+function pendingFor(side) { return pendingBySide[side]; }
+function showToast(t) { log.toasts.push(t); }
+function saveConfigToServer() { log.saved++; }
+function renderMatrix() {} function renderLayerButtons() {} function renderCombosTable() {} function renderKeyPairs() {}
+function updateInspector() {} function applySettingsToInputs() {} function applySelectFilter() {}
+function clearKeySelection() {} function isEditableTarget() { return false; }
+async function sendDeviceCommand(cmd, side) { log.sent.push(cmd); return true; }
+${section("js/key-pairs-ui.js", "function keycodeLabel", "\n}\n")}
+}
+var window = this;
+${extra}
+${read("js/macros-ui.js")}
+${read("js/layout-profiles-ui.js")}
+`, w);
+  return { w, dom, log };
+}
+
+test("Makro-UI: Speichern und Rückgängig ersetzen nur die Makro-Liste", () => {
+  const { w, dom, log } = uiHarness();
+  vm.runInContext("currentConfig.macros = [];", w);
+  w.openMacroEditor(-1);
+  dom.document.getElementById("macroNameInput").value = "Copy";
+  dom.document.getElementById("macroStepType").value = "tap";
+  dom.document.getElementById("macroStepCode").value = "KEY_C";
+  w.addMacroStepFromUI();
+  w.saveMacroFromUI();
+  assert.strictEqual(vm.runInContext("currentConfig.macros.length", w), 1);
+  const change = log.pending.at(-1);
+  assert.ok(change.snapshot && change.macros);
+  assert.strictEqual(change.title, "Makro 0 hinzugefügt");
+  change.revert();
+  assert.strictEqual(vm.runInContext("currentConfig.macros.length", w), 0);
 });
+
+test("Makro-UI: Löschen und Rückgängig behalten spätere Tastenänderungen", () => {
+  const { w, log } = uiHarness();
+  vm.runInContext(`currentConfig.macros = [{ name: "a", steps: [{ type: "tap", code: "KEY_A" }] },
+                                           { name: "b", steps: [{ type: "tap", code: "KEY_B" }] }];
+    currentConfig.layers[0][2][1] = { label: "M0", tap: "MACRO_0", hold: "NONE", dtap: "NONE" };
+    currentConfig.layers[0][2][2] = { label: "M1", tap: "MACRO_1", hold: "NONE", dtap: "NONE" };`, w);
+  w.deleteMacro(0);
+  assert.strictEqual(vm.runInContext("currentConfig.layers[0][2][1].tap", w), "NONE");
+  assert.strictEqual(vm.runInContext("currentConfig.layers[0][2][2].tap", w), "MACRO_0");
+  // Spätere Änderung an einer anderen Taste
+  vm.runInContext(`currentConfig.layers[0][3][1] = { label: "X", tap: "KEY_X", hold: "NONE", dtap: "NONE" };`, w);
+  log.pending.at(-1).revert();
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(currentConfig.macros.map(m => m.name))", w)), ["a", "b"]);
+  assert.strictEqual(vm.runInContext("currentConfig.layers[0][2][1].tap", w), "MACRO_0");
+  assert.strictEqual(vm.runInContext("currentConfig.layers[0][2][2].tap", w), "MACRO_1");
+  assert.strictEqual(vm.runInContext("currentConfig.layers[0][3][1].tap", w), "KEY_X");
+  // Rückgängig nicht möglich: die Meldung nennt die Ursache
+  w.deleteMacro(0);
+  const revert = log.pending.at(-1).revert;
+  vm.runInContext(`currentConfig.macros = Array.from({ length: MAX_MACROS }, (_, i) => ({ name: "m" + i, steps: [] }));`, w);
+  revert();
+  assert.ok(log.toasts.at(-1).includes(`schon ${api.MAX_MACROS} Makros`));
+  // Liste inzwischen kürzer als der Index: andere Ursache
+  vm.runInContext(`currentConfig.macros = [{ name: "x", steps: [] }, { name: "y", steps: [] }];`, w);
+  w.deleteMacro(1);
+  const second = log.pending.at(-1).revert;
+  vm.runInContext(`currentConfig.macros = [];`, w);
+  second();
+  assert.ok(log.toasts.at(-1).includes("Makro-Liste hat sich geändert"));
+});
+
+// Taste über den Inspektor übernehmen (setupEventListeners aus js/editor-events.js)
+function applyKeyHarness() {
+  const h = uiHarness(`var pendingChanges = [];
+function togglePendingChangesDrawer() {} function discardAllPendingChanges() {} function populateComboKeyDropdowns() {}
+function clearSelectFilter() {} function renderPendingSyncUI() {} function setPendingFor() {}
+function writeConfigWithDiff() {} function saveAndFlashToDactyl() {} function readConfigFromESP32() {}
+${read("js/editor-events.js")}`);
+  const { w, dom } = h;
+  // Selects: options/selectedIndex für das Label der Taste
+  ["primaryActionSelect", "holdActionSelect", "dtapActionSelect"].forEach(id => {
+    const el = dom.document.getElementById(id);
+    el.options = [{ text: "M" }];
+    el.value = "NONE";
+  });
+  w.setupEventListeners();
+  return h;
+}
+
+asyncTests.push(["Staging: Taste mit MACRO_n wartet auf vorgemerkte Makros", async () => {
+  const { w, dom, log } = applyKeyHarness();
+  vm.runInContext(`currentConfig.macros = [{ name: "a", steps: [{ type: "tap", code: "KEY_A" }] }];
+    selectedKey = { r: 2, c: 1 };`, w);
+  dom.document.getElementById("primaryActionSelect").value = "MACRO_0";
+  // Ohne vorgemerkte Makro-Änderung geht die Taste live an das Gerät
+  await dom.document.getElementById("btnApplyKey").click();
+  assert.ok(log.sent.some(c => c.startsWith("SET_KEY 0 2 1 368")));
+  // Mit vorgemerkter Makro-Änderung wird sie nur vorgemerkt
+  log.sent.length = 0;
+  vm.runInContext(`markPendingSync({ type: "macro", snapshot: true, macros: true, title: "m", description: "", revert() {} });`, w);
+  await dom.document.getElementById("btnApplyKey").click();
+  assert.deepStrictEqual(log.sent, []);
+  assert.ok(log.toasts.at(-1).includes("Makros sind noch nicht synchronisiert"));
+}]);
+
+asyncTests.push(["Combo-Dialog: Modifier Hold mit One-Shot oder Caps Word wird nicht gespeichert", async () => {
+  const { w, dom, log } = applyKeyHarness();
+  const el = id => dom.document.getElementById(id);
+  const save = async (behavior, action) => {
+    el("comboKey1Select").value = "2,1";
+    el("comboKey2Select").value = "2,2";
+    el("comboBehaviorSelect").value = behavior;
+    const sel = el("comboActionSelect");
+    sel.value = action;
+    sel.options = [{ text: action }];
+    sel.selectedIndex = 0;
+    await el("btnSaveCombo").click();
+  };
+  const count = () => vm.runInContext("currentConfig.combos.length", w);
+  const before = count();
+  for (const action of ["OSM_LSHIFT", "CAPS_WORD"]) {
+    await save("MODIFIER_HOLD", action);
+    assert.strictEqual(count(), before);
+    assert.ok(log.alerts.at(-1).includes("Modifier Hold"));
+  }
+  // Gegenprobe: KEY_PRESS mit One-Shot und MODIFIER_HOLD mit Shift werden gespeichert
+  await save("KEY_PRESS", "OSM_LSHIFT");
+  await save("MODIFIER_HOLD", "KEY_LEFT_SHIFT");
+  assert.strictEqual(count(), before + 2);
+}]);
+
+asyncTests.push(["Import: vorgemerkte Änderung trägt pairs und macros", async () => {
+  const { w, dom, log } = applyKeyHarness();
+  const cfg = { layers: [[[{ tap: "MACRO_0" }]]], macros: [{ name: "a", steps: [{ type: "tap", code: "KEY_A" }] }] };
+  w.FileReader = function () {
+    this.readAsText = () => Promise.resolve().then(() => this.onload({ target: { result: JSON.stringify(cfg) } }));
+  };
+  await dom.document.getElementById("fileInput").fire("change", { target: { files: [{ name: "x.json" }], value: "" } });
+  await new Promise(r => setImmediate(r));
+  const change = log.pending.at(-1);
+  assert.strictEqual(change.type, "import");
+  assert.ok(change.pairs && change.macros);
+  // Eine Taste mit MACRO_0 geht danach nicht live, bevor die Makros synchronisiert sind
+  assert.ok(vm.runInContext(`keyNeedsStagedMacros({ tap: "MACRO_0" }, pendingFor("R"))`, w));
+}]);
+
+// Fetch-Stub für /api/profiles: Antworten in der Reihenfolge der Aufrufe
+function profilesHarness(responses) {
+  const h = uiHarness();
+  const queue = responses.slice();
+  h.w.fetch = async (url, opts = {}) => {
+    h.log.fetches.push({ url, method: opts.method || "GET", body: opts.body ? JSON.parse(opts.body) : null });
+    const next = queue.shift();
+    if (next && next.gate) await next.gate;
+    const { status = 200, body } = next || {};
+    return { ok: status >= 200 && status < 300, status, json: async () => body };
+  };
+  vm.runInContext(`SIDE_PROFILES.R.label = "rechte Hälfte";`, h.w);
+  return h;
+}
+
+asyncTests.push(["Layout-Profile: Laden, Seitenprüfung, Revert und Revision beim Speichern", async () => {
+  const profileCfg = { layers: [[[{ tap: "KEY_Q" }]]] };
+  const { w, dom, log } = profilesHarness([
+    { body: { profiles: [{ name: "Gaming", savedAt: "", config: profileCfg }], revision: 3, skipped: [] } },
+    { body: { profiles: [{ name: "Gaming", savedAt: "", config: profileCfg }], revision: 3, skipped: [] } },
+    { body: { success: true, revision: 4 } }
+  ]);
+  await w.openLayoutProfilesDialog();
+  const before = vm.runInContext("JSON.stringify(currentConfig.layers[0][0][0])", w);
+  // Hälfte gewechselt: Laden tut nichts
+  vm.runInContext(`editSide = "L";`, w);
+  w.loadLayoutProfile("gaming");
+  assert.strictEqual(log.pending.length, 0);
+  vm.runInContext(`editSide = "R";`, w);
+  w.loadLayoutProfile("gaming");
+  const change = log.pending.at(-1);
+  assert.ok(change.snapshot && change.pairs && change.macros && change.type === "profile_load");
+  assert.strictEqual(vm.runInContext("currentConfig.layers[0][0][0].tap", w), "KEY_Q");
+  change.revert();
+  assert.strictEqual(vm.runInContext("JSON.stringify(currentConfig.layers[0][0][0])", w), before);
+  // Speichern sendet die gelesene Revision und übernimmt die neue
+  await w.openLayoutProfilesDialog();
+  dom.document.getElementById("layoutProfileNameInput").value = "Neu";
+  await w.saveLayoutProfileFromUI();
+  const post = log.fetches.find(f => f.method === "POST");
+  assert.strictEqual(post.body.revision, 3);
+  assert.deepStrictEqual(post.body.profiles.map(p => p.name), ["Gaming", "Neu"]);
+  assert.strictEqual(vm.runInContext("layoutProfilesRevision", w), 4);
+}]);
+
+asyncTests.push(["Layout-Profile: Antwort ohne Liste, übersprungene Profile und Konflikt", async () => {
+  // Antwort ohne Liste: klarer Fehler statt TypeError
+  let h = profilesHarness([{ body: { nichts: true } }]);
+  await h.w.openLayoutProfilesDialog();
+  assert.ok(h.dom.document.getElementById("layoutProfilesStatus").textContent.includes("keine Profilliste"), h.dom.document.getElementById("layoutProfilesStatus").textContent);
+  // Übersprungene Profile werden gemeldet
+  h = profilesHarness([{ body: { profiles: [], revision: 1, skipped: ["Profil 'Alt': kaputt"] } }]);
+  await h.w.openLayoutProfilesDialog();
+  assert.ok(h.log.alerts.some(a => a.includes("Profil 'Alt'")));
+  // Konflikt (409): Meldung und Neuladen der Liste mit neuer Revision
+  h = profilesHarness([
+    { body: { profiles: [], revision: 1, skipped: [] } },
+    { status: 409, body: { success: false, error: "anderes Fenster" } },
+    { body: { profiles: [{ name: "Fremd", savedAt: "", config: { layers: [[[]]] } }], revision: 2, skipped: [] } }
+  ]);
+  await h.w.openLayoutProfilesDialog();
+  h.dom.document.getElementById("layoutProfileNameInput").value = "Mein";
+  await h.w.saveLayoutProfileFromUI();
+  const post = h.log.fetches.find(f => f.method === "POST");
+  assert.strictEqual(post.body.revision, 1);
+  assert.ok(h.log.alerts.some(a => a.includes("anderes Fenster")));
+  assert.strictEqual(h.log.fetches.at(-1).method, "GET");
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(layoutProfiles.map(p => p.name))", h.w)), ["Fremd"]);
+  assert.strictEqual(vm.runInContext("layoutProfilesRevision", h.w), 2);
+}]);
+
+asyncTests.push(["Layout-Profile: ein Lesen, das vor einem Schreibzugriff begann, überschreibt die Revision nicht", async () => {
+  let releaseGet;
+  const slowGet = new Promise(r => { releaseGet = r; });
+  const h = profilesHarness([
+    { body: { profiles: [], revision: 1, skipped: [] } },
+    { gate: slowGet, body: { profiles: [], revision: 1, skipped: [] } },   // langsames Lesen mit altem Stand
+    { body: { success: true, revision: 2 } }
+  ]);
+  await h.w.openLayoutProfilesDialog();
+  const reading = h.w.reloadLayoutProfiles("R");
+  h.dom.document.getElementById("layoutProfileNameInput").value = "Neu";
+  await h.w.saveLayoutProfileFromUI();
+  assert.strictEqual(vm.runInContext("layoutProfilesRevision", h.w), 2);
+  releaseGet();
+  await reading;
+  assert.strictEqual(vm.runInContext("layoutProfilesRevision", h.w), 2);
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(layoutProfiles.map(p => p.name))", h.w)), ["Neu"]);
+}]);
+
+asyncTests.push(["Layout-Profile: Schreiben auf einer Hälfte verwirft das Lesen der anderen Hälfte nicht", async () => {
+  let releaseWrite, releaseRead;
+  const writeGate = new Promise(r => { releaseWrite = r; });
+  const readGate = new Promise(r => { releaseRead = r; });
+  const h = profilesHarness([
+    { body: { profiles: [], revision: 0, skipped: [] } },                                   // Öffnen rechts
+    { gate: writeGate, body: { success: true, revision: 1 } },                               // Schreiben rechts, hängt
+    { gate: readGate, body: { profiles: [{ name: "Links", savedAt: "", config: { layers: [[[]]] } }], revision: 7, skipped: [] } }
+  ]);
+  await h.w.openLayoutProfilesDialog();
+  h.dom.document.getElementById("layoutProfileNameInput").value = "Rechts";
+  const saving = h.w.saveLayoutProfileFromUI();
+  await Promise.resolve();
+  h.w.closeLayoutProfilesDialog();
+  vm.runInContext(`editSide = "L";`, h.w);
+  const opening = h.w.openLayoutProfilesDialog();         // Lesen links beginnt vor dem Ende des Schreibens rechts
+  releaseWrite();
+  await saving;
+  releaseRead();                                           // Lesen links endet nach dem Schreiben rechts
+  await opening;
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(layoutProfiles && layoutProfiles.map(p => p.name))", h.w)), ["Links"]);
+  assert.strictEqual(vm.runInContext("layoutProfilesRevision", h.w), 7);
+}]);
+
+asyncTests.push(["Layout-Profile: nach dem Schreiben rendert der Dialog nie die alte Liste", async () => {
+  const cfg = { layers: [[[]]] };
+  const h = profilesHarness([
+    { body: { profiles: [{ name: "A", savedAt: "", config: cfg }], revision: 0, skipped: [] } },
+    { body: { success: true, revision: 1 } },
+    { body: { success: true, revision: 2 } }
+  ]);
+  await h.w.openLayoutProfilesDialog();
+  const status = h.dom.document.getElementById("layoutProfilesStatus");
+  const seen = [];
+  Object.defineProperty(status, "textContent", { get() { return this._t; }, set(v) { this._t = v; seen.push(v); } });
+  h.dom.document.getElementById("layoutProfileNameInput").value = "B";
+  await h.w.saveLayoutProfileFromUI();
+  assert.ok(!seen.some(t => t.startsWith("1 von")), `Dialog zeigte kurz die alte Liste: ${seen.join(" | ")}`);
+  assert.strictEqual(seen.at(-1).split(" ")[0], "2");
+  seen.length = 0;
+  await h.w.deleteLayoutProfile("B");
+  assert.ok(!seen.some(t => t.startsWith("2 von")), `Dialog zeigte kurz die alte Liste: ${seen.join(" | ")}`);
+  assert.strictEqual(seen.at(-1).split(" ")[0], "1");
+}]);
+
+asyncTests.push(["Layout-Profile: Meldung über übersprungene Profile erscheint einmal pro Stand", async () => {
+  const body = { profiles: [], revision: 3, skipped: ["Profil 'Alt': kaputt"] };
+  const h = profilesHarness([{ body }, { body }, { body: { ...body, revision: 4 } }]);
+  await h.w.openLayoutProfilesDialog();
+  await h.w.openLayoutProfilesDialog();
+  assert.strictEqual(h.log.alerts.filter(a => a.includes("Profil 'Alt'")).length, 1);
+  await h.w.openLayoutProfilesDialog();                    // neuer Stand: erneut melden
+  assert.strictEqual(h.log.alerts.filter(a => a.includes("Profil 'Alt'")).length, 2);
+}]);
+
+asyncTests.push(["Layout-Profile: Laden ist während eines Schreibzugriffs gesperrt", async () => {
+  const { w, log } = profilesHarness([{ body: { profiles: [{ name: "Gaming", savedAt: "", config: { layers: [[[{ tap: "KEY_Q" }]]] } }], revision: 0, skipped: [] } }]);
+  await w.openLayoutProfilesDialog();
+  vm.runInContext("layoutProfilesBusy = true;", w);
+  w.loadLayoutProfile("Gaming");
+  assert.strictEqual(log.pending.length, 0);
+  assert.strictEqual(vm.runInContext("currentConfig.layers[0][0][0].tap !== 'KEY_Q'", w), true);
+  vm.runInContext("layoutProfilesBusy = false;", w);
+  w.loadLayoutProfile("Gaming");
+  assert.strictEqual(log.pending.length, 1);
+}]);
+
+asyncTests.push(["Layout-Profile: fehlgeschlagener Schreibzugriff nach erneutem Öffnen lädt die Liste neu", async () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const h = profilesHarness([
+    { body: { profiles: [{ name: "A", savedAt: "", config: { layers: [[[]]] } }], revision: 0, skipped: [] } },
+    { gate, status: 500, body: { success: false, error: "Platte voll" } },
+    { body: { profiles: [{ name: "A", savedAt: "", config: { layers: [[[]]] } }], revision: 0, skipped: [] } },
+    { body: { profiles: [{ name: "A", savedAt: "", config: { layers: [[[]]] } }], revision: 0, skipped: [] } }
+  ]);
+  await h.w.openLayoutProfilesDialog();
+  h.dom.document.getElementById("layoutProfileNameInput").value = "B";
+  const saving = h.w.saveLayoutProfileFromUI();
+  await Promise.resolve();
+  h.w.closeLayoutProfilesDialog();
+  const reopening = h.w.openLayoutProfilesDialog();   // Lesen beginnt vor dem Ende des Schreibens
+  release();
+  await saving;
+  await reopening;
+  assert.ok(h.log.alerts.some(a => a.includes("Platte voll")));
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(layoutProfiles && layoutProfiles.map(p => p.name))", h.w)), ["A"]);
+  assert.notStrictEqual(h.dom.document.getElementById("layoutProfilesStatus").textContent, "Speichert …");
+}]);
+
+asyncTests.push(["Layout-Profile: neu geöffneter Dialog übernimmt die Sperre eines laufenden Schreibzugriffs", async () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const h = profilesHarness([
+    { body: { profiles: [{ name: "A", savedAt: "", config: { layers: [[[]]] } }], revision: 0, skipped: [] } },
+    { gate, body: { success: true, revision: 1 } },
+    { body: { profiles: [{ name: "A", savedAt: "", config: { layers: [[[]]] } }], revision: 0, skipped: [] } }
+  ]);
+  await h.w.openLayoutProfilesDialog();
+  h.dom.document.getElementById("layoutProfileNameInput").value = "B";
+  const saving = h.w.saveLayoutProfileFromUI();
+  await Promise.resolve();
+  assert.strictEqual(vm.runInContext("layoutProfilesBusy", h.w), true);
+  // Dialog schließen und während des Schreibens neu öffnen
+  h.w.closeLayoutProfilesDialog();
+  await h.w.openLayoutProfilesDialog();
+  const modal = h.dom.document.getElementById("layoutProfilesModal");
+  modal.children = [h.dom.document.getElementById("layoutProfilesList")];
+  vm.runInContext("renderLayoutProfiles()", h.w);
+  const buttons = modal.querySelectorAll(".modal-body button");
+  assert.ok(buttons.length > 0 && buttons.every(b => b.disabled), "Knöpfe sind während des Schreibens aktiv");
+  assert.strictEqual(h.dom.document.getElementById("layoutProfilesStatus").textContent, "Speichert …");
+  release();
+  await saving;
+  assert.strictEqual(vm.runInContext("layoutProfilesBusy", h.w), false);
+}]);
 
 (async () => {
   for (const [name, fn] of asyncTests) {
@@ -1628,7 +2133,7 @@ test("Layout-Profile: Laden ist eine geprüfte Snapshot-Änderung mit Tastenpaar
     passed++;
     console.log(`[       OK ] ${name}`);
   }
-  console.log(`\n${passed} App-Logik-Tests bestanden.`);
+  console.log(`\n${passed} App-Logik-Tests bestanden${skipped ? `, ${skipped} übersprungen` : ""}.`);
 })().catch((err) => {
   console.error(err);
   process.exit(1);

@@ -186,7 +186,7 @@ function revertResolvedPairs(pairs, layers, firstIdx, count) {
 
 // Makro-Schritt wie in server.py/Firmware: tap/down/up mit Tastatur-Code 1..255, pause mit ms 1..MACRO_MAX_PAUSE_MS
 function isValidMacroStep(step) {
-  if (!step || typeof step !== "object" || !(step.type in MACRO_STEP_TYPES)) return false;
+  if (!step || typeof step !== "object" || !Object.prototype.hasOwnProperty.call(MACRO_STEP_TYPES, step.type)) return false;
   if (step.type === "pause") return Number.isInteger(step.ms) && step.ms >= 1 && step.ms <= MACRO_MAX_PAUSE_MS;
   return isKeyPairMember(step.code);
 }
@@ -224,22 +224,48 @@ function isMacroUsed(layers, idx) {
   return (layers || []).some(layer => (layer || []).some(row => (row || []).some(uses)));
 }
 
+// Wendet remap(code, pos) auf jeden Aktions-Code aller Ebenen an (Kopie). pos = { l, r, c, field };
+// field null = Zelle als reiner Code-String.
+function remapLayerCodes(layers, remap) {
+  const next = JSON.parse(JSON.stringify(layers || []));
+  next.forEach((layer, l) => (layer || []).forEach((row, r) => (row || []).forEach((k, c) => {
+    if (typeof k === "string") row[c] = remap(k, { l, r, c, field: null });
+    else if (k && typeof k === "object") ["tap", "hold", "dtap"].forEach(f => { if (f in k) k[f] = remap(k[f], { l, r, c, field: f }); });
+  })));
+  return next;
+}
+
 // Entfernt das Makro idx und nummeriert die Verweise neu (wie removeKeyPairAt). Combos nutzen keine Makros.
-// Ändert nichts in-place; liefert { macros, layers } oder null bei ungültigem Index.
+// Ändert nichts in-place; liefert { macros, layers, cleared } oder null bei ungültigem Index.
+// cleared: Positionen, deren Verweis auf das Makro geleert wurde (für restoreMacroAt).
 function removeMacroAt(config, idx) {
   const macros = (config && config.macros) || [];
   if (!isValidIndex(idx, macros.length)) return null;
-  const remap = code => {
+  const cleared = [];
+  const layers = remapLayerCodes(config.layers, (code, pos) => {
     const n = macroIndexFromCode(code);
     if (n < 0 || n < idx) return code;
-    return n === idx ? "NONE" : `MACRO_${n - 1}`;
-  };
-  const layers = JSON.parse(JSON.stringify(config.layers || []));
-  layers.forEach(layer => (layer || []).forEach(row => (row || []).forEach((k, c) => {
-    if (typeof k === "string") row[c] = remap(k);
-    else if (k && typeof k === "object") ["tap", "hold", "dtap"].forEach(f => { if (f in k) k[f] = remap(k[f]); });
-  })));
-  return { macros: JSON.parse(JSON.stringify(macros.filter((_, i) => i !== idx))), layers };
+    if (n > idx) return `MACRO_${n - 1}`;
+    cleared.push(pos);
+    return "NONE";
+  });
+  return { macros: JSON.parse(JSON.stringify(macros.filter((_, i) => i !== idx))), layers, cleared };
+}
+
+// Rückgängig zu removeMacroAt auf dem aktuellen Stand: fügt das Makro wieder bei idx ein, rückt höhere Verweise
+// zurück und setzt nur die geleerten Positionen wieder, die noch leer sind. Spätere Tastenänderungen bleiben.
+function restoreMacroAt(config, idx, macro, cleared) {
+  const macros = JSON.parse(JSON.stringify((config && config.macros) || []));
+  if (!Number.isInteger(idx) || idx < 0 || idx > macros.length || macros.length >= MAX_MACROS) return null;
+  macros.splice(idx, 0, JSON.parse(JSON.stringify(macro)));
+  const wasCleared = new Set((cleared || []).map(p => `${p.l},${p.r},${p.c},${p.field}`));
+  const layers = remapLayerCodes(config.layers, (code, pos) => {
+    const n = macroIndexFromCode(code);
+    if (n >= idx) return `MACRO_${n + 1}`;
+    if (n < 0 && (code === "NONE" || code === "") && wasCleared.has(`${pos.l},${pos.r},${pos.c},${pos.field}`)) return `MACRO_${idx}`;
+    return code;
+  });
+  return { macros, layers };
 }
 
 // true, wenn eine vorgemerkte Änderung die Makro-Liste ändert (Flag macros): das Gerät kennt die lokalen
@@ -255,10 +281,20 @@ function keyPairLabel(pair, labelFor) {
   return `${labelFor(pair.first)} + ${labelFor(pair.second)}`;
 }
 
+// Ältere Configs: Combos mit MODIFIER_HOLD und One-Shot- oder Caps-Word-Aktion sandten nie etwas. Sie werden
+// zu KEY_PRESS (wie migrate_config in server.py), statt die ganze Config ungültig zu machen. Ändert cfg in-place.
+function migrateConfig(cfg) {
+  if (!cfg || typeof cfg !== "object" || !Array.isArray(cfg.combos)) return cfg;
+  cfg.combos = cfg.combos.map(cb => (cb && cb.behavior === "MODIFIER_HOLD" && isOneShotOrCapsWordCode(cb.action))
+    ? { ...cb, behavior: "KEY_PRESS" } : cb);
+  return cfg;
+}
+
 // Prüft eine importierte oder vom Server geladene Konfiguration und wirft bei ungültiger Struktur.
 // profile: Hälfte, für die die Config bestimmt ist (fehlende Tasten und Combos, wie server.py)
 function validateConfigShape(cfg, profile) {
   if (!cfg || typeof cfg !== "object" || Array.isArray(cfg)) throw new Error("Konfiguration muss ein Objekt sein.");
+  migrateConfig(cfg);
   if (!Array.isArray(cfg.layers) || cfg.layers.length === 0 || cfg.layers.length > NUM_LAYERS) {
     throw new Error(`'layers' muss 1..${NUM_LAYERS} Ebenen enthalten.`);
   }
@@ -353,10 +389,11 @@ function normalizeConfig(cfg, profile) {
     ? cfg.keyPairs.filter(p => p && isKeyPairMember(p.first) && isKeyPairMember(p.second))
         .slice(0, MAX_KEY_PAIRS).map(p => ({ first: p.first, second: p.second }))
     : [];
+  // Ein ungültiges Makro wird leer, nicht entfernt: MACRO_<n> verweist per Index, die Indizes bleiben gleich
   cfg.macros = Array.isArray(cfg.macros)
-    ? cfg.macros.filter(isValidMacro).slice(0, MAX_MACROS).map((m, i) => ({
-        name: sanitizeCommandText(m.name, `Makro ${i}`),
-        steps: m.steps.map(normalizeMacroStep)
+    ? cfg.macros.slice(0, MAX_MACROS).map((m, i) => ({
+        name: sanitizeCommandText(m && m.name, `Makro ${i}`),
+        steps: isValidMacro(m) ? m.steps.map(normalizeMacroStep) : []
       }))
     : [];
   const names = Array.isArray(cfg.layerNames) ? cfg.layerNames : [];
@@ -504,10 +541,21 @@ function describeKeyActions(actions) {
 // =============================================================================
 const MAX_LAYOUT_PROFILES = 32;
 
-// Namen ohne Groß-/Kleinschreibung vergleichen (wie server.py)
+// Namen ohne Groß-/Kleinschreibung vergleichen wie str.casefold() in server.py: toUpperCase faltet "ß" zu
+// "SS", toLowerCase danach gleicht die übrigen Fälle an ("Straße" = "STRASSE"). Zeichenweise, damit kein
+// Kontext (End-Sigma) mitspielt. Zwei Zeichen weichen sonst ab: "ẞ" bleibt bei toUpperCase stehen (casefold:
+// "ss"), und "ı" würde zu "i" (casefold lässt es stehen).
+function layoutProfileNameKey(name) {
+  return Array.from(String(name), ch => {
+    if (ch === "ẞ") return "ss";
+    if (ch === "ı") return ch;
+    return ch.toUpperCase().toLowerCase();
+  }).join("");
+}
+
 function findLayoutProfileIndex(profiles, name) {
-  const key = String(name).toLowerCase();
-  return profiles.findIndex(p => p.name.toLowerCase() === key);
+  const key = layoutProfileNameKey(name);
+  return profiles.findIndex(p => layoutProfileNameKey(p.name) === key);
 }
 
 // Wie sanitize_name in server.py: nur druckbare Zeichen (str.isprintable), ohne Quotes und Backslashes,

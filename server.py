@@ -80,13 +80,76 @@ def side_paths(side):
             "template": INO_TEMPLATE_FILE or INO_FILE, "sketch": SKETCH_DIR, "profiles": PROFILES_FILE}
 
 
+def remove_tree(path):
+    """Löscht ein Verzeichnis auch dann, wenn ältere Kopien die Rechte des Pakets (0555) übernommen haben."""
+    if not os.path.isdir(path):
+        return
+    for dirpath, _, _ in os.walk(path):
+        try:
+            os.chmod(dirpath, 0o755)
+        except OSError:
+            pass
+    shutil.rmtree(path, ignore_errors=True)
+
+
 def sync_firmware_sources():
     """Kopiert die Firmware-Quellen des Pakets in das Datenverzeichnis (beide Sketches: links bindet
-    ../dactyl_right/ ein). So kompiliert ein Flash nach einem App-Update immer die Quellen dieser Version."""
+    ../dactyl_right/ ein). So kompiliert ein Flash nach einem App-Update immer die Quellen dieser Version.
+
+    Jeder Sketch entsteht vollständig in einem Temp-Verzeichnis und ersetzt erst danach den alten: Dateien, die
+    eine neuere App-Version entfernt hat, bleiben nicht liegen, und ein Fehler beim Kopieren hinterlässt keinen
+    halb aktualisierten Sketch. Eine gerenderte .ino im Datenverzeichnis bleibt erhalten (ein Flash der Hälfte rendert
+    sie aus der Vorlage im Paket neu); fehlt sie, kommt die Vorlage aus dem Paket."""
     if not SEPARATE_FIRMWARE:
         return
-    for name in FIRMWARE_SKETCHES:
-        shutil.copytree(os.path.join(SOURCE_FIRMWARE_DIR, name), os.path.join(FIRMWARE_DIR, name), dirs_exist_ok=True)
+    os.makedirs(FIRMWARE_DIR, exist_ok=True)
+    # Reste eines hart abgebrochenen Laufs (.<sketch>.*.new / .old) entfernen
+    for entry in os.listdir(FIRMWARE_DIR):
+        if entry.startswith(".") and entry.endswith((".new", ".old")) and \
+                any(entry.startswith(f".{name}.") for name in FIRMWARE_SKETCHES):
+            remove_tree(os.path.join(FIRMWARE_DIR, entry))
+    staged = []
+    try:
+        for name in FIRMWARE_SKETCHES:
+            target = os.path.join(FIRMWARE_DIR, name)
+            stage = tempfile.mkdtemp(prefix=f".{name}.", suffix=".new", dir=FIRMWARE_DIR)
+            staged.append((stage, target))
+            ino = f"{name}.ino"
+            source = os.path.join(SOURCE_FIRMWARE_DIR, name)
+            shutil.copytree(source, stage, dirs_exist_ok=True,
+                            ignore=lambda directory, names, ino=ino, source=source: [ino] if directory == source and ino in names else [])
+            # copytree übernimmt die Rechte des Pakets: Verzeichnisse beschreibbar machen (Ersetzen, Löschen, .ino)
+            for dirpath, _, _ in os.walk(stage):
+                os.chmod(dirpath, 0o755)
+            # Gerenderte .ino behalten; ohne sie (erster Abgleich) die Vorlage, damit jeder Sketch vollständig ist
+            rendered = os.path.join(target, ino)
+            shutil.copy2(rendered if os.path.isfile(rendered) else os.path.join(source, ino), os.path.join(stage, ino))
+        # Erst alle alten Sketches zur Seite legen, dann alle neuen einsetzen. Ein Fehler stellt beide alten
+        # wieder her: die Sketches bleiben ein zusammengehöriger Stand (links bindet ../dactyl_right/ ein).
+        moved, placed = [], []
+        try:
+            for stage, target in staged:
+                if os.path.exists(target):
+                    old = tempfile.mkdtemp(prefix=f".{os.path.basename(target)}.", suffix=".old", dir=FIRMWARE_DIR)
+                    os.rmdir(old)
+                    os.replace(target, old)
+                    moved.append((old, target))
+                os.replace(stage, target)
+                placed.append(target)
+        except BaseException:
+            for target in placed:
+                remove_tree(target)
+            for old, target in moved:
+                if os.path.exists(target):
+                    remove_tree(target)
+                os.replace(old, target)
+            raise
+        for old, _ in moved:
+            remove_tree(old)
+    finally:
+        for stage, _ in staged:
+            if os.path.exists(stage):
+                remove_tree(stage)
 
 
 def parse_side(path):
@@ -380,6 +443,9 @@ def validate_combo_key(key, field):
     c = validate_int(key.get("c"), 0, NUM_COLS - 1, f"{field}.c")
     return r, c
 
+# One-Shot- und Caps-Word-Aktionen (Codes > 0xFF): als Combo nur mit KEY_PRESS
+ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD"}
+
 def generate_combos_cpp(combos):
     if combos is None:
         combos = []
@@ -399,6 +465,9 @@ def generate_combos_cpp(combos):
         act = code_to_cpp(action if isinstance(action, str) else "0")
         if act.startswith("(ACT_MACRO_BASE"):
             raise ValueError("Combos unterstützen keine Makros.")
+        # MODIFIER_HOLD hält einen Code 1..255; One-Shot und Caps Word (> 0xFF) sendeten dort nichts
+        if beh == 1 and act in ONE_SHOT_CPP:
+            raise ValueError("Modifier Hold unterstützt keine One-Shot- oder Caps-Word-Aktion.")
         # KeyCombo hat exakt 6 Felder (r1, c1, r2, c2, behavior, action)
         cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act} }}")
     lines = [
@@ -660,6 +729,7 @@ def load_config_for_app(side="R"):
             return {"exists": False}
         if not isinstance(config, dict):
             return {"exists": False}
+        config = migrate_config(config)
         config["source"] = source
         return config
     return {"exists": False}
@@ -688,6 +758,48 @@ def save_config_and_firmware(config, side="R"):
     sync_firmware_sources()
     write_files_atomic([(paths["ino"], new_ino), (paths["config"], json.dumps(config, indent=2))])
 
+class ProfileConflict(Exception):
+    """Die Profildatei hat sich seit dem Lesen geändert (anderes App-Fenster): HTTP 409."""
+
+
+def migrate_config(config):
+    """Ältere Configs: Combos mit MODIFIER_HOLD und One-Shot- oder Caps-Word-Aktion sandten nie etwas.
+    Sie werden zu KEY_PRESS (One-Shot = tippen), statt die ganze Config oder das Profil ungültig zu machen."""
+    if not isinstance(config, dict) or not isinstance(config.get("combos"), list):
+        return config
+    combos = []
+    for cb in config["combos"]:
+        if (isinstance(cb, dict) and cb.get("behavior") == "MODIFIER_HOLD" and isinstance(cb.get("action"), str)
+                and code_to_cpp(cb["action"]) in ONE_SHOT_CPP):
+            cb = {**cb, "behavior": "KEY_PRESS"}
+        combos.append(cb)
+    return {**config, "combos": combos}
+
+
+def validate_profile_entry(entry, idx, names, side="R"):
+    """Prüft ein Profil und gibt es bereinigt zurück. names: bisher vergebene Namen (casefold), wird ergänzt."""
+    if not isinstance(entry, dict):
+        raise ValueError(f"Ungültiges Profil {idx}: Objekt erwartet.")
+    name = sanitize_name(entry.get("name"), "")
+    if not name or name != entry.get("name"):
+        raise ValueError(f"Ungültiger Profilname in Profil {idx}.")
+    if name.casefold() in names:
+        raise ValueError(f"Profilname doppelt: {name}")
+    saved_at = entry.get("savedAt", "")
+    if not isinstance(saved_at, str) or len(saved_at) > 40:
+        raise ValueError(f"Ungültiger Zeitstempel in Profil '{name}'.")
+    config = strip_response_metadata(entry.get("config"))
+    try:
+        validate_config(config, side)
+    except ValueError as err:
+        raise ValueError(f"Profil '{name}': {err}") from err
+    names.add(name.casefold())
+    return {"name": name, "savedAt": saved_at, "config": config}
+
+def profile_revision(data):
+    rev = data.get("revision", 0) if isinstance(data, dict) else 0
+    return rev if isinstance(rev, int) and not isinstance(rev, bool) and rev >= 0 else 0
+
 def validate_profiles(data, side="R"):
     """Prüft die Profilliste einer Hälfte: eindeutige Namen, höchstens MAX_PROFILES, jede Config wie /api/config."""
     if not isinstance(data, dict) or not isinstance(data.get("profiles"), list):
@@ -695,44 +807,61 @@ def validate_profiles(data, side="R"):
     profiles = data["profiles"]
     if len(profiles) > MAX_PROFILES:
         raise ValueError(f"Ungültige Profile: maximal {MAX_PROFILES} Profile erlaubt.")
-    result, names = [], set()
-    for idx, entry in enumerate(profiles):
-        if not isinstance(entry, dict):
-            raise ValueError(f"Ungültiges Profil {idx}: Objekt erwartet.")
-        name = sanitize_name(entry.get("name"), "")
-        if not name or name != entry.get("name"):
-            raise ValueError(f"Ungültiger Profilname in Profil {idx}.")
-        if name.casefold() in names:
-            raise ValueError(f"Profilname doppelt: {name}")
-        names.add(name.casefold())
-        saved_at = entry.get("savedAt", "")
-        if not isinstance(saved_at, str) or len(saved_at) > 40:
-            raise ValueError(f"Ungültiger Zeitstempel in Profil '{name}'.")
-        config = strip_response_metadata(entry.get("config"))
-        try:
-            validate_config(config, side)
-        except ValueError as err:
-            raise ValueError(f"Profil '{name}': {err}") from err
-        result.append({"name": name, "savedAt": saved_at, "config": config})
-    return {"profiles": result}
+    names = set()
+    return {"profiles": [validate_profile_entry(entry, idx, names, side) for idx, entry in enumerate(profiles)]}
 
 def load_profiles(side="R"):
-    """Profilliste einer Hälfte. Fehlt die Datei, ist die Liste leer; eine beschädigte Datei liefert None."""
+    """Profilliste einer Hälfte mit Revision. Fehlt die Datei, ist die Liste leer; eine unlesbare Datei liefert None.
+    Ein ungültiges Profil (z. B. nach einer strengeren Regel) macht nicht die ganze Liste unbrauchbar: es wird
+    übersprungen und unter "skipped" gemeldet. Das nächste Speichern entfernt es aus der Datei."""
     try:
         with open(side_paths(side)["profiles"], "r", encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
-        return {"profiles": []}
+        return {"profiles": [], "revision": 0, "skipped": []}
     except (OSError, ValueError):
         return None
-    try:
-        return validate_profiles(data, side)
-    except ValueError:
+    if not isinstance(data, dict) or not isinstance(data.get("profiles"), list):
         return None
+    result, names, skipped = [], set(), []
+    for idx, entry in enumerate(data["profiles"]):
+        if len(result) >= MAX_PROFILES:
+            skipped.append(f"Profil {idx}: maximal {MAX_PROFILES} Profile erlaubt.")
+            continue
+        # Nur beim Laden migrieren; ein POST mit der alten Form wird abgelehnt (wie /api/config)
+        if isinstance(entry, dict):
+            entry = {**entry, "config": migrate_config(strip_response_metadata(entry.get("config")))}
+        try:
+            result.append(validate_profile_entry(entry, idx, names, side))
+        except ValueError as err:
+            skipped.append(str(err))
+    return {"profiles": result, "revision": profile_revision(data), "skipped": skipped}
 
 def save_profiles_atomic(data, side="R"):
-    data = validate_profiles(data, side)
-    write_file_atomic(side_paths(side)["profiles"], json.dumps(data, indent=2))
+    """Speichert die Liste, wenn "revision" dem gespeicherten Stand entspricht; sonst ProfileConflict.
+    Gibt die neue Revision zurück."""
+    if not isinstance(data, dict):
+        raise ValueError("Ungültige Profile: Objekt mit einer Liste 'profiles' erwartet.")
+    expected = data.get("revision")
+    if not isinstance(expected, int) or isinstance(expected, bool) or expected < 0:
+        raise ValueError("Ungültige Profile: Zahl 'revision' (Stand beim Lesen) erwartet.")
+    clean = validate_profiles(data, side)
+    path = side_paths(side)["profiles"]
+    # Prüfen und Schreiben unter einer Dateisperre: zwei gleichzeitige POSTs gewinnen nicht beide
+    with open(path + ".lock", "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        current = load_profiles(side)
+        if current is None:
+            raise OSError("Profildatei ist beschädigt oder unlesbar.")
+        if current["revision"] != expected:
+            raise ProfileConflict("Die Profile wurden inzwischen in einem anderen Fenster geändert. Bitte neu laden.")
+        clean["revision"] = expected + 1
+        # Ungültige Profile verschwinden mit diesem Speichern: die alte Datei vorher als Backup behalten
+        if current["skipped"]:
+            backup = f"{path}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
+            shutil.copy2(path, backup)
+        write_file_atomic(path, json.dumps(clean, indent=2))
+    return clean["revision"]
 
 def find_arduino_cli():
     cli = shutil.which("arduino-cli")
@@ -1064,14 +1193,17 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             if data is None:
                 return
             try:
-                save_profiles_atomic(data, side)
+                revision = save_profiles_atomic(data, side)
             except ValueError as e:
                 self.send_json(400, {"success": False, "error": str(e)})
+                return
+            except ProfileConflict as e:
+                self.send_json(409, {"success": False, "error": str(e)})
                 return
             except OSError as e:
                 self.send_json(500, {"success": False, "error": str(e)})
                 return
-            self.send_json(200, {"success": True})
+            self.send_json(200, {"success": True, "revision": revision})
             return
 
         self.send_json(404, {"error": "Not found"})

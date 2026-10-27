@@ -175,9 +175,11 @@ Für den echten kabellosen LiPo-Akkubetrieb verfügt die Firmware über eine int
 
 1. **Stufe 1: Standby / Light Sleep (Standard: 5 Minuten)**
    - Senkt den Matrix-Scan auf ca. 25 Hz. Die rechte Hälfte drosselt die CPU zusätzlich von 240 MHz auf **80 MHz**. Die linke Hälfte bleibt auf 240 MHz, weil ein Taktwechsel bei laufendem Wi-Fi den ESP-NOW-Versand stört.
-   - Die BLE-Verbindung zu macOS bleibt **vollständig aktiv** (kein Reconnect nötig).
-   - **0 ms Latenz:** Der erste Tastenanschlag weckt die CPU sofort wieder auf 240 MHz auf.
-   - Spart ca. 70% Energie bei kurzen Tipp-Pausen.
+   - Die BLE-Verbindung zu macOS bleibt **vollständig aktiv** (kein Reconnect nötig). Der Funk bleibt bei beiden Hälften an (BLE und ESP-NOW).
+   - **Rechte Hälfte:** Der erste Tastenanschlag setzt die CPU sofort wieder auf 240 MHz.
+   - **Ersparnis (Schätzung nach ESP32-Datenblatt, nicht gemessen):** Der Funk verbraucht in beiden Stufen gleich viel; nur der CPU-Anteil sinkt.
+     - Rechts: Die Datenblattwerte gelten für die CPU **ohne Funk** (der Funk kommt in beiden Stufen hinzu): ca. 30–68 mA bei 240 MHz, ca. 20–31 mA bei 80 MHz. Das Board spart damit ca. 10–37 mA.
+     - Links: Der Takt bleibt bei 240 MHz. Nur der langsamere Scan spart Strom; die Ersparnis ist gering.
 
 2. **Stufe 2: Deep Sleep (Standard: 60 Minuten)**
    - Schaltet den ESP32 bei längerer Abwesenheit in den tiefen Tiefschlaf (**~10–15 µA Stromaufnahme**).
@@ -233,6 +235,7 @@ dactyl_configurator/
 | `0x127` | Apple Mac Globe | `ACT_MAC_GLOBE` (`0x029D`) | Emojis / Fn-Tastenkombinationen |
 | `0x160` .. `0x167` | One-Shot-Modifier | `ACT_OSM_LCTRL` .. `ACT_OSM_RGUI` (`OSM_*`) | Tippen: Modifier nur für die nächste Taste (beide Hälften); Halten: normaler Modifier |
 | `0x168` | Caps Word | `ACT_CAPS_WORD` (`CAPS_WORD`) | Buchstaben groß bis zum Wortende (Leertaste, Satzzeichen) |
+| `0x170` .. `0x17F` | Makro | `ACT_MACRO_BASE` + n (`MACRO_0` .. `MACRO_15`) | Spielt eine Folge aus Tippen, Drücken, Loslassen und Pausen (max. 32 Schritte) |
 
 ---
 

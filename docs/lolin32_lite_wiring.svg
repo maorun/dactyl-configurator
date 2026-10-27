@@ -515,7 +515,7 @@
     <rect x="520" y="0" width="480" height="95" rx="10" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
     <text x="540" y="24" fill="#10b981" font-size="12px" font-weight="700">⚡ TWO-STAGE SLEEP (STROMSPARMODUS):</text>
     <text x="540" y="44" fill="#cbd5e1" font-size="11px">• <tspan fill="#f1f5f9" font-weight="600">Reiner Akkubetrieb:</tspan> LiPo direkt an JST-Buchse anschließen.</text>
-    <text x="540" y="62" fill="#cbd5e1" font-size="11px">• <tspan fill="#38bdf8" font-weight="600">Stufe 1 (5 Min):</tspan> 80 MHz Standby, BLE bleibt an, 0ms Aufwachzeit.</text>
+    <text x="540" y="62" fill="#cbd5e1" font-size="11px">• <tspan fill="#38bdf8" font-weight="600">Stufe 1 (5 Min):</tspan> Standby (rechts 80 MHz, links 240 MHz), Funk bleibt an.</text>
     <text x="540" y="80" fill="#cbd5e1" font-size="11px">• <tspan fill="#a855f7" font-weight="600">Stufe 2 (60 Min):</tspan> Deep Sleep (~10µA), EXT1 Wakeup auf allen Zeilen.</text>
 
     <!-- Box 3: Spalten-Regel -->

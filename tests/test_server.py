@@ -909,9 +909,11 @@ class TestServerHttp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        cls.old_cfg = (server.CONFIG_FILE, server.LEFT_CONFIG_FILE)
+        cls.old_cfg = (server.CONFIG_FILE, server.LEFT_CONFIG_FILE, server.PROFILES_FILE, server.LEFT_PROFILES_FILE)
         server.CONFIG_FILE = os.path.join(cls.tmp.name, "current_config.json")
         server.LEFT_CONFIG_FILE = os.path.join(cls.tmp.name, "current_config_left.json")
+        server.PROFILES_FILE = os.path.join(cls.tmp.name, "layout_profiles.json")
+        server.LEFT_PROFILES_FILE = os.path.join(cls.tmp.name, "layout_profiles_left.json")
         cls.httpd = socketserver.TCPServer(("127.0.0.1", 0), server.ConfiguratorHandler)
         cls.port = cls.httpd.server_address[1]
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
@@ -921,7 +923,7 @@ class TestServerHttp(unittest.TestCase):
     def tearDownClass(cls):
         cls.httpd.shutdown()
         cls.httpd.server_close()
-        server.CONFIG_FILE, server.LEFT_CONFIG_FILE = cls.old_cfg
+        server.CONFIG_FILE, server.LEFT_CONFIG_FILE, server.PROFILES_FILE, server.LEFT_PROFILES_FILE = cls.old_cfg
         cls.tmp.cleanup()
 
     def request(self, method, path, body=None, headers=None):
@@ -1013,6 +1015,67 @@ class TestServerHttp(unittest.TestCase):
         with open(server.CONFIG_FILE, encoding="utf-8") as f:
             self.assertNotIn("source", json.load(f))
         self.assertEqual(json.loads(self.request("GET", "/api/config")[1])["source"], "user")
+
+    def test_layout_profiles_per_side_roundtrip(self):
+        origin = {"Origin": "http://localhost:8088"}
+        old = (server.PROFILES_FILE, server.LEFT_PROFILES_FILE)
+        server.PROFILES_FILE = os.path.join(self.tmp.name, "roundtrip_profiles.json")
+        server.LEFT_PROFILES_FILE = os.path.join(self.tmp.name, "roundtrip_profiles_left.json")
+        try:
+            # Ohne Datei: leere Liste
+            self.assertEqual(json.loads(self.request("GET", "/api/profiles?side=R")[1]), {"profiles": []})
+            right = {"profiles": [{"name": "Gaming", "savedAt": "2026-10-27T10:00:00Z",
+                                   "config": {"layers": [[[{"tap": "KEY_P"}]]], "source": "user"}}]}
+            left = {"profiles": [{"name": "Code", "savedAt": "", "config": {"layers": [[[{"tap": "KEY_Q"}]]]}}]}
+            self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(right), headers=origin)[0], 200)
+            self.assertEqual(self.request("POST", "/api/profiles?side=L", body=json.dumps(left), headers=origin)[0], 200)
+            got = json.loads(self.request("GET", "/api/profiles?side=R")[1])
+            # "source" ist Server-Metadatum und wird nicht im Profil gespeichert
+            self.assertEqual(got["profiles"][0]["config"], {"layers": [[[{"tap": "KEY_P"}]]]})
+            self.assertEqual(json.loads(self.request("GET", "/api/profiles?side=L")[1]), left)
+            self.assertEqual(self.request("GET", "/api/profiles?side=X")[0], 400)
+            self.assertEqual(self.request("POST", "/api/profiles?side=X", body=json.dumps(left), headers=origin)[0], 400)
+        finally:
+            server.PROFILES_FILE, server.LEFT_PROFILES_FILE = old
+
+    def test_layout_profiles_validation(self):
+        origin = {"Origin": "http://localhost:8088"}
+        cfg = {"layers": [[[{"tap": "KEY_A"}]]]}
+        bad_bodies = [
+            {"profiles": "x"},
+            {"profiles": [{"name": "", "config": cfg}]},
+            {"profiles": [{"name": 'A"B', "config": cfg}]},
+            {"profiles": [{"name": "A", "config": cfg}, {"name": "a", "config": cfg}]},
+            {"profiles": [{"name": "A", "config": {"layers": []}}]},
+            {"profiles": [{"name": "A", "savedAt": 5, "config": cfg}]},
+            {"profiles": [{"name": f"P{i}", "config": cfg} for i in range(server.MAX_PROFILES + 1)]},
+        ]
+        for body in bad_bodies:
+            with self.subTest(body=str(body)[:60]):
+                self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(body), headers=origin)[0], 400)
+        # Links gelten die Regeln der fehlenden Tasten (R5C0 trägt keine Aktion)
+        bad_left = {"profiles": [{"name": "A", "config": {"layers": [[[], [], [], [], [], [{"tap": "KEY_A"}]]]}}]}
+        self.assertEqual(self.request("POST", "/api/profiles?side=L", body=json.dumps(bad_left), headers=origin)[0], 400)
+        self.assertEqual(self.request("POST", "/api/profiles?side=R", body=json.dumps(bad_left), headers=origin)[0], 200)
+
+    def test_layout_profiles_corrupt_file_is_not_replaced(self):
+        old = server.PROFILES_FILE
+        server.PROFILES_FILE = os.path.join(self.tmp.name, "corrupt_profiles.json")
+        try:
+            with open(server.PROFILES_FILE, "w", encoding="utf-8") as f:
+                f.write("{kaputt")
+            status, data = self.request("GET", "/api/profiles?side=R")
+            self.assertEqual(status, 500)
+            self.assertFalse(json.loads(data)["success"])
+        finally:
+            server.PROFILES_FILE = old
+
+    def test_layout_profiles_are_not_versioned(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        with open(os.path.join(root, ".gitignore"), encoding="utf-8") as f:
+            ignored = [line.strip() for line in f]
+        self.assertIn("layout_profiles.json", ignored)
+        self.assertIn("layout_profiles_left.json", ignored)
 
     def test_save_config_atomic_validation(self):
         # Must reject non-dict or missing layers

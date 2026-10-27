@@ -18,7 +18,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Rangliste
 
-- **Profilverwaltung** `[App]` — *Nutzen: mittel · Aufwand: mittel* — Mehrere benannte Layouts lokal speichern und umschalten (heute nur ein `current_config.json` pro Hälfte plus JSON-Export/Import). Der Export deckt den Bedarf heute teilweise ab.
 - **ESP-NOW härten bzw. verschlüsseln** `[Split]` — *Nutzen: gering · Aufwand: mittel* — Unverschlüsseltes ESP-NOW ist eine bewusst akzeptierte Designentscheidung (Latenz, `AGENTS.md` 2a). Ein Angriff braucht Nähe und die gefälschte linke MAC. Verschlüsselung mit PMK/LMK kostet Airtime; vorher die Latenz messen.
 - **Fortschritt beim Flashen** `[App]` — *Nutzen: gering · Aufwand: klein* — `arduino-cli`-Ausgabe live an die App streamen statt nur am Ende melden. Flashen ist selten; der Nutzen liegt in der Fehlersuche bei einem hängenden Upload.
 - **Ebenen-Übersicht** `[App]` — *Nutzen: gering · Aufwand: mittel* — Alle 8 Ebenen verkleinert nebeneinander, damit transparente Tasten und Konflikte sichtbar werden.
@@ -67,6 +66,13 @@ Kleine Befunde aus Reviews, bewusst auf später verschoben. Jeder Punkt braucht 
 - `js/config-model.js` (`isValidMacroStep`): Der Operator `in` akzeptiert geerbte Namen wie `"constructor"` als Schritt-Typ. Folge: Eine importierte Datei besteht die Prüfung; der Sync sendet dann einen ungültigen Befehl und bricht ab. Korrektur: `Object.hasOwn(MACRO_STEP_TYPES, step.type)` verwenden und einen Test für `"constructor"` ergänzen.
 - `js/editor-events.js` (Import, `markPendingSync`): Die Import-Änderung setzt `pairs: true`, aber nicht `macros: true`. Folge: Nach einem Import geht eine Taste mit `MACRO_n` live, bevor die Makros synchronisiert sind. Korrektur: `macros: true` in der Import-Änderung setzen und einen Staging-Test ergänzen.
 - `README.md` (Aktionscode-Tabelle): Die Tabelle nennt One-Shot und Caps Word, aber nicht `0x170`..`0x17F`. Folge: Leser der README finden den Makro-Bereich nicht. Korrektur: Zeile für Makros ergänzen.
+- `js/config-model.js` (`findLayoutProfileIndex`): Die App vergleicht Profilnamen mit `toLowerCase`, `server.py` mit `casefold`. Folge: "Straße" und "STRASSE" gelten in der App als verschieden; der Server lehnt die Liste als Duplikat ab. Korrektur: In JS einen `casefold`-gleichen Vergleich verwenden und testen.
+- `server.py` (`load_profiles`): Ein einziges ungültiges Profil macht die ganze Datei ungültig (HTTP 500). Folge: Nach einer strengeren Validierungsregel kann der Nutzer seine Profile in der App weder laden noch löschen. Korrektur: Ungültige Einträge beim Laden überspringen und melden oder einen Reparaturweg anbieten.
+- `js/layout-profiles-ui.js` (`fetchLayoutProfiles`): `data.profiles` wird ohne Formprüfung gelesen. Folge: Eine Antwort ohne Liste wirft einen `TypeError` mit unklarer Meldung. Korrektur: `Array.isArray(data.profiles)` prüfen und einen klaren Fehler werfen.
+- `server.py` (`POST /api/profiles`): Der POST ersetzt die ganze Datei ohne Version. Folge: Zwei App-Fenster überschreiben sich gegenseitig (last write wins), ein Profil geht verloren. Korrektur: Ein Revisionsfeld speichern und einen veralteten Schreibzugriff mit HTTP 409 ablehnen.
+- `tests/test_app_logic.js` (Layout-Profile laden): Der Test prüft nur den Quelltext per Regex. Folge: Revert, Seitenprüfung und Busy-Sperre von `loadLayoutProfile` sind ohne Verhaltenstest. Korrektur: `js/layout-profiles-ui.js` mit DOM-Stubs ausführen und Pending Change, Revert und Seitenprüfung prüfen.
+- `js/layout-profiles-ui.js` (`openLayoutProfilesDialog`): Wird der Dialog während eines laufenden Schreibzugriffs neu geöffnet, sind die Knöpfe aktiv, reagieren aber nicht (`layoutProfilesBusy` ist noch gesetzt). Folge: Klicks auf Speichern, Laden und Löschen bleiben ohne Meldung. Korrektur: Nach jedem Rendern `setLayoutProfilesBusy(layoutProfilesBusy)` aufrufen und einen Status "Speichert …" zeigen.
+- `tests/test_server.py` (Layout-Profile): Kein Test für Namen, die App und Server unterschiedlich normalisieren (Leerzeichen nach dem Kürzen, `casefold`-Duplikate). Folge: Ein Auseinanderlaufen der Regeln bleibt unentdeckt. Korrektur: Server-Fälle für beide Namen ergänzen.
 
 ## Detailpläne
 
@@ -81,6 +87,7 @@ Derzeit kein offener Plan.
 - **Tap-Dance / Doppel-Tippen:** dritte Aktion pro Taste; zwei Tipps innerhalb von 200 ms lösen sie aus.
 - **Linke Hälfte:** eigene Firmware (Keymap, NVS, Config-BLE, Power Management) mit ESP-NOW zum Master; die App bearbeitet, synchronisiert und flasht beide Hälften.
 - **Flash-Port-Auswahl:** `server.py` flasht nur den Port, dessen Board sich per `DEVICE_INFO.side` als die gewählte Hälfte meldet.
+- **Profilverwaltung:** Dialog "Profile" speichert, lädt und löscht benannte Layouts pro Hälfte (`/api/profiles`, `layout_profiles*.json`) — PR #30.
 - **Deutsche Zeichen im Keycode-Picker:** Gruppe "Deutsche Zeichen (macOS)" mit Shift-Zeichen (`:`, `+`, `*`, `?` …) als Einzelcode und Option-Zeichen (`@`, `€`, `{` …) als automatisch angelegtes Tastenpaar; Suchfeld über jeder Aktions-Auswahl.
 - **Weitere deutsche Zeichen:** `<` (ISO-Taste `KEY_NON_US_BACKSLASH`, HID `0x64`), `>` (Tastenpaar Shift + ISO-Taste), `^`, `°`, `´` und `` ` `` in "Deutsche Zeichen (macOS)"; Zuordnung für den macOS-Tastaturtyp ISO.
 - **macOS-Layout "U.S.":** Gruppe "Sonderzeichen (macOS US)" mit US-Zeichen, `§` über die ISO-Taste, `° € ´` als Tastenpaar; eigene Umlaut-Aktionen `UMLAUT_AE` … `UMLAUT_SZ` (Tottaste Alt + u, dann Vokal; ß = Alt + s); Preset und Vorlagen mit US-Beschriftung.

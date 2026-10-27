@@ -498,3 +498,39 @@ function describeKeyActions(actions) {
   if (actions.dtapCode) text += ` · 2×: ${findDefinitionByCode(actions.dtapCode).label}`;
   return text;
 }
+
+// =============================================================================
+// Layout-Profile: benannte Kopien der Config einer Hälfte (/api/profiles?side=L|R)
+// =============================================================================
+const MAX_LAYOUT_PROFILES = 32;
+
+// Namen ohne Groß-/Kleinschreibung vergleichen (wie server.py)
+function findLayoutProfileIndex(profiles, name) {
+  const key = String(name).toLowerCase();
+  return profiles.findIndex(p => p.name.toLowerCase() === key);
+}
+
+// Wie sanitize_name in server.py: nur druckbare Zeichen (str.isprintable), ohne Quotes und Backslashes,
+// höchstens 31 Code Points. Erst kürzen, dann trimmen: so bleibt kein Leerzeichen am Ende, und der Server
+// erhält den Namen unverändert. Sonst lehnt er die ganze Liste ab.
+function sanitizeLayoutProfileName(value) {
+  const printable = String(value ?? "").replace(/[\p{C}\p{Zl}\p{Zp}"\\]|(?! )\p{Zs}/gu, "").trim();
+  return Array.from(printable).slice(0, MAX_NAME_LENGTH).join("").trim();
+}
+
+// Neue Liste mit dem gespeicherten Profil; ein gleichnamiges Profil wird an seiner Stelle ersetzt.
+// Rückgabe { profiles, replaced }. Ohne Namen oder bei voller Liste: Fehler.
+function upsertLayoutProfile(profiles, name, config, savedAt) {
+  const clean = sanitizeLayoutProfileName(name);
+  if (!clean) throw new Error("Profilname fehlt.");
+  const entry = { name: clean, savedAt, config: JSON.parse(JSON.stringify(config)) };
+  const idx = findLayoutProfileIndex(profiles, clean);
+  if (idx >= 0) return { profiles: profiles.map((p, i) => i === idx ? entry : p), replaced: true };
+  if (profiles.length >= MAX_LAYOUT_PROFILES) throw new Error(`Maximal ${MAX_LAYOUT_PROFILES} Profile pro Hälfte.`);
+  return { profiles: [...profiles, entry], replaced: false };
+}
+
+function removeLayoutProfile(profiles, name) {
+  const idx = findLayoutProfileIndex(profiles, name);
+  return idx < 0 ? profiles : profiles.filter((_, i) => i !== idx);
+}

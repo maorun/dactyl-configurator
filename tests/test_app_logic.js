@@ -46,6 +46,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
              isValidMacroStep, isValidMacro, normalizeMacroStep, macroCommands, isMacroUsed, removeMacroAt,
              keyNeedsStagedMacros, macroSaveIndex,
+             MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides };`, ctx);
 const api = ctx.api;
@@ -1576,6 +1577,49 @@ test("Live-Monitor Split-Ansicht: Verdrahtung mit Ansicht, bearbeiteter Hälfte 
 test("Ansichtswechsel prüft den Combo-Hinweis neu", () => {
   const handler = section("js/editor.js", "// Hand Switcher Buttons", "// Apply Layout Preset Button");
   assert.ok(/checkActiveCombos\(\)/.test(handler));
+});
+
+test("Layout-Profile: Speichern, Ersetzen, Löschen und Grenzen", () => {
+  const cfgA = { layers: [[[{ tap: "KEY_A" }]]] };
+  const cfgB = { layers: [[[{ tap: "KEY_B" }]]] };
+  let res = api.upsertLayoutProfile([], "  Gaming\n", cfgA, "t1");
+  assert.strictEqual(res.replaced, false);
+  assert.strictEqual(res.profiles[0].name, "Gaming");
+  // Kopie: spätere Änderungen an der Config verändern das Profil nicht
+  cfgA.layers[0][0][0].tap = "KEY_Z";
+  assert.strictEqual(res.profiles[0].config.layers[0][0][0].tap, "KEY_A");
+  const first = res.profiles;
+  res = api.upsertLayoutProfile(first, "Code", cfgB, "t2");
+  assert.deepStrictEqual([...res.profiles.map(p => p.name)], ["Gaming", "Code"]);
+  // Gleicher Name ohne Groß-/Kleinschreibung ersetzt an derselben Stelle; die alte Liste bleibt unverändert
+  res = api.upsertLayoutProfile(res.profiles, "gaming", cfgB, "t3");
+  assert.strictEqual(res.replaced, true);
+  assert.deepStrictEqual([...res.profiles.map(p => p.name)], ["gaming", "Code"]);
+  assert.strictEqual(res.profiles[0].savedAt, "t3");
+  assert.strictEqual(first[0].savedAt, "t1");
+  assert.strictEqual(api.findLayoutProfileIndex(res.profiles, "CODE"), 1);
+  assert.throws(() => api.upsertLayoutProfile([], ' "\\ ', cfgA, "t"), /Profilname fehlt/);
+  const full = Array.from({ length: api.MAX_LAYOUT_PROFILES }, (_, i) => ({ name: `P${i}`, savedAt: "", config: cfgA }));
+  assert.throws(() => api.upsertLayoutProfile(full, "Neu", cfgA, "t"), /Maximal/);
+  assert.strictEqual(api.upsertLayoutProfile(full, "p3", cfgB, "t").replaced, true);
+  assert.deepStrictEqual([...api.removeLayoutProfile(res.profiles, "code").map(p => p.name)], ["gaming"]);
+  assert.strictEqual(api.removeLayoutProfile(res.profiles, "fehlt"), res.profiles);
+});
+
+test("Layout-Profile: Namen wie sanitize_name in server.py (unverändert gültig)", () => {
+  // Kürzen auf 31 Zeichen darf kein Leerzeichen am Ende lassen
+  assert.strictEqual(api.sanitizeLayoutProfileName(`${"a".repeat(30)} b`), "a".repeat(30));
+  assert.strictEqual(api.sanitizeLayoutProfileName(' Mein "Layout"\t\\ '), "Mein Layout");
+  // Nicht druckbare Zeichen (Python str.isprintable) fallen weg, Umlaute bleiben
+  assert.strictEqual(api.sanitizeLayoutProfileName("Grün ​Ä "), "GrünÄ");
+  assert.strictEqual(Array.from(api.sanitizeLayoutProfileName("😀".repeat(40))).length, 31);
+});
+
+test("Layout-Profile: Laden ist eine geprüfte Snapshot-Änderung mit Tastenpaaren und Makros", () => {
+  const src = read("js/layout-profiles-ui.js");
+  const load = src.slice(src.indexOf("function loadLayoutProfile"), src.indexOf("async function deleteLayoutProfile"));
+  assert.ok(/validateConfigShape\(/.test(load));
+  assert.ok(/snapshot: true/.test(load) && /pairs: true/.test(load) && /macros: true/.test(load));
 });
 
 (async () => {

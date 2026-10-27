@@ -1703,3 +1703,36 @@ body {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* Layout-Profile */
+.layout-profile-save {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.layout-profile-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.layout-profile-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.layout-profile-list strong {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.layout-profile-time {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}

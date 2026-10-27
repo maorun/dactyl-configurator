@@ -54,6 +54,10 @@ LEFT_CONFIG_FILE = os.path.join(DATA_DIR, "current_config_left.json")
 LEFT_DEFAULT_CONFIG_FILE = os.path.join(DIRECTORY, "default_config_left.json")
 LEFT_INO_FILE = os.path.join(FIRMWARE_DIR, "dactyl_left", "dactyl_left.ino")
 LEFT_SKETCH_DIR = os.path.join(FIRMWARE_DIR, "dactyl_left")
+# Benannte Layout-Profile je Hälfte (lokaler Laufzeitzustand wie current_config*.json)
+PROFILES_FILE = os.path.join(DATA_DIR, "layout_profiles.json")
+LEFT_PROFILES_FILE = os.path.join(DATA_DIR, "layout_profiles_left.json")
+MAX_PROFILES = 32
 # Mit eigenem Datenverzeichnis ist die .ino aus dem Paket die Vorlage; gerendert und kompiliert wird eine Kopie.
 # None: die .ino wird an Ort und Stelle gerendert (Repository).
 SEPARATE_FIRMWARE = FIRMWARE_DIR != SOURCE_FIRMWARE_DIR
@@ -70,9 +74,10 @@ def side_paths(side):
     """Dateien einer Hälfte. Liest die Modulvariablen bei jedem Aufruf (Tests ersetzen sie)."""
     if side == "L":
         return {"config": LEFT_CONFIG_FILE, "default": LEFT_DEFAULT_CONFIG_FILE, "ino": LEFT_INO_FILE,
-                "template": LEFT_INO_TEMPLATE_FILE or LEFT_INO_FILE, "sketch": LEFT_SKETCH_DIR}
+                "template": LEFT_INO_TEMPLATE_FILE or LEFT_INO_FILE, "sketch": LEFT_SKETCH_DIR,
+                "profiles": LEFT_PROFILES_FILE}
     return {"config": CONFIG_FILE, "default": DEFAULT_CONFIG_FILE, "ino": INO_FILE,
-            "template": INO_TEMPLATE_FILE or INO_FILE, "sketch": SKETCH_DIR}
+            "template": INO_TEMPLATE_FILE or INO_FILE, "sketch": SKETCH_DIR, "profiles": PROFILES_FILE}
 
 
 def sync_firmware_sources():
@@ -256,7 +261,7 @@ STATIC_ALLOWLIST = {
     "/js/side-right.js": "js/side-right.js", "/js/side-left.js": "js/side-left.js",
 }
 # Module der Web-App (Reihenfolge in index.html)
-APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "macros-ui", "editor-events", "ble", "serial",
+APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "macros-ui", "layout-profiles-ui", "editor-events", "ble", "serial",
                "live-monitor", "heatmap", "matrix-test", "keyboard-hooks", "config-sync")
 STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 
@@ -683,6 +688,52 @@ def save_config_and_firmware(config, side="R"):
     sync_firmware_sources()
     write_files_atomic([(paths["ino"], new_ino), (paths["config"], json.dumps(config, indent=2))])
 
+def validate_profiles(data, side="R"):
+    """Prüft die Profilliste einer Hälfte: eindeutige Namen, höchstens MAX_PROFILES, jede Config wie /api/config."""
+    if not isinstance(data, dict) or not isinstance(data.get("profiles"), list):
+        raise ValueError("Ungültige Profile: Objekt mit einer Liste 'profiles' erwartet.")
+    profiles = data["profiles"]
+    if len(profiles) > MAX_PROFILES:
+        raise ValueError(f"Ungültige Profile: maximal {MAX_PROFILES} Profile erlaubt.")
+    result, names = [], set()
+    for idx, entry in enumerate(profiles):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Ungültiges Profil {idx}: Objekt erwartet.")
+        name = sanitize_name(entry.get("name"), "")
+        if not name or name != entry.get("name"):
+            raise ValueError(f"Ungültiger Profilname in Profil {idx}.")
+        if name.casefold() in names:
+            raise ValueError(f"Profilname doppelt: {name}")
+        names.add(name.casefold())
+        saved_at = entry.get("savedAt", "")
+        if not isinstance(saved_at, str) or len(saved_at) > 40:
+            raise ValueError(f"Ungültiger Zeitstempel in Profil '{name}'.")
+        config = strip_response_metadata(entry.get("config"))
+        try:
+            validate_config(config, side)
+        except ValueError as err:
+            raise ValueError(f"Profil '{name}': {err}") from err
+        result.append({"name": name, "savedAt": saved_at, "config": config})
+    return {"profiles": result}
+
+def load_profiles(side="R"):
+    """Profilliste einer Hälfte. Fehlt die Datei, ist die Liste leer; eine beschädigte Datei liefert None."""
+    try:
+        with open(side_paths(side)["profiles"], "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {"profiles": []}
+    except (OSError, ValueError):
+        return None
+    try:
+        return validate_profiles(data, side)
+    except ValueError:
+        return None
+
+def save_profiles_atomic(data, side="R"):
+    data = validate_profiles(data, side)
+    write_file_atomic(side_paths(side)["profiles"], json.dumps(data, indent=2))
+
 def find_arduino_cli():
     cli = shutil.which("arduino-cli")
     if cli:
@@ -925,6 +976,19 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(200, load_config_for_app(side))
             return
 
+        if path == "/api/profiles":
+            side = parse_side(self.path)
+            if side is None:
+                self.send_json(400, {"success": False, "error": "Ungültiger Parameter 'side' (L oder R)."})
+                return
+            data = load_profiles(side)
+            if data is None:
+                # Beschädigte Datei nicht still durch eine leere Liste ersetzen: ein Speichern würde sie überschreiben
+                self.send_json(500, {"success": False, "error": "Profildatei ist beschädigt oder unlesbar."})
+                return
+            self.send_json(200, data)
+            return
+
         if path in STATIC_ALLOWLIST:
             self.path = "/" + STATIC_ALLOWLIST[path]
             super().do_GET()
@@ -947,7 +1011,7 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
 
-        if path in ("/api/save_and_flash", "/api/config"):
+        if path in ("/api/save_and_flash", "/api/config", "/api/profiles"):
             side = parse_side(self.path)
             if side is None:
                 self.send_json(400, {"success": False, "error": "Ungültiger Parameter 'side' (L oder R)."})
@@ -986,6 +1050,21 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
                 return
             try:
                 save_config_atomic(config, side)
+            except ValueError as e:
+                self.send_json(400, {"success": False, "error": str(e)})
+                return
+            except OSError as e:
+                self.send_json(500, {"success": False, "error": str(e)})
+                return
+            self.send_json(200, {"success": True})
+            return
+
+        if path == "/api/profiles":
+            data = self.read_json_body()
+            if data is None:
+                return
+            try:
+                save_profiles_atomic(data, side)
             except ValueError as e:
                 self.send_json(400, {"success": False, "error": str(e)})
                 return

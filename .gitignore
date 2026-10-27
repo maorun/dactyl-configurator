@@ -3,4 +3,6 @@ __pycache__
 # Lokaler Laufzeitzustand der Configurator-App (Vorlage: default_config.json)
 current_config.json
 current_config_left.json
+layout_profiles.json
+layout_profiles_left.json
 .claude

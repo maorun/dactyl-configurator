@@ -52,6 +52,9 @@
         <button id="btnWriteConfig" class="btn btn-outline" style="border-color: #10b981; color: #6ee7b7;" title="Aktuelle Tastenbelegung per Bluetooth oder USB sofort im ESP32 NVS speichern (ohne Flashen)">
           <span class="btn-icon">⚡</span> Auf ESP32 speichern
         </button>
+        <button id="btnLayoutProfiles" class="btn btn-outline" title="Mehrere benannte Layouts der bearbeiteten Hälfte lokal speichern und laden">
+          Profile
+        </button>
         <button id="btnExportJson" class="btn btn-outline">
           Export JSON
         </button>
@@ -550,6 +553,24 @@
       </div>
     </div>
 
+    <!-- Modal: Layout-Profile der bearbeiteten Hälfte -->
+    <div class="modal-backdrop" id="layoutProfilesModal" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h4 id="layoutProfilesTitle">Layout-Profile</h4>
+          <button class="modal-close" id="btnCloseLayoutProfiles">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="layout-profile-save">
+            <input type="text" id="layoutProfileNameInput" class="form-control" maxlength="31" placeholder="Name des Profils ...">
+            <button class="btn btn-primary btn-sm" id="btnSaveLayoutProfile">Aktuelles Layout speichern</button>
+          </div>
+          <p id="layoutProfilesStatus" class="sync-diff-hint"></p>
+          <ul id="layoutProfilesList" class="layout-profile-list"></ul>
+        </div>
+      </div>
+    </div>
+
     <!-- Toast Notification -->
     <div class="toast" id="toastNotification"></div>
   </div>
@@ -562,10 +583,11 @@
   <script src="js/side-routing.js?v=2"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=3"></script>
-  <script src="js/config-model.js?v=4"></script>
+  <script src="js/config-model.js?v=5"></script>
   <script src="js/editor.js?v=4"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/macros-ui.js?v=1"></script>
+  <script src="js/layout-profiles-ui.js?v=1"></script>
   <script src="js/editor-events.js?v=4"></script>
   <script src="js/ble.js?v=1"></script>
   <script src="js/serial.js?v=4"></script>
@@ -574,6 +596,6 @@
   <script src="js/matrix-test.js?v=1"></script>
   <script src="js/keyboard-hooks.js?v=3"></script>
   <script src="js/config-sync.js?v=3"></script>
-  <script src="app.js?v=40"></script>
+  <script src="app.js?v=41"></script>
 </body>
 </html>

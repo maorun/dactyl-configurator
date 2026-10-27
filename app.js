@@ -108,6 +108,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initMatrixTestUI();
   initKeyPairsUI();
   initMacrosUI();
+  initLayoutProfilesUI();
 });
 
 function updateConfigModeUI(active, syncing = false) {

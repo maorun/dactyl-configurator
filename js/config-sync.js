@@ -2,6 +2,9 @@
 // Configuration Read/Write
 // =============================================================================
 
+// Timer, der Balken und Text nach einem Sync ausblendet. Ein neuer Sync löscht ihn, sonst blendet er dessen Anzeige aus.
+let syncProgressHideTimer = null;
+
 async function writeConfigToESP32(options = {}) {
   const autoDisconnectAfter = !!(options && options.autoDisconnectAfter);
 
@@ -28,8 +31,18 @@ async function writeConfigToESP32(options = {}) {
 
   const progressWrap = document.getElementById("autoSyncProgressWrap");
   const progressBar = document.getElementById("autoSyncProgressBar");
+  // Text über dem Balken: der Balken zeigt die Übertragung, keine Wartezeit auf weitere Änderungen
+  const progressLabel = document.getElementById("autoSyncProgressLabel");
+  if (syncProgressHideTimer !== null) {
+    clearTimeout(syncProgressHideTimer);
+    syncProgressHideTimer = null;
+  }
   if (progressWrap) progressWrap.style.display = "block";
   if (progressBar) progressBar.style.width = "2%";
+  if (progressLabel) {
+    progressLabel.style.display = "block";
+    progressLabel.textContent = `Übertrage an ${profile.label} …`;
+  }
 
   const previousConfigMode = isConfigModeActive;
   updateConfigModeUI(bleConfigChar ? true : previousConfigMode, true);
@@ -88,13 +101,18 @@ async function writeConfigToESP32(options = {}) {
     const combos = cfg.combos.slice(0, MAX_COMBOS);
     const macros = (cfg.macros || []).slice(0, MAX_MACROS);
     const totalSteps = countSyncSteps(settingCommands.length, totalLayers, combos.length, macros.length);
+    const showProgressLabel = () => {
+      if (progressLabel) progressLabel.textContent = syncProgressLabel(profile.label, completedSteps, totalSteps);
+    };
     const updateProgress = () => {
       completedSteps++;
       if (progressBar) {
         const pct = Math.round((completedSteps / totalSteps) * 100);
         progressBar.style.width = `${pct}%`;
       }
+      showProgressLabel();
     };
+    showProgressLabel();
 
     for (const { cmd, ack, optional } of settingCommands) {
       await sendConfirmed(cmd, ack, 3000, optional);
@@ -195,9 +213,12 @@ async function writeConfigToESP32(options = {}) {
       updateConfigModeUI(bleConfigChar ? true : previousConfigMode, false);
       if (syncSucceeded) showToast(`✅ Vollständige Konfiguration der ${profile.label} im ESP32 NVS gespeichert!`);
     }
-    setTimeout(() => {
+    if (progressLabel) progressLabel.textContent = syncSucceeded ? "Übertragung abgeschlossen" : "Übertragung abgebrochen";
+    syncProgressHideTimer = setTimeout(() => {
+      syncProgressHideTimer = null;
       if (progressWrap) progressWrap.style.display = "none";
       if (progressBar) progressBar.style.width = "0%";
+      if (progressLabel) progressLabel.style.display = "none";
     }, 600);
   }
 }
@@ -213,6 +234,11 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_COMBO_TIMEOUT ${clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40)}`, ack: "SET_COMBO_TIMEOUT" },
     { cmd: `SET_TAPPING_TERM ${clampSetting("tappingTermMs", s.tappingTermMs ?? 200)}`, ack: "SET_TAPPING_TERM", optional: true }
   ];
+}
+
+// Text über dem Fortschrittsbalken, z. B. "Übertrage an rechte Hälfte: 120 / 395 Schritte"
+function syncProgressLabel(sideLabel, done, total) {
+  return `Übertrage an ${sideLabel}: ${Math.min(done, total)} / ${total} Schritte`;
 }
 
 // Fortschrittsschritte des vollen Syncs: Einstellungen, Ebenen-Namen, Tasten (SET_K), SAVE_NVS,

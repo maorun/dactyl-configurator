@@ -1194,7 +1194,8 @@ test("Makros: Löschen nummeriert Tasten neu und Staging", () => {
 });
 
 // Voller Sync aus js/config-sync.js mit Fake-USB-Verbindung. reply(cmd) liefert die Antwortzeile oder null.
-function fullSyncHarness(reply) {
+// holdMs: Timer mit dieser Dauer laufen nicht sofort, sondern warten in held (Ausblend-Timer des Balkens)
+function fullSyncHarness(reply, holdMs = null) {
   const progress = [];
   const toasts = [];
   const sent = [];
@@ -1206,11 +1207,23 @@ function fullSyncHarness(reply) {
     { name: "Warten", steps: [{ type: "pause", ms: 250 }, { type: "tap", code: "a" }] }
   ];
   const delays = [];
+  // Texte über dem Balken in der Reihenfolge der Anzeige; hidden = Label ausgeblendet
+  const labels = [];
+  const label = { style: { set display(v) { if (v === "none") labels.hidden = true; } },
+                  set textContent(v) { labels.push(v); } };
+  const held = [];
   const w = {
-    console: { error() {}, warn() {} }, sent, reply, delays,
-    setTimeout: (fn, ms) => { delays.push(ms); Promise.resolve().then(fn); return 0; }, clearTimeout: () => {},
+    console: { error() {}, warn() {} }, sent, reply, delays, held,
+    setTimeout: (fn, ms) => {
+      delays.push(ms);
+      if (ms === holdMs) { held.push({ fn, cleared: false }); return held.length; }
+      Promise.resolve().then(fn);
+      return 0;
+    },
+    clearTimeout: id => { if (id > 0 && held[id - 1]) held[id - 1].cleared = true; },
     document: { getElementById: id => id === "autoSyncProgressBar"
-      ? { style: { set width(v) { progress.push(parseInt(v, 10)); } } } : { style: {} } }
+      ? { style: { set width(v) { progress.push(parseInt(v, 10)); } } }
+      : (id === "autoSyncProgressLabel" ? label : { style: {} }) }
   };
   vm.createContext(w);
   vm.runInContext(`${code}
@@ -1243,7 +1256,7 @@ ${read("js/config-sync.js")}
 this.write = writeConfigToESP32;
 this.state = () => ({ isAutoSyncing });
 this.setBle = (char, disconnect) => { bleConfigChar = char; disconnectBle = disconnect; };`, Object.assign(w, { cfgRef: cfg, toastsRef: toasts }));
-  return { w, progress, toasts, sent, delays };
+  return { w, progress, toasts, sent, delays, labels, held };
 }
 
 const okReply = cmd => cmd.startsWith("SET_K ") ? null : `OK ${cmd}`;
@@ -1283,6 +1296,40 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(cmds.length, 6);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM"]);
 });
+
+asyncTests.push(["Sync: Text über dem Balken zählt die übertragenen Schritte", async () => {
+  const { w, labels, progress } = fullSyncHarness(okReply);
+  await w.write();
+  const steps = progress.slice(1, -1).length;
+  assert.strictEqual(labels[0], `Übertrage an ${R.label} …`);
+  assert.strictEqual(labels[1], `Übertrage an ${R.label}: 0 / ${steps} Schritte`);
+  assert.strictEqual(labels.at(-2), `Übertrage an ${R.label}: ${steps} / ${steps} Schritte`);
+  assert.strictEqual(labels.at(-1), "Übertragung abgeschlossen");
+  assert.strictEqual(labels.hidden, true);
+  // Keine Live-Region: ein Screenreader würde jeden der etwa 400 Schritte ansagen
+  const labelTag = /<div id="autoSyncProgressLabel"[^>]*>/.exec(read("index.html"));
+  assert.ok(labelTag, "autoSyncProgressLabel fehlt in index.html");
+  assert.ok(!/aria-live/.test(labelTag[0]));
+  // Abbruch: eigener Endtext
+  const bad = fullSyncHarness(cmd => cmd === "SAVE_NVS" ? "ERR NVS SAVE_NVS" : okReply(cmd));
+  await bad.w.write();
+  assert.strictEqual(bad.labels.at(-1), "Übertragung abgebrochen");
+  assert.ok(!bad.labels.includes("Übertragung abgeschlossen"));
+}]);
+
+asyncTests.push(["Sync: Ausblend-Timer eines früheren Syncs blendet die Anzeige eines neuen Syncs nicht aus", async () => {
+  const { w, labels, held } = fullSyncHarness(okReply, 600);
+  await w.write();
+  assert.strictEqual(held.length, 1);
+  // Zweiter Sync (Live-Sync nach 300 ms) startet, bevor der erste Timer abläuft
+  const second = w.write();
+  assert.strictEqual(held[0].cleared, true, "neuer Sync löscht den alten Ausblend-Timer");
+  await second;
+  assert.strictEqual(labels.hidden, undefined);
+  // Der Timer des zweiten Syncs blendet aus
+  held[1].fn();
+  assert.strictEqual(labels.hidden, true);
+}]);
 
 asyncTests.push(["One-Shot: Trennen ohne Wartezeit, isAutoSyncing endet auch bei einem Fehler im Trennen", async () => {
   const { w, delays } = fullSyncHarness(okReply);

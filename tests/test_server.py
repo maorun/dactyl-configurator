@@ -685,18 +685,55 @@ class TestServerAndCodegen(unittest.TestCase):
             self.assertNotEqual(proc.returncode, 0)
             with open(key, encoding="utf-8") as f:
                 self.assertEqual(f.read(), header)
+            # --if-missing (npm run build:app / rebuild:app) behält den Schlüssel und endet ohne Fehler
+            proc = run("--if-missing")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(key, encoding="utf-8") as f:
+                self.assertEqual(f.read(), header)
             proc = run("--force")
             self.assertEqual(proc.returncode, 0, proc.stderr)
             with open(key, encoding="utf-8") as f:
                 self.assertNotEqual(f.read(), header)
             self.assertEqual(sorted(os.listdir(tmp)), ["DactylSplitKey.h"])
+            # Ohne Schlüssel erzeugt --if-missing einen neuen
+            os.remove(key)
+            proc = run("--if-missing")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(os.stat(key).st_mode & 0o777, 0o600)
+            with open(key, encoding="utf-8") as f:
+                header = f.read()
+            # Zu weite Rechte: --if-missing setzt 0600 und lässt den Inhalt unverändert
+            os.chmod(key, 0o644)
+            proc = run("--if-missing")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(os.stat(key).st_mode & 0o777, 0o600)
+            with open(key, encoding="utf-8") as f:
+                self.assertEqual(f.read(), header)
+            # Beschädigte Datei (leer, ein Byte zu wenig): Abbruch statt eines Pakets mit kaputtem Schlüssel
+            for broken in ("", header.rsplit(", ", 1)[0] + "};\n"):
+                with open(key, "w", encoding="utf-8") as f:
+                    f.write(broken)
+                proc = run("--if-missing")
+                self.assertEqual(proc.returncode, 1, broken[:40])
+                self.assertIn("beschädigt", proc.stderr)
+                with open(key, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), broken)
+            # Unbekanntes Argument (Tippfehler) und zu viele Argumente: Aufrufhinweis, Datei unverändert
+            for args in (("--if-mising",), ("--force", "--if-missing")):
+                proc = run(*args)
+                self.assertEqual(proc.returncode, 2, args)
+                self.assertIn("Aufruf:", proc.stderr)
+                with open(key, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), broken)
 
     def test_build_app_script_bundles_server_ui_and_firmware(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
             pkg = json.load(f)
         self.assertEqual(pkg["main"], "main.js")
-        self.assertEqual(pkg["scripts"]["build:app"], "bash scripts/build-app.sh")
+        # Der ESP-NOW-Schlüssel entsteht vor dem Bau, sonst kompiliert "Auf Dactyl flashen" in der App nicht
+        self.assertEqual(pkg["scripts"]["build:app"],
+                         "bash scripts/generate-split-key.sh --if-missing && bash scripts/build-app.sh")
         with tempfile.TemporaryDirectory() as tmp:
             # Repository-Kopie mit einer Nutzer-Config, Electron-Paket mit einer veralteten Datei
             repo = os.path.join(tmp, "repo")
@@ -1061,7 +1098,8 @@ class TestServerAndCodegen(unittest.TestCase):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
             pkg = json.load(f)
-        self.assertEqual(pkg["scripts"]["rebuild:app"], "bash scripts/rebuild-app.sh")
+        self.assertEqual(pkg["scripts"]["rebuild:app"],
+                         "bash scripts/generate-split-key.sh --if-missing && bash scripts/rebuild-app.sh")
         with open(os.path.join(root, "scripts", "rebuild-app.sh"), encoding="utf-8") as f:
             script = f.read()
         self.assertIn("set -euo pipefail", script)

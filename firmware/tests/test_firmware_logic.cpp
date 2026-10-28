@@ -141,6 +141,7 @@ static int testsPassed = 0;
 
 // Reset mock state before tests
 void resetState() {
+  remoteMomentaryLayers = 0;
   for (int l = 0; l < NUM_LAYERS; l++) {
     momentaryLayers[l] = false;
     toggleLayers[l] = false;
@@ -330,6 +331,120 @@ static size_t countOutput(const std::string& line) {
 static bool hasOutputPrefix(const std::string& prefix) {
   for (const auto& l : Serial.outputLines) if (l.rfind(prefix, 0) == 0) return true;
   return false;
+}
+
+// -----------------------------------------------------------------------------
+// Test 3b: Layer-Abgleich beider Hälften (MO und TG der anderen Hälfte)
+// -----------------------------------------------------------------------------
+TEST(test_remote_momentary_layer_activates_layer_here) {
+  resetState();
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[1][2][1] = KEY_LEFT_ARROW;
+  // MO_1 der anderen Hälfte: eine Taste dieser Hälfte sendet die Belegung von Ebene 1
+  assert(applyRemoteLayerState(0x02, false, 0));
+  assert(getActiveLayer() == 1);
+  assert(countOutput("LAYER: SPLIT -> Layer 1\n") == 1);
+  bleKeyboard.pressHistory.clear();
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  assert(!bleKeyboard.pressHistory.empty() && bleKeyboard.pressHistory.back() == KEY_LEFT_ARROW);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  // Loslassen der anderen Hälfte: zurück auf Ebene 0
+  assert(applyRemoteLayerState(0, false, 0));
+  assert(getActiveLayer() == 0);
+  // Gleicher Zustand meldet keinen Wechsel
+  Serial.clear();
+  assert(!applyRemoteLayerState(0, false, 0));
+  assert(!hasOutputPrefix("LAYER:"));
+  // Entferntes MO_0 erzwingt Ebene 0 wie ein eigenes
+  toggleLayers[3] = true;
+  applyRemoteLayerState(0x01, false, 0);
+  assert(getActiveLayer() == 0);
+  applyRemoteLayerState(0, false, 0);
+  assert(getActiveLayer() == 3);
+}
+
+TEST(test_remote_toggle_state_replaces_local_toggles) {
+  resetState();
+  toggleLayers[2] = true;
+  // SET der anderen Hälfte: Ebene 3 eingerastet, Ebene 2 nicht mehr; Bit 0 (Ebene 0) rastet nie ein
+  assert(applyRemoteLayerState(0, true, (1 << 3) | 1));
+  assert(!toggleLayers[0] && !toggleLayers[2] && toggleLayers[3]);
+  assert(getActiveLayer() == 3);
+  assert(toggleLayerMask() == (1 << 3));
+  // Ohne SET bleiben die Toggles unverändert
+  applyRemoteLayerState(0, false, 0);
+  assert(toggleLayers[3]);
+}
+
+TEST(test_local_layer_masks_follow_mo_and_tg_keys) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_MO_2;
+  KEYMAP[0][5][1] = ACT_TG_1;
+  keyState[5][0] = true;
+  onMatrixKeyChange(5, 0, true);
+  assert(localMomentaryLayerMask() == (1 << 2));
+  keyState[5][1] = true;
+  onMatrixKeyChange(5, 1, true);
+  keyState[5][1] = false;
+  onMatrixKeyChange(5, 1, false);
+  // TG_1 auf Ebene 0 gedrückt, aber Ebene 2 ist aktiv: Taste ist dort transparent (Ebene 0)
+  assert(toggleLayerMask() == (1 << 1));
+  keyState[5][0] = false;
+  onMatrixKeyChange(5, 0, false);
+  assert(localMomentaryLayerMask() == 0);
+  // Entfernte MO-Ebenen zählen nicht als eigene (kein Echo an die andere Hälfte)
+  applyRemoteLayerState(0x08, false, 0);
+  assert(localMomentaryLayerMask() == 0);
+}
+
+TEST(test_layer_navigation_and_combo_toggle_change_toggle_mask) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_LAYER_UP;
+  KEYMAP[2][5][0] = ACT_LAYER_UP;
+  keyState[5][0] = true;
+  onMatrixKeyChange(5, 0, true);
+  keyState[5][0] = false;
+  onMatrixKeyChange(5, 0, false);
+  assert(toggleLayerMask() == (1 << 1));
+  KEYMAP[1][5][1] = ACT_LAYER_DOWN;
+  keyState[5][1] = true;
+  onMatrixKeyChange(5, 1, true);
+  keyState[5][1] = false;
+  onMatrixKeyChange(5, 1, false);
+  assert(toggleLayerMask() == 0);
+  // Combo LAYER_TOGGLE schreibt toggleLayers[] und geht damit in den Abgleich
+  numCombos = 1;
+  userCombos[0] = { 2, 1, 2, 2, 2, (uint16_t)ACT_TG_1 + 2 }; // Ebene 3
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);
+  checkUserCombos();
+  assert(toggleLayerMask() == (1 << 3));
+  keyState[2][1] = keyState[2][2] = false;
+  onMatrixKeyChange(2, 1, false);
+  onMatrixKeyChange(2, 2, false);
+  checkUserCombos();
+}
+
+TEST(test_layer_up_steps_from_shared_layer_with_remote_mo) {
+  resetState();
+  KEYMAP[2][5][0] = ACT_LAYER_UP;
+  // Die andere Hälfte hält MO_2: LAYER_UP dieser Hälfte schaltet von der gemeinsamen Ebene 2 auf 3
+  applyRemoteLayerState(1 << 2, false, 0);
+  assert(getActiveLayer() == 2);
+  keyState[5][0] = true;
+  onMatrixKeyChange(5, 0, true);
+  keyState[5][0] = false;
+  onMatrixKeyChange(5, 0, false);
+  assert(toggleLayerMask() == (1 << 3) && getActiveLayer() == 3);
+  // Loslassen der anderen Hälfte: die eingerastete Ebene 3 bleibt
+  applyRemoteLayerState(0, false, 0);
+  assert(getActiveLayer() == 3);
 }
 
 TEST(test_matrix_event_for_key_without_action) {

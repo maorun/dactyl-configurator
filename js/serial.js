@@ -327,7 +327,8 @@ function handleSerialLine(line, side = null, transport = "ble") {
       const evt = JSON.parse(line.substring(10));
       if (!isValidIndex(evt.r, NUM_ROWS) || !isValidIndex(evt.c, NUM_COLS)) return;
       const pressedLayer = isValidIndex(evt.layer, NUM_LAYERS) ? evt.layer : undefined;
-      if (isEditSide && isValidIndex(evt.target_layer, NUM_LAYERS) && evt.target_layer !== activeLayerIndex) {
+      // Beide Hälften teilen die aktive Ebene (Layer-Abgleich der Firmware): die Anzeige folgt jeder Hälfte
+      if (isValidIndex(evt.target_layer, NUM_LAYERS) && evt.target_layer !== activeLayerIndex) {
         switchLayerUI(evt.target_layer);
       }
       triggerVisualKeyPress(evt.r, evt.c, typeof evt.key === "string" ? evt.key : "", lineSide, pressedLayer);
@@ -375,10 +376,10 @@ function handleSerialLine(line, side = null, transport = "ble") {
     }
   }
 
-  // 4. Layer Umschaltung aus Firmware
+  // 4. Layer Umschaltung aus Firmware (beide Hälften teilen die aktive Ebene, auch "LAYER: SPLIT")
   else if (line.startsWith("LAYER:")) {
     const match = line.match(/Layer\s*(\d+)/i);
-    if (match && isEditSide) {
+    if (match) {
       const l = parseInt(match[1], 10);
       switchLayerUI(l);
     }

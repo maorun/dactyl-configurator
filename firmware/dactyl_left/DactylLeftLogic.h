@@ -267,3 +267,20 @@ bool consumeMasterActivity(volatile bool &received, unsigned long nowMs, unsigne
   lastActivityMs = nowMs;
   return true;
 }
+
+// Fehlgeschlagener ESP-NOW-Start beim Booten: höchstens ESPNOW_BOOT_RETRIES Board-Neustarts in Folge, dann läuft
+// die Hälfte ohne ESP-NOW weiter (Config Mode und USB bleiben erreichbar, keine Neustart-Schleife, die den Akku
+// leert). rtcState liegt in RTC_NOINIT und gilt nur nach einem Software-Reset (sonst Zufallswert).
+// Rückgabe: true = jetzt neu starten.
+#define ESPNOW_BOOT_RETRIES 3
+#define ESPNOW_BOOT_RETRY_MAGIC 0xE5B0A000UL
+
+inline bool espNowBootRetryAllowed(uint32_t &rtcState, bool softwareReset) {
+  uint32_t count = (softwareReset && (rtcState & 0xFFFFFF00UL) == ESPNOW_BOOT_RETRY_MAGIC) ? (rtcState & 0xFF) : 0;
+  if (count >= ESPNOW_BOOT_RETRIES) {
+    rtcState = 0;
+    return false;
+  }
+  rtcState = ESPNOW_BOOT_RETRY_MAGIC | (count + 1);
+  return true;
+}

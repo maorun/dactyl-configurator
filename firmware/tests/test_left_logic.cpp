@@ -521,6 +521,24 @@ TEST(test_queue_push_after_drain_makes_room) {
   assert(!queuePushAfterDrain(q, ev, [&] { drains++; }) && drains == 2 && q.count == SPLIT_QUEUE_SIZE);
 }
 
+TEST(test_espnow_boot_retry_stops_after_limit) {
+  uint32_t rtc = 0x12345678; // Kaltstart: RTC_NOINIT enthält einen Zufallswert
+  assert(espNowBootRetryAllowed(rtc, false));
+  assert(espNowBootRetryAllowed(rtc, true));
+  assert(espNowBootRetryAllowed(rtc, true));
+  // Nach ESPNOW_BOOT_RETRIES Neustarts in Folge: kein weiterer Neustart (keine Schleife)
+  assert(!espNowBootRetryAllowed(rtc, true));
+  assert(rtc == 0);
+  // Ein Kaltstart (Einschalten, Reset-Taste) zählt neu, auch mit gültigem Zählerstand
+  rtc = ESPNOW_BOOT_RETRY_MAGIC | ESPNOW_BOOT_RETRIES;
+  assert(espNowBootRetryAllowed(rtc, false));
+  assert(rtc == (ESPNOW_BOOT_RETRY_MAGIC | 1));
+  // Zählerstand über der Grenze (beschädigtes Byte): kein Neustart
+  rtc = ESPNOW_BOOT_RETRY_MAGIC | 0xFF;
+  assert(!espNowBootRetryAllowed(rtc, true));
+  assert(rtc == 0);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Firmware Unit Test Suite" << std::endl;

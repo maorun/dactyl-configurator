@@ -109,6 +109,7 @@ ESP-NOW ist das latenzarme (< 5 ms) 2.4-GHz-Protokoll von Espressif für die dra
   peerInfo.encrypt = false;
   esp_now_add_peer(&peerInfo);
   ```
+  Das Dactyl verschlüsselt die Strecke: `esp_now_set_pmk()` vor `esp_now_add_peer()`, `encrypt = true` und `lmk` (16 Byte) im Peer (`DactylSplitCrypto.h`).
 
 ### Deterministisches Peer-Addressing (Split Keyboard)
 - **Rechte Master-Hand:**

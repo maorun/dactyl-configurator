@@ -45,10 +45,13 @@
 
 #include "../dactyl_right/DactylCommon.h"
 #include "DactylLeftLogic.h"
+#include "../dactyl_right/DactylSplitCrypto.h"
 #include "DactylSplitKeyboard.h"
 
 // Überlebt ESP.restart() im RTC-Slow-Memory, wird aber beim Kaltstart ignoriert
 RTC_NOINIT_ATTR uint32_t rtcConfigModeMagic;
+// Zähler der Board-Neustarts nach fehlgeschlagenem ESP-NOW-Start (espNowBootRetryAllowed)
+RTC_NOINIT_ATTR uint32_t rtcEspNowBootRetry;
 
 void handleConfigCommand(String cmd, bool fromBle = false);
 void sendConfigNotification(String msg, bool addDelay = false);
@@ -391,17 +394,22 @@ static bool setupEspNow() {
   activityRxReady = (esp_now_register_recv_cb(onEspNowRecv) == ESP_OK);
   if (!activityRxReady) Serial.println("ERR ESPNOW_RECV_CB");
 
+  // Verschlüsselte Strecke (DactylSplitCrypto.h): der Master nimmt nur Pakete mit demselben LMK an
+  if (esp_now_set_pmk(SPLIT_ESPNOW_PMK) != ESP_OK) {
+    Serial.println("ERR ESPNOW_PMK");
+    return false;
+  }
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, SPLIT_MASTER_MAC, sizeof(SPLIT_MASTER_MAC));
   peer.channel = SPLIT_ESPNOW_CHANNEL;
   peer.ifidx = WIFI_IF_STA;
-  peer.encrypt = false;
+  splitPeerSetEncryption(peer.encrypt, peer.lmk);
   if (esp_now_add_peer(&peer) != ESP_OK) {
     Serial.println("ERR ESPNOW_PEER");
     return false;
   }
   espNowReady = true;
-  Serial.println("ESP-NOW bereit (Kanal 1, Ziel 2E:BC:BB:81:61:A6)");
+  Serial.println("ESP-NOW bereit (Kanal 1, verschlüsselt, Ziel 2E:BC:BB:81:61:A6)");
   // Nach einem Neustart hält der Master evtl. noch Eingaben dieser Hälfte (kein Link-Timeout bei kurzem
   // Reboot). RELEASE_ALL löst sie; die Bestätigung meldet zugleich den Link, ohne auf den Heartbeat zu warten.
   // releaseAll() leert auch die gehaltenen Eingaben des Proxys (nach restartEspNow nicht leer).
@@ -551,9 +559,21 @@ void setup() {
 
   // 4. Config Mode: isolierter BLE-Server. Keyboard Mode: nur ESP-NOW zum Master
   if (isConfigMode) {
+    // Der Software-Reset in den Config Mode und zurück ist kein ESP-NOW-Neustartversuch
+    rtcEspNowBootRetry = 0;
     startConfigModeBle();
   } else {
-    setupEspNow();
+    // Ohne ESP-NOW sendet diese Hälfte nichts: einige Neustarts versuchen es erneut, danach läuft sie ohne Funk
+    if (setupEspNow()) {
+      rtcEspNowBootRetry = 0;
+    } else if (espNowBootRetryAllowed(rtcEspNowBootRetry, resetReason == ESP_RST_SW)) {
+      Serial.println("[ESPNOW] Start fehlgeschlagen -> Board-Neustart");
+      Serial.flush();
+      delay(1000);
+      ESP.restart();
+    } else {
+      Serial.println("[ESPNOW] Start wiederholt fehlgeschlagen -> ohne ESP-NOW (Schlüssel prüfen, neu flashen)");
+    }
     Serial.println("MODE:KEYBOARD");
   }
 }

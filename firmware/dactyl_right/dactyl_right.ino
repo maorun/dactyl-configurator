@@ -48,6 +48,7 @@ volatile bool enterConfigRequested = false;
 #include "DactylConfigBleCallbacks.h"
 #include "DactylBleComposite.h"
 #include "DactylSplitHid.h"
+#include "DactylSplitCrypto.h"
 
 class DactylBleKeyboard : public DactylBleComposite {
 public:
@@ -459,23 +460,34 @@ void setupSplitReceiver() {
   }
   if (esp_now_register_recv_cb(onSplitDataRecv) != ESP_OK) {
     Serial.println("[SPLIT] ERR ESPNOW_RECV_CB");
+    esp_now_deinit();
     return;
   }
-  splitRxReady = true;
-  // Peer für die Rückrichtung (ACTIVITY). Ohne Peer empfängt der Master weiter, nur links schläft dann allein ein.
+  // Verschlüsselte Strecke (DactylSplitCrypto.h): Pakete der linken Hälfte kommen nur mit demselben LMK an.
+  // Ohne Peer empfängt der Master nichts von links (der Peer trägt den LMK) und sendet nichts zurück.
+  if (esp_now_set_pmk(SPLIT_ESPNOW_PMK) != ESP_OK) {
+    Serial.println("[SPLIT] ERR ESPNOW_PMK");
+    esp_now_deinit(); // kein Empfang in den Ring, solange splitRxReady false ist
+    return;
+  }
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, SPLIT_LEFT_MAC, sizeof(SPLIT_LEFT_MAC));
   peer.channel = SPLIT_ESPNOW_CHANNEL;
   peer.ifidx = WIFI_IF_STA;
-  peer.encrypt = false;
+  splitPeerSetEncryption(peer.encrypt, peer.lmk);
   splitActivityReset(splitActivity);
   splitLayerReset(splitLayerSync);
   splitRemoteLayersReset(splitRemoteLayers);
   splitActivityPeerReady = (esp_now_add_peer(&peer) == ESP_OK);
-  if (!splitActivityPeerReady) Serial.println("[SPLIT] ERR ESPNOW_PEER (Aktivität an links)");
+  if (!splitActivityPeerReady) {
+    Serial.println("[SPLIT] ERR ESPNOW_PEER (verschlüsselter Peer links)");
+    esp_now_deinit();
+    return;
+  }
+  splitRxReady = true;
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  Serial.printf("[SPLIT] ESP-NOW-Empfang bereit (Kanal %d, Wi-Fi-STA-MAC %02X:%02X:%02X:%02X:%02X:%02X)\n",
+  Serial.printf("[SPLIT] ESP-NOW-Empfang bereit (Kanal %d, verschlüsselt, Wi-Fi-STA-MAC %02X:%02X:%02X:%02X:%02X:%02X)\n",
     SPLIT_ESPNOW_CHANNEL, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 

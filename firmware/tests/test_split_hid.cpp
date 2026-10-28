@@ -6,6 +6,12 @@
 // Getestete Logik unverändert aus firmware/dactyl_right/DactylSplitHid.h (beide Hälften)
 #include "../dactyl_right/DactylSplitHid.h"
 
+// Testschlüssel statt DactylSplitKey.h (nicht versioniert): DactylSplitCrypto.h bindet die Datei dann nicht ein
+#define DACTYL_SPLIT_KEY_PRESENT 1
+static const uint8_t SPLIT_ESPNOW_PMK[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+static const uint8_t SPLIT_ESPNOW_LMK[16] = {21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36};
+#include "../dactyl_right/DactylSplitCrypto.h"
+
 static int testsRun = 0;
 static int testsPassed = 0;
 
@@ -1403,6 +1409,20 @@ TEST(test_caps_word_toggle_is_not_retried) {
   assert(!splitEventRetryable(makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE)));
   assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_ONE_SHOT_PRESS, 2)));
   assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 2)));
+}
+
+// -----------------------------------------------------------------------------
+// Verschlüsselte Strecke (DactylSplitCrypto.h)
+// -----------------------------------------------------------------------------
+
+TEST(test_split_peer_is_encrypted_with_lmk) {
+  bool encrypt = false;
+  uint8_t lmk[SPLIT_ESPNOW_KEY_LEN] = {};
+  splitPeerSetEncryption(encrypt, lmk);
+  assert(encrypt);
+  assert(memcmp(lmk, SPLIT_ESPNOW_LMK, SPLIT_ESPNOW_KEY_LEN) == 0);
+  // Der LMK ist nicht die PMK (sonst wäre der verschlüsselte Austausch des LMK wirkungslos)
+  assert(memcmp(lmk, SPLIT_ESPNOW_PMK, SPLIT_ESPNOW_KEY_LEN) != 0);
 }
 
 int main() {

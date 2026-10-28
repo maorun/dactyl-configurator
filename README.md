@@ -138,6 +138,7 @@ Der Server startet unter `http://localhost:8088`.
 - **ESP-NOW-Schlüssel (einmalig, vor dem ersten Flashen):**
   - Führe `bash scripts/generate-split-key.sh` aus. Das Skript schreibt `firmware/dactyl_right/DactylSplitKey.h` (nicht versioniert, Modus 0600).
   - Beide Hälften verschlüsseln die Funkstrecke damit. Ohne Schlüssel bricht das Kompilieren ab.
+  - `npm run build:app` und `npm run rebuild:app` erzeugen den Schlüssel vorher selbst, wenn er fehlt. Ein vorhandener Schlüssel bleibt unverändert.
   - Flashe nach einem neuen Schlüssel beide Hälften. Danach `npm run build:app`, damit die App den Schlüssel beim Flashen kennt.
 - **Flashen per USB:**
   - Mit einem Klick auf **„💾 Auf Dactyl flashen“** kompiliert der lokale Server die C++-Keymap und flasht die Firmware per `arduino-cli` direkt auf den ESP32.

@@ -968,6 +968,14 @@ FIRMWARE_FQBN = "esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs"
 
 # Höchstlänge des Fehlertexts: die ganze Ausgabe ging bereits zeilenweise an die App
 FLASH_ERROR_TAIL_CHARS = 8000
+# Terminal-Steuerfolgen von esptool (z. B. ESC[1A ESC[2K für Zeile hoch und Zeile löschen): CSI- und OSC-Folgen
+# sowie ein einzelnes ESC (ohne das Folgezeichen), dazu übrige Steuerzeichen außer Tab, auch C1 (U+0080..U+009F)
+CLI_CONTROL_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def strip_terminal_controls(text):
+    """Entfernt Terminal-Steuerfolgen, damit die App nur lesbaren Text zeigt."""
+    return CLI_CONTROL_RE.sub("", text)
 
 
 def run_cli(cmd, timeout_s, on_line=None):
@@ -981,8 +989,8 @@ def run_cli(cmd, timeout_s, on_line=None):
     pending = b""
 
     def emit(raw):
-        # Leere Zeilen entfallen (auch ein \r\n, das auf zwei Stücke verteilt ankommt)
-        line = raw.decode("utf-8", "replace").rstrip()
+        # Leere Zeilen entfallen (auch ein \r\n, das auf zwei Stücke verteilt ankommt, und reine Steuerfolgen)
+        line = strip_terminal_controls(raw.decode("utf-8", "replace")).rstrip()
         if not line:
             return
         output.append(line)

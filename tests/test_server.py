@@ -581,6 +581,33 @@ class TestServerAndCodegen(unittest.TestCase):
                 alive = False
         self.assertFalse(alive, "Kindprozess läuft nach dem Timeout weiter")
 
+    def test_strip_terminal_controls(self):
+        # Ausgabe von esptool beim echten Flash (2026-10-28)
+        self.assertEqual(server.strip_terminal_controls("\x1b[1A\x1b[2KHash of data verified."), "Hash of data verified.")
+        self.assertEqual(server.strip_terminal_controls("\x1b[KWriting at 0x00010000 [===]  100.0%"),
+                         "Writing at 0x00010000 [===]  100.0%")
+        self.assertEqual(server.strip_terminal_controls("\x1b[1;32mOK\x1b[0m"), "OK")
+        self.assertEqual(server.strip_terminal_controls("\x1b]0;Titel\x07Text"), "Text")
+        self.assertEqual(server.strip_terminal_controls("a\x08b\x00c\x1b"), "abc")
+        self.assertEqual(server.strip_terminal_controls("Tab\tbleibt, Ümlaut auch [1A ohne ESC"), "Tab\tbleibt, Ümlaut auch [1A ohne ESC")
+        # OSC mit ESC-Backslash als Abschluss, unvollständiges CSI am Zeilenende
+        self.assertEqual(server.strip_terminal_controls("\x1b]0;T\x1b\\X"), "X")
+        self.assertEqual(server.strip_terminal_controls("a\x1b["), "a[")
+        # 8-Bit-CSI (U+009B) und andere C1-Zeichen, ohne Umlaute (U+00C4 ...) zu treffen
+        self.assertEqual(server.strip_terminal_controls("\u009b2KÄ\u0085ö"), "2KÄö")
+        # Ein einzelnes ESC verschluckt das Folgezeichen nicht
+        self.assertEqual(server.strip_terminal_controls("\x1bAbc"), "Abc")
+
+    def test_run_cli_removes_terminal_controls_from_lines(self):
+        lines = []
+        # Die Folge ESC[2K und der Umlaut kommen in zwei getrennten, geleerten Teilen (Chunk-Grenze mitten im Zeichen)
+        script = ("import sys,time\nw = sys.stdout.buffer\n"
+                  "w.write(b'\\x1b[1A\\x1b[2KHash of data verified.\\n\\x1b[2K\\n\\x1b[KSch\\xc3'); w.flush(); time.sleep(0.3)\n"
+                  "w.write(b'\\xb6n 100%\\r'); w.flush()")
+        code, output = server.run_cli([sys.executable, "-c", script], 10, lines.append)
+        self.assertEqual(lines, ["Hash of data verified.", "Schön 100%"])   # reine Steuerzeile entfällt
+        self.assertEqual(output, "Hash of data verified.\nSchön 100%")
+
     def test_run_cli_skips_empty_lines_from_split_crlf(self):
         lines = []
         script = "import sys,time\nsys.stdout.write('a\\r'); sys.stdout.flush(); time.sleep(0.3)\nsys.stdout.write('\\nb\\n')"

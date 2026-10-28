@@ -289,7 +289,7 @@ Keys in the matrix use `uint16_t` action codes:
 - Changes within `LIVE_SYNC_DEBOUNCE_MS` (300 ms) start one sync. A change during a running sync (`isAutoSyncing`) or BLE connection setup (`isConnectingBle`) starts the next sync after it (`LIVE_SYNC_RETRY_MS`). The sync clears only the changes it sent.
 - "Rückgängig" and "Alle verwerfen" call `requestLiveSync(side, true)`: the app sends the restored state also without a pending change, because an earlier sync can already have sent the undone change.
 - While the layout diff runs (`deviceSnapshotRead`, `diffFlowActive`), or when the connection ends before the sync starts, the live sync sends nothing and shows the pending hint; the changes stay pending for the next one-shot auto-sync, BLE connect or "Auf ESP32 speichern". A failed sync keeps the changes pending.
-- Each live sync writes `keymap`, combos, pairs and macros to NVS once (accepted flash wear; the ESP32 NVS does wear leveling). Over USB it also runs in keyboard mode.
+- NVS skips a write when the new value equals the stored value (also for blobs, ESP-IDF `Storage::writeItem`). So a live sync writes only the changed data, for example the `keymap` blob (672 bytes, about 23 entries) after a key change, and always `num_macros` (`saveMacrosToNVS` removes it first). The old `SET_KEY` also wrote all three key blobs, so a key change costs about the same as before. NVS spreads the writes over its 5 pages (wear leveling); about 24 entries per sync give about 2.6 million syncs at 100,000 erase cycles per page. Over USB the live sync also runs in keyboard mode.
 
 ---
 

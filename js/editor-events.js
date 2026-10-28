@@ -332,18 +332,26 @@ async function saveAndFlashToDactyl() {
   }
 
   showToast(`Kompiliere & Flashe Firmware auf die ${profile.label}... Bitte warten.`);
+  const flashLog = openFlashLogDialog(profile);
 
   try {
-    // Der Server wählt den USB-Port, dessen Board sich per DEVICE_INFO als diese Hälfte meldet
-    const res = await fetch(`/api/save_and_flash?side=${side}`, {
+    // Der Server wählt den USB-Port, dessen Board sich per DEVICE_INFO als diese Hälfte meldet.
+    // stream=1: arduino-cli-Ausgabe kommt zeilenweise als NDJSON, das Ergebnis als letzte Zeile.
+    const res = await fetch(`/api/save_and_flash?side=${side}&stream=1`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(cfg)
     });
 
     let data = {};
-    try { data = await res.json(); } catch (_) {}
+    if ((res.headers.get("Content-Type") || "").includes("application/x-ndjson") && res.body) {
+      data = (await readFlashStream(res.body, flashLog.onEvent)) || { success: false, error: "Verbindung zum Server vor dem Ergebnis beendet." };
+    } else {
+      // Validierungsfehler vor dem Start kommen als normales JSON
+      try { data = await res.json(); } catch (_) {}
+    }
     if (res.ok && data.success) {
+      flashLog.finish(true);
       if (hadSerial) {
         try {
           await new Promise(r => setTimeout(r, 1200)); // ESP32 Reboot nach Flashen abwarten
@@ -371,11 +379,13 @@ async function saveAndFlashToDactyl() {
       alert(`✅ Erfolgreich auf die ${profile.label} gespeichert (${data.port || "USB"})!\n\nDie Firmware wurde aktualisiert. Die Hälfte startet jetzt mit der neuen Tastenbelegung.`);
     } else {
       const errMsg = data.error || (data.stage ? `Fehler in Phase '${data.stage}'` : "Unbekannter Fehler");
+      flashLog.finish(false, data.stage ? `Fehler in Phase: ${flashStageLabel(data.stage)}` : "Flashen fehlgeschlagen");
       showToast("❌ Fehler beim Flashen!");
       alert("Fehler beim Flashen auf den ESP32:\n\n" + errMsg);
     }
   } catch (err) {
     console.error("Flash error:", err);
+    flashLog.finish(false, "Server nicht erreichbar");
     showToast("❌ Server nicht erreichbar!");
     alert("Netzwerkfehler: Konnte /api/save_and_flash nicht erreichen.\nLäuft python3 server.py?");
   } finally {

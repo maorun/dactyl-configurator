@@ -19,14 +19,14 @@ function section(file, startMarker, endMarker) {
 // Reihenfolge wie im Browser (index.html); keycodes.js und config-model.js sind ganz DOM-frei
 const code = [
   ...["js/side-profiles.js", "js/side-right.js", "js/side-left.js", "js/side-state.js", "js/keycodes.js",
-      "js/config-model.js"].map(read),
+      "js/config-model.js", "js/flash-log.js"].map(read),
   section("js/editor.js", "// Alte Configs speichern Modifier-Halte-Aktionen", "function appendOptionGroup"),
   section("js/editor.js", "// Sichtbarkeit der Optionen bei einer Suche", "// Auswahl-IDs, deren Suche"),
   section("js/keyboard-hooks.js", "const ACTION_CODE_TO_EVENT_CODES", "// Gehaltene MO_x-Ebene einer Hälfte"),
   section("js/keyboard-hooks.js", "// Löst einen Browser-Tastencode für eine Hälfte auf", "// Alle Treffer eines Tastendrucks")
 ].join("\n");
 
-const ctx = {};
+const ctx = { TextDecoder };
 vm.createContext(ctx);
 vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateConfigShape,
@@ -48,7 +48,8 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
-             ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides };`, ctx);
+             ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
+             createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES };`, ctx);
 const api = ctx.api;
 const R = api.SIDE_PROFILES.R;
 const L = api.SIDE_PROFILES.L;
@@ -2354,6 +2355,53 @@ asyncTests.push(["Layout-Profile: neu geöffneter Dialog übernimmt die Sperre e
   release();
   await saving;
   assert.strictEqual(vm.runInContext("layoutProfilesBusy", h.w), false);
+}]);
+
+test("Flash-Protokoll: NDJSON-Zeilen über Stückgrenzen hinweg", () => {
+  const sp = api.createNdjsonSplitter();
+  assert.strictEqual(sp.push('{"type":"log","li').length, 0);
+  const out = sp.push('ne":"a"}\n{"type":"log","line":"b"}\n{"type":"res');
+  assert.deepStrictEqual([...out.map(e => e.line)], ["a", "b"]);
+  // Kaputte Zeilen und Nicht-Objekte werden übersprungen, der Rest bleibt erhalten
+  assert.deepStrictEqual([...sp.push('ult","success":true}\nkaputt\n42\n\n').map(e => ({ ...e }))], [{ type: "result", success: true }]);
+  assert.strictEqual(sp.push('{"type":"log","line":"ohne Zeilenende"}').length, 0);
+  assert.deepStrictEqual([...sp.flush().map(e => e.line)], ["ohne Zeilenende"]);
+  assert.strictEqual(sp.flush().length, 0);
+});
+
+test("Flash-Protokoll: Zeilenliste kürzt die ältesten Zeilen", () => {
+  const lines = [];
+  for (let i = 0; i < api.FLASH_LOG_MAX_LINES + 5; i++) api.appendFlashLogLine(lines, `z${i}`);
+  assert.strictEqual(lines.length, api.FLASH_LOG_MAX_LINES);
+  assert.strictEqual(lines[0], "z5");
+  assert.strictEqual(lines[lines.length - 1], `z${api.FLASH_LOG_MAX_LINES + 4}`);
+  assert.deepStrictEqual([...api.appendFlashLogLine(["a", "b"], "c", 2)], ["b", "c"]);
+});
+
+test("Flash-Protokoll: Phasen-Namen", () => {
+  assert.strictEqual(api.flashStageLabel("compile"), "Kompilieren");
+  assert.strictEqual(api.flashStageLabel("upload"), "Upload");
+  assert.strictEqual(api.flashStageLabel("port"), "USB-Port");
+  assert.strictEqual(api.flashStageLabel(undefined), "Flashen");
+});
+
+// Body mit getReader() aus Byte-Stücken
+function fakeFlashBody(chunks) {
+  let i = 0;
+  return { getReader: () => ({ read: async () => (i < chunks.length ? { value: chunks[i++], done: false } : { value: undefined, done: true }) }) };
+}
+
+asyncTests.push(["Flash-Protokoll: Stream meldet jede Zeile und liefert das Ergebnis", async () => {
+  const bytes = Buffer.from('{"type":"log","stage":"compile","line":"Größe"}\n{"type":"result","success":false,"stage":"upload","error":"x"}\n', "utf8");
+  const cut = bytes.indexOf(Buffer.from("ö")) + 1;          // mitten im UTF-8-Zeichen
+  const events = [];
+  const result = await api.readFlashStream(fakeFlashBody([bytes.subarray(0, cut), bytes.subarray(cut)]), e => events.push(e));
+  assert.strictEqual(events[0].line, "Größe");
+  assert.strictEqual(events.length, 2);
+  assert.deepStrictEqual({ ...result }, { type: "result", success: false, stage: "upload", error: "x" });
+  // Ohne Ergebnis-Zeile (Server abgestürzt) liefert der Stream null
+  const none = await api.readFlashStream(fakeFlashBody([Buffer.from('{"type":"log","line":"a"}\n')]), () => {});
+  assert.strictEqual(none, null);
 }]);
 
 (async () => {

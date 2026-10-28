@@ -14,6 +14,7 @@ import glob
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import tempfile
 import fcntl
@@ -324,7 +325,7 @@ STATIC_ALLOWLIST = {
     "/js/side-right.js": "js/side-right.js", "/js/side-left.js": "js/side-left.js",
 }
 # Module der Web-App (Reihenfolge in index.html)
-APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "macros-ui", "layout-profiles-ui", "editor-events", "ble", "serial",
+APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
                "live-monitor", "heatmap", "matrix-test", "keyboard-hooks", "config-sync")
 STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 
@@ -965,12 +966,77 @@ def find_serial_port(side="R"):
 FIRMWARE_FQBN = "esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs"
 
 
-def flash_firmware(side="R"):
+# Höchstlänge des Fehlertexts: die ganze Ausgabe ging bereits zeilenweise an die App
+FLASH_ERROR_TAIL_CHARS = 8000
+
+
+def run_cli(cmd, timeout_s, on_line=None):
+    """Startet arduino-cli und meldet jede Ausgabezeile (stdout und stderr) sofort an on_line.
+    Liefert (returncode, ausgabe). Nach timeout_s wird die ganze Prozessgruppe beendet und TimeoutExpired ausgelöst."""
+    # Eigene Prozessgruppe: arduino-cli startet esptool als Kindprozess, der sonst nach dem Abbruch weiterflasht
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=os.environ, start_new_session=True)
+    fd = proc.stdout.fileno()
+    deadline = time.monotonic() + timeout_s
+    output = []
+    pending = b""
+
+    def emit(raw):
+        # Leere Zeilen entfallen (auch ein \r\n, das auf zwei Stücke verteilt ankommt)
+        line = raw.decode("utf-8", "replace").rstrip()
+        if not line:
+            return
+        output.append(line)
+        if on_line:
+            on_line(line)
+
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(cmd, timeout_s)
+            ready, _, _ = select.select([fd], [], [], min(remaining, 0.5))
+            if not ready:
+                continue
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            # esptool meldet den Upload-Fortschritt mit \r statt \n
+            pending += chunk.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+            *lines, pending = pending.split(b"\n")
+            for raw in lines:
+                emit(raw)
+        if pending:
+            emit(pending)
+        returncode = proc.wait(timeout=max(deadline - time.monotonic(), 1))
+    except BaseException:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        proc.wait()
+        raise
+    finally:
+        proc.stdout.close()
+    return returncode, "\n".join(output)
+
+
+def flash_firmware(side="R", on_output=None):
+    """on_output(stage, line) erhält jede Zeile von Kompilieren und Upload, sobald arduino-cli sie ausgibt."""
     arduino_cli = find_arduino_cli()
     if not arduino_cli:
         return {"success": False, "error": "arduino-cli wurde nicht im System-Pfad gefunden! Bitte über 'brew install arduino-cli' installieren."}
 
+    def output_for(stage):
+        if on_output is None:
+            return None
+        return lambda line: on_output(stage, line)
+
+    def status(stage, text):
+        if on_output is not None:
+            on_output(stage, text)
+
     label = "linke" if side == "L" else "rechte"
+    status("port", f"Suche die {label} Hälfte am USB ...")
     port = find_serial_port(side)
     if not port:
         return {"success": False, "stage": "port", "error": f"Keine {label} Hälfte am USB gefunden. Bitte die {label} Hälfte per USB anschließen (andere Programme mit offenem USB-Monitor schließen)."}
@@ -982,13 +1048,14 @@ def flash_firmware(side="R"):
         "--fqbn", FIRMWARE_FQBN,
         sketch
     ]
+    status("compile", f"Kompiliere die Firmware der {label}n Hälfte (Port {port}) ...")
     try:
-        proc_comp = subprocess.run(compile_cmd, capture_output=True, text=True, check=False, env=os.environ, timeout=COMPILE_TIMEOUT_S)
-        if proc_comp.returncode != 0:
+        code, output = run_cli(compile_cmd, COMPILE_TIMEOUT_S, output_for("compile"))
+        if code != 0:
             return {
                 "success": False,
                 "stage": "compile",
-                "error": proc_comp.stderr or proc_comp.stdout
+                "error": output[-FLASH_ERROR_TAIL_CHARS:]
             }
     except FileNotFoundError:
         return {"success": False, "error": "arduino-cli wurde nicht im System-Pfad gefunden!"}
@@ -997,6 +1064,7 @@ def flash_firmware(side="R"):
 
     # 2. Upload: Das Kompilieren dauert bis zu 300 s. Wurde in der Zeit umgesteckt, kann der Port jetzt die
     # andere Hälfte sein. Deshalb direkt vor dem Upload erneut prüfen.
+    status("port", f"Prüfe den Port {port} vor dem Upload ...")
     if query_device_side(port) != side:
         return {"success": False, "stage": "port", "error": f"Am Port {port} hängt nicht mehr die {label} Hälfte. Nichts geflasht; bitte erneut starten."}
     upload_cmd = [
@@ -1006,15 +1074,18 @@ def flash_firmware(side="R"):
         "--upload-property", "upload.speed=115200",
         sketch
     ]
+    status("upload", f"Lade die Firmware auf {port} hoch ...")
     try:
-        proc_up = subprocess.run(upload_cmd, capture_output=True, text=True, check=False, env=os.environ, timeout=UPLOAD_TIMEOUT_S)
+        code, output = run_cli(upload_cmd, UPLOAD_TIMEOUT_S, output_for("upload"))
+    except FileNotFoundError:
+        return {"success": False, "error": "arduino-cli wurde nicht im System-Pfad gefunden!"}
     except subprocess.TimeoutExpired:
         return {"success": False, "stage": "upload", "error": f"Upload abgebrochen (Timeout nach {UPLOAD_TIMEOUT_S}s)."}
-    if proc_up.returncode != 0:
+    if code != 0:
         return {
             "success": False,
             "stage": "upload",
-            "error": proc_up.stderr or proc_up.stdout
+            "error": output[-FLASH_ERROR_TAIL_CHARS:]
         }
 
     return {"success": True, "port": port, "side": side, "message": "Firmware erfolgreich kompiliert und geflasht!"}
@@ -1056,6 +1127,33 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(403, {"error": "Forbidden origin"})
             return False
         return True
+
+    def stream_flash(self, side):
+        """Sendet die arduino-cli-Ausgabe als NDJSON (eine JSON-Zeile pro Ereignis), zuletzt das Ergebnis.
+        Ohne Content-Length: die Antwort endet mit dem Schließen der Verbindung (HTTP/1.0)."""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.end_headers()
+        client_gone = False
+
+        def write_event(event):
+            nonlocal client_gone
+            if client_gone:
+                return
+            try:
+                self.wfile.write((json.dumps(event) + "\n").encode("utf-8"))
+                self.wfile.flush()
+            except OSError:
+                # Geschlossenes App-Fenster bricht den Upload nicht ab: ein halber Flash wäre schlimmer
+                client_gone = True
+
+        try:
+            result = flash_firmware(side, on_output=lambda stage, line: write_event({"type": "log", "stage": stage, "line": line}))
+        except Exception as err:
+            # Die Header sind gesendet: der Fehler muss als Ergebnis-Zeile kommen, sonst sieht die App nur einen Abbruch
+            result = {"success": False, "error": f"Flashen fehlgeschlagen: {err}"}
+        write_event(dict(result, type="result"))
+        self.close_connection = True
 
     def read_json_body(self):
         raw_len = self.headers.get("Content-Length")
@@ -1169,6 +1267,9 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             # 2. Flashen (nur auf den Port, der sich als diese Hälfte meldet)
+            if parse_qs(urlsplit(self.path).query).get("stream") == ["1"]:
+                self.stream_flash(side)
+                return
             result = flash_firmware(side)
             self.send_json(200 if result.get("success") else 500, result)
             return

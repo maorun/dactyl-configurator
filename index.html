@@ -572,6 +572,22 @@
       </div>
     </div>
 
+    <!-- Modal: Live-Ausgabe von arduino-cli beim Flashen -->
+    <div class="modal-backdrop" id="flashLogModal" style="display: none;">
+      <div class="modal-dialog flash-log-dialog">
+        <div class="modal-header">
+          <h4 id="flashLogTitle">Flashen</h4>
+        </div>
+        <div class="modal-body">
+          <p id="flashLogStage" class="flash-log-stage"></p>
+          <pre id="flashLogOutput" class="flash-log-output"></pre>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCloseFlashLog" disabled>Schließen</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Toast Notification -->
     <div class="toast" id="toastNotification"></div>
   </div>
@@ -589,7 +605,8 @@
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/macros-ui.js?v=1"></script>
   <script src="js/layout-profiles-ui.js?v=1"></script>
-  <script src="js/editor-events.js?v=4"></script>
+  <script src="js/flash-log.js?v=1"></script>
+  <script src="js/editor-events.js?v=5"></script>
   <script src="js/ble.js?v=1"></script>
   <script src="js/serial.js?v=4"></script>
   <script src="js/live-monitor.js?v=2"></script>

@@ -451,11 +451,6 @@ async function sendBleCommandAwait(cmd, okPrefix, timeoutMs) {
   return ack;
 }
 
-// Verbindung zu einer bestimmten Hälfte (BLE im Config Mode oder USB mit erkannter Hälfte)
-function isDeviceConnected(side = editSide) {
-  return Dactyl.routeCommand(side, connectionState()) !== null;
-}
-
 // Hälfte der aktiven Verbindung (BLE bevorzugt), null ohne Verbindung oder bei unbekannter USB-Hälfte
 function connectedSide() {
   return Dactyl.connectedSide(connectionState());

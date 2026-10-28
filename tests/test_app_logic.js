@@ -42,10 +42,10 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
              removeKeyPairAt, KEYCODES, UMLAUT_LABELS, ONE_SHOT_LABELS, holdSublabel,
-             planKeyPairDeletion, hasPendingPairChange, keyNeedsStagedPairs,
+             planKeyPairDeletion,
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
              isValidMacroStep, isValidMacro, normalizeMacroStep, macroCommands, isMacroUsed, removeMacroAt,
-             keyNeedsStagedMacros, macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode,
+             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides };`, ctx);
@@ -899,6 +899,141 @@ asyncTests.push(["Layout-Diff: Trennen während der Abfrage beendet sie sofort",
   assert.ok(section("js/serial.js", "async function disconnectSerialNow", "function updateBatteryUI").includes("abortDeviceSnapshotReadIfDisconnected()"));
 }]);
 
+// Live-Sync aus js/config-sync.js: Planung, Warteschlange pro Hälfte und Sperren
+function liveSyncHarness() {
+  const timers = [];
+  const h = {
+    side: "R", pending: { R: [{ id: 1 }], L: [] }, writes: [], toasts: [], SIDE_PROFILES: api.SIDE_PROFILES,
+    setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }
+  };
+  h.connectedSide = () => h.side;
+  h.pendingFor = side => h.pending[side];
+  h.showToast = t => h.toasts.push(t);
+  h.writeConfigToESP32 = async opts => { h.writes.push(opts); };
+  vm.createContext(h);
+  vm.runInContext(`var isAutoSyncing = false, isConnectingBle = false, deviceSnapshotRead = null, diffFlowActive = false;
+    ${section("js/config-sync.js", "// Änderungen innerhalb von LIVE_SYNC_DEBOUNCE_MS", "// One-Shot-Auto-Sync (BLE-Verbindung")}
+    this.request = requestLiveSync;`, h);
+  const run = async () => { while (timers.length) { const t = timers.shift(); await t.fn(); } };
+  return { h, timers, run, set: expr => vm.runInContext(expr, h) };
+}
+
+asyncTests.push(["Live-Sync: schnelle Änderungen einer verbundenen Hälfte starten einen vollen Sync", async () => {
+  const { h, timers, run } = liveSyncHarness();
+  assert.strictEqual(h.request("R"), true);
+  assert.strictEqual(h.request("R"), true);
+  assert.strictEqual(timers.length, 1, "mehrere Änderungen planen einen Sync");
+  assert.strictEqual(timers[0].ms, vm.runInContext("LIVE_SYNC_DEBOUNCE_MS", h));
+  assert.ok(timers[0].ms > 0);
+  await run();
+  assert.strictEqual(h.writes.length, 1);
+  assert.deepStrictEqual({ ...h.writes[0] }, { autoDisconnectAfter: false, expectedSide: "R" });
+  // Nicht verbundene oder andere Hälfte: nichts planen, die Änderung bleibt vorgemerkt
+  assert.strictEqual(h.request("L"), false);
+  h.side = null;
+  assert.strictEqual(h.request("R"), false);
+  assert.strictEqual(timers.length, 0);
+}]);
+
+asyncTests.push(["Live-Sync: wartet auf einen laufenden Sync, Diff und Trennung zeigen den Hinweis", async () => {
+  const { h, timers, run, set } = liveSyncHarness();
+  set("isAutoSyncing = true");
+  h.request("R");
+  await timers.shift().fn();
+  assert.strictEqual(h.writes.length, 0);
+  assert.strictEqual(timers.at(-1).ms, vm.runInContext("LIVE_SYNC_RETRY_MS", h));
+  set("isAutoSyncing = false");
+  await run();
+  assert.strictEqual(h.writes.length, 1);
+  // Während des Diffs nichts übertragen, aber den Vormerk-Hinweis zeigen
+  set("diffFlowActive = true");
+  h.request("R");
+  await run();
+  assert.strictEqual(h.writes.length, 1);
+  assert.ok(h.toasts.at(-1).includes("bleiben vorgemerkt"));
+  set("diffFlowActive = false");
+  // BLE-Verbindungsaufbau läuft: erst danach senden
+  set("isConnectingBle = true");
+  h.request("R");
+  await timers.shift().fn();
+  assert.strictEqual(h.writes.length, 1);
+  assert.strictEqual(timers.at(-1).ms, vm.runInContext("LIVE_SYNC_RETRY_MS", h));
+  set("isConnectingBle = false");
+  await run();
+  assert.strictEqual(h.writes.length, 2);
+  // Verbindung endet vor dem Sync (One-Shot trennt): Hinweis statt stillem Verwerfen
+  h.toasts.length = 0;
+  h.request("R");
+  h.side = null;
+  await run();
+  assert.strictEqual(h.writes.length, 2);
+  assert.ok(h.toasts.at(-1).includes("bleiben vorgemerkt"));
+  h.side = "R";
+  // Ohne vorgemerkte Änderung (inzwischen synchronisiert) kein weiterer Sync
+  h.pending.R = [];
+  h.request("R");
+  await run();
+  assert.strictEqual(h.writes.length, 2);
+  // Nach Rückgängig (force): auch ohne vorgemerkte Änderung senden, ein späterer Aufruf ohne force hebt das nicht auf
+  h.request("R", true);
+  h.request("R");
+  await run();
+  assert.strictEqual(h.writes.length, 3);
+}]);
+
+// markPendingSync, undoPendingChange und discardAllPendingChanges aus app.js
+function pendingHarness() {
+  const w = { toasts: [], requests: [], connected: true, confirm: () => true, console: { error() {} } };
+  vm.createContext(w);
+  vm.runInContext(`var editSide = "R";
+    var pendingChanges = [], otherPending = [], pendingSyncCount = 0;
+    var document = { getElementById: () => null };
+    function pendingFor(side) { return side === editSide ? pendingChanges : otherPending; }
+    function setPendingFor(side, list) { if (side === editSide) pendingChanges = list; else otherPending = list; }
+    function renderPendingSyncUI() {}
+    function isUndoBlocked() { return false; }
+    function showToast(t) { toasts.push(t); }
+    function activeProfile() { return { comboLabel: "C", label: "rechte Hälfte" }; }
+    function requestLiveSync(side, force) { requests.push([side, !!force]); return connected; }
+    ${section("app.js", "function undoPendingChange", "// Verwirft die vorgemerkten Änderungen")}
+    ${section("app.js", "// Verwirft die vorgemerkten Änderungen", "// Lädt die gespeicherte Konfiguration")}
+    this.mark = markPendingSync; this.undo = undoPendingChange; this.discard = discardAllPendingChanges;
+    this.list = () => pendingChanges; this.other = () => otherPending;`, w);
+  return w;
+}
+
+test("Live-Sync: markPendingSync plant den Sync der Hälfte, ohne Verbindung mit Vormerk-Hinweis", () => {
+  const w = pendingHarness();
+  w.mark({ type: "key", title: "T" }, "R");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(w.requests)), [["R", false]]);
+  assert.strictEqual(w.list().length, 1);
+  assert.strictEqual(w.toasts.length, 0, "verbunden: writeConfigToESP32 meldet den Fortschritt");
+  w.connected = false;
+  w.mark({ type: "key", title: "U" }, "R");
+  assert.ok(w.toasts.at(-1).includes("Vorgemerkt (U)"));
+  // Andere Hälfte: eigene Liste, eigener Sync
+  w.mark({ type: "key", title: "L" }, "L");
+  assert.deepStrictEqual([...w.requests.at(-1)], ["L", false]);
+  assert.strictEqual(w.other().length, 1);
+  // Rückgängig und Verwerfen übertragen den Stand erneut (force)
+  w.undo(w.list()[0].id);
+  assert.deepStrictEqual([...w.requests.at(-1)], ["R", true]);
+  w.requests.length = 0;
+  w.discard();
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(w.requests)), [["R", true]]);
+  assert.strictEqual(w.list().length, 0);
+});
+
+asyncTests.push(["Live-Sync: Ebene umbenennen merkt vor und sendet kein SET_NAME", async () => {
+  const { w, dom, log } = uiHarness(`
+${section("js/editor.js", "async function renameActiveLayer", "function initUI")}`);
+  dom.document.getElementById("layerNameInput").value = "Nav";
+  await w.renameActiveLayer();
+  assert.deepStrictEqual(log.sent, []);
+  assert.strictEqual(log.pending.at(-1).type, "layer_name");
+  assert.strictEqual(vm.runInContext("currentConfig.layerNames[0]", w), "Nav");
+}]);
+
 asyncTests.push(["Layout-Diff: writeConfigToESP32 überträgt nach einem Hälftenwechsel nichts", async () => {
   const toasts = [];
   let progressShown = false;
@@ -1044,7 +1179,6 @@ test("Makros: Löschen nummeriert Tasten neu und Staging", () => {
   assert.strictEqual(api.removeMacroAt(config, 3), null);
   assert.ok(api.isMacroUsed(config.layers, 2));
   assert.ok(!api.isMacroUsed(next.layers, 2));
-  assert.ok(api.keyNeedsStagedMacros({ tap: "MACRO_0" }, [{ macros: true }]));
   // Rückgängig: das Makro kommt zurück, nur die geleerten Verweise werden wieder gesetzt
   next.layers[0][0][1].tap = "KEY_Q";                              // spätere Tastenänderung
   next.layers[0][0][3] = "KEY_W";                                  // geleerte Position später neu belegt
@@ -1057,8 +1191,6 @@ test("Makros: Löschen nummeriert Tasten neu und Staging", () => {
   assert.strictEqual(brow[2].dtap, "MACRO_2");                     // nachgerückter Verweis zurück
   assert.strictEqual(brow[3], "KEY_W");                            // neu belegt: bleibt
   assert.strictEqual(api.restoreMacroAt({ macros: Array(api.MAX_MACROS).fill({ steps: [] }), layers: [] }, 0, { steps: [] }, []), null);
-  assert.ok(!api.keyNeedsStagedMacros({ tap: "MACRO_0" }, [{ pairs: true }]));
-  assert.ok(!api.keyNeedsStagedMacros({ tap: "KEY_A" }, [{ macros: true }]));
 });
 
 // Voller Sync aus js/config-sync.js mit Fake-USB-Verbindung. reply(cmd) liefert die Antwortzeile oder null.
@@ -1073,9 +1205,10 @@ function fullSyncHarness(reply) {
     { name: "Copy", steps: [{ type: "down", code: "KEY_LEFT_GUI" }, { type: "tap", code: "KEY_C" }, { type: "up", code: "KEY_LEFT_GUI" }] },
     { name: "Warten", steps: [{ type: "pause", ms: 250 }, { type: "tap", code: "a" }] }
   ];
+  const delays = [];
   const w = {
-    console: { error() {}, warn() {} }, sent, reply,
-    setTimeout: (fn) => { Promise.resolve().then(fn); return 0; }, clearTimeout: () => {},
+    console: { error() {}, warn() {} }, sent, reply, delays,
+    setTimeout: (fn, ms) => { delays.push(ms); Promise.resolve().then(fn); return 0; }, clearTimeout: () => {},
     document: { getElementById: id => id === "autoSyncProgressBar"
       ? { style: { set width(v) { progress.push(parseInt(v, 10)); } } } : { style: {} } }
   };
@@ -1089,7 +1222,7 @@ function configFor() { return cfgRef; }
 function activeProfile() { return SIDE_PROFILES.R; }
 function alert() {}
 function showToast(t) { toastsRef.push(t); }
-function updateConfigModeUI() {}
+function updateConfigModeUI(active, syncing = false) { isAutoSyncing = syncing; }
 function pendingFor() { return []; }
 function clearPendingSync() {}
 function setPendingFor() {}
@@ -1107,8 +1240,10 @@ async function sendSerialCommand(cmd) {
   return true;
 }
 ${read("js/config-sync.js")}
-this.write = writeConfigToESP32;`, Object.assign(w, { cfgRef: cfg, toastsRef: toasts }));
-  return { w, progress, toasts, sent };
+this.write = writeConfigToESP32;
+this.state = () => ({ isAutoSyncing });
+this.setBle = (char, disconnect) => { bleConfigChar = char; disconnectBle = disconnect; };`, Object.assign(w, { cfgRef: cfg, toastsRef: toasts }));
+  return { w, progress, toasts, sent, delays };
 }
 
 const okReply = cmd => cmd.startsWith("SET_K ") ? null : `OK ${cmd}`;
@@ -1148,6 +1283,20 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(cmds.length, 6);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM"]);
 });
+
+asyncTests.push(["One-Shot: Trennen ohne Wartezeit, isAutoSyncing endet auch bei einem Fehler im Trennen", async () => {
+  const { w, delays } = fullSyncHarness(okReply);
+  let disconnects = 0;
+  w.setBle({}, async () => { disconnects++; throw new Error("GATT"); });
+  // USB-Pfad für die Befehle: BLE-Senden schlägt fehl, der Sync bricht ab und trennt trotzdem
+  const running = w.write({ autoDisconnectAfter: true }).catch(() => {});
+  assert.strictEqual(w.state().isAutoSyncing, true);
+  await running;
+  assert.strictEqual(disconnects, 1);
+  assert.strictEqual(w.state().isAutoSyncing, false);
+  // Keine Wartezeit vor dem Trennen: nur der 600-ms-Timer zum Ausblenden des Balkens
+  assert.ok(!delays.includes(150), `Wartezeiten: ${delays}`);
+}]);
 
 asyncTests.push(["Sync: Firmware ohne SET_TAPPING_TERM bricht den Sync nicht ab", async () => {
   const { w, toasts, sent } = fullSyncHarness(cmd =>
@@ -1457,18 +1606,6 @@ test("Tastenpaar löschen: Nachfrage, Snapshot-Zustand und Revert", () => {
   assert.strictEqual(unused.used, false);
   assert.strictEqual(unused.shiftsFollowing, false);
   assert.strictEqual(api.planKeyPairDeletion(config, 5), null);
-});
-
-test("Tastenpaar: Taste mit noch nicht synchronisierter Paar-Tabelle wird nur vorgemerkt", () => {
-  const pending = [{ type: "key_pair", pairs: true }];
-  assert.ok(api.hasPendingPairChange(pending));
-  assert.ok(!api.hasPendingPairChange([{ type: "key" }, { type: "preset", snapshot: true }]));
-  assert.ok(!api.hasPendingPairChange(undefined));
-  assert.ok(api.keyNeedsStagedPairs({ tap: "PAIR_0", hold: "NONE", dtap: "NONE" }, pending));
-  assert.ok(api.keyNeedsStagedPairs({ tap: "KEY_A", hold: "NONE", dtap: "PAIR_3" }, pending));
-  assert.ok(!api.keyNeedsStagedPairs({ tap: "KEY_A", hold: "KEY_LEFT_CTRL", dtap: "NONE" }, pending));
-  // Synchronisierte Paare: Taste darf sofort per SET_KEY gesendet werden
-  assert.ok(!api.keyNeedsStagedPairs({ tap: "PAIR_0", hold: "NONE", dtap: "NONE" }, [{ type: "key" }]));
 });
 
 test("Optionslisten: Gruppenposition, Präfix und Combo ohne Tastenpaar-Zeichen", () => {
@@ -1908,20 +2045,22 @@ ${read("js/editor-events.js")}`);
   return h;
 }
 
-asyncTests.push(["Staging: Taste mit MACRO_n wartet auf vorgemerkte Makros", async () => {
+asyncTests.push(["Live-Sync: Taste übernehmen merkt vor und sendet keinen Einzelbefehl", async () => {
   const { w, dom, log } = applyKeyHarness();
   vm.runInContext(`currentConfig.macros = [{ name: "a", steps: [{ type: "tap", code: "KEY_A" }] }];
     selectedKey = { r: 2, c: 1 };`, w);
   dom.document.getElementById("primaryActionSelect").value = "MACRO_0";
-  // Ohne vorgemerkte Makro-Änderung geht die Taste live an das Gerät
   await dom.document.getElementById("btnApplyKey").click();
-  assert.ok(log.sent.some(c => c.startsWith("SET_KEY 0 2 1 368")));
-  // Mit vorgemerkter Makro-Änderung wird sie nur vorgemerkt
-  log.sent.length = 0;
-  vm.runInContext(`markPendingSync({ type: "macro", snapshot: true, macros: true, title: "m", description: "", revert() {} });`, w);
-  await dom.document.getElementById("btnApplyKey").click();
+  // Kein SET_KEY: markPendingSync startet bei verbundener Hälfte den vollen Sync
   assert.deepStrictEqual(log.sent, []);
-  assert.ok(log.toasts.at(-1).includes("Makros sind noch nicht synchronisiert"));
+  assert.strictEqual(log.pending.at(-1).type, "key");
+  // markPendingSync (Stub) bekam die Hälfte R: dort plant requestLiveSync den Sync
+  assert.strictEqual(vm.runInContext("pendingFor('R').at(-1).type", w), "key");
+  assert.strictEqual(vm.runInContext("currentConfig.layers[0][2][1].tap", w), "MACRO_0");
+  // Einstellungen speichern: ebenfalls vormerken statt SET_*-Einzelbefehle
+  await dom.document.getElementById("btnSaveSettings").click();
+  assert.deepStrictEqual(log.sent, []);
+  assert.strictEqual(log.pending.at(-1).type, "settings");
 }]);
 
 asyncTests.push(["Combo-Dialog: Modifier Hold mit One-Shot oder Caps Word wird nicht gespeichert", async () => {
@@ -1961,8 +2100,6 @@ asyncTests.push(["Import: vorgemerkte Änderung trägt pairs und macros", async 
   const change = log.pending.at(-1);
   assert.strictEqual(change.type, "import");
   assert.ok(change.pairs && change.macros);
-  // Eine Taste mit MACRO_0 geht danach nicht live, bevor die Makros synchronisiert sind
-  assert.ok(vm.runInContext(`keyNeedsStagedMacros({ tap: "MACRO_0" }, pendingFor("R"))`, w));
 }]);
 
 // Fetch-Stub für /api/profiles: Antworten in der Reihenfolge der Aufrufe

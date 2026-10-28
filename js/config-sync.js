@@ -178,15 +178,20 @@ async function writeConfigToESP32(options = {}) {
     rejectAllPendingAcks("Sync abgebrochen", side);
     showToast("Fehler beim Übertragen der Konfiguration: " + err.message + " (Änderungen bleiben vorgemerkt)", 7000);
   } finally {
-    isAutoSyncing = false;
-    // One-Shot: Tastatur IMMER zurück in den Mac-Modus schicken, auch nach einem Fehler
+    // One-Shot: Tastatur IMMER zurück in den Mac-Modus schicken, auch nach einem Fehler.
+    // isAutoSyncing bleibt bis nach dem Trennen gesetzt, damit kein Live-Sync in EXIT_CONFIG startet.
     if (autoDisconnectAfter && bleConfigChar) {
-      await new Promise(r => setTimeout(r, 150));
-      const exited = await disconnectBle();
+      let exited = false;
+      try {
+        exited = await disconnectBle();
+      } finally {
+        isAutoSyncing = false;
+      }
       if (syncSucceeded && exited) {
         showToast(`✅ ${profile.label} automatisch synchronisiert & getrennt! Sie tippt wieder normal.`);
       }
     } else {
+      isAutoSyncing = false;
       updateConfigModeUI(bleConfigChar ? true : previousConfigMode, false);
       if (syncSucceeded) showToast(`✅ Vollständige Konfiguration der ${profile.label} im ESP32 NVS gespeichert!`);
     }
@@ -215,6 +220,51 @@ function buildSettingCommands(s, profile) {
 // Muss zu den updateProgress()-Aufrufen passen.
 function countSyncSteps(settingCount, layerCount, comboCount, macroCount = 0) {
   return settingCount + NUM_LAYERS + layerCount * NUM_ROWS * NUM_COLS + 1 + comboCount + 1 + 1 + macroCount + 1;
+}
+
+// Live-Sync: jede vorgemerkte Änderung einer verbundenen Hälfte überträgt die vollständige Konfiguration
+// (Einstellungen, Ebenen-Namen, alle Tasten, Combos, Tastenpaare, Makros), nicht nur die einzelne Änderung.
+// So bleibt die Belegung auf dem Gerät gleich der App, auch wenn das Gerät Einzelbefehle verloren hat.
+// Änderungen innerhalb von LIVE_SYNC_DEBOUNCE_MS lösen einen Sync aus; eine Änderung während eines Syncs löst
+// danach einen weiteren aus. Jeder Sync schreibt Tasten, Combos, Paare und Makros einmal in den NVS.
+const LIVE_SYNC_DEBOUNCE_MS = 300;
+const LIVE_SYNC_RETRY_MS = 200;
+// Geplante Live-Syncs je Hälfte: force = auch ohne vorgemerkte Änderung senden (nach Rückgängig)
+const liveSyncQueued = new Map();
+
+// Rückgabe: true, wenn ein Sync geplant ist. Der volle Sync überträgt an die Hälfte der aktiven Verbindung
+// (BLE bevorzugt); ist das eine andere Hälfte, bleibt die Änderung bis zu deren nächstem Sync vorgemerkt.
+function requestLiveSync(side, force = false) {
+  if (!side || connectedSide() !== side) return false;
+  if (liveSyncQueued.has(side)) {
+    if (force) liveSyncQueued.set(side, true);
+  } else {
+    liveSyncQueued.set(side, force);
+    setTimeout(() => runQueuedLiveSync(side), LIVE_SYNC_DEBOUNCE_MS);
+  }
+  return true;
+}
+
+async function runQueuedLiveSync(side) {
+  // Laufender Sync oder Verbindungsaufbau: danach erneut prüfen
+  if (isAutoSyncing || isConnectingBle) {
+    setTimeout(() => runQueuedLiveSync(side), LIVE_SYNC_RETRY_MS);
+    return;
+  }
+  const force = liveSyncQueued.get(side);
+  liveSyncQueued.delete(side);
+  const hasPending = pendingFor(side).length > 0;
+  if (!hasPending && !force) return;
+  // Während des Layout-Diffs entscheidet der Benutzer im Dialog; ohne Verbindung wartet die Änderung auf den
+  // nächsten Sync. markPendingSync hat den Hinweis dafür unterdrückt: hier zeigen.
+  if (deviceSnapshotRead || diffFlowActive || connectedSide() !== side) {
+    if (hasPending) {
+      const profile = SIDE_PROFILES[side];
+      showToast(`💾 Nicht übertragen: Die Änderungen der ${profile.label} bleiben vorgemerkt. Halte ${profile.comboLabel} (0.5s) zum Übertragen.`, 6000);
+    }
+    return;
+  }
+  await writeConfigToESP32({ autoDisconnectAfter: false, expectedSide: side });
 }
 
 // One-Shot-Auto-Sync (BLE-Verbindung nach der Config-Combo). Während des Layout-Diffs nicht übertragen:

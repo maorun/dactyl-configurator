@@ -133,18 +133,6 @@ function planKeyPairDeletion(config, idx) {
   return { used, next, old, removed: { ...config.keyPairs[idx] }, shiftsFollowing: idx < config.keyPairs.length - 1 };
 }
 
-// true, wenn eine vorgemerkte Änderung die Paar-Tabelle ändert (Flag pairs): das Gerät kennt die
-// lokalen PAIR_<n> dann erst nach dem nächsten Sync
-function hasPendingPairChange(changes) {
-  return (changes || []).some(ch => ch && ch.pairs);
-}
-
-// Eine Taste mit PAIR_<n> darf nur vorgemerkt werden, solange die Paar-Tabelle noch nicht synchronisiert ist
-function keyNeedsStagedPairs(actions, changes) {
-  const usesPair = Object.values(actions || {}).some(code => pairIndexFromCode(code) >= 0);
-  return usesPair && hasPendingPairChange(changes);
-}
-
 // Entfernt das Tastenpaar idx und nummeriert die Verweise neu: PAIR_idx wird "NONE", PAIR_n mit n > idx
 // wird PAIR_(n-1). Gilt für Tap, Halten und Doppel-Tipp aller Ebenen sowie für Combo-Aktionen.
 // Ändert nichts in-place; liefert { keyPairs, layers, combos } oder null bei ungültigem Index.
@@ -266,13 +254,6 @@ function restoreMacroAt(config, idx, macro, cleared) {
     return code;
   });
   return { macros, layers };
-}
-
-// true, wenn eine vorgemerkte Änderung die Makro-Liste ändert (Flag macros): das Gerät kennt die lokalen
-// MACRO_<n> dann erst nach dem nächsten Sync
-function keyNeedsStagedMacros(actions, changes) {
-  const usesMacro = Object.values(actions || {}).some(code => macroIndexFromCode(code) >= 0);
-  return usesMacro && (changes || []).some(ch => ch && ch.macros);
 }
 
 // Anzeigename eines Tastenpaars, z. B. "Umschalt (Links) + ."

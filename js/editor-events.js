@@ -79,8 +79,6 @@ function setupEventListeners() {
     layer[r][c] = { label, tap, hold, dtap };
     renderMatrix();
 
-    const { tapCode, holdCode, dtapCode } = keyToNumericActions(layer[r][c]);
-
     const changeRecord = {
       type: "key",
       pairs: resolved.added.length > 0,
@@ -103,35 +101,8 @@ function setupEventListeners() {
       changeRecord.description += ` (neues Tastenpaar: ${resolved.added.map(p => keyPairLabel(p, keycodeLabel)).join(", ")})`;
     }
 
-    // Ein neues Tastenpaar kennt das Gerät erst nach dem nächsten Sync: Taste ebenfalls nur vormerken
-    if (resolved.added.length) {
-      markPendingSync(changeRecord, side);
-      showToast("Neues Tastenpaar angelegt. Taste und Paar werden mit dem nächsten Sync übertragen.");
-      saveConfigToServer(side);
-      return;
-    }
-    // Ein Makro aus einer noch vorgemerkten Makro-Liste kennt das Gerät erst nach dem nächsten Sync
-    if (keyNeedsStagedMacros({ tap, hold, dtap }, pendingFor(side))) {
-      markPendingSync(changeRecord, side);
-      showToast("Die Makros sind noch nicht synchronisiert. Die Taste wird mit dem nächsten Sync übertragen.");
-      saveConfigToServer(side);
-      return;
-    }
-    // Ein wiederverwendetes Paar, dessen Tabelle noch vorgemerkt ist, kennt das Gerät ebenfalls noch nicht
-    if (keyNeedsStagedPairs({ tap, hold, dtap }, pendingFor(side))) {
-      markPendingSync(changeRecord, side);
-      showToast("Die Tastenpaare sind noch nicht synchronisiert. Die Taste wird mit dem nächsten Sync übertragen.");
-      saveConfigToServer(side);
-      return;
-    }
-
-    // SET_KEY <l> <r> <c> <tap> <hold> <dtap>: Firmware antwortet mit OK SET_KEY bzw. ERR (Toast im Notification-Handler)
-    const sent = await sendDeviceCommand(`SET_KEY ${targetLayer} ${r} ${c} ${tapCode} ${holdCode} ${dtapCode}`, side);
-    if (sent) {
-      showToast(`⚡ An ${SIDE_PROFILES[side].label} übertragen: [R${r}, C${c}] = ${label}`);
-    } else {
-      markPendingSync(changeRecord, side);
-    }
+    // Vormerken; eine verbundene Hälfte bekommt sofort die vollständige Konfiguration (mit neuen Paaren und Makros)
+    markPendingSync(changeRecord, side);
 
     saveConfigToServer(side);
   });
@@ -334,27 +305,8 @@ function setupEventListeners() {
         }
       };
 
-      if (isDeviceConnected(side)) {
-        const cmds = [
-          `SET_STANDBY ${standbyMinutes}`,
-          `SET_SLEEP ${sleepMinutes}`,
-          `SET_DEV_NAME ${devName}`,
-          `SET_DEBOUNCE ${debounce}`,
-          `SET_COMBO_TIMEOUT ${comboTimeout}`,
-          `SET_TAPPING_TERM ${tappingTerm}`
-        ];
-        let allOk = true;
-        for (const cmd of cmds) {
-          if (!(await sendDeviceCommand(cmd, side))) { allOk = false; break; }
-        }
-        if (allOk) {
-          showToast(`✅ Device-Einstellungen & Timeouts an ${SIDE_PROFILES[side].label} übertragen!`);
-        } else {
-          markPendingSync(changeRecord, side);
-        }
-      } else {
-        markPendingSync(changeRecord, side);
-      }
+      // Vormerken; eine verbundene Hälfte bekommt sofort die vollständige Konfiguration
+      markPendingSync(changeRecord, side);
     });
   }
 }

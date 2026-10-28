@@ -124,14 +124,9 @@ async function renameActiveLayer() {
     }
   };
 
-  // An die Hälfte per Bluetooth oder USB senden (bei Fehler als ausstehend vormerken)
+  // Vormerken; eine verbundene Hälfte bekommt sofort die vollständige Konfiguration
   const side = editSide;
-  const ok = await sendDeviceCommand(`SET_NAME ${targetLayer} ${newName}`, side);
-  if (ok) {
-    showToast(`Ebene ${targetLayer} in "${newName}" umbenannt!`);
-  } else {
-    markPendingSync(changeRecord, side);
-  }
+  markPendingSync(changeRecord, side);
 
   saveConfigToServer(side);
 }

@@ -308,6 +308,8 @@ function undoPendingChange(id) {
     renderPendingSyncUI();
   }
   showToast(`↩️ Änderung rückgängig gemacht: ${change.title}`);
+  // Ein laufender oder fehlgeschlagener Sync kann die Änderung schon gesendet haben: Stand erneut übertragen
+  requestLiveSync(editSide, true);
 }
 
 function discardAllPendingChanges() {
@@ -328,6 +330,7 @@ function discardAllPendingChanges() {
   }
   clearPendingSync();
   showToast(`🗑️ ${count} vorgemerkte Änderung${count === 1 ? "" : "en"} verworfen.`);
+  requestLiveSync(editSide, true);
 }
 
 // side: Hälfte, zu der die Änderung gehört. Asynchrone Aufrufer übergeben die beim Start erfasste Hälfte,
@@ -347,6 +350,7 @@ function markPendingSync(changeOrSummary = "", side = editSide) {
         pairs: !!changeOrSummary.pairs,
         macros: !!changeOrSummary.macros
       });
+      requestLiveSync(side);
     }
     return;
   }
@@ -378,6 +382,8 @@ function markPendingSync(changeOrSummary = "", side = editSide) {
     pendingChanges.push(changeObj);
   }
   renderPendingSyncUI();
+  // Verbundene Hälfte: sofort die vollständige Konfiguration übertragen (writeConfigToESP32 meldet den Fortschritt)
+  if (changeObj && requestLiveSync(side)) return;
 
   const titleText = changeObj ? changeObj.title : "";
   const suffix = titleText ? ` (${titleText})` : "";

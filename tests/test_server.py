@@ -9,6 +9,7 @@ import tempfile
 import http.client
 import socketserver
 import threading
+import time
 from unittest import mock
 
 # Add parent directory to sys.path
@@ -462,56 +463,51 @@ class TestServerAndCodegen(unittest.TestCase):
     def test_flash_uses_min_spiffs_partition_for_compile_and_upload(self):
         calls = []
 
-        class Done:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        def fake_run(cmd, **kwargs):
+        def fake_run(cmd, timeout_s, on_line=None):
             calls.append(cmd)
-            return Done()
+            return 0, ""
 
-        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run)
+        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli)
         server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
         server.find_serial_port = lambda side="R": "/dev/cu.usbserial-test"
         server.query_device_side = lambda port: "R"
-        server.subprocess.run = fake_run
+        server.run_cli = fake_run
         try:
             server.flash_firmware()
         finally:
-            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run = old
+            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli = old
         self.assertEqual([c[1] for c in calls], ["compile", "upload"])
         for cmd in calls:
             self.assertEqual(cmd[cmd.index("--fqbn") + 1], "esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs")
 
-    def run_flash(self, side, port_for, side_before_upload=None):
+    def run_flash(self, side, port_for, side_before_upload=None, cli_lines=None, cli_code=0, on_output=None):
         """Führt flash_firmware(side) mit gefälschtem arduino-cli aus; port_for(side) ersetzt die Port-Erkennung.
-        side_before_upload: Antwort der Nachprüfung vor dem Upload (Standard: die angefragte Hälfte)."""
+        side_before_upload: Antwort der Nachprüfung vor dem Upload (Standard: die angefragte Hälfte).
+        cli_lines(cmd): Ausgabezeilen des gefälschten Aufrufs; cli_code: sein Exit-Code."""
         calls = []
         probes = []
 
-        class Done:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        def fake_run(cmd, **kwargs):
+        def fake_run(cmd, timeout_s, on_line=None):
             calls.append(cmd)
-            return Done()
+            lines = cli_lines(cmd) if cli_lines else []
+            for line in lines:
+                if on_line:
+                    on_line(line)
+            return cli_code, "\n".join(lines)
 
         def fake_query(port):
             probes.append((port, len(calls)))
             return side if side_before_upload is None else side_before_upload
 
-        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run)
+        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli)
         server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
         server.find_serial_port = port_for
         server.query_device_side = fake_query
-        server.subprocess.run = fake_run
+        server.run_cli = fake_run
         try:
-            result = server.flash_firmware(side)
+            result = server.flash_firmware(side, on_output=on_output)
         finally:
-            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.subprocess.run = old
+            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli = old
         self.last_probes = probes
         return result, calls
 
@@ -525,6 +521,72 @@ class TestServerAndCodegen(unittest.TestCase):
         result, calls = self.run_flash("L", lambda s: "/dev/cu.usbserial-a", side_before_upload=None)
         self.assertTrue(result["success"])
         self.assertEqual([c[1] for c in calls], ["compile", "upload"])
+
+    def test_flash_reports_each_cli_line_with_its_stage(self):
+        events = []
+        result, calls = self.run_flash("R", lambda s: "/dev/cu.usbserial-a",
+                                       cli_lines=lambda cmd: [f"{cmd[1]} 1", f"{cmd[1]} 2"],
+                                       on_output=lambda stage, line: events.append((stage, line)))
+        self.assertTrue(result["success"])
+        cli_events = [e for e in events if e[1].startswith(("compile ", "upload "))]
+        self.assertEqual(cli_events, [("compile", "compile 1"), ("compile", "compile 2"),
+                                      ("upload", "upload 1"), ("upload", "upload 2")])
+        # Statuszeilen vor jeder Phase: Port-Suche, Kompilieren, Port-Prüfung, Upload
+        self.assertEqual([e[0] for e in events if e not in cli_events], ["port", "compile", "port", "upload"])
+
+    def test_flash_error_keeps_only_the_tail_of_the_output(self):
+        long_lines = [f"zeile {i:05d}" for i in range(2000)]
+        result, calls = self.run_flash("R", lambda s: "/dev/cu.usbserial-a", cli_lines=lambda cmd: long_lines, cli_code=1)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["stage"], "compile")
+        self.assertEqual(len(result["error"]), server.FLASH_ERROR_TAIL_CHARS)
+        self.assertTrue(result["error"].endswith("zeile 01999"))
+        self.assertEqual([c[1] for c in calls], ["compile"])
+
+    def test_run_cli_streams_lines_and_splits_carriage_returns(self):
+        lines = []
+        script = "import sys,time\nprint('a', flush=True)\nsys.stderr.write('b\\r\\nc\\rd')\nsys.stderr.flush()\nsys.exit(3)"
+        code, output = server.run_cli([sys.executable, "-c", script], 10, lines.append)
+        self.assertEqual(code, 3)
+        self.assertEqual(lines, ["a", "b", "c", "d"])   # stderr zählt mit, \r trennt Fortschrittszeilen
+        self.assertEqual(output, "a\nb\nc\nd")
+
+    def test_run_cli_reports_lines_before_the_process_ends(self):
+        seen_at = []
+        script = "import time\nprint('erste', flush=True)\ntime.sleep(1.0)\nprint('zweite', flush=True)"
+        start = time.monotonic()
+        server.run_cli([sys.executable, "-c", script], 10, lambda line: seen_at.append((line, time.monotonic() - start)))
+        self.assertEqual([l for l, _ in seen_at], ["erste", "zweite"])
+        self.assertLess(seen_at[0][1], 0.8)    # live, nicht erst am Ende
+
+    def test_run_cli_kills_the_process_group_on_timeout(self):
+        # Wie arduino-cli -> esptool: ein Kindprozess hält die Pipe offen und muss mit beendet werden
+        script = ("import subprocess,sys,time\n"
+                  "c = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+                  "print(c.pid, flush=True)\n"
+                  "time.sleep(30)")
+        lines = []
+        start = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            server.run_cli([sys.executable, "-c", script], 1.5, lines.append)
+        self.assertLess(time.monotonic() - start, 10)
+        child = int(lines[0])
+        deadline = time.monotonic() + 5
+        alive = True
+        while alive and time.monotonic() < deadline:
+            try:
+                os.kill(child, 0)
+                time.sleep(0.05)
+            except ProcessLookupError:
+                alive = False
+        self.assertFalse(alive, "Kindprozess läuft nach dem Timeout weiter")
+
+    def test_run_cli_skips_empty_lines_from_split_crlf(self):
+        lines = []
+        script = "import sys,time\nsys.stdout.write('a\\r'); sys.stdout.flush(); time.sleep(0.3)\nsys.stdout.write('\\nb\\n')"
+        code, output = server.run_cli([sys.executable, "-c", script], 10, lines.append)
+        self.assertEqual(lines, ["a", "b"])
+        self.assertEqual(output, "a\nb")
 
     def test_flash_uses_sketch_and_port_of_the_side(self):
         ports = {"L": "/dev/cu.usbserial-left", "R": "/dev/cu.usbserial-right"}
@@ -1312,6 +1374,99 @@ class TestServerHttp(unittest.TestCase):
         self.assertEqual(status, 400)
         status, _ = self.request("POST", "/api/config", body="{}", headers={"Content-Length": str(server.MAX_BODY_BYTES + 1)})
         self.assertEqual(status, 413)
+
+    def test_save_and_flash_stream_sends_ndjson_lines_and_result(self):
+        old = (server.save_config_and_firmware, server.flash_firmware)
+        seen = {}
+
+        def fake_flash(side, on_output=None):
+            seen["side"] = side
+            on_output("compile", "Sketch uses 1 bytes")
+            on_output("upload", "Writing at 0x00010000 (50 %)")
+            return {"success": True, "port": "/dev/cu.usbserial-a", "side": side}
+
+        server.save_config_and_firmware = lambda cfg, side: None
+        server.flash_firmware = fake_flash
+        try:
+            status, data = self.request("POST", "/api/save_and_flash?side=L&stream=1", body=json.dumps({"layers": [[]]}),
+                                        headers={"Origin": "http://localhost:8088"})
+        finally:
+            server.save_config_and_firmware, server.flash_firmware = old
+        self.assertEqual(status, 200)
+        events = [json.loads(line) for line in data.decode("utf-8").splitlines()]
+        self.assertEqual(seen["side"], "L")
+        self.assertEqual(events[0], {"type": "log", "stage": "compile", "line": "Sketch uses 1 bytes"})
+        self.assertEqual(events[1]["stage"], "upload")
+        self.assertEqual(events[-1], {"type": "result", "success": True, "port": "/dev/cu.usbserial-a", "side": "L"})
+
+    def test_save_and_flash_stream_reports_an_exception_as_result(self):
+        old = (server.save_config_and_firmware, server.flash_firmware)
+
+        def broken_flash(side, on_output=None):
+            on_output("compile", "erste Zeile")
+            raise PermissionError("arduino-cli nicht ausführbar")
+
+        server.save_config_and_firmware = lambda cfg, side: None
+        server.flash_firmware = broken_flash
+        try:
+            status, data = self.request("POST", "/api/save_and_flash?stream=1", body=json.dumps({"layers": [[]]}),
+                                        headers={"Origin": "http://localhost:8088"})
+        finally:
+            server.save_config_and_firmware, server.flash_firmware = old
+        events = [json.loads(line) for line in data.decode("utf-8").splitlines()]
+        self.assertEqual(events[0]["line"], "erste Zeile")
+        self.assertEqual(events[-1]["type"], "result")
+        self.assertFalse(events[-1]["success"])
+        self.assertIn("arduino-cli nicht ausführbar", events[-1]["error"])
+
+    def test_save_and_flash_stream_continues_after_the_client_disconnects(self):
+        # Ein geschlossenes App-Fenster darf den Upload nicht abbrechen: ein halber Flash wäre schlimmer
+        writes = []
+
+        class BrokenPipeFile:
+            def write(self, data):
+                writes.append(data)
+                if len(writes) > 1:
+                    raise BrokenPipeError()
+
+            def flush(self):
+                pass
+
+        handler = server.ConfiguratorHandler.__new__(server.ConfiguratorHandler)
+        handler.wfile = BrokenPipeFile()
+        handler.request_version = "HTTP/1.0"
+        handler.send_response = lambda code: None
+        handler.send_header = lambda *a: None
+        handler.end_headers = lambda: None
+        finished = []
+
+        def fake_flash(side, on_output=None):
+            for i in range(5):
+                on_output("upload", f"Writing {i}")
+            finished.append(side)
+            return {"success": True, "side": side}
+
+        old = server.flash_firmware
+        server.flash_firmware = fake_flash
+        try:
+            handler.stream_flash("R")
+        finally:
+            server.flash_firmware = old
+        self.assertEqual(finished, ["R"])        # Flash lief bis zum Ende
+        self.assertEqual(len(writes), 2)          # nach dem Fehler kein weiterer Schreibversuch
+        self.assertTrue(handler.close_connection)
+
+    def test_save_and_flash_stream_validation_error_stays_plain_json(self):
+        # Eine ungültige Config scheitert vor dem Stream: normale 400-Antwort, nichts geflasht
+        old = server.flash_firmware
+        server.flash_firmware = lambda *a, **k: self.fail("darf nicht flashen")
+        try:
+            status, data = self.request("POST", "/api/save_and_flash?stream=1", body=json.dumps({"layers": []}),
+                                        headers={"Origin": "http://localhost:8088"})
+        finally:
+            server.flash_firmware = old
+        self.assertEqual(status, 400)
+        self.assertFalse(json.loads(data)["success"])
 
     def test_post_json_null_returns_400(self):
         for path in ("/api/config", "/api/save_and_flash"):

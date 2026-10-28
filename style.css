@@ -984,6 +984,29 @@ body {
   background: var(--bg-input);
 }
 
+/* Live-Ausgabe beim Flashen */
+.flash-log-dialog {
+  max-width: 760px;
+}
+
+.flash-log-stage {
+  margin: 0 0 0.75rem;
+  font-weight: 600;
+}
+
+.flash-log-output {
+  height: 50vh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 /* Layout-Diff vor dem Sync */
 .sync-diff-hint {
   color: var(--text-muted);

@@ -26,7 +26,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 - **Key Overrides** `[Firmware/App]` — *Nutzen: mittel · Aufwand: mittel* — Modifier + Taste ergibt eine andere Aktion, zum Beispiel `Shift` + `Backspace` = `Delete`. Spart Tastenpaare und Ebenen. Muss `heldModifierMask` und den Zustand in `SplitArbitratedKeyboard` beachten.
 - **Letzte Aktion wiederholen (Repeat)** `[Firmware/App]` — *Nutzen: mittel · Aufwand: mittel* — Eine Aktion `REPEAT` führt die zuletzt ausgeführte Aktion noch einmal aus, nicht nur den letzten Tastencode: auch Combo-Aktionen, Tastenpaare, Umlaute, Makros und Medientasten. Die Firmware merkt sich dafür die aufgelöste Aktion (inkl. Combo-Ergebnis), nicht die Matrix-Position. Gehalten wirkt sie wie die gehaltene Originalaktion. Offene Fragen: Layer-Aktionen, One-Shot und `CAPS_WORD` ausschließen; über beide Hälften wiederholen (der Master kennt nur HID-Ereignisse, nicht die Aktion der linken Hälfte).
 - **OTA-Update über BLE im Config-Modus** `[Firmware/App]` — *Nutzen: mittel · Aufwand: groß* — `min_spiffs` hat zwei OTA-Slots; Flashen ohne USB-Kabel, vor allem für die linke Hälfte. Hohes Risiko: Rollback, Signatur und die unauthentifizierte Config-Characteristic. Steht deshalb unter den kleineren Einträgen.
-- **Fortschritt beim Flashen** `[App]` — *Nutzen: gering · Aufwand: klein* — `arduino-cli`-Ausgabe live an die App streamen statt nur am Ende melden. Flashen ist selten; der Nutzen liegt in der Fehlersuche bei einem hängenden Upload.
 - **Ebenen-Übersicht** `[App]` — *Nutzen: gering · Aufwand: mittel* — Alle 8 Ebenen verkleinert nebeneinander, damit transparente Tasten und Konflikte sichtbar werden.
 - **Heatmap pro Ebene** `[App]` — *Nutzen: gering · Aufwand: klein* — Zähler zusätzlich nach `layer` aus dem `KEY_PRESS`-Event trennen.
 - **Heatmap-Export** `[App]` — *Nutzen: gering · Aufwand: klein* — Zähler als CSV/JSON exportieren, z. B. für Layout-Optimierung. Sinnvoll erst zusammen mit oder nach der Heatmap pro Ebene.
@@ -54,6 +53,7 @@ Derzeit kein offener Plan.
 
 ## Umgesetzt
 
+- **Fortschritt beim Flashen:** "Auf Dactyl flashen" zeigt die Ausgabe von `arduino-cli` (Kompilieren und Upload, auch den esptool-Fortschritt) live in einem Dialog. Der Server streamt sie als NDJSON (`/api/save_and_flash?stream=1`).
 - **ESP-NOW-Verschlüsselung:** Beide Hälften verschlüsseln die Funkstrecke mit CCMP (PMK + LMK, `DactylSplitCrypto.h`). Der Schlüssel liegt in der nicht versionierten Datei `DactylSplitKey.h` (`scripts/generate-split-key.sh`, Modus 0600); ohne sie bricht der Build ab. Offen: Hardware-Prüfung, ob der Master unverschlüsselte Pakete mit der linken MAC verwirft; bis dahin ist eine Injektion mit gefälschter MAC nicht ausgeschlossen.
 - **Tasten-Heatmap & WPM-Anzeige** im Live-Monitor — PR #2.
 - **Matrix-Test (Löt- und Dioden-Tester)** als eigener Tab — PR #3.

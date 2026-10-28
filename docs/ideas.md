@@ -18,7 +18,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Rangliste
 
-- **ESP-NOW härten bzw. verschlüsseln** `[Split]` — *Nutzen: gering · Aufwand: mittel* — Unverschlüsseltes ESP-NOW ist eine bewusst akzeptierte Designentscheidung (Latenz, `AGENTS.md` 2a). Ein Angriff braucht Nähe und die gefälschte linke MAC. Verschlüsselung mit PMK/LMK kostet Airtime; vorher die Latenz messen.
 - **Fortschritt beim Flashen** `[App]` — *Nutzen: gering · Aufwand: klein* — `arduino-cli`-Ausgabe live an die App streamen statt nur am Ende melden. Flashen ist selten; der Nutzen liegt in der Fehlersuche bei einem hängenden Upload.
 - **Ebenen-Übersicht** `[App]` — *Nutzen: gering · Aufwand: mittel* — Alle 8 Ebenen verkleinert nebeneinander, damit transparente Tasten und Konflikte sichtbar werden.
 - **Heatmap pro Ebene** `[App]` — *Nutzen: gering · Aufwand: klein* — Zähler zusätzlich nach `layer` aus dem `KEY_PRESS`-Event trennen.
@@ -38,6 +37,7 @@ Befunde, die der Nutzer ausdrücklich zurückgestellt hat, und Hardware-Prüfung
 - Hardware-Prüfung offen: Tottaste Alt + u eines Umlauts auf der linken Hälfte am Mac testen. Der Host-Test prüft nur die Reihenfolge der `SplitHidEvent`s; der Master sendet sie ohne Abstand.
 - Hardware-Prüfung offen: ESP-NOW-Neustart der linken Hälfte. Den Master per Reset-Taste neu starten, während links getippt wird. Erwartet: `ESPNOW_RESTART` höchstens einmal pro Backoff (30 s, dann 60 s, 120 s ... bis 8 Min), danach `Master erreichbar=1` ohne Reset der linken Hälfte. Zusätzlich prüfen: `STATUS` meldet `ActivityRx=1`.
 - Hardware-Prüfung offen: Synchronisierte Inaktivitäts-Timer. 6 Min nur rechts tippen; links darf nicht in Standby gehen (Serial `[POWER]`), und linke Tasten kommen ohne Verzögerung an. Der Host-Test prüft nur Parser und Drosselung, nicht den Funkweg Master -> links.
+- Hardware-Prüfung offen: ESP-NOW-Verschlüsselung. Beide Hälften mit demselben Schlüssel flashen; linke Tasten, Layer-Sync und `ACTIVITY` müssen ankommen. Danach nur links einen neuen Schlüssel flashen (`--force`): erwartet `ESPNOW_FAIL`, keine linken Tasten am Mac. Zusätzlich prüfen, ob der Master ein unverschlüsseltes Paket mit der linken MAC verwirft (die ESP-IDF-Doku sagt dazu nichts). Die Tipplatenz links mit und ohne Verschlüsselung vergleichen.
 - Hardware-Prüfung offen: One-Shot-Shift links, dann Taste rechts (und umgekehrt); Caps Word über beide Hälften; One-Shot-Shift vor `UMLAUT_AE` ergibt `Ä`.
 
 ## Detailpläne
@@ -46,6 +46,7 @@ Derzeit kein offener Plan.
 
 ## Umgesetzt
 
+- **ESP-NOW-Verschlüsselung:** Beide Hälften verschlüsseln die Funkstrecke mit CCMP (PMK + LMK, `DactylSplitCrypto.h`). Der Schlüssel liegt in der nicht versionierten Datei `DactylSplitKey.h` (`scripts/generate-split-key.sh`, Modus 0600); ohne sie bricht der Build ab. Offen: Hardware-Prüfung, ob der Master unverschlüsselte Pakete mit der linken MAC verwirft; bis dahin ist eine Injektion mit gefälschter MAC nicht ausgeschlossen.
 - **Tasten-Heatmap & WPM-Anzeige** im Live-Monitor — PR #2.
 - **Matrix-Test (Löt- und Dioden-Tester)** als eigener Tab — PR #3.
 - **Ebenen-Werkzeuge:** Ebene kopieren, tauschen, leeren (als Snapshot vorgemerkt, rückgängig machbar) — PR #4.

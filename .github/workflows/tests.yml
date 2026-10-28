@@ -62,6 +62,11 @@ jobs:
           arduino-cli core update-index
           arduino-cli core install esp32:esp32@3.3.12
 
+      # Wegwerf-Schlüssel nur für den Compile-Check (die Datei ist nicht versioniert, ohne sie bricht der Build ab)
+      - name: Generate ESP-NOW Test Key
+        run: |
+          bash scripts/generate-split-key.sh
+
       # Keine externe BleKeyboard-Bibliothek: Keycodes & HID-Report-Typen liegen in DactylKeycodes.h
       - name: Compile Dactyl Firmware
         run: |

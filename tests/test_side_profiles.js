@@ -499,6 +499,58 @@ test("Standby-Hinweise: pro Hälfte passend zum CPU-Takt der Firmware", () => {
   assert.match(svg, /rechts 80 MHz, links 240 MHz/);
 });
 
+test("ESP-NOW: beide Hälften verschlüsseln die Strecke mit dem nicht versionierten Schlüssel", () => {
+  for (const [label, ino, setup] of [["links", leftIno, "static bool setupEspNow()"],
+                                     ["rechts", rightIno, "void setupSplitReceiver()"]]) {
+    assert.match(ino, /#include "(\.\.\/dactyl_right\/)?DactylSplitCrypto\.h"/, `${label}: DactylSplitCrypto.h fehlt`);
+    const start = ino.indexOf(setup);
+    assert.ok(start >= 0, `${label}: ${setup} fehlt`);
+    const body = ino.slice(start, ino.indexOf("\n}\n", start));
+    assert.doesNotMatch(body, /\.encrypt\s*=\s*false/, `${label}: unverschlüsselter Peer`);
+    const pmk = body.indexOf("esp_now_set_pmk(SPLIT_ESPNOW_PMK)");
+    const enc = body.indexOf("splitPeerSetEncryption(peer.encrypt, peer.lmk)");
+    const add = body.indexOf("esp_now_add_peer(&peer)");
+    assert.ok(pmk >= 0 && enc >= 0 && add >= 0, `${label}: PMK, LMK oder Peer fehlt`);
+    assert.ok(pmk < add && enc < add, `${label}: PMK und LMK müssen vor esp_now_add_peer gesetzt sein`);
+  }
+  // Ohne verschlüsselten Peer verarbeitet der Master keine Pakete von links
+  const right = rightIno.slice(rightIno.indexOf("void setupSplitReceiver()"));
+  assert.ok(right.indexOf("splitRxReady = true") > right.indexOf("esp_now_add_peer(&peer)"),
+    "rechts: splitRxReady erst nach dem verschlüsselten Peer");
+  const crypto = read("firmware/dactyl_right/DactylSplitCrypto.h");
+  assert.match(crypto, /#error "ESP-NOW-Schlüssel fehlt/);
+  // Das Muster deckt auch die Temp-Datei von generate-split-key.sh (DactylSplitKey.h.XXXXXX) ab
+  assert.match(read(".gitignore"), /^firmware\/dactyl_right\/DactylSplitKey\.h\*$/m);
+  assert.match(read("scripts/generate-split-key.sh"), /mktemp "\$KEY_FILE\.XXXXXX"/);
+  // Ohne ESP-NOW beim Start sendet links nichts: begrenzte Board-Neustarts (espNowBootRetryAllowed, Host-Test
+  // test_espnow_boot_retry_stops_after_limit), danach ohne Funk weiter
+  const leftSetup = leftIno.slice(leftIno.indexOf("void setup()"));
+  const boot = leftSetup.match(/if \(setupEspNow\(\)\) \{([\s\S]*?)\} else if \(espNowBootRetryAllowed\(rtcEspNowBootRetry, resetReason == ESP_RST_SW\)\) \{([\s\S]*?)\} else \{([\s\S]*?)\n    \}/);
+  assert.ok(boot, "links: Rückgabe von setupEspNow() beim Start prüfen");
+  assert.match(boot[1], /rtcEspNowBootRetry = 0;/, "links: Erfolg setzt den Zähler zurück");
+  assert.match(boot[2], /ESP\.restart\(\);/, "links: begrenzter Neustart fehlt");
+  assert.match(boot[3], /wiederholt fehlgeschlagen/);
+  assert.doesNotMatch(boot[3], /ESP\.restart/, "links: nach der Grenze kein Neustart");
+  // Config Mode (Software-Reset hinein und hinaus) verbraucht keinen Versuch
+  assert.match(leftSetup, /if \(isConfigMode\) \{[^}]*rtcEspNowBootRetry = 0;[^}]*startConfigModeBle\(\);/,
+    "links: Config Mode setzt den Neustart-Zähler zurück");
+  // Rechts: jeder Fehler nach esp_now_init beendet ESP-NOW, damit kein Paket in den Ring kommt. Jeder Fehlerzweig
+  // beginnt mit einer [SPLIT] ERR-Zeile und endet mit return.
+  const rightBody = right.slice(0, right.indexOf("\n}\n"));
+  // Ohne erfolgreiches esp_now_init gibt es nichts zu beenden: erst die Zweige danach prüfen
+  const afterInit = rightBody.slice(rightBody.indexOf("ERR ESPNOW_INIT") + "ERR ESPNOW_INIT".length);
+  const branches = [...afterInit.matchAll(/Serial\.println\("\[SPLIT\] (ERR [A-Z_]+)[^"]*"\);([\s\S]*?)return;/g)];
+  assert.deepStrictEqual(branches.map(b => b[1]), ["ERR ESPNOW_RECV_CB", "ERR ESPNOW_PMK", "ERR ESPNOW_PEER"],
+    "rechts: Fehlerzweige nach esp_now_init");
+  for (const [, marker, body] of branches) {
+    assert.match(body, /esp_now_deinit\(\);/, `rechts: ${marker} ohne esp_now_deinit`);
+  }
+  const ci = read(".github/workflows/tests.yml");
+  assert.ok(ci.indexOf("bash scripts/generate-split-key.sh") >= 0
+    && ci.indexOf("bash scripts/generate-split-key.sh") < ci.indexOf("arduino-cli compile"),
+    "CI: Schlüssel vor dem Compile erzeugen");
+});
+
 test("README: Aktionscode-Tabelle nennt den Makro-Bereich", () => {
   const common = read("firmware/dactyl_right/DactylCommon.h");
   assert.match(common, /#define ACT_MACRO_BASE\s+0x170/);

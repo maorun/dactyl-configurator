@@ -9,3 +9,5 @@ layout_profiles.json.lock
 layout_profiles_left.json.lock
 layout_profiles*.json.*.bak
 .claude
+# Gemeinsamer ESP-NOW-Schlüssel beider Hälften (scripts/generate-split-key.sh)
+firmware/dactyl_right/DactylSplitKey.h*

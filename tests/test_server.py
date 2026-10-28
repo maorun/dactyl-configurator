@@ -652,6 +652,45 @@ class TestServerAndCodegen(unittest.TestCase):
             finally:
                 server.CONFIG_FILE, server.INO_FILE, server.LEFT_CONFIG_FILE, server.LEFT_INO_FILE = old
 
+    def test_generate_split_key_writes_private_header_once(self):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        script = os.path.join(root, "scripts", "generate-split-key.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            key = os.path.join(tmp, "DactylSplitKey.h")
+            env = {**os.environ, "DACTYL_SPLIT_KEY_FILE": key}
+
+            def run(*args):
+                return subprocess.run(["bash", script, *args], env=env, capture_output=True, text=True, timeout=30)
+
+            proc = run()
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(os.stat(key).st_mode & 0o777, 0o600)
+            with open(key, encoding="utf-8") as f:
+                header = f.read()
+            self.assertIn("#define DACTYL_SPLIT_KEY_PRESENT 1", header)
+            keys = {}
+            for name in ("SPLIT_ESPNOW_PMK", "SPLIT_ESPNOW_LMK"):
+                m = re.search(r"static const uint8_t " + name + r"\[16\] = \{([^}]*)\};", header)
+                self.assertIsNotNone(m, name)
+                values = [v.strip() for v in m.group(1).split(",")]
+                self.assertEqual(len(values), 16, name)
+                self.assertTrue(all(re.fullmatch(r"0x[0-9a-f]{2}", v) for v in values), name)
+                keys[name] = values
+            self.assertNotEqual(keys["SPLIT_ESPNOW_PMK"], keys["SPLIT_ESPNOW_LMK"])
+            # Keine Schlüsselwerte in der Ausgabe
+            for values in keys.values():
+                self.assertNotIn(values[0] + ", " + values[1], proc.stdout + proc.stderr)
+            # Ein vorhandener Schlüssel bleibt ohne --force unverändert (sonst verstehen sich die Hälften nicht mehr)
+            proc = run()
+            self.assertNotEqual(proc.returncode, 0)
+            with open(key, encoding="utf-8") as f:
+                self.assertEqual(f.read(), header)
+            proc = run("--force")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            with open(key, encoding="utf-8") as f:
+                self.assertNotEqual(f.read(), header)
+            self.assertEqual(sorted(os.listdir(tmp)), ["DactylSplitKey.h"])
+
     def test_build_app_script_bundles_server_ui_and_firmware(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
@@ -671,6 +710,14 @@ class TestServerAndCodegen(unittest.TestCase):
                 shutil.copytree(os.path.join(root, "firmware", name), os.path.join(repo, "firmware", name))
             with open(os.path.join(repo, "current_config.json"), "w", encoding="utf-8") as f:
                 f.write('{"layers": "repo"}')
+            # Testschlüssel mit zu weiten Rechten: das Paket bekommt ihn nur für den Nutzer lesbar (0600)
+            repo_key = os.path.join(repo, "firmware", "dactyl_right", "DactylSplitKey.h")
+            with open(repo_key, "w", encoding="utf-8") as f:
+                f.write("#define DACTYL_SPLIT_KEY_PRESENT 1\n")
+            os.chmod(repo_key, 0o644)
+            # Rest eines abgebrochenen generate-split-key.sh: kommt nie ins Paket
+            with open(repo_key + ".AbC123", "w", encoding="utf-8") as f:
+                f.write("rest")
             app_path = os.path.join(tmp, "Dactyl.app")
             os.makedirs(os.path.join(app_path, "Contents", "Frameworks", "Electron Framework.framework"))
             app_dir = os.path.join(app_path, "Contents", "Resources", "app")
@@ -703,6 +750,11 @@ class TestServerAndCodegen(unittest.TestCase):
                         "js/config-sync.js", "firmware/dactyl_right/dactyl_right.ino",
                         "firmware/dactyl_right/DactylLogic.h", "firmware/dactyl_left/dactyl_left.ino"):
                 self.assertTrue(os.path.isfile(os.path.join(app_dir, rel)), rel)
+            bundle_key = os.path.join(app_dir, "firmware", "dactyl_right", "DactylSplitKey.h")
+            self.assertEqual(os.stat(bundle_key).st_mode & 0o777, 0o600)
+            self.assertEqual(sorted(n for n in os.listdir(os.path.dirname(bundle_key)) if n.startswith("DactylSplitKey")),
+                             ["DactylSplitKey.h"])
+            self.assertNotIn("Kein ESP-NOW-Schlüssel", proc.stderr)
             # Kein Laufzeitzustand und keine Altlasten im signierten Paket
             self.assertFalse(os.path.exists(os.path.join(app_dir, "current_config.json")))
             self.assertFalse(os.path.exists(os.path.join(app_dir, "veraltet.js")))
@@ -719,6 +771,12 @@ class TestServerAndCodegen(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             with open(os.path.join(data_dir, "current_config.json"), encoding="utf-8") as f:
                 self.assertEqual(f.read(), '{"layers": "app"}')
+            # Ohne Schlüssel baut das Paket weiter, warnt aber: "Auf Dactyl flashen" bricht dann ab
+            os.remove(repo_key)
+            proc = build()
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("Kein ESP-NOW-Schlüssel", proc.stderr)
+            self.assertFalse(os.path.exists(bundle_key))
             # Das Backup liegt neben dem Paket, nicht darin: codesign versiegelt es sonst mit
             backup = os.path.join(tmp, ".Dactyl.app.app-dir.old")
             # Ein früherer Lauf wurde nach dem Verschieben ins Backup hart beendet: der nächste Lauf stellt es wieder her
@@ -818,6 +876,30 @@ class TestServerAndCodegen(unittest.TestCase):
             for name in server.FIRMWARE_SKETCHES:
                 self.assertEqual(sorted(os.listdir(os.path.join(data, name))), ["Alt.h"], name)
             self.assertEqual(sorted(os.listdir(data)), sorted(server.FIRMWARE_SKETCHES))
+
+    def test_sync_firmware_sources_keeps_private_split_key(self):
+        # "Auf Dactyl flashen" kompiliert im Datenverzeichnis: der ESP-NOW-Schlüssel muss dort ankommen, mit 0600
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "bundle")
+            data = os.path.join(tmp, "data")
+            for name in server.FIRMWARE_SKETCHES:
+                os.makedirs(os.path.join(source, name))
+                with open(os.path.join(source, name, f"{name}.ino"), "w", encoding="utf-8") as f:
+                    f.write(name)
+            key = os.path.join(source, "dactyl_right", "DactylSplitKey.h")
+            with open(key, "w", encoding="utf-8") as f:
+                f.write("#define DACTYL_SPLIT_KEY_PRESENT 1\n")
+            os.chmod(key, 0o600)
+            old = (server.SOURCE_FIRMWARE_DIR, server.FIRMWARE_DIR, server.SEPARATE_FIRMWARE)
+            server.SOURCE_FIRMWARE_DIR, server.FIRMWARE_DIR, server.SEPARATE_FIRMWARE = source, data, True
+            try:
+                server.sync_firmware_sources()
+            finally:
+                server.SOURCE_FIRMWARE_DIR, server.FIRMWARE_DIR, server.SEPARATE_FIRMWARE = old
+            copied = os.path.join(data, "dactyl_right", "DactylSplitKey.h")
+            with open(copied, encoding="utf-8") as f:
+                self.assertEqual(f.read(), "#define DACTYL_SPLIT_KEY_PRESENT 1\n")
+            self.assertEqual(os.stat(copied).st_mode & 0o777, 0o600)
 
     def test_sync_firmware_sources_handles_readonly_dirs_orphans_and_missing_ino(self):
         with tempfile.TemporaryDirectory() as tmp:

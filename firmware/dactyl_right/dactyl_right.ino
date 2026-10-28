@@ -145,6 +145,7 @@ void enterConfigMode();
 void toggleConfigMode();
 void checkUserCombos();
 void stopMacro(bool releaseKeys);
+void sendSplitLayerRelease();
 
 void enterConfigMode() {
   if (isConfigMode) return;
@@ -153,6 +154,7 @@ void enterConfigMode() {
 
   stopMacro(false);
   bleKeyboard.releaseAll();
+  sendSplitLayerRelease();
   Serial.println("\n=============================================");
   Serial.println("  [CONFIG MODE] AKTIVIERT -> Starte Config-BLE...");
   Serial.println("=============================================");
@@ -263,6 +265,7 @@ void enterDeepSleep() {
   sendConfigNotification("SLEEP_STARTING");
   // Laufendes Makro beenden und seine Codes am Mac loslassen, bevor die Verbindung endet
   stopMacro(true);
+  sendSplitLayerRelease();
   delay(30);
 
   // 1. Spalten als OUTPUT HIGH halten (3.3V) - sowoh für RTC als auch normale GPIOs
@@ -432,6 +435,9 @@ static bool splitHostWasReady = false;
 // Eigenes Tippen an die linke Hälfte melden (synchronisierte Inaktivitäts-Timer, DactylSplitHid.h)
 static bool splitActivityPeerReady = false;
 static SplitActivityThrottle splitActivity;
+// Layer-Abgleich mit der linken Hälfte (SPLIT_OP_LAYER_STATE, DactylSplitHid.h)
+static SplitLayerSync splitLayerSync;
+static SplitRemoteLayers splitRemoteLayers;
 
 // Läuft auf dem Wi-Fi-Task: nur prüfen und einreihen, kein Serial, kein BLE
 static void onSplitDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
@@ -463,6 +469,8 @@ void setupSplitReceiver() {
   peer.ifidx = WIFI_IF_STA;
   peer.encrypt = false;
   splitActivityReset(splitActivity);
+  splitLayerReset(splitLayerSync);
+  splitRemoteLayersReset(splitRemoteLayers);
   splitActivityPeerReady = (esp_now_add_peer(&peer) == ESP_OK);
   if (!splitActivityPeerReady) Serial.println("[SPLIT] ERR ESPNOW_PEER (Aktivität an links)");
   uint8_t mac[6];
@@ -482,13 +490,26 @@ static void onSplitKeyEvent(const SplitHidEvent &ev) {
     splitKeyEventLayer(ev.code));
 }
 
+// Layer-Zustand der linken Hälfte: ihre MO-Ebenen, mit SET auch ihre Toggle-Änderung
+static void onSplitLayer(const SplitHidEvent &ev) {
+  bool set = splitLayerMasterReceive(splitLayerSync, splitRemoteLayers, ev, millis());
+  applyRemoteLayerState(splitLayerMomentary(ev), set, splitLayerToggles(ev));
+}
+
 // Ereignisse der linken Hälfte aus loop() ausführen (Logik: splitProcessRx in DactylSplitHid.h)
 void processSplitEvents() {
   if (!splitRxReady) return;
   unsigned long now = millis();
   bool hostReady = !isConfigMode && bleKeyboard.isConnected();
+  bool linkWasUp = bleKeyboard.splitLeft.linkUp;
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
-                                     hostReady, now, onSplitApplied, onSplitKeyEvent);
+                                     hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer);
+  // Linke Hälfte gerade erreichbar (Start, Aufwachen): sofort den Layer-Zustand des Masters senden
+  // Linke Hälfte nicht erreichbar, aus oder im Deep Sleep: ihre gehaltenen MO-Ebenen verfallen
+  if (splitLayerMasterAfterRx(splitLayerSync, splitRemoteLayers, linkWasUp, bleKeyboard.splitLeft.linkUp,
+                              rep.linkLost, now)) {
+    applyRemoteLayerState(0, false, 0);
+  }
   // Auch ein KEY_EVENT (linke Taste mit Aktion 0) hält den Master wach
   if (rep.applied || rep.keyEvents) {
     lastActivityTime = now;
@@ -507,6 +528,25 @@ void sendSplitActivityIfDue() {
   if (!splitActivityTake(splitActivity, millis())) return;
   SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_ACTIVITY);
   splitActivitySendResult(splitActivity, esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK);
+}
+
+// Vor Config Mode und Deep Sleep: eigene MO-Ebenen links lösen (sonst erst nach dem Verfall).
+// Die Toggles bleiben, die linke Hälfte führt sie weiter.
+void sendSplitLayerRelease() {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  // Ein Sendefehler ist ohne Folge: links verfallen die Ebenen nach SPLIT_LAYER_REMOTE_TIMEOUT_MS
+  SplitHidEvent ev = splitLayerReleaseEvent(splitLayerSync, toggleLayerMask(), true);
+  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+}
+
+// Layer-Zustand an die linke Hälfte, immer als SET: bei jeder Änderung (mit Wiederholung) und, solange die
+// linke Hälfte erreichbar ist, jede Sekunde (ohne linke Hälfte kein Funkverkehr ohne Änderung)
+void sendSplitLayerStateIfDue() {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  splitLayerSendIfDue(splitLayerSync, localMomentaryLayerMask(), toggleLayerMask(), true, millis(),
+                      bleKeyboard.splitLeft.linkUp, [](const SplitHidEvent &ev) {
+                        return esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK;
+                      });
 }
 
 void setup() {
@@ -716,6 +756,7 @@ void loop() {
   // Ereignisse der linken Hälfte (ESP-NOW) anzeigen
   processSplitEvents();
   sendSplitActivityIfDue();
+  sendSplitLayerStateIfDue();
 
   // Deferriertes Starten/Beenden des Config-Modus aus loopTask
   if (enterConfigRequested) {

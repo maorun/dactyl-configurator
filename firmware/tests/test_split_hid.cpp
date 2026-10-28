@@ -81,9 +81,11 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_ONE_SHOT_PRESS, 0x02),
     makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 0xFF),
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE),
+    makeSplitLayerEvent(0x02, 0x08, false),
+    makeSplitLayerEvent(0x02, 0x08, true, 1), // links setzt nach eigener Toggle-Änderung
   };
-  // Alle Ops links -> Master; ACTIVITY ist die einzige Op der Rückrichtung
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 1);
+  // Alle Ops links -> Master (LAYER_STATE als REPORT und SET); ACTIVITY ist die einzige Op nur der Rückrichtung
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT);
   for (const SplitHidEvent &ev : ok) assert(parse(SPLIT_LEFT_MAC, ev, out) && out.op == ev.op);
 }
 
@@ -110,6 +112,9 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 2, 1),
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE, 1),
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE, 0, 1),
+    makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0x0100, 0),  // REPORT ohne Toggle-Bits
+    makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0x0100, 1),  // Ebene 0 rastet nie ein
+    makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0, -1),      // Master-Form kommt nie von links
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -568,8 +573,10 @@ TEST(test_process_rx_link_timeout_releases_left_inputs) {
 // -----------------------------------------------------------------------------
 // Rückrichtung Master -> links (ACTIVITY)
 // -----------------------------------------------------------------------------
+// Wie onEspNowRecv in dactyl_left.ino: parseSplitMasterPacket, danach die Op ACTIVITY
 static bool parseActivity(const uint8_t *mac, SplitHidEvent ev, int len = (int)sizeof(SplitHidEvent)) {
-  return parseSplitActivityPacket(mac, reinterpret_cast<const uint8_t *>(&ev), len);
+  SplitHidEvent out;
+  return parseSplitMasterPacket(mac, reinterpret_cast<const uint8_t *>(&ev), len, out) && out.op == SPLIT_OP_ACTIVITY;
 }
 
 TEST(test_activity_packet_accepts_only_master_activity) {
@@ -584,7 +591,561 @@ TEST(test_activity_packet_accepts_only_master_activity) {
   assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HEARTBEAT)));
   assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a')));
   assert(!parseActivity(SPLIT_MASTER_MAC, makeSplitHidEvent(0xFF)));
-  assert(!parseSplitActivityPacket(SPLIT_MASTER_MAC, nullptr, 4));
+  SplitHidEvent out;
+  assert(!parseSplitMasterPacket(SPLIT_MASTER_MAC, nullptr, 4, out));
+}
+
+// -----------------------------------------------------------------------------
+// Layer-Abgleich (LAYER_STATE)
+// -----------------------------------------------------------------------------
+static bool parseMaster(const uint8_t *mac, SplitHidEvent ev, SplitHidEvent &out, int len = (int)sizeof(SplitHidEvent)) {
+  return parseSplitMasterPacket(mac, reinterpret_cast<const uint8_t *>(&ev), len, out);
+}
+
+TEST(test_layer_event_encoding) {
+  assert(SPLIT_OP_LAYER_STATE == 17); // append-only: Nummer nie ändern
+  SplitHidEvent set = makeSplitLayerEvent(0x82, 0x0B, true, 5);
+  // Bit 0 der Toggles (Ebene 0) entfällt; arg = Nummer des SET
+  assert(set.code == (0x82 | (0x0A << 8)) && set.arg == 5);
+  assert(splitLayerMomentary(set) == 0x82 && splitLayerToggles(set) == 0x0A && splitLayerIsSet(set));
+  assert(!splitLayerFromMaster(set) && splitLayerSeq(set) == 5);
+  // REPORT trägt keine Toggles
+  SplitHidEvent rep = makeSplitLayerEvent(0x04, 0x0A, false);
+  assert(rep.code == 0x04 && rep.arg == 0 && !splitLayerIsSet(rep) && splitLayerToggles(rep) == 0);
+  // Master: arg < 0, zurückgemeldete Nummer in den Bits 0..6 (auch 0 = noch keine)
+  SplitHidEvent m = makeSplitMasterLayerEvent(0x02, 0x0C, 127);
+  assert(m.arg < 0 && splitLayerFromMaster(m) && splitLayerIsSet(m) && splitLayerSeq(m) == 127);
+  assert(splitLayerToggles(m) == 0x0C && splitLayerMomentary(m) == 0x02);
+  SplitHidEvent m0 = makeSplitMasterLayerEvent(0, 0, 0);
+  assert(m0.arg < 0 && splitLayerSeq(m0) == 0);
+}
+
+TEST(test_master_packet_accepts_activity_and_master_layer_only) {
+  SplitHidEvent out;
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_ACTIVITY), out) && out.op == SPLIT_OP_ACTIVITY);
+  SplitHidEvent m = makeSplitMasterLayerEvent(0x02, 0x04, 9);
+  assert(parseMaster(SPLIT_MASTER_MAC, m, out) && out.code == m.code && out.arg == m.arg);
+  // Linke Formen (REPORT, SET) kommen nie vom Master
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitLayerEvent(0x02, 0, false), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitLayerEvent(0x02, 0x04, true, 3), out));
+  assert(!parseMaster(SPLIT_LEFT_MAC, m, out));
+  assert(!parseMaster(nullptr, m, out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, m, out, 3));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0x0100, -128), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_ACTIVITY, 1), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'), out));
+  assert(!parseSplitMasterPacket(SPLIT_MASTER_MAC, nullptr, 4, out));
+  // Der Master nimmt kein Master-Paket an (arg < 0 von links ist ungültig)
+  SplitHidEvent tmp;
+  assert(!parse(SPLIT_LEFT_MAC, m, tmp));
+}
+
+TEST(test_layer_sync_left_sends_changes_and_set_until_echo) {
+  SplitLayerSync s;
+  splitLayerReset(s, 10);
+  SplitHidEvent ev;
+  // Erstes Paket nach dem Start meldet nur: die Toggles führt der Master
+  assert(splitLayerTake(s, 0, 0x04, false, 100, true, ev) && !splitLayerIsSet(ev));
+  assert(!splitLayerTake(s, 0, 0x04, false, 101, true, ev));
+  // MO-Änderung: sofort, als REPORT, auch ohne Erlaubnis zum Auffrischen
+  assert(splitLayerTake(s, 0x02, 0x04, false, 102, false, ev) && !splitLayerIsSet(ev) && splitLayerMomentary(ev) == 0x02);
+  // Eigene Toggle-Änderung: SET mit neuer Nummer (Startwert 10 -> 11), offen bis zur Rückmeldung
+  assert(splitLayerTake(s, 0x02, 0x0C, false, 103, false, ev) && splitLayerIsSet(ev) && splitLayerToggles(ev) == 0x0C);
+  assert(splitLayerSeq(ev) == 11 && s.setPending);
+  // Links wiederholt nicht selbst (die Sendewarteschlange hat einen Retry)
+  assert(!splitLayerTake(s, 0x02, 0x0C, false, 103 + SPLIT_LAYER_REPEAT_MS, false, ev));
+  // Ein Master-Paket ohne diese Nummer gilt nicht, auch mit gleichen Toggles (älteres Paket)
+  assert(!splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x0C, 10), 150));
+  assert(!splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x04, 0), 151));
+  // Auffrischen nur, wenn erlaubt; mit offenem SET weiter als SET mit derselben Nummer
+  assert(!splitLayerTake(s, 0x02, 0x0C, false, 103 + SPLIT_LAYER_REFRESH_MS, false, ev));
+  assert(splitLayerTake(s, 0x02, 0x0C, false, 103 + SPLIT_LAYER_REFRESH_MS, true, ev) && splitLayerSeq(ev) == 11);
+  // Rückmeldung der Nummer schließt das SET ab; das Auffrischen meldet danach nur
+  assert(splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x0C, 11), 1200));
+  assert(!s.setPending);
+  assert(splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x10, 11), 1201));
+  assert(splitLayerTake(s, 0x02, 0x0C, false, 103 + 2 * SPLIT_LAYER_REFRESH_MS, true, ev) && !splitLayerIsSet(ev));
+  // Übernommene Toggles des Masters gelten als gesendet: kein Echo
+  splitLayerNoteAdoptedToggles(s, 0x10);
+  assert(!splitLayerTake(s, 0x02, 0x10, false, 104 + 2 * SPLIT_LAYER_REFRESH_MS, false, ev));
+}
+
+TEST(test_layer_sync_quick_on_off_toggle_needs_newest_echo) {
+  SplitLayerSync s;
+  splitLayerReset(s, 0);
+  SplitHidEvent ev;
+  splitLayerTake(s, 0, 0, false, 0, true, ev);
+  // TG_1 an, gleich wieder aus: zwei SET mit Nummern 1 und 2
+  assert(splitLayerTake(s, 0, 0x02, false, 10, false, ev) && splitLayerSeq(ev) == 1);
+  assert(splitLayerTake(s, 0, 0x00, false, 20, false, ev) && splitLayerSeq(ev) == 2);
+  // Ein älteres Master-Paket mit Toggles 0 (gleich dem Endstand) schließt das SET nicht
+  assert(!splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x00, 0), 25));
+  // Die Rückmeldung von SET 1 auch nicht (Master noch auf Zwischenstand)
+  assert(!splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x02, 1), 30));
+  assert(splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x00, 2), 40));
+}
+
+TEST(test_layer_sync_seq_wraps_inside_1_to_127) {
+  SplitLayerSync s;
+  splitLayerReset(s, 126);
+  SplitHidEvent ev;
+  splitLayerTake(s, 0, 0, false, 0, true, ev);
+  assert(splitLayerTake(s, 0, 0x02, false, 1, false, ev) && splitLayerSeq(ev) == 127 && ev.arg == 127);
+  assert(splitLayerTake(s, 0, 0x00, false, 2, false, ev) && splitLayerSeq(ev) == 1 && ev.arg == 1);
+  assert(isValidSplitLayerEvent(ev));
+}
+
+TEST(test_layer_sync_force_keeps_toggle_change_as_set) {
+  SplitLayerSync s;
+  splitLayerReset(s, 0);
+  SplitHidEvent ev;
+  splitLayerTake(s, 0, 0, false, 100, true, ev);
+  // restartEspNow ohne offenes SET; ein Toggle im nächsten Durchlauf geht trotzdem als SET raus
+  splitLayerForce(s, 200);
+  assert(splitLayerTake(s, 0, 0x02, false, 201, false, ev) && splitLayerIsSet(ev) && splitLayerToggles(ev) == 0x02);
+  // Ohne Änderung sendet Force einmal sofort (REPORT ohne offenes SET erst nach der Rückmeldung)
+  assert(splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x02, splitLayerSeq(ev)), 210));
+  splitLayerForce(s, 300);
+  assert(splitLayerTake(s, 0, 0x02, false, 301, false, ev) && !splitLayerIsSet(ev));
+  assert(!splitLayerTake(s, 0, 0x02, false, 302, false, ev));
+}
+
+TEST(test_layer_sync_pending_set_survives_espnow_restart) {
+  SplitLayerSync s;
+  SplitRemoteLayers r;
+  SplitLayerMailbox mb = {};
+  uint32_t seen = 0;
+  splitLayerReset(s, 0);
+  splitRemoteLayersReset(r);
+  SplitHidEvent ev;
+  splitLayerTake(s, 0, 0, false, 100, true, ev);
+  // Toggle während eines Ausfalls: SET liegt offen
+  assert(splitLayerTake(s, 0, 0x02, false, 110, false, ev) && splitLayerIsSet(ev));
+  uint8_t seq = splitLayerSeq(ev);
+  // Ein Master-Paket von vor dem Neustart liegt noch im Briefkasten, eine MO-Ebene des Masters gilt
+  splitLayerMailboxPut(mb, makeSplitMasterLayerEvent(0x04, 0x00, 0));
+  splitRemoteLayersApply(r, makeSplitMasterLayerEvent(0x04, 0, 0), 120);
+  // restartEspNow (splitLayerLeftRestart): sofort neu senden, SET bleibt offen, Altes wird verworfen
+  splitLayerLeftRestart(s, r, mb, seen, 5000);
+  assert(r.momentary == 0);
+  SplitHidEvent stale;
+  assert(!splitLayerMailboxTake(mb, seen, stale));
+  assert(splitLayerTake(s, 0, 0x02, false, 5000, false, ev) && splitLayerIsSet(ev) && splitLayerSeq(ev) == seq);
+  // Die Frist beginnt mit dem Neustart neu
+  assert(!splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0, 0), 5000 + SPLIT_LAYER_SET_TIMEOUT_MS - 1));
+  // Ein Paket nach dem Neustart kommt an
+  splitLayerMailboxPut(mb, makeSplitMasterLayerEvent(0, 0x02, seq));
+  assert(splitLayerMailboxTake(mb, seen, stale) && splitLayerSeq(stale) == seq);
+}
+
+TEST(test_layer_sync_pending_set_expires_when_master_never_confirms) {
+  SplitLayerSync s;
+  splitLayerReset(s, 0);
+  SplitHidEvent ev;
+  splitLayerTake(s, 0, 0, false, 100, true, ev);
+  assert(splitLayerTake(s, 0, 0x02, false, 200, false, ev) && splitLayerIsSet(ev));
+  // Rückmeldung verloren, der Master ändert seine Toggles: nach der Frist gilt sein Stand links
+  assert(!splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x08, 0), 200 + SPLIT_LAYER_SET_TIMEOUT_MS - 1));
+  assert(splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x08, 0), 200 + SPLIT_LAYER_SET_TIMEOUT_MS));
+  splitLayerNoteAdoptedToggles(s, 0x08);
+  // Das Auffrischen meldet danach nur (kein SET mit dem alten Stand)
+  assert(splitLayerTake(s, 0, 0x08, false, 200 + SPLIT_LAYER_SET_TIMEOUT_MS + SPLIT_LAYER_REFRESH_MS, true, ev));
+  assert(!splitLayerIsSet(ev));
+}
+
+TEST(test_layer_send_failure_keeps_pending_set_and_retries) {
+  SplitLayerSync s;
+  splitLayerReset(s, 0);
+  std::vector<SplitHidEvent> sent;
+  bool accept = true;
+  auto send = [&](const SplitHidEvent &ev) { if (accept) sent.push_back(ev); return accept; };
+  assert(splitLayerSendIfDue(s, 0, 0, false, 100, true, send));
+  // Volle Warteschlange beim eigenen Toggle: nichts gesendet, aber das SET bleibt offen
+  accept = false;
+  assert(!splitLayerSendIfDue(s, 0, 0x02, false, 110, false, send));
+  assert(s.setPending && s.setSeq == 1);
+  // Ein Master-Paket mit altem Stand dazwischen überschreibt den eigenen Toggle nicht
+  assert(!splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0, 0), 111));
+  // Nächster Durchlauf: das SET geht raus
+  accept = true;
+  assert(splitLayerSendIfDue(s, 0, 0x02, false, 112, false, send));
+  assert(sent.size() == 2 && splitLayerIsSet(sent[1]) && splitLayerToggles(sent[1]) == 0x02);
+  // Dieselbe Nummer wie beim gescheiterten Versuch; ihre Rückmeldung schließt das SET
+  assert(s.setPending && splitLayerSeq(sent[1]) == 1 && s.setSeq == 1);
+  // Master: ein Sendefehler stellt den Stand her, der nächste Aufruf sendet die Änderung erneut
+  SplitLayerSync m;
+  splitLayerReset(m);
+  sent.clear();
+  assert(splitLayerSendIfDue(m, 0, 0, true, 0, true, send));
+  accept = false;
+  assert(!splitLayerSendIfDue(m, 0x02, 0, true, 50, false, send));
+  accept = true;
+  assert(splitLayerSendIfDue(m, 0x02, 0, true, 51, false, send));
+  assert(sent.size() == 2 && splitLayerMomentary(sent[1]) == 0x02 && splitLayerFromMaster(sent[1]));
+}
+
+TEST(test_layer_unsent_set_is_dropped_when_toggle_reverts) {
+  SplitLayerSync s;
+  splitLayerReset(s, 0);
+  std::vector<SplitHidEvent> sent;
+  bool accept = true;
+  auto send = [&](const SplitHidEvent &ev) { if (accept) sent.push_back(ev); return accept; };
+  assert(splitLayerSendIfDue(s, 0, 0x08, false, 100, true, send));
+  // TG_1 an, Warteschlange voll: SET offen, nie gesendet
+  accept = false;
+  assert(!splitLayerSendIfDue(s, 0, 0x0A, false, 110, false, send));
+  assert(s.setPending && s.setUnsent);
+  // TG_1 wieder aus, bevor das SET raus ist: kein SET mit dem alten Stand, Master-Toggles gelten wieder
+  accept = true;
+  assert(!splitLayerSendIfDue(s, 0, 0x08, false, 120, false, send));
+  assert(!s.setPending && !s.setUnsent);
+  assert(splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x18, 0), 121));
+  // Auffrischen meldet nur
+  assert(splitLayerSendIfDue(s, 0, 0x08, false, 100 + SPLIT_LAYER_REFRESH_MS, true, send));
+  assert(!splitLayerIsSet(sent.back()));
+  // Ein gesendetes SET ohne Rückmeldung bleibt offen, auch wenn ein neueres SET nie rausgeht: ein älteres
+  // Master-Paket nähme sonst den gesendeten Stand zurück
+  assert(splitLayerSendIfDue(s, 0, 0x0A, false, 2000, false, send) && splitLayerIsSet(sent.back()));
+  assert(s.setPending && !s.setUnsent);
+  accept = false;
+  uint8_t sentSeq = splitLayerSeq(sent.back());
+  assert(!splitLayerSendIfDue(s, 0, 0x08, false, 2010, false, send));
+  assert(s.setPending && !s.setUnsent && s.setSeq == sentSeq);
+  // Zurück auf den gesendeten Stand: nichts zu senden, ein älteres Master-Paket gilt nicht
+  assert(!splitLayerSendIfDue(s, 0, 0x0A, false, 2020, false, send));
+  assert(!splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x08, 0), 2021));
+  // Die Rückmeldung der gesendeten Nummer schließt das SET
+  assert(splitLayerAcceptMasterToggles(s, makeSplitMasterLayerEvent(0, 0x0A, sentSeq), 2022) && !s.setPending);
+}
+
+TEST(test_layer_release_event_drops_only_momentary_layers) {
+  SplitLayerSync s;
+  splitLayerReset(s, 0);
+  s.echoSeq = 7;
+  SplitHidEvent master = splitLayerReleaseEvent(s, 0x0A, true);
+  assert(splitLayerMomentary(master) == 0 && splitLayerFromMaster(master) && splitLayerToggles(master) == 0x0A);
+  assert(splitLayerSeq(master) == 7 && isValidSplitMasterLayerEvent(master));
+  // Links ohne offenes SET: REPORT
+  SplitHidEvent left = splitLayerReleaseEvent(s, 0x0A, false);
+  assert(splitLayerMomentary(left) == 0 && !splitLayerIsSet(left) && isValidSplitHidEvent(left));
+  // Links mit offenem SET: das SET geht mit (Toggle kurz vor Config Mode oder Deep Sleep)
+  SplitHidEvent ev;
+  splitLayerTake(s, 0x04, 0, false, 0, true, ev);
+  splitLayerTake(s, 0x04, 0x02, false, 10, false, ev);
+  SplitHidEvent leftSet = splitLayerReleaseEvent(s, 0x02, false);
+  assert(splitLayerMomentary(leftSet) == 0 && splitLayerIsSet(leftSet) && splitLayerToggles(leftSet) == 0x02);
+  assert(splitLayerSeq(leftSet) == s.setSeq && isValidSplitHidEvent(leftSet));
+  // Am Empfänger gelten danach keine entfernten MO-Ebenen mehr
+  SplitRemoteLayers r;
+  splitRemoteLayersReset(r);
+  splitRemoteLayersApply(r, makeSplitLayerEvent(0x04, 0, false), 10);
+  splitRemoteLayersApply(r, left, 20);
+  assert(r.momentary == 0);
+}
+
+TEST(test_master_after_rx_forces_send_and_clears_remote_layers) {
+  SplitLayerSync s;
+  SplitRemoteLayers r;
+  splitLayerReset(s);
+  splitRemoteLayersReset(r);
+  SplitHidEvent ev;
+  splitLayerTake(s, 0, 0, true, 0, true, ev);
+  splitLayerTake(s, 0, 0, true, SPLIT_LAYER_REPEAT_MS, false, ev);
+  assert(!splitLayerTake(s, 0, 0, true, 100, false, ev));
+  // Link-Aufbau: sofort senden
+  assert(!splitLayerMasterAfterRx(s, r, false, true, false, 200));
+  assert(splitLayerTake(s, 0, 0, true, 200, false, ev));
+  // Ohne gehaltene Ebene: nichts zu tun
+  assert(!splitLayerMasterAfterRx(s, r, true, false, true, 300));
+  splitRemoteLayersApply(r, makeSplitLayerEvent(0x02, 0, false), 1000);
+  assert(!splitLayerMasterAfterRx(s, r, true, true, false, 1001));
+  // Link-Ausfall löst sofort, ohne auf den Verfall zu warten
+  assert(splitLayerMasterAfterRx(s, r, true, false, true, 1002) && r.momentary == 0);
+  // Verfall ohne Link-Ausfall
+  splitRemoteLayersApply(r, makeSplitLayerEvent(0x02, 0, false), 2000);
+  assert(splitLayerMasterAfterRx(s, r, true, true, false, 2000 + SPLIT_LAYER_REMOTE_TIMEOUT_MS) && r.momentary == 0);
+}
+
+TEST(test_master_receive_echoes_left_set_seq) {
+  SplitLayerSync s;
+  SplitRemoteLayers r;
+  splitLayerReset(s);
+  splitRemoteLayersReset(r);
+  SplitHidEvent ev;
+  splitLayerTake(s, 0, 0x08, true, 0, true, ev);
+  splitLayerTake(s, 0, 0x08, true, SPLIT_LAYER_REPEAT_MS, false, ev);
+  // REPORT: nur MO, keine Toggles, keine neue Rückmeldung
+  assert(!splitLayerMasterReceive(s, r, makeSplitLayerEvent(0x04, 0, false), 100));
+  assert(r.momentary == 0x04 && s.echoSeq == 0);
+  assert(!splitLayerTake(s, 0, 0x08, true, 101, false, ev));
+  // SET: Toggles gelten, die Nummer geht sofort zurück (auch bei gleichen Toggles)
+  assert(splitLayerMasterReceive(s, r, makeSplitLayerEvent(0x04, 0x08, true, 42), 110));
+  assert(splitLayerTake(s, 0, 0x08, true, 111, false, ev) && splitLayerSeq(ev) == 42);
+}
+
+// Beide Hälften gekoppelt mit den Produktionsfunktionen von dactyl_left.ino (splitLayerLeftReceive) und
+// dactyl_right.ino (splitLayerMasterReceive); der Toggle-Zustand je Hälfte steht für toggleLayers[]
+struct LayerPeer {
+  SplitLayerSync sync;
+  SplitRemoteLayers remote;
+  uint8_t mo;
+  uint8_t tg;
+};
+
+static void leftReceives(LayerPeer &left, const SplitHidEvent &ev, unsigned long now) {
+  if (splitLayerLeftReceive(left.sync, left.remote, ev, now)) left.tg = splitLayerToggles(ev);
+}
+
+static void masterReceives(LayerPeer &master, const SplitHidEvent &ev, unsigned long now) {
+  if (splitLayerMasterReceive(master.sync, master.remote, ev, now)) master.tg = splitLayerToggles(ev);
+}
+
+TEST(test_layer_sync_both_halves_converge_after_simultaneous_toggles) {
+  LayerPeer m = {}, l = {};
+  splitLayerReset(m.sync);
+  splitLayerReset(l.sync, 0);
+  splitRemoteLayersReset(m.remote);
+  splitRemoteLayersReset(l.remote);
+  SplitHidEvent ev;
+  // Start: Master hat TG_3 eingerastet, links übernimmt es (erstes Paket links ist REPORT)
+  m.tg = 0x08;
+  assert(splitLayerTake(l.sync, l.mo, l.tg, false, 0, true, ev) && !splitLayerIsSet(ev));
+  masterReceives(m, ev, 0);
+  assert(m.tg == 0x08);
+  assert(splitLayerTake(m.sync, m.mo, m.tg, true, 0, true, ev));
+  leftReceives(l, ev, 0);
+  assert(l.tg == 0x08);
+  // Gleichzeitig: Master schaltet TG_1 dazu, links TG_2; das Master-Paket kreuzt das linke SET
+  m.tg = 0x0A;
+  l.tg = 0x0C;
+  SplitHidEvent fromMaster, fromLeft;
+  assert(splitLayerTake(m.sync, m.mo, m.tg, true, 10, false, fromMaster));
+  assert(splitLayerTake(l.sync, l.mo, l.tg, false, 10, false, fromLeft) && splitLayerIsSet(fromLeft));
+  leftReceives(l, fromMaster, 15); // älteres Master-Paket: verworfen
+  assert(l.tg == 0x0C);
+  masterReceives(m, fromLeft, 15);
+  assert(m.tg == 0x0C);
+  // Die Wiederholung des Masters trägt den alten Stand und die alte Rückmeldung: verworfen
+  // (sie kommt vor der Antwort auf das SET, weil der Master die Rückmeldung im nächsten Paket sendet)
+  assert(splitLayerTake(m.sync, m.mo, m.tg, true, 40, false, ev));
+  leftReceives(l, ev, 40);
+  // Das Paket mit der Rückmeldung schließt das SET; beide Hälften haben denselben Stand
+  assert(l.tg == 0x0C && !l.sync.setPending && splitLayerSeq(ev) == splitLayerSeq(fromLeft));
+  // Danach übernimmt links wieder jede Änderung des Masters
+  m.tg = 0x00;
+  assert(splitLayerTake(m.sync, m.mo, m.tg, true, 100, false, ev));
+  leftReceives(l, ev, 100);
+  assert(l.tg == 0x00);
+  // MO links wirkt am Master, MO am Master wirkt links
+  l.mo = 0x04;
+  assert(splitLayerTake(l.sync, l.mo, l.tg, false, 200, false, ev) && !splitLayerIsSet(ev));
+  masterReceives(m, ev, 200);
+  assert(m.remote.momentary == 0x04 && m.tg == 0x00);
+  m.mo = 0x02;
+  assert(splitLayerTake(m.sync, m.mo, m.tg, true, 210, false, ev));
+  leftReceives(l, ev, 210);
+  assert(l.remote.momentary == 0x02);
+}
+
+static std::vector<SplitHidEvent> layerEventsForOrder;
+static void recordLayerForOrder(const SplitHidEvent &ev) { layerEventsForOrder.push_back(ev); }
+
+TEST(test_master_ignores_duplicate_left_set_after_own_toggle) {
+  LayerPeer m = {};
+  splitLayerReset(m.sync);
+  splitRemoteLayersReset(m.remote);
+  SplitHidEvent ev;
+  splitLayerTake(m.sync, 0, 0, true, 0, true, ev);
+  // Links SET 5 mit TG_1: der Master übernimmt es und meldet 5 zurück
+  SplitHidEvent set5 = makeSplitLayerEvent(0, 0x02, true, 5);
+  masterReceives(m, set5, 10);
+  assert(m.tg == 0x02);
+  // Danach rastet der Master selbst TG_2 ein
+  m.tg = 0x06;
+  assert(splitLayerTake(m.sync, 0, m.tg, true, 20, false, ev) && splitLayerSeq(ev) == 5);
+  // Retry oder Auffrischen von SET 5 trifft spät ein: der Master-Toggle bleibt
+  masterReceives(m, set5, 30);
+  assert(m.tg == 0x06);
+  // Ein neues SET der linken Hälfte gilt
+  masterReceives(m, makeSplitLayerEvent(0, 0x00, true, 6), 40);
+  assert(m.tg == 0x00);
+}
+
+TEST(test_master_accepts_left_set_with_old_number_after_left_report) {
+  LayerPeer m = {};
+  splitLayerReset(m.sync);
+  splitRemoteLayersReset(m.remote);
+  masterReceives(m, makeSplitLayerEvent(0, 0x02, true, 9), 10);
+  assert(m.sync.echoSeq == 9);
+  // Linke Hälfte startet neu: ihr erstes Paket ist ein REPORT, ihr nächstes SET trägt zufällig wieder die 9
+  masterReceives(m, makeSplitLayerEvent(0, 0, false), 9000);
+  assert(m.sync.echoSeq == 0);
+  masterReceives(m, makeSplitLayerEvent(0, 0x08, true, 9), 9001);
+  assert(m.tg == 0x08 && m.sync.echoSeq == 9);
+}
+
+TEST(test_master_echoes_first_left_set_after_link_up_in_firmware_order) {
+  // Wie processSplitEvents: splitProcessRx (onLayer -> splitLayerMasterReceive), danach splitLayerMasterAfterRx
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  LayerPeer m = {};
+  splitLayerReset(m.sync);
+  splitRemoteLayersReset(m.remote);
+  SplitHidEvent ev;
+  layerEventsForOrder.clear();
+  // Link ist unten; das erste Paket nach dem Aufbau ist ein SET (Toggle links während des Ausfalls)
+  bool linkWasUp = k.splitLeft.linkUp;
+  assert(!linkWasUp);
+  splitRxPush(rxq, makeSplitLayerEvent(0, 0x04, true, 33));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 500, nullptr, nullptr, recordLayerForOrder);
+  for (const SplitHidEvent &e : layerEventsForOrder) masterReceives(m, e, 500);
+  splitLayerMasterAfterRx(m.sync, m.remote, linkWasUp, k.splitLeft.linkUp, rep.linkLost, 500);
+  assert(m.tg == 0x04);
+  // Das nächste Master-Paket meldet die 33 zurück
+  assert(splitLayerTake(m.sync, 0, m.tg, true, 500, false, ev) && splitLayerSeq(ev) == 33);
+  // Ein Auffrischen mit derselben Nummer nimmt einen späteren Master-Toggle nicht zurück
+  m.tg = 0x0C;
+  masterReceives(m, makeSplitLayerEvent(0, 0x04, true, 33), 1500);
+  assert(m.tg == 0x0C);
+}
+
+TEST(test_layer_sync_restore_resends_same_set) {
+  SplitLayerSync s;
+  splitLayerReset(s, 0);
+  SplitHidEvent ev;
+  splitLayerTake(s, 0, 0, false, 100, true, ev);
+  // Der Aufrufer stellt den Stand vor splitLayerTake wieder her: dasselbe Paket kommt erneut
+  SplitLayerSync before = s;
+  assert(splitLayerTake(s, 0, 0x02, false, 110, false, ev) && splitLayerIsSet(ev));
+  s = before;
+  assert(splitLayerTake(s, 0, 0x02, false, 111, false, ev) && splitLayerIsSet(ev) && splitLayerToggles(ev) == 0x02);
+}
+
+TEST(test_layer_sync_master_always_sets_and_repeats_changes) {
+  SplitLayerSync s;
+  splitLayerReset(s);
+  SplitHidEvent ev;
+  assert(splitLayerTake(s, 0, 0, true, 100, true, ev) && splitLayerFromMaster(ev));
+  // Wiederholung einer Änderung nach SPLIT_LAYER_REPEAT_MS (kein Retry auf dem Master)
+  assert(!splitLayerTake(s, 0, 0, true, 100 + SPLIT_LAYER_REPEAT_MS - 1, false, ev));
+  assert(splitLayerTake(s, 0, 0, true, 100 + SPLIT_LAYER_REPEAT_MS, false, ev) && splitLayerFromMaster(ev));
+  // Nur eine Wiederholung
+  assert(!splitLayerTake(s, 0, 0, true, 200, false, ev));
+  assert(splitLayerTake(s, 0x02, 0, true, 300, false, ev) && splitLayerMomentary(ev) == 0x02);
+  assert(splitLayerTake(s, 0x02, 0, true, 300 + SPLIT_LAYER_REPEAT_MS, false, ev));
+  // Auffrischen jede Sekunde, ohne Wiederholung
+  assert(splitLayerTake(s, 0x02, 0, true, 330 + SPLIT_LAYER_REFRESH_MS, true, ev));
+  assert(!splitLayerTake(s, 0x02, 0, true, 330 + SPLIT_LAYER_REFRESH_MS + SPLIT_LAYER_REPEAT_MS, true, ev));
+  // Force: nach Link-Aufbau sofort senden
+  splitLayerForce(s, 1400);
+  assert(splitLayerTake(s, 0x02, 0, true, 1400, false, ev));
+}
+
+TEST(test_remote_layers_expire_without_packets) {
+  SplitRemoteLayers r;
+  splitRemoteLayersReset(r);
+  assert(!splitRemoteLayersExpire(r, 100000));
+  splitRemoteLayersApply(r, makeSplitLayerEvent(0x02, 0, false), 1000);
+  assert(r.momentary == 0x02);
+  assert(!splitRemoteLayersExpire(r, 1000 + SPLIT_LAYER_REMOTE_TIMEOUT_MS - 1));
+  assert(splitRemoteLayersExpire(r, 1000 + SPLIT_LAYER_REMOTE_TIMEOUT_MS) && r.momentary == 0);
+  assert(!splitRemoteLayersExpire(r, 1000 + 2 * SPLIT_LAYER_REMOTE_TIMEOUT_MS));
+}
+
+TEST(test_layer_mailbox_keeps_newest_packet) {
+  SplitLayerMailbox m = {};
+  uint32_t seen = 0;
+  SplitHidEvent out;
+  assert(!splitLayerMailboxTake(m, seen, out));
+  splitLayerMailboxPut(m, makeSplitMasterLayerEvent(0x02, 0, 0));
+  splitLayerMailboxPut(m, makeSplitMasterLayerEvent(0x04, 0x08, 3));
+  assert(splitLayerMailboxTake(m, seen, out));
+  assert(out.op == SPLIT_OP_LAYER_STATE && splitLayerMomentary(out) == 0x04 && splitLayerToggles(out) == 0x08);
+  assert(splitLayerFromMaster(out) && splitLayerSeq(out) == 3);
+  assert(!splitLayerMailboxTake(m, seen, out));
+}
+
+TEST(test_layer_mailbox_rejects_torn_read) {
+  SplitLayerMailbox m = {};
+  uint32_t seen = 0;
+  SplitHidEvent out;
+  splitLayerMailboxPut(m, makeSplitMasterLayerEvent(0x02, 0, 0));
+  // Schreiben läuft (ungerade Nummer): kein Lesen, der nächste Durchlauf liest
+  m.seq = m.seq + 1;
+  m.code = 0x0404;
+  assert(!splitLayerMailboxTake(m, seen, out));
+  assert(seen == 0);
+  m.arg = (int8_t)0x80;
+  m.seq = m.seq + 1;
+  assert(splitLayerMailboxTake(m, seen, out) && out.code == 0x0404);
+  // Verwerfen übergeht alles Eingetroffene
+  splitLayerMailboxPut(m, makeSplitMasterLayerEvent(0x01, 0, 0));
+  splitLayerMailboxDiscard(m, seen);
+  assert(!splitLayerMailboxTake(m, seen, out));
+}
+
+static std::vector<uint16_t> layerCodes;
+static void recordLayer(const SplitHidEvent &ev) { layerCodes.push_back(ev.code); }
+
+TEST(test_process_rx_hands_layer_state_over_without_host_and_activity) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  layerCodes.clear();
+  SplitHidEvent ev = makeSplitLayerEvent(0x02, 0, false);
+  splitRxPush(rxq, ev);
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 700, nullptr, nullptr, recordLayer);
+  // Ohne HID-Wirkung, auch ohne Mac; kein Aktivitäts-Zähler (das Auffrischen hielte den Master wach)
+  assert((layerCodes == std::vector<uint16_t>{ev.code}));
+  assert(rep.applied == 0 && rep.keyEvents == 0 && k.log.empty());
+  assert(k.splitLeft.linkUp && k.splitLeft.lastRxMs == 700);
+}
+
+static std::vector<SplitHidEvent> layerEvents;
+static void recordLayerEvent(const SplitHidEvent &ev) { layerEvents.push_back(ev); }
+
+TEST(test_process_rx_hands_over_newest_layer_packet_once) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  layerEvents.clear();
+  // Eine Flut (gefälschte linke MAC) und ein SET am Ende, dazwischen ein HID-Ereignis
+  for (int i = 0; i < 10; i++) splitRxPush(rxq, makeSplitLayerEvent((uint8_t)(1 << (i % 8)), 0, false));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  SplitHidEvent set = makeSplitLayerEvent(0x04, 0x08, true, 3);
+  splitRxPush(rxq, set);
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, recordLayerEvent);
+  // Nur das neueste Paket, einmal; das HID-Ereignis läuft unverändert
+  assert(layerEvents.size() == 1 && layerEvents[0].code == set.code && layerEvents[0].arg == set.arg);
+  assert(rep.applied == 1 && (k.log == Log{"P97"}));
+  // Ohne Layer-Paket kein Aufruf
+  layerEvents.clear();
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 200, nullptr, nullptr, recordLayerEvent);
+  assert(layerEvents.empty());
+}
+
+TEST(test_process_rx_link_loss_clears_remote_layers_via_master_after_rx) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  LayerPeer m = {};
+  splitLayerReset(m.sync);
+  splitRemoteLayersReset(m.remote);
+  layerEvents.clear();
+  bool linkWasUp = k.splitLeft.linkUp;
+  splitRxPush(rxq, makeSplitLayerEvent(0x02, 0, false));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1000, nullptr, nullptr, recordLayerEvent);
+  for (const SplitHidEvent &ev : layerEvents) masterReceives(m, ev, 1000);
+  assert(!splitLayerMasterAfterRx(m.sync, m.remote, linkWasUp, k.splitLeft.linkUp, rep.linkLost, 1000));
+  assert(m.remote.momentary == 0x02 && m.sync.forceSend);
+  // Keine Pakete mehr: Link-Ausfall nach SPLIT_LINK_TIMEOUT_MS löst die linke MO-Ebene
+  linkWasUp = k.splitLeft.linkUp;
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1000 + SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, recordLayerEvent);
+  assert(rep.linkLost);
+  assert(splitLayerMasterAfterRx(m.sync, m.remote, linkWasUp, k.splitLeft.linkUp, rep.linkLost, 1000 + SPLIT_LINK_TIMEOUT_MS));
+  assert(m.remote.momentary == 0);
 }
 
 TEST(test_activity_throttle_sends_first_note_immediately) {

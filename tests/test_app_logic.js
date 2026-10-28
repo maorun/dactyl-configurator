@@ -560,7 +560,7 @@ test("Layout-Diff: nicht vorhandene Tasten zählen nicht, unvollständige Snapsh
 // handleSerialLine aus js/serial.js in einem eigenen Kontext mit Stubs für DOM, Anzeige und Verbindungen.
 // conn: Verbindungszustand (bleUp, bleSide, serialUp, serialSide), wie connectionState() in js/ble.js.
 function serialLineHarness(conn = {}) {
-  const calls = { press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [] };
+  const calls = { press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [], layers: [] };
   const s = {
     calls, console: { log() {}, warn() {} },
     document: { getElementById: () => null },
@@ -587,7 +587,7 @@ function captureDeviceSnapshotLine(line, side) { calls.captured.push(side); retu
 function showToast() {}
 function updateConfigModeUI() {}
 function updateBatteryUI() {}
-function switchLayerUI() {}
+function switchLayerUI(l) { calls.layers.push(l); }
 function renderMatrix() { calls.applied++; }
 function renderMatrixTest() { calls.rendered++; }
 function renderLayerButtons() {}
@@ -660,6 +660,16 @@ test("serial.js: SPLIT_KEY zählt nicht doppelt, wenn die linke Hälfte selbst v
   s.handle('KEY_PRESS:{"r":1,"c":2,"key":"q","layer":0}', "L", "usb");
   assert.deepStrictEqual(s.calls.press, ["L12"]);
   assert.deepStrictEqual(s.calls.stats, ["L"]);
+});
+
+test("serial.js: Ebenenwechsel der nicht bearbeiteten Hälfte schaltet die geteilte Ebene um", () => {
+  // Rechte Hälfte bearbeitet, linke Hälfte per USB: ihr MO_2 gilt auf beiden Hälften (Layer-Abgleich)
+  const s = serialLineHarness({ serialUp: true, serialSide: "L" });
+  s.handle('KEY_PRESS:{"r":5,"c":0,"key":"MO_2","code":258,"layer":0,"target_layer":2}', "L", "usb");
+  assert.deepStrictEqual(s.calls.layers, [2]);
+  // LAYER-Zeile vom Abgleich mit der anderen Hälfte ("LAYER: SPLIT -> Layer n")
+  s.handle("LAYER: SPLIT -> Layer 3", "L", "usb");
+  assert.deepStrictEqual(s.calls.layers, [2, 3]);
 });
 
 // Diff-Ablauf aus js/config-sync.js mit Fake-Timern, Fake-Gerät und Fake-Dialog
@@ -1573,6 +1583,7 @@ function liveContext(handView, edited) {
   vm.runInContext(`${code}
 ${section("js/keyboard-hooks.js", "// Gehaltene MO_x-Ebene einer Hälfte", "// Löst einen Browser-Tastencode für eine Hälfte auf")}
 ${section("js/keyboard-hooks.js", "// Alle Treffer eines Tastendrucks", "// Find key on Layer 0")}
+var Dactyl = { SIDE_IDS: ["R", "L"] };
 ${section("js/live-monitor.js", "// Combos gelten je Hälfte", "function showComboAlert")}
 var activeHandView = ${JSON.stringify(handView)};
 var editSide = ${JSON.stringify(edited)};
@@ -1582,7 +1593,8 @@ const configs = { R: JSON.parse(JSON.stringify(SIDE_PROFILES.R.defaultConfig)),
 function configFor(side) { return configs[side]; }
 function showComboAlert(combo) { alerts.push(combo.id); }
 function hideComboAlert() { alerts.push(null); }
-this.live = { resolveKeysFromEvent, checkActiveCombos, activePressedKeys, setView: v => { activeHandView = v; } };`, live);
+this.live = { resolveKeysFromEvent, checkActiveCombos, activePressedKeys, getSharedHeldLayer, configs,
+  setView: v => { activeHandView = v; } };`, live);
   return live;
 }
 
@@ -1608,6 +1620,39 @@ test("Live-Monitor Split-Ansicht: Verdrahtung mit Ansicht, bearbeiteter Hälfte 
   combo.live.setView("left");
   combo.live.checkActiveCombos();
   assert.strictEqual(combo.alerts.at(-1), null);
+});
+
+test("Live-Monitor Einzelansicht: ein MO der ausgeblendeten Hälfte gilt für die bearbeitete", () => {
+  // triggerVisualKeyPress markiert jede Taste mit ihrer Hälfte, unabhängig von der Ansicht (SPLIT_KEY, USB)
+  const ctx = liveContext("right", "R");
+  const { configs, activePressedKeys } = ctx.live;
+  configs.L.layers[0][5][0] = { tap: "MO_2", label: "MO2" };
+  configs.R.layers[2][2][1] = { tap: "KEY_PAGE_UP", label: "PgUp" };
+  activePressedKeys.add("L_5_0");
+  assert.strictEqual(ctx.live.getSharedHeldLayer(), 2);
+  const hit = JSON.parse(JSON.stringify(ctx.live.resolveKeysFromEvent({ code: "PageUp", key: "", altKey: false })));
+  assert.deepStrictEqual(hit.map(h => `${h.side}R${h.matched.r}C${h.matched.c}L${h.matched.layer}`), ["RR2C1L2"]);
+});
+
+test("Live-Monitor: ein gehaltenes MO einer Hälfte gilt auf beiden Hälften", () => {
+  const ctx = liveContext("both", "R");
+  const { configs, activePressedKeys } = ctx.live;
+  configs.L.layers[0][5][0] = { tap: "MO_2", label: "MO2" };
+  configs.R.layers[0][5][6] = { tap: "MO_1", label: "MO1" };
+  assert.strictEqual(ctx.live.getSharedHeldLayer(), 0);
+  activePressedKeys.add("L_5_0");
+  assert.strictEqual(ctx.live.getSharedHeldLayer(), 2);
+  // Höchste Ebene gewinnt, wie getActiveLayer() der Firmware
+  activePressedKeys.add("R_5_6");
+  assert.strictEqual(ctx.live.getSharedHeldLayer(), 2);
+  activePressedKeys.delete("L_5_0");
+  assert.strictEqual(ctx.live.getSharedHeldLayer(), 1);
+  // Die rechte Hälfte löst mit der Ebene auf, die links gehalten wird
+  activePressedKeys.delete("R_5_6");
+  activePressedKeys.add("L_5_0");
+  configs.R.layers[2][2][1] = { tap: "KEY_PAGE_UP", label: "PgUp" };
+  const hit = ctx.live.resolveKeysFromEvent({ code: "PageUp", key: "", altKey: false });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(hit)).map(h => `${h.side}R${h.matched.r}C${h.matched.c}L${h.matched.layer}`), ["RR2C1L2"]);
 });
 
 test("Ansichtswechsel prüft den Combo-Hinweis neu", () => {

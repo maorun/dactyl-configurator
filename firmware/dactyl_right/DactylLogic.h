@@ -14,6 +14,7 @@
  *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
  *   MAX_MACROS, MAX_MACRO_STEPS, ACT_MACRO_BASE, MacroStep, userMacros[][], macroLengths[], numMacros,
  *   momentaryLayers[], toggleLayers[], keyState[][], pressedAction[][],
+ *   (remoteMomentaryLayers definiert diese Datei: MO-Ebenen der anderen Hälfte)
  *   keyPressTime[][], keySentToHost[][],
  *   isConfigMode, enterConfigRequested, exitConfigRequested, lastActivityTime,
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
@@ -52,12 +53,43 @@
 // -----------------------------------------------------------------------------
 // Layer-Auflösung
 // -----------------------------------------------------------------------------
+// Von der anderen Hälfte gehaltene MO-Ebenen (Bit i = Ebene i, SPLIT_OP_LAYER_STATE). Ein MO auf einer
+// Hälfte aktiviert die Ebene auf beiden; die TG-Ebenen gleichen die Hälften direkt in toggleLayers[] ab.
+uint8_t remoteMomentaryLayers = 0;
+
 uint8_t getActiveLayer() {
-  if (momentaryLayers[0]) return 0; // Momentary Layer 0 zwingt temporär Base-Layer
+  // Momentary Layer 0 zwingt temporär Base-Layer, auch von der anderen Hälfte
+  if (momentaryLayers[0] || (remoteMomentaryLayers & 1)) return 0;
   for (int l = NUM_LAYERS - 1; l > 0; l--) {
-    if (momentaryLayers[l] || toggleLayers[l]) return l;
+    if (momentaryLayers[l] || toggleLayers[l] || (remoteMomentaryLayers & (1u << l))) return l;
   }
   return 0;
+}
+
+// Eigene MO-Ebenen und eingerastete Ebenen als Bitmaske für den Layer-Abgleich
+uint8_t localMomentaryLayerMask() {
+  uint8_t m = 0;
+  for (int l = 0; l < NUM_LAYERS && l < 8; l++) if (momentaryLayers[l]) m |= (uint8_t)(1u << l);
+  return m;
+}
+uint8_t toggleLayerMask() {
+  uint8_t m = 0;
+  for (int l = 1; l < NUM_LAYERS && l < 8; l++) if (toggleLayers[l]) m |= (uint8_t)(1u << l);
+  return m;
+}
+
+// Layer-Zustand der anderen Hälfte übernehmen: ihre MO-Ebenen, mit setToggles auch die TG-Ebenen.
+// Meldet einen Wechsel der aktiven Ebene als LAYER-Zeile (die App folgt ihr). Liefert true bei Wechsel.
+bool applyRemoteLayerState(uint8_t momentary, bool setToggles, uint8_t toggles) {
+  uint8_t before = getActiveLayer();
+  remoteMomentaryLayers = momentary;
+  if (setToggles) {
+    for (int l = 1; l < NUM_LAYERS && l < 8; l++) toggleLayers[l] = (toggles >> l) & 1;
+  }
+  uint8_t after = getActiveLayer();
+  if (after == before) return false;
+  Serial.printf("LAYER: SPLIT -> Layer %d\n", after);
+  return true;
 }
 
 // Ermittelt Tap-, Halte- und Doppel-Tipp-Aktion einer Taste inkl. transparentem Fallback auf Layer 0.

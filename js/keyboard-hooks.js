@@ -92,6 +92,12 @@ function getHeldKeyboardLayer(side = editSide) {
   return 0;
 }
 
+// Gehaltene Ebene beider Hälften: ein MO auf einer Hälfte gilt auf beiden (Layer-Abgleich der Firmware).
+// Wie getActiveLayer() in DactylLogic.h gewinnt die höchste Ebene.
+function getSharedHeldLayer(sideIds = Dactyl.SIDE_IDS) {
+  return sideIds.reduce((max, side) => Math.max(max, getHeldKeyboardLayer(side)), 0);
+}
+
 // Löst einen Browser-Tastencode für eine Hälfte auf: Config der Hälfte, ihre gehaltene Ebene (heldLayer)
 // und ihre Scancode-Tabelle. Reine Funktion; liefert { r, c, label, layer } oder null.
 function resolveKeyForSide(config, profile, heldLayer, e) {
@@ -129,7 +135,7 @@ function browserKeySides(handView, editedSide, sideIds) {
 function resolveKeysFromEvent(e) {
   const hits = [];
   for (const side of browserKeySides(activeHandView, editSide, Dactyl.SIDE_IDS)) {
-    const matched = resolveKeyForSide(configFor(side), SIDE_PROFILES[side], getHeldKeyboardLayer(side), e);
+    const matched = resolveKeyForSide(configFor(side), SIDE_PROFILES[side], getSharedHeldLayer(), e);
     if (matched) hits.push({ side, matched });
   }
   return hits;

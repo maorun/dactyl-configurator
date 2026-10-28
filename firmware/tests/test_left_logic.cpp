@@ -504,6 +504,23 @@ TEST(test_key_event_diagnostic_needs_link_and_counts_drops) {
   assert(q.count == SPLIT_DIAG_QUEUE_LIMIT && dropped == 2);
 }
 
+TEST(test_queue_push_after_drain_makes_room) {
+  SplitSendQueue q;
+  queueReset(q);
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_LAYER_STATE);
+  // Mit Platz: direkt eingereiht, ohne zu leeren
+  int drains = 0;
+  assert(queuePushAfterDrain(q, ev, [&] { drains++; }) && drains == 0 && q.count == 1);
+  // Volle Warteschlange: erst leeren, dann einreihen
+  while (queuePush(q, makeSplitHidEvent(SPLIT_OP_HEARTBEAT))) {}
+  assert(q.count == SPLIT_QUEUE_SIZE);
+  assert(queuePushAfterDrain(q, ev, [&] { drains++; queueReset(q); }));
+  assert(drains == 1 && q.count == 1 && q.items[q.head].op == SPLIT_OP_LAYER_STATE);
+  // Leeren ohne Erfolg: false, kein Überlauf
+  while (queuePush(q, makeSplitHidEvent(SPLIT_OP_HEARTBEAT))) {}
+  assert(!queuePushAfterDrain(q, ev, [&] { drains++; }) && drains == 2 && q.count == SPLIT_QUEUE_SIZE);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Firmware Unit Test Suite" << std::endl;

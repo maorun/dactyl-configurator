@@ -109,6 +109,7 @@ void checkUserCombos();
 void serviceSendQueue();
 void flushSendQueue(unsigned long maxMs);
 void stopMacro(bool releaseKeys);
+static void queueSplitLayerRelease();
 
 // Im Gegensatz zur rechten Hälfte gibt es keinen macOS-HID-Bond: Config Mode startet per Soft-Reboot
 // in einem isolierten BLE-Stack, Keyboard Mode nutzt kein BLE (nur ESP-NOW).
@@ -119,6 +120,7 @@ void enterConfigMode() {
 
   stopMacro(false);
   bleKeyboard.releaseAll();
+  queueSplitLayerRelease();
   Serial.println("\n=============================================");
   Serial.println("  [CONFIG MODE] AKTIVIERT -> Starte Config-BLE...");
   Serial.println("=============================================");
@@ -188,6 +190,7 @@ void enterDeepSleep() {
   // Alles lösen, was die linke Hälfte am Master gedrückt hält, und kurz auf die Zustellung warten
   stopMacro(false);
   bleKeyboard.releaseAll();
+  queueSplitLayerRelease();
   flushSendQueue(300);
   esp_now_deinit();
   WiFi.mode(WIFI_OFF);
@@ -310,6 +313,13 @@ static volatile uint32_t callbackSeq = 0;
 // Vom Empfangs-Callback (Wi-Fi-Task) gesetzt: Am Master wurde getippt (SPLIT_OP_ACTIVITY)
 static volatile bool masterActivityReceived = false;
 
+// Layer-Abgleich mit dem Master (SPLIT_OP_LAYER_STATE): Briefkasten vom Empfangs-Callback, Sendezustand
+// und die MO-Ebenen des Masters mit Verfall
+static SplitLayerMailbox masterLayerMailbox = {};
+static uint32_t masterLayerSeen = 0;
+static SplitLayerSync splitLayerSync;
+static SplitRemoteLayers splitRemoteLayers;
+
 static void onEspNowSent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
   (void)info;
   lastSendOk = (status == ESP_NOW_SEND_SUCCESS);
@@ -317,9 +327,41 @@ static void onEspNowSent(const esp_now_send_info_t *info, esp_now_send_status_t 
 }
 
 // Läuft auf dem Wi-Fi-Task: nur prüfen und vormerken; loop() setzt den Inaktivitäts-Timer zurück
+// und übernimmt den Layer-Zustand
 static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-  if (info == nullptr || !parseSplitActivityPacket(info->src_addr, data, len)) return;
-  masterActivityReceived = true;
+  SplitHidEvent ev;
+  if (info == nullptr || !parseSplitMasterPacket(info->src_addr, data, len, ev)) return;
+  if (ev.op == SPLIT_OP_ACTIVITY) masterActivityReceived = true;
+  else splitLayerMailboxPut(masterLayerMailbox, ev);
+}
+
+// Layer-Zustand des Masters übernehmen: seine MO-Ebenen immer, seine Toggles ohne offenes eigenes SET
+// (DactylSplitHid.h). Ohne Paket verfallen seine MO-Ebenen.
+static void processMasterLayerState() {
+  unsigned long now = millis();
+  SplitHidEvent ev;
+  if (splitLayerMailboxTake(masterLayerMailbox, masterLayerSeen, ev)) {
+    bool adopt = splitLayerLeftReceive(splitLayerSync, splitRemoteLayers, ev, now);
+    applyRemoteLayerState(splitLayerMomentary(ev), adopt, splitLayerToggles(ev));
+  }
+  if (splitRemoteLayersExpire(splitRemoteLayers, now)) applyRemoteLayerState(0, false, 0);
+}
+
+// Eigenen Layer-Zustand an den Master: Änderungen sofort, das Auffrischen nur bis zur halben Warteschlange
+// (wie Diagnose-Ereignisse), damit es beim schnellen Tippen nicht ausbleibt und der Master eine gehaltene
+// MO-Ebene nicht verfallen lässt. Eine volle Warteschlange stellt den Stand wieder her: der nächste
+// Durchlauf sendet neu.
+static void queueSplitLayerStateIfDue() {
+  splitLayerSendIfDue(splitLayerSync, localMomentaryLayerMask(), toggleLayerMask(), false, millis(),
+                      sendQueue.count < SPLIT_DIAG_QUEUE_LIMIT,
+                      [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); });
+}
+
+// Vor Config Mode und Deep Sleep: eigene MO-Ebenen am Master lösen (sonst erst nach dem Verfall). Eine
+// volle Warteschlange wird vorher geleert; gelingt auch das nicht, verfallen die Ebenen am Master nach 3 s.
+static void queueSplitLayerRelease() {
+  queuePushAfterDrain(sendQueue, splitLayerReleaseEvent(splitLayerSync, toggleLayerMask(), false),
+                      [] { flushSendQueue(150); });
 }
 
 static bool setupEspNow() {
@@ -339,6 +381,11 @@ static bool setupEspNow() {
     return false;
   }
   esp_now_register_send_cb(onEspNowSent);
+  // Layer-Zustand sofort neu melden. Nach restartEspNow bleibt ein offenes SET offen (eigener Toggle aus
+  // dem Ausfall); nach Start und Aufwachen ist der Zustand leer (setup). Fremde MO-Ebenen gelten erst nach Empfang.
+  splitLayerLeftRestart(splitLayerSync, splitRemoteLayers, masterLayerMailbox, masterLayerSeen, millis());
+  // Über applyRemoteLayerState, damit ein Ebenenwechsel als LAYER-Zeile die App erreicht
+  applyRemoteLayerState(0, false, 0);
   // Ohne Empfang schläft links weiter nach eigener Inaktivität ein (Verhalten vor ACTIVITY).
   // Kein Setup-Fehler: das Senden funktioniert weiter. Die STATUS-Zeile meldet ActivityRx=0.
   activityRxReady = (esp_now_register_recv_cb(onEspNowRecv) == ESP_OK);
@@ -474,6 +521,7 @@ void setup() {
   lastActivityTime = millis();
   queueReset(sendQueue);
   restartGuardReset(restartGuard);
+  splitLayerReset(splitLayerSync, esp_random());
   resetLeftKeys();
 
   Serial.println("\n=============================================");
@@ -621,6 +669,10 @@ void loop() {
   }
 
   if (!isConfigMode) {
+    // Eigene Änderung zuerst einreihen: ihr SET startet das Schutzfenster, bevor ein Master-Paket aus
+    // demselben Durchlauf die noch nicht gesendete Toggle-Änderung überschreibt
+    queueSplitLayerStateIfDue();
+    processMasterLayerState();
     sendHeartbeatIfDue();
     serviceSendQueue();
     // Tippen am Master zählt als Aktivität: Standby beenden, Deep Sleep verschieben.

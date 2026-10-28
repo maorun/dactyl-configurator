@@ -136,6 +136,16 @@ bool queueHasRoomForMacro(const SplitSendQueue &q) {
   return q.count + MACRO_QUEUE_RESERVE < SPLIT_QUEUE_SIZE;
 }
 
+// Ereignis einreihen, das nicht verloren gehen darf (Layer-Release vor Config Mode und Deep Sleep). Eine
+// volle Warteschlange wird erst mit drain() geleert (sendet die älteren Ereignisse, z. B. RELEASE_ALL).
+// false nur, wenn auch danach kein Platz ist.
+template <class DrainFn>
+bool queuePushAfterDrain(SplitSendQueue &q, const SplitHidEvent &ev, DrainFn drain) {
+  if (queuePush(q, ev)) return true;
+  drain();
+  return queuePush(q, ev);
+}
+
 // Matrix-Position für den Live-Monitor am Master einreihen, nach den HID-Ereignissen der Taste.
 // Ohne Link sendet die Hälfte nichts (wie DactylLogic.h ohne Master). Ein Ereignis, das die
 // Warteschlangen-Grenze verwirft, zählt droppedCount. Rückgabe: true = eingereiht.

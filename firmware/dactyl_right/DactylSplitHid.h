@@ -537,7 +537,17 @@ struct SplitLeftHeld {
   uint16_t fw;
   // Beginn des Links: Fenster für splitLeftFwStatus
   unsigned long fwSinceMs;
+  // Link-Statistik für die App (SPLIT_LINK, DEVICE_INFO.left_link); splitHeldReset setzt sie zurück
+  unsigned long linkChangedMs;   // letzter Wechsel des Links (auf/ab)
+  bool everUp;                   // seit dem Start kam mindestens ein Paket
+  uint32_t linkLosses;           // Link-Timeouts
+  uint32_t rxDropped;            // verworfene Pakete bei vollem Empfangsring
+  uint32_t keyDropped;           // KEY_EVENTs über SPLIT_KEY_EVENTS_PER_RX (nicht gemeldet)
 };
+
+inline void splitCountAdd(uint32_t &counter, uint32_t n) {
+  counter = (n > 0xFFFFFFFFu - counter) ? 0xFFFFFFFFu : counter + n;
+}
 
 inline void splitHeldReset(SplitLeftHeld &h) {
   memset(&h, 0, sizeof(h));
@@ -596,6 +606,8 @@ inline void splitNoteLeftRx(SplitLeftHeld &h, const SplitHidEvent &ev, unsigned 
   if (!h.linkUp) {
     h.fw = 0;
     h.fwSinceMs = nowMs;
+    h.linkChangedMs = nowMs;
+    h.everUp = true;
   }
   if (ev.op == SPLIT_OP_FW_VERSION) h.fw = ev.code;
   h.lastRxMs = nowMs;
@@ -708,7 +720,47 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
 inline bool splitCheckLinkTimeout(SplitLeftHeld &h, unsigned long nowMs, SplitHidSink &sink) {
   if (!h.linkUp || (nowMs - h.lastRxMs) < SPLIT_LINK_TIMEOUT_MS) return false;
   h.linkUp = false;
+  h.linkChangedMs = h.lastRxMs; // der Link ist seit dem letzten Paket weg, nicht erst seit der Erkennung
+  splitCountAdd(h.linkLosses, 1);
   splitReleaseHeld(h, sink);
+  return true;
+}
+
+// Link-Meldung an die App (SPLIT_LINK-Zeile): ein Wechsel des Links sofort, geänderte Zähler höchstens alle
+// SPLIT_LINK_REPORT_MS (eine Flut verworfener Pakete erzeugt keine Flut von Serial-Zeilen, jede kostet loop()
+// etwa 4 ms bei 115200 Baud).
+#define SPLIT_LINK_REPORT_MS 1000UL
+
+struct SplitLinkReporter {
+  bool reported;          // schon einmal gemeldet
+  bool up;
+  uint32_t losses, rxDropped, keyDropped;
+  unsigned long lastMs;
+};
+
+// JSON für SPLIT_LINK und DEVICE_INFO.left_link; "ms" = Zeit seit dem letzten Wechsel (0 ohne Link-Historie).
+// GET_INFO über BLE ruft das im BLE-Task auf: ein linkChangedMs, das loop() gerade schrieb, liegt nach nowMs
+// (weniger als SPLIT_LINK_SKEW_MS) und ergibt 0 statt einer riesigen Zahl. Sonst gilt das Alter unsigned,
+// auch über 24,8 Tage hinaus (millis() läuft nach 49,7 Tagen über).
+#define SPLIT_LINK_SKEW_MS 256UL
+inline int splitLeftLinkJson(char *buf, size_t size, const SplitLeftHeld &h, unsigned long nowMs) {
+  unsigned long since = h.everUp ? (nowMs - h.linkChangedMs) : 0;
+  if (since > 0xFFFFFFFFUL - SPLIT_LINK_SKEW_MS) since = 0;
+  return snprintf(buf, size, "{\"up\":%d,\"ms\":%lu,\"ever\":%d,\"losses\":%lu,\"rx_dropped\":%lu,\"key_dropped\":%lu}",
+                  h.linkUp ? 1 : 0, (unsigned long)since, h.everUp ? 1 : 0, (unsigned long)h.linkLosses,
+                  (unsigned long)h.rxDropped, (unsigned long)h.keyDropped);
+}
+
+inline bool splitLinkReportDue(SplitLinkReporter &r, const SplitLeftHeld &h, unsigned long nowMs) {
+  bool changed = !r.reported || r.up != h.linkUp;
+  bool counters = r.losses != h.linkLosses || r.rxDropped != h.rxDropped || r.keyDropped != h.keyDropped;
+  if (!changed && !(counters && (nowMs - r.lastMs) >= SPLIT_LINK_REPORT_MS)) return false;
+  r.reported = true;
+  r.up = h.linkUp;
+  r.losses = h.linkLosses;
+  r.rxDropped = h.rxDropped;
+  r.keyDropped = h.keyDropped;
+  r.lastMs = nowMs;
   return true;
 }
 
@@ -1051,6 +1103,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
         onKeyEvent(ev);
       } else if (onKeyEvent && rep.keyEventsDropped < 255) {
         rep.keyEventsDropped++;
+        splitCountAdd(kbd.splitLeft.keyDropped, 1);
       }
       continue;
     }
@@ -1074,6 +1127,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
 
   // Ein verworfenes Paket kann ein Release gewesen sein: Gedrücktes ist nicht mehr verlässlich
   if (dropped != droppedSeen) {
+    splitCountAdd(kbd.splitLeft.rxDropped, dropped - droppedSeen);
     droppedSeen = dropped;
     rep.overflow = true;
     if (hostReady) splitReleaseHeld(kbd.splitLeft, kbd);

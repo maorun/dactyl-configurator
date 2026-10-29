@@ -1505,6 +1505,116 @@ TEST(test_combo_release_all_keeps_left_fw) {
   assert(splitLeftFwStatus(k.splitLeft, 100) == 4);
 }
 
+TEST(test_link_stats_track_changes_losses_and_drops) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = true;
+  assert(!k.splitLeft.everUp && k.splitLeft.linkLosses == 0);
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 500, nullptr);
+  assert(k.splitLeft.everUp && k.splitLeft.linkChangedMs == 500);
+  // Weitere Pakete ändern den Zeitpunkt des Wechsels nicht
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 900, nullptr);
+  assert(k.splitLeft.linkChangedMs == 500 && k.splitLeft.linkLosses == 0);
+  // Link-Timeout
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 900 + SPLIT_LINK_TIMEOUT_MS, nullptr);
+  assert(rep.linkLost && !k.splitLeft.linkUp);
+  // Der Link ist seit dem letzten Paket weg (900), nicht erst seit der Erkennung nach dem Timeout
+  assert(k.splitLeft.linkLosses == 1 && k.splitLeft.linkChangedMs == 900);
+  assert(k.splitLeft.everUp);
+  // Zweiter Aufbau und zweiter Ausfall
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 10000, nullptr);
+  assert(k.splitLeft.linkUp && k.splitLeft.linkChangedMs == 10000);
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 10000 + SPLIT_LINK_TIMEOUT_MS, nullptr);
+  assert(k.splitLeft.linkLosses == 2);
+  // Ring-Überlauf: verworfene Pakete summieren sich
+  for (int i = 0; i < SPLIT_RX_QUEUE_SIZE + 3; i++) splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 20000, nullptr);
+  assert(k.splitLeft.rxDropped == 3);
+  for (int i = 0; i < SPLIT_RX_QUEUE_SIZE + 2; i++) splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 20100, nullptr);
+  assert(k.splitLeft.rxDropped == 5);
+}
+
+TEST(test_link_stats_count_dropped_key_events) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  appliedCodes.clear();
+  keyEventCodes.clear();
+  for (int i = 0; i < SPLIT_KEY_EVENTS_PER_RX + 4; i++) {
+    splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(0, 0, (i & 1) == 0, 0)));
+  }
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, recordKeyEvent);
+  assert(k.splitLeft.keyDropped == 4);
+}
+
+TEST(test_link_stats_counter_saturates) {
+  uint32_t c = 0xFFFFFFFEu;
+  splitCountAdd(c, 1);
+  assert(c == 0xFFFFFFFFu);
+  splitCountAdd(c, 5);
+  assert(c == 0xFFFFFFFFu);
+}
+
+TEST(test_left_link_json_reports_state_and_clamps_time) {
+  char buf[160];
+  SplitLeftHeld h = {};
+  splitLeftLinkJson(buf, sizeof(buf), h, 5000);
+  assert(std::string(buf) == "{\"up\":0,\"ms\":0,\"ever\":0,\"losses\":0,\"rx_dropped\":0,\"key_dropped\":0}");
+  h.everUp = true;
+  h.linkUp = true;
+  h.linkChangedMs = 1000;
+  h.linkLosses = 2;
+  h.rxDropped = 3;
+  h.keyDropped = 4;
+  splitLeftLinkJson(buf, sizeof(buf), h, 3500);
+  assert(std::string(buf) == "{\"up\":1,\"ms\":2500,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4}");
+  // BLE-Task liest millis() vor einem neueren linkChangedMs aus loop(): 0 statt einer riesigen Zahl
+  splitLeftLinkJson(buf, sizeof(buf), h, 999);
+  assert(std::string(buf).find("\"ms\":0,") != std::string::npos);
+  // Ein Link, der länger als 2^31 ms (24,8 Tage) getrennt ist, zeigt sein volles Alter, nicht 0
+  h.linkChangedMs = 1000;
+  splitLeftLinkJson(buf, sizeof(buf), h, 1000UL + 0x90000000UL);
+  assert(std::string(buf).find("\"ms\":2415919104,") != std::string::npos);
+  // Millis-Überlauf: das Alter bleibt richtig
+  h.linkChangedMs = ~0UL - 255; // wie test_link_timeout_across_millis_wrap: unabhängig von der Breite von unsigned long
+  splitLeftLinkJson(buf, sizeof(buf), h, 256UL);
+  assert(std::string(buf).find("\"ms\":512,") != std::string::npos);
+  // Größte Zahlen passen in den Puffer der Firmware (160 Bytes) und bleiben gültig abgeschlossen
+  h.linkLosses = h.rxDropped = h.keyDropped = 0xFFFFFFFFu;
+  h.linkChangedMs = 0;
+  int n = splitLeftLinkJson(buf, sizeof(buf), h, 0x7FFFFFFFUL);
+  assert(n > 0 && n < (int)sizeof(buf) && buf[n - 1] == '}');
+}
+
+TEST(test_link_report_sends_changes_at_once_and_throttles_counters) {
+  SplitLinkReporter r = {};
+  SplitLeftHeld h = {};
+  assert(splitLinkReportDue(r, h, 0));            // erste Meldung: Link ab, nie verbunden
+  assert(!splitLinkReportDue(r, h, 10));          // nichts geändert
+  h.linkUp = true;
+  assert(splitLinkReportDue(r, h, 20));           // Wechsel sofort, auch innerhalb des Intervalls
+  h.rxDropped = 1;
+  assert(!splitLinkReportDue(r, h, 30));          // Zähler: gedrosselt
+  assert(!splitLinkReportDue(r, h, 20 + SPLIT_LINK_REPORT_MS - 1));
+  assert(splitLinkReportDue(r, h, 20 + SPLIT_LINK_REPORT_MS));
+  assert(!splitLinkReportDue(r, h, 20 + 3 * SPLIT_LINK_REPORT_MS)); // gemeldet, nichts Neues
+  h.linkUp = false;
+  h.linkLosses = 1;
+  assert(splitLinkReportDue(r, h, 20 + 3 * SPLIT_LINK_REPORT_MS + 1)); // Wechsel sofort
+  // Überlauf von millis(): Intervall bleibt richtig
+  SplitLinkReporter w = {};
+  SplitLeftHeld g = {};
+  g.linkUp = true;
+  assert(splitLinkReportDue(w, g, 0xFFFFFF00UL));
+  g.keyDropped = 2;
+  assert(!splitLinkReportDue(w, g, 0xFFFFFF00UL + 500));
+  assert(splitLinkReportDue(w, g, 0xFFFFFF00UL + SPLIT_LINK_REPORT_MS));
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Split HID Protocol Test Suite" << std::endl;

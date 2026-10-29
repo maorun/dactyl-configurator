@@ -35,6 +35,11 @@
           <span class="fw-mismatch-icon">⚠️</span>
           <strong>Beide Hälften flashen</strong>
         </div>
+        <!-- Funkverbindung zur Sender-Hälfte, vom Master gemeldet (SPLIT_LINK / DEVICE_INFO.left_link, js/side-routing.js) -->
+        <div class="split-link-pill" id="splitLinkPill" hidden>
+          <span class="split-link-dot"></span>
+          <strong id="splitLinkText"></strong>
+        </div>
         <!-- Bluetooth Permission Check / Config / Live-Sync Button Flow -->
         <button id="btnCheckBtPermission" class="btn btn-outline" style="border-color: #f59e0b; color: #fcd34d;" title="Prüft die macOS Bluetooth-Berechtigung für diese App">
           <span class="btn-icon">🔒</span> Bluetooth prüfen

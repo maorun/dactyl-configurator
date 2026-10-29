@@ -487,6 +487,112 @@ test("Firmwarestand: ein erfolgreicher Flash vergisst den Stand der geflashten H
   assert.ok(ok > 0 && /firmwareVersions\.forget\(side\);\s*updateFirmwareVersionUI\(\);/.test(body));
 });
 
+const LINK_LINE = 'SPLIT_LINK:{"up":0,"ms":5000,"ever":1,"losses":2,"rx_dropped":3,"key_dropped":4}';
+
+test("Split-Link: SPLIT_LINK kommt nur vom Master und wird auf Feldtypen geprüft", () => {
+  // JSON-Vergleich: die Module laufen in einem eigenen Kontext, deepStrictEqual prüft den Prototyp
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(D.parseSplitLinkLine(LINK_LINE, "R"))),
+    { up: false, ever: true, ms: 5000, losses: 2, rxDropped: 3, keyDropped: 4 });
+  assert.strictEqual(D.parseSplitLinkLine(LINK_LINE, "L"), undefined);   // nur der Master kennt den Link
+  assert.strictEqual(D.parseSplitLinkLine("SPLIT_LINK:kaputt", "R"), undefined);
+  assert.strictEqual(D.parseSplitLinkLine("SPLIT_LINK:null", "R"), undefined);
+  assert.strictEqual(D.parseSplitLinkLine('SPLIT_FW:{"fw":2}', "R"), undefined);
+  assert.strictEqual(D.parseSplitLinkLine(LINK_LINE.replace('"up":0', '"up":2'), "R"), undefined);
+  assert.strictEqual(D.parseSplitLinkLine(LINK_LINE.replace('"ms":5000', '"ms":-1'), "R"), undefined);
+  assert.strictEqual(D.parseSplitLinkLine(LINK_LINE.replace('"losses":2', '"losses":1.5'), "R"), undefined);
+  assert.strictEqual(D.parseSplitLinkLine(LINK_LINE.replace('"rx_dropped":3,', ""), "R"), undefined);
+});
+
+test("Split-Link: Stand aus Zeile und DEVICE_INFO, Zeitpunkt des Wechsels, Vergessen", () => {
+  let t = 100000;
+  const link = D.createSplitLinkStatus(() => t);
+  assert.strictEqual(link.status(), null);
+  link.note(D.parseSplitLinkLine(LINK_LINE, "R"));
+  assert.strictEqual(link.status().since, 95000);                         // Empfang - ms
+  assert.strictEqual(link.status().up, false);
+  // DEVICE_INFO des Masters trägt left_link; die linke Hälfte kennt den Link nicht
+  t = 200000;
+  link.noteDeviceInfo("L", { left_link: { up: 1, ms: 10, ever: 1, losses: 0, rx_dropped: 0, key_dropped: 0 } });
+  assert.strictEqual(link.status().up, false);
+  link.noteDeviceInfo("R", { left_link: { up: 1, ms: 10, ever: 1, losses: 0, rx_dropped: 0, key_dropped: 0 } });
+  assert.strictEqual(link.status().up, true);
+  assert.strictEqual(link.status().since, 199990);
+  // Ungültiges left_link und Firmware ohne left_link ändern nichts
+  link.noteDeviceInfo("R", { left_link: { up: 5 } });
+  link.noteDeviceInfo("R", { fw: 3 });
+  assert.strictEqual(link.status().up, true);
+  // Nie verbunden: kein Zeitpunkt
+  link.note(D.parseSplitLinkLine('SPLIT_LINK:{"up":0,"ms":0,"ever":0,"losses":0,"rx_dropped":0,"key_dropped":0}', "R"));
+  assert.strictEqual(link.status().since, null);
+  link.note(undefined);                                                    // ungültige Zeile
+  assert.strictEqual(link.status().ever, false);
+  link.forget();
+  assert.strictEqual(link.status(), null);
+});
+
+test("Split-Link: left_link null (Config Mode) löscht den Stand; USB hält ihn gültig, BLE allein nicht", () => {
+  const link = D.createSplitLinkStatus(() => 1000);
+  link.note(D.parseSplitLinkLine(LINK_LINE, "R"));
+  link.noteDeviceInfo("R", { left_link: null });           // Master im Config Mode: kein Empfang
+  assert.strictEqual(link.status(), null);
+  link.note(D.parseSplitLinkLine(LINK_LINE, "R"));
+  link.noteDeviceInfo("R", { left_link: "kaputt" });       // ungültig: Stand bleibt
+  assert.notStrictEqual(link.status(), null);
+  const conn = o => ({ bleUp: false, bleSide: null, serialUp: false, serialSide: null, ...o });
+  assert.strictEqual(D.splitLinkStaysValid(conn({ serialUp: true, serialSide: "R" })), true);
+  assert.strictEqual(D.splitLinkStaysValid(conn({ serialUp: true, serialSide: "L" })), false);   // nur der Master kennt den Link
+  assert.strictEqual(D.splitLinkStaysValid(conn({ serialUp: true, serialSide: null })), false);  // Hälfte noch unbekannt
+  assert.strictEqual(D.splitLinkStaysValid(conn({ bleUp: true, bleSide: "R" })), false);         // BLE: kein Nachschub
+  assert.strictEqual(D.splitLinkStaysValid(conn({})), false);
+});
+
+test("Split-Link: Anzeige verbunden, getrennt seit, nie verbunden und unbekannt", () => {
+  const fmt = ms => `T${ms}`;
+  const st = o => ({ up: false, ever: true, since: 7, losses: 2, rxDropped: 3, keyDropped: 4, ...o });
+  assert.strictEqual(D.describeSplitLink(null, "Links", fmt), null);
+  const up = D.describeSplitLink(st({ up: true }), "Links", fmt);
+  assert.deepStrictEqual([up.state, up.text], ["up", "Links: verbunden"]);
+  const down = D.describeSplitLink(st({}), "Links", fmt);
+  assert.deepStrictEqual([down.state, down.text], ["down", "Links: getrennt seit T7"]);
+  const never = D.describeSplitLink(st({ ever: false, since: null }), "Links", fmt);
+  assert.deepStrictEqual([never.state, never.text], ["never", "Links: nie verbunden"]);
+  assert.ok(down.title.includes("Verbindungsabbrüche: 2") && down.title.includes("Empfangspuffer): 3") &&
+    down.title.includes("Tastenmeldungen: 4"));
+});
+
+test("Split-Link: Pill im Header, Anzeige wird beim Trennen des Masters vergessen", () => {
+  const html = read("index.html");
+  assert.ok(/id="splitLinkPill"[^>]*\bhidden\b/.test(html) && html.includes('id="splitLinkText"'));
+  const serial = read("js/serial.js");
+  assert.ok(/line\.startsWith\("SPLIT_LINK:"\)/.test(serial));
+  // left_link aus DEVICE_INFO nur über USB: eine BLE-Momentaufnahme veraltete ohne Nachschub
+  assert.ok(/if \(transport === "usb"\) \{\s*splitLinkStatus\.noteDeviceInfo\(lineSide, info\);\s*updateSplitLinkUI\(\);/.test(serial));
+  const ble = read("js/ble.js");
+  const disc = ble.slice(ble.indexOf("function onBleDisconnected"));
+  assert.ok(/forgetSplitLink\(\);/.test(disc.slice(0, disc.indexOf("\n}\n"))));
+  const ser = serial.slice(serial.indexOf("async function disconnectSerialNow"));
+  assert.ok(/forgetSplitLink\(\);/.test(ser.slice(0, ser.indexOf("\n}\n"))));
+  // Kein "R"/"L"-Literal: das Label der Sender-Hälfte kommt aus dem Profil
+  const ui = serial.slice(serial.indexOf("function updateSplitLinkUI"), serial.indexOf("function forgetSplitLink"));
+  assert.ok(ui.includes("getSplitSenderSide()") && !/["'][RL]["']/.test(ui));
+});
+
+test("Split-Link: Firmware meldet SPLIT_LINK und left_link aus derselben Funktion", () => {
+  assert.ok(/DEVICE_INFO_LEFT_LINK\(buf, size\)\s+deviceInfoLeftLink\(buf, size\)/.test(rightIno));
+  // Config Mode und fehlgeschlagener ESP-NOW-Start melden "null" statt "nie verbunden"
+  const fn = rightIno.slice(rightIno.indexOf("int deviceInfoLeftLink(char *buf, size_t size) {"));
+  assert.ok(/if \(isConfigMode \|\| !splitRxReady\) return snprintf\(buf, size, "null"\);/.test(fn.slice(0, fn.indexOf("\n}\n"))));
+  assert.ok(fn.includes("splitLeftLinkJson(buf, size, bleKeyboard.splitLeft, millis())"));
+  assert.ok(!leftIno.includes("DEVICE_INFO_LEFT_LINK"));
+  assert.ok(rightIno.includes('Serial.printf("SPLIT_LINK:%s\\n"'));
+  assert.ok(logic.includes('\\"left_link\\":'));
+  // Gleiche Feldnamen in Firmware und App
+  const split = read("firmware/dactyl_right/DactylSplitHid.h");
+  for (const f of ["up", "ms", "ever", "losses", "rx_dropped", "key_dropped"]) {
+    assert.ok(split.includes(`\\"${f}\\":`), f);
+  }
+});
+
 test("Firmwarestand: DactylVersion.h ist die einzige Quelle beider Hälften", () => {
   const version = read("firmware/dactyl_right/DactylVersion.h");
   const v = Number(define(version, "DACTYL_FW_VERSION"));

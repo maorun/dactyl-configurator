@@ -171,6 +171,45 @@ bool queueHeartbeat(SplitSendQueue &q, uint8_t &counter) {
   return q.count == 0 && queuePush(q, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
 }
 
+// Doppel-Tipp-Zustand an den Master (SPLIT_OP_TAP_PENDING): 1, solange ein Einzel-Tipp auf den zweiten Tipp
+// wartet, sonst 0. Nur bei einer Änderung; reported ändert sich erst nach dem Einreihen, eine volle
+// Warteschlange meldet also im nächsten Durchlauf erneut. Ohne Link gilt nichts als gemeldet: der Master löscht
+// die Meldung bei einem neuen Link, ein noch wartender Tipp wird danach neu gemeldet. Hinter den HID-Ereignissen
+// des Tipps eingereiht: der Master führt den Tipp aus, bevor er die 0 sieht. setupEspNow setzt reported zurück.
+struct SplitTapPendingReporter {
+  bool reported;
+};
+
+bool queueTapPendingIfChanged(SplitSendQueue &q, SplitTapPendingReporter &rep, bool linkUp, bool waiting) {
+  if (!linkUp) {
+    rep.reported = false;
+    return false;
+  }
+  if (waiting == rep.reported) return false;
+  if (!queuePush(q, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, waiting ? 1 : 0))) return false;
+  rep.reported = waiting;
+  return true;
+}
+
+// Nach setupEspNow: nichts gilt als gemeldet, eine alte Anforderung des Masters entfällt
+inline void tapPendingReset(SplitTapPendingReporter &rep, volatile bool &flushRequested) {
+  rep.reported = false;
+  flushRequested = false;
+}
+
+// Je loop()-Durchlauf nach dem Matrix-Scan: eine Anforderung des Masters (SPLIT_OP_TAP_FLUSH) sendet die wartenden
+// Einzel-Tipps (flush, DactylLogic.h flushAllDoubleTaps), danach den geänderten Zustand (waiting =
+// anyDoubleTapWaiting). Die HID-Ereignisse des Tipps stehen so vor TAP_PENDING 0.
+template <class FlushFn, class WaitingFn>
+void serviceTapPending(SplitSendQueue &q, SplitTapPendingReporter &rep, volatile bool &flushRequested, bool linkUp,
+                       FlushFn flush, WaitingFn waiting) {
+  if (flushRequested) {
+    flushRequested = false;
+    flush();
+  }
+  queueTapPendingIfChanged(q, rep, linkUp, waiting());
+}
+
 // Op des Pakets am Kopf der Warteschlange (vor queueOnSendResult lesen), HEARTBEAT bei leerer Warteschlange
 uint8_t queueHeadOp(const SplitSendQueue &q) {
   return q.count ? q.items[q.head].op : (uint8_t)SPLIT_OP_HEARTBEAT;

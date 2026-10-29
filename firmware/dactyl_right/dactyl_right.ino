@@ -418,6 +418,9 @@ uint16_t DTAPMAP[NUM_LAYERS][6][7] = {};
 // [[[END_DTAPMAP]]]
 
 bool keyState[6][7] = {false};
+// Zuletzt gelesener Matrix-Zustand. keyState folgt ihm erst, wenn die Änderung ausgeführt ist: Wartet links ein
+// Einzel-Tipp (SPLIT_OP_TAP_PENDING), hält splitLocalDefer die Änderung kurz zurück.
+bool rawKeyState[6][7] = {false};
 uint16_t pressedAction[6][7] = {0};
 unsigned long keyPressTime[6][7] = {0};
 bool keySentToHost[6][7] = {false};
@@ -452,6 +455,17 @@ static SplitActivityThrottle splitActivity;
 // Layer-Abgleich mit der linken Hälfte (SPLIT_OP_LAYER_STATE, DactylSplitHid.h)
 static SplitLayerSync splitLayerSync;
 static SplitRemoteLayers splitRemoteLayers;
+// Eigene Matrix-Änderungen, die auf einen wartenden linken Einzel-Tipp warten (DactylSplitHid.h)
+static SplitLocalDefer splitLocalDefer;
+
+static void applyLocalKeyChange(uint8_t r, uint8_t c, bool pressed, unsigned long atMs) {
+  keyState[r][c] = pressed;
+  onMatrixKeyChange(r, c, pressed, atMs);
+}
+
+static bool leftTapPendingNow() {
+  return !isConfigMode && splitLeftTapPending(bleKeyboard.splitLeft, millis());
+}
 
 // Läuft auf dem Wi-Fi-Task: nur prüfen und einreihen, kein Serial, kein BLE
 static void onSplitDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
@@ -515,6 +529,19 @@ static void onSplitKeyEvent(const SplitHidEvent &ev) {
     splitKeyEventLayer(ev.code));
 }
 
+// Vor einem linken Tastendruck: zurückgehaltene eigene Tasten (nur wenn links kein Tipp mehr wartet) und wartende
+// eigene Einzel-Tipps zuerst senden, damit die Zeichen in der Reihenfolge der Anschläge ankommen
+static void onSplitBeforeLeftPress(const SplitHidEvent &ev) {
+  (void)ev;
+  // GET_INFO über BLE hält den Mutex kurz; ohne ihn bleibt die alte Reihenfolge, mit Hinweis
+  if (configMutex && xSemaphoreTake(configMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+    Serial.println("WARN: configMutex busy, Einzel-Tipp nicht vor linker Taste gesendet");
+    return;
+  }
+  splitBeforeLeftPress(splitLocalDefer, leftTapPendingNow(), applyLocalKeyChange, flushAllDoubleTaps);
+  if (configMutex) xSemaphoreGive(configMutex);
+}
+
 // Layer-Zustand der linken Hälfte: ihre MO-Ebenen, mit SET auch ihre Toggle-Änderung
 static void onSplitLayer(const SplitHidEvent &ev) {
   bool set = splitLayerMasterReceive(splitLayerSync, splitRemoteLayers, ev, millis());
@@ -528,7 +555,8 @@ void processSplitEvents() {
   bool hostReady = !isConfigMode && bleKeyboard.isConnected();
   bool linkWasUp = bleKeyboard.splitLeft.linkUp;
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
-                                     hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer);
+                                     hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer,
+                                     onSplitBeforeLeftPress);
   // Linke Hälfte gerade erreichbar (Start, Aufwachen): sofort den Layer-Zustand des Masters senden
   // Linke Hälfte nicht erreichbar, aus oder im Deep Sleep: ihre gehaltenen MO-Ebenen verfallen
   if (splitLayerMasterAfterRx(splitLayerSync, splitRemoteLayers, linkWasUp, bleKeyboard.splitLeft.linkUp,
@@ -699,6 +727,11 @@ void loop() {
   }
 
   if (scanMutexTaken) {
+    // Zurückgehaltene Tasten ausführen: links hat den wartenden Tipp gesendet oder die Zeitgrenze ist um
+    if (splitDeferReplayDue(splitLocalDefer, leftTapPendingNow(), millis())) {
+      splitDeferReplay(splitLocalDefer, applyLocalKeyChange);
+    }
+
     for (int r = 0; r < NUM_ROWS; r++) {
       pinMode(ROW_PINS[r], OUTPUT);
       digitalWrite(ROW_PINS[r], LOW);
@@ -707,15 +740,23 @@ void loop() {
       for (int c = 0; c < NUM_COLS; c++) {
         bool isPressed = (digitalRead(COL_PINS[c]) == LOW);
 
-        if (isPressed != keyState[r][c]) {
-          keyState[r][c] = isPressed;
+        if (isPressed != rawKeyState[r][c]) {
+          rawKeyState[r][c] = isPressed;
           splitNoteLocalKeyChange(splitActivity, millis(), lastActivityTime);
           exitStandby();
-          onMatrixKeyChange(r, c, isPressed);
+          // Hinter einem wartenden linken Einzel-Tipp zurückhalten (Zeichenreihenfolge)
+          splitDeferApplyOrHold(splitLocalDefer, r, c, isPressed, leftTapPendingNow(), millis(), applyLocalKeyChange);
         }
       }
 
       pinMode(ROW_PINS[r], INPUT);
+    }
+
+    // Eine Taste wurde zurückgehalten: links den wartenden Tipp einmal sofort senden lassen (kein Retry,
+    // nach SPLIT_TAP_FLUSH_TIMEOUT_MS führt der Master die Taste ohnehin aus)
+    if (splitDeferTakeFlushRequest(splitLocalDefer) && splitActivityPeerReady) {
+      SplitHidEvent flushEv = makeSplitHidEvent(SPLIT_OP_TAP_FLUSH);
+      esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&flushEv, sizeof(flushEv));
     }
 
     // Benutzerdefinierte Tasten-Chords / Combos prüfen (Item 10)
@@ -742,6 +783,10 @@ void loop() {
         pressedAction[4][5] = 0;
         keyState[0][0] = false;
         keyState[4][5] = false;
+        rawKeyState[0][0] = false;
+        rawKeyState[4][5] = false;
+        // Zurückgehaltene Änderungen gehören zur Zeit vor dem Moduswechsel
+        splitDeferReset(splitLocalDefer);
         sendConfigNotification("KEY_RELEASE:{\"r\":0,\"c\":0}");
         sendConfigNotification("KEY_RELEASE:{\"r\":4,\"c\":5}");
 

@@ -68,7 +68,16 @@ void sendConfigNotification(String msg, bool addDelay = false);
 
 // Wie dactyl_left.ino: Makro-Schritte warten auf freien Platz in der Sendewarteschlange
 #define MACRO_OUTPUT_READY() queueHasRoomForMacro(sendQueue)
+// Wie dactyl_left.ino: TAP_PENDING 0 direkt hinter jedem nachgeholten Tipp
+static SplitTapPendingReporter tapPendingReporter = {};
+static void onDoubleTapFlushed();
+#define DOUBLE_TAP_FLUSHED() onDoubleTapFlushed()
 #include "../dactyl_right/DactylLogic.h"
+
+static void onDoubleTapFlushed() {
+  queueTapPendingIfChanged(sendQueue, tapPendingReporter, !isConfigMode && bleKeyboard.isConnected(),
+                           anyDoubleTapWaiting());
+}
 
 static int testsRun = 0;
 static int testsPassed = 0;
@@ -87,6 +96,7 @@ static void resetState() {
     }
   resetTapHold();
   resetDoubleTap();
+  tapPendingReporter = {};
   numCombos = 0;
   numKeyPairs = 0;
   numMacros = 0;
@@ -431,6 +441,55 @@ TEST(test_macro_waits_for_send_queue_room) {
     assert(is(all[i], SPLIT_OP_KEY_PRESS, 'a') && is(all[i + 1], SPLIT_OP_KEY_RELEASE, 'a'));
   }
   assert(bleKeyboard.droppedEvents() == droppedBefore);
+}
+
+// Wie loop() in dactyl_left.ino (serviceTapPending): TAP_FLUSH des Masters sendet den wartenden Tipp, danach
+// meldet TAP_PENDING 0. Der Tipp steht in der Warteschlange vor der 0: der Master führt ihn zuerst aus.
+TEST(test_master_tap_flush_sends_waiting_tap_before_pending_zero) {
+  KEYMAP[0][2][1] = 'j';
+  DTAPMAP[0][2][1] = KEY_ESC;
+  SplitTapPendingReporter &rep = tapPendingReporter;
+  volatile bool flushRequested = false;
+  tap(2, 1);
+  serviceTapPending(sendQueue, rep, flushRequested, bleKeyboard.isConnected(), flushAllDoubleTaps, anyDoubleTapWaiting);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && is(ev[0], SPLIT_OP_TAP_PENDING, 1));
+  // Ohne Anforderung wartet der Tipp weiter
+  serviceTapPending(sendQueue, rep, flushRequested, bleKeyboard.isConnected(), flushAllDoubleTaps, anyDoubleTapWaiting);
+  assert(drain().empty() && anyDoubleTapWaiting());
+  advanceMillis(10);
+  flushRequested = true;  // onEspNowRecv: SPLIT_OP_TAP_FLUSH
+  serviceTapPending(sendQueue, rep, flushRequested, bleKeyboard.isConnected(), flushAllDoubleTaps, anyDoubleTapWaiting);
+  assert(!flushRequested);
+  ev = drain();
+  assert(ev.size() == 3);
+  assert(is(ev[0], SPLIT_OP_KEY_PRESS, 'j') && is(ev[1], SPLIT_OP_KEY_RELEASE, 'j'));
+  assert(is(ev[2], SPLIT_OP_TAP_PENDING, 0));
+}
+
+// Eine linke Taste nach dem wartenden Tipp: TAP_PENDING 0 steht zwischen dem Tipp und der neuen Taste. Der Master
+// lässt seine zurückgehaltenen Tasten so vor der neuen Taste laufen, aber nach dem Tipp.
+TEST(test_left_key_after_waiting_tap_reports_pending_zero_before_its_press) {
+  KEYMAP[0][2][1] = 'j';
+  DTAPMAP[0][2][1] = KEY_ESC;
+  KEYMAP[0][2][2] = 'k';
+  tap(2, 1);
+  queueTapPendingIfChanged(sendQueue, tapPendingReporter, true, anyDoubleTapWaiting());
+  assert(drain().size() == 1);
+  advanceMillis(10);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 4);
+  assert(is(ev[0], SPLIT_OP_KEY_PRESS, 'j') && is(ev[1], SPLIT_OP_KEY_RELEASE, 'j'));
+  assert(is(ev[2], SPLIT_OP_TAP_PENDING, 0) && is(ev[3], SPLIT_OP_KEY_PRESS, 'k'));
+}
+
+TEST(test_tap_pending_reset_after_espnow_setup) {
+  SplitTapPendingReporter rep = {true};
+  volatile bool flushRequested = true;
+  tapPendingReset(rep, flushRequested);
+  assert(!rep.reported && !flushRequested);
 }
 
 int main() {

@@ -573,6 +573,36 @@ TEST(test_heartbeat_fw_version_waits_for_queue_room) {
   assert(queueHeartbeat(q, counter) && q.items[q.head].op == SPLIT_OP_FW_VERSION);
 }
 
+TEST(test_tap_pending_reported_on_change_only) {
+  SplitSendQueue tq;
+  queueReset(tq);
+  SplitTapPendingReporter rep = {};
+  assert(!queueTapPendingIfChanged(tq, rep, true, false));   // 0 ist der Anfangszustand
+  assert(queueTapPendingIfChanged(tq, rep, true, true));
+  assert(tq.count == 1 && tq.items[tq.head].op == SPLIT_OP_TAP_PENDING && tq.items[tq.head].code == 1);
+  assert(!queueTapPendingIfChanged(tq, rep, true, true));    // keine Wiederholung ohne Änderung
+  assert(queueTapPendingIfChanged(tq, rep, true, false));
+  assert(tq.count == 2 && tq.items[(tq.head + 1) % SPLIT_QUEUE_SIZE].code == 0);
+  assert(isValidSplitHidEvent(tq.items[tq.head]) && splitEventRetryable(tq.items[tq.head]));
+}
+
+TEST(test_tap_pending_retried_after_full_queue_or_link_loss) {
+  SplitSendQueue tq;
+  queueReset(tq);
+  SplitTapPendingReporter rep = {};
+  assert(!queueTapPendingIfChanged(tq, rep, false, true));   // ohne Link nichts
+  assert(tq.count == 0 && !rep.reported);
+  while (tq.count < SPLIT_QUEUE_SIZE) queuePush(tq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  assert(!queueTapPendingIfChanged(tq, rep, true, true));
+  assert(!rep.reported);                                     // nächster Durchlauf meldet erneut
+  queueReset(tq);
+  assert(queueTapPendingIfChanged(tq, rep, true, true) && rep.reported);
+  // Link weg und wieder da: der Master hat die Meldung gelöscht, der wartende Tipp wird neu gemeldet
+  assert(!queueTapPendingIfChanged(tq, rep, false, true) && !rep.reported);
+  queueReset(tq);
+  assert(queueTapPendingIfChanged(tq, rep, true, true) && tq.count == 1 && tq.items[tq.head].code == 1);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Firmware Unit Test Suite" << std::endl;

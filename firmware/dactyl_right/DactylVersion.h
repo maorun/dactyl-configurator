@@ -5,4 +5,4 @@
  * Beide Hälften teilen den Wert; die App meldet "Beide Hälften flashen", wenn er abweicht.
  * Wertebereich 1..65535 (0 = unbekannt). Keine Arduino- oder ESP-IDF-Abhängigkeit.
  */
-#define DACTYL_FW_VERSION 1
+#define DACTYL_FW_VERSION 2

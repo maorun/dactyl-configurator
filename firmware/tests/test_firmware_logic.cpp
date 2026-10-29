@@ -1770,6 +1770,40 @@ TEST(test_double_tap_flushed_before_other_key) {
 }
 
 // -----------------------------------------------------------------------------
+// Test 42a: Ein Druck der anderen Hälfte sendet den wartenden Tipp vorher (flushAllDoubleTaps)
+// -----------------------------------------------------------------------------
+TEST(test_double_tap_flush_all_for_other_half) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 177", false);
+  assert(!anyDoubleTapWaiting());
+  tapKeyAt(2, 1, 1000, 1050);
+  assert(anyDoubleTapWaiting() && bleKeyboard.pressHistory.empty());
+  setMillis(1080);
+  flushAllDoubleTaps();
+  assert(countPresses('j') == 1 && bleKeyboard.pressedKeys.empty());
+  assert(!anyDoubleTapWaiting() && !doubleTap[2][1].waiting);
+  // Das Fenster ist zu: der Tick sendet nichts mehr
+  setMillis(2000);
+  processDeferredKeys(millis());
+  assert(countPresses('j') == 1 && countPresses(KEY_ESC) == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 42b: Eine später ausgeführte Änderung (Master, SplitLocalDefer) zählt ab ihrer Scan-Zeit
+// -----------------------------------------------------------------------------
+TEST(test_replayed_press_keeps_scan_time_for_tapping_term) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 128 0", false); // J: Tap j, Hold Ctrl
+  setMillis(1040);                                     // 40 ms zurückgehalten
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1000 + TAPPING_TERM_MS + 10);              // ab der Scan-Zeit länger als der Tapping-Term
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(countPresses(KEY_LEFT_CTRL) == 1 && countPresses('j') == 0);
+}
+
+// -----------------------------------------------------------------------------
 // Test 43: Zweiter Druck nach Ablauf des Fensters, aber vor dem Tick: zwei Einzel-Tipps
 // -----------------------------------------------------------------------------
 TEST(test_double_tap_late_second_press_is_two_taps) {

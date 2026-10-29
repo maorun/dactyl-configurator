@@ -18,7 +18,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Rangliste
 
-- **Firmware-Version in `DEVICE_INFO`** `[Firmware/App]` — *Nutzen: hoch · Aufwand: klein* — `DEVICE_INFO` enthält keine Version (`DactylLogic.h`). Gemischte Firmware fällt heute nur indirekt auf, zum Beispiel durch `ERR UNKNOWN` oder einen fehlenden Layer-Sync ohne Meldung. Ein Feld `fw` (Git-Hash oder Protokollversion) lässt die App beide Hälften vergleichen und "Beide Hälften flashen" anzeigen. Steht oben, weil es Fehler vermeidet, die das Tippen stören, und klein ist.
 - **Automatisches Backup vor Sync und Flash** `[App/Server]` — *Nutzen: hoch · Aufwand: klein* — Vor jedem `writeConfigToESP32` und "Auf Dactyl flashen" speichert `server.py` einen Snapshot mit Zeitstempel im Datenverzeichnis und behält die letzten N. Der Dialog "Profile" bietet sie zum Laden an. Das Gerät hat während der Entwicklung schon einmal sein Layout verloren; ein Backup macht diesen Fall rückgängig.
 - **Split-Link-Status in der App** `[Firmware/App]` — *Nutzen: mittel · Aufwand: klein* — Der Master kennt Link-Zustand und Drop-Zähler (`SPLIT_KEY_RX_DROPPED`, Link-Timeout). Die App zeigt "Linke Hälfte verbunden / getrennt seit …" und die Zähler. Hilft bei Ausfällen der linken Hälfte und bei den offenen Hardware-Prüfungen.
 - **`GET_CONFIG` mit Combos, Tastenpaaren und Makros** `[Firmware/App]` — *Nutzen: mittel · Aufwand: mittel* — Layout-Diff und "Vom ESP32 laden" lassen diese Teile aus; der Diff zeigt "keine Änderung", obwohl die Makros abweichen können. Mit der Erweiterung ist ein Backup direkt vom Gerät vollständig. Steht unter dem Backup, weil der App-Snapshot den Hauptfall schon abdeckt.
@@ -45,6 +44,7 @@ Befunde, die der Nutzer ausdrücklich zurückgestellt hat, und Hardware-Prüfung
 - Hardware-Prüfung offen: ESP-NOW-Neustart der linken Hälfte. Den Master per Reset-Taste neu starten, während links getippt wird. Erwartet: `ESPNOW_RESTART` höchstens einmal pro Backoff (30 s, dann 60 s, 120 s ... bis 8 Min), danach `Master erreichbar=1` ohne Reset der linken Hälfte. Zusätzlich prüfen: `STATUS` meldet `ActivityRx=1`.
 - Hardware-Prüfung offen: Synchronisierte Inaktivitäts-Timer. 6 Min nur rechts tippen; links darf nicht in Standby gehen (Serial `[POWER]`), und linke Tasten kommen ohne Verzögerung an. Der Host-Test prüft nur Parser und Drosselung, nicht den Funkweg Master -> links.
 - Hardware-Prüfung offen: ESP-NOW-Verschlüsselung. Bestanden (2026-10-28): beide Hälften mit demselben Schlüssel geflasht, linke Tasten kommen am Mac an. Offen: Layer-Sync und `ACTIVITY` prüfen. Danach nur links einen neuen Schlüssel flashen (`--force`): erwartet `ESPNOW_FAIL`, keine linken Tasten am Mac. Zusätzlich prüfen, ob der Master ein unverschlüsseltes Paket mit der linken MAC verwirft (die ESP-IDF-Doku sagt dazu nichts). Die Tipplatenz links mit und ohne Verschlüsselung vergleichen.
+- Hardware-Prüfung offen: Firmwarestand. Beide Hälften flashen; `GET_INFO` am Master zeigt `"fw"` und nach höchstens 5 s `"left_fw"` mit demselben Wert, die App zeigt keinen Hinweis. Dann links eine Firmware ohne `FW_VERSION` flashen: nach etwa 12 s meldet der Master `SPLIT_FW:{"fw":-1}`, die App zeigt "Beide Hälften flashen", linke Tasten kommen weiter am Mac an.
 - Hardware-Prüfung offen: One-Shot-Shift links, dann Taste rechts (und umgekehrt); Caps Word über beide Hälften; One-Shot-Shift vor `UMLAUT_AE` ergibt `Ä`.
 
 ## Detailpläne
@@ -53,6 +53,7 @@ Derzeit kein offener Plan.
 
 ## Umgesetzt
 
+- **Firmware-Version in `DEVICE_INFO`:** Beide Hälften melden `DACTYL_FW_VERSION` (`DactylVersion.h`) als `fw`. Die linke Hälfte sendet ihren Stand per Split-Op `FW_VERSION` an den Master; er meldet ihn als `left_fw` und `SPLIT_FW:`. Bei abweichendem Stand zeigt die App "Beide Hälften flashen".
 - **Fortschritt beim Flashen:** "Auf Dactyl flashen" zeigt die Ausgabe von `arduino-cli` (Kompilieren und Upload, auch den esptool-Fortschritt) live in einem Dialog. Der Server streamt sie als NDJSON (`/api/save_and_flash?stream=1`).
 - **ESP-NOW-Verschlüsselung:** Beide Hälften verschlüsseln die Funkstrecke mit CCMP (PMK + LMK, `DactylSplitCrypto.h`). Der Schlüssel liegt in der nicht versionierten Datei `DactylSplitKey.h` (`scripts/generate-split-key.sh`, Modus 0600); ohne sie bricht der Build ab. Offen: Hardware-Prüfung, ob der Master unverschlüsselte Pakete mit der linken MAC verwirft; bis dahin ist eine Injektion mit gefälschter MAC nicht ausgeschlossen.
 - **Tasten-Heatmap & WPM-Anzeige** im Live-Monitor — PR #2.

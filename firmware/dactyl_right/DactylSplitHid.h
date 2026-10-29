@@ -12,6 +12,7 @@
 #include <string.h>
 #include "DactylKeycodes.h" // dactylAsciiToHid, KEY_LEFT_SHIFT (implizites Shift großer/gesetzter Zeichen)
 #include "DactylOneShot.h"  // One-Shot-Modifier und Caps Word (Zustand auf dem Master)
+#include "DactylVersion.h"  // DACTYL_FW_VERSION (SPLIT_OP_FW_VERSION)
 
 #define SPLIT_ESPNOW_CHANNEL 1
 
@@ -39,7 +40,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_ONE_SHOT_RELEASE = 15,
   SPLIT_OP_CAPS_WORD_TOGGLE = 16, // Caps Word umschalten, ohne Werte
   SPLIT_OP_LAYER_STATE = 17,  // beide Richtungen: Layer-Zustand des Absenders (makeSplitLayerEvent)
-  SPLIT_OP_COUNT = 18
+  SPLIT_OP_FW_VERSION = 18,   // links -> Master: code = DACTYL_FW_VERSION (1..65535), ohne HID-Wirkung
+  SPLIT_OP_COUNT = 19
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -109,6 +111,8 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
       return ev.code == 0 && ev.arg == 0;
     case SPLIT_OP_LAYER_STATE:
       return isValidSplitLayerEvent(ev);
+    case SPLIT_OP_FW_VERSION:
+      return ev.code != 0 && ev.arg == 0;
     case SPLIT_OP_KEY_EVENT:
       return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_KEY_EVENT_MASK) == 0 &&
              splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
@@ -529,6 +533,10 @@ struct SplitLeftHeld {
   SplitHeldSet set;
   unsigned long lastRxMs;
   bool linkUp;
+  // Firmwarestand der linken Hälfte aus SPLIT_OP_FW_VERSION; 0 = unbekannt (kein Paket seit dem Link-Aufbau)
+  uint16_t fw;
+  // Beginn des Links: Fenster für splitLeftFwStatus
+  unsigned long fwSinceMs;
 };
 
 inline void splitHeldReset(SplitLeftHeld &h) {
@@ -572,6 +580,36 @@ inline void splitReleaseHeld(SplitLeftHeld &h, SplitHidSink &sink) {
   }
   if (held.mouse) sink.leftMouseRelease(held.mouse);
   if (held.oneShot) sink.leftOneShotRelease(held.oneShot, false);
+}
+
+// Firmwarestand der linken Hälfte (SPLIT_OP_FW_VERSION). Die linke Hälfte sendet ihn mit dem ersten
+// Lebenszeichen nach dem Start von ESP-NOW und danach mit jedem SPLIT_FW_VERSION_EVERY-ten
+// (queueHeartbeat in DactylLeftLogic.h). Bleibt er SPLIT_FW_DETECT_MS nach dem Link-Aufbau aus, sendet die
+// linke Hälfte keine Version: ihre Firmware ist älter als SPLIT_OP_FW_VERSION.
+#define SPLIT_FW_VERSION_EVERY 5
+// Länger als zwei Abstände (2 x 5 s): eine verlorene Meldung ergibt kein falsches "alt"
+#define SPLIT_FW_DETECT_MS 12000UL
+
+// Für jedes gültige Paket der linken Hälfte, vor der Auswertung: Link-Zustand und Firmwarestand.
+// Ein neuer Link setzt den Stand zurück: Flashen der linken Hälfte dauert länger als SPLIT_LINK_TIMEOUT_MS.
+inline void splitNoteLeftRx(SplitLeftHeld &h, const SplitHidEvent &ev, unsigned long nowMs) {
+  if (!h.linkUp) {
+    h.fw = 0;
+    h.fwSinceMs = nowMs;
+  }
+  if (ev.op == SPLIT_OP_FW_VERSION) h.fw = ev.code;
+  h.lastRxMs = nowMs;
+  h.linkUp = true;
+}
+
+// Stand für DEVICE_INFO.left_fw und SPLIT_FW: > 0 = DACTYL_FW_VERSION links, 0 = unbekannt (kein Link oder
+// Fenster läuft), -1 = Link ohne Version (linke Firmware älter als SPLIT_OP_FW_VERSION).
+// GET_INFO über BLE ruft das im BLE-Task auf: nowMs kann vor einem fwSinceMs liegen, das loop() gerade schrieb.
+inline int32_t splitLeftFwStatus(const SplitLeftHeld &h, unsigned long nowMs) {
+  if (!h.linkUp) return 0;
+  if (h.fw) return h.fw;
+  long elapsed = (long)(nowMs - h.fwSinceMs);
+  return elapsed >= (long)SPLIT_FW_DETECT_MS ? -1 : 0;
 }
 
 // Führt ein bereits geprüftes Ereignis aus. Liefert true, wenn eine HID-Ausgabe erfolgte.
@@ -980,6 +1018,8 @@ typedef void (*SplitRxAppliedFn)(const SplitHidEvent &ev);
 //   onLayer erhält nur das neueste Paket eines Aufrufs, höchstens eines (eine Flut mit gefälschter linker MAC
 //   erzeugt höchstens eine LAYER-Zeile je loop()). Ein SET in einem überholten Paket entfällt damit; die
 //   linke Hälfte sendet es weiter, bis der Master seine Nummer zurückmeldet.
+// - FW_VERSION hat keine HID-Wirkung: splitNoteLeftRx setzt splitLeft.fw auch ohne Host; es zählt nicht als
+//   Aktivität.
 template <class Kbd>
 SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, bool &hostWasReady,
                              bool hostReady, unsigned long nowMs, SplitRxAppliedFn onApplied,
@@ -1000,6 +1040,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   bool haveLayer = false;
   uint8_t keyEvents = 0;
   while (splitRxPop(q, ev)) {
+    splitNoteLeftRx(kbd.splitLeft, ev, nowMs);
+    if (ev.op == SPLIT_OP_FW_VERSION) continue;
     if (ev.op == SPLIT_OP_KEY_EVENT) {
       kbd.splitLeft.lastRxMs = nowMs;
       kbd.splitLeft.linkUp = true;
@@ -1019,6 +1061,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
       haveLayer = true;
       continue;
     }
+
     if (!hostReady) {
       kbd.splitLeft.lastRxMs = nowMs;
       kbd.splitLeft.linkUp = true;

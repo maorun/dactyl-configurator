@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dactyl Keyboard Configurator</title>
-  <link rel="stylesheet" href="style.css?v=13">
+  <link rel="stylesheet" href="style.css?v=14">
 </head>
 <body>
   <div class="app-container">
@@ -29,6 +29,11 @@
           <span class="bt-icon">📶</span>
           <span class="bt-label">Live-Verbindung:</span>
           <strong id="btDeviceNameText">Nicht verbunden</strong>
+        </div>
+        <!-- Firmwarestand beider Hälften weicht ab (DEVICE_INFO.fw / left_fw, js/side-routing.js) -->
+        <div class="fw-mismatch-pill" id="fwMismatchPill" hidden>
+          <span class="fw-mismatch-icon">⚠️</span>
+          <strong>Beide Hälften flashen</strong>
         </div>
         <!-- Bluetooth Permission Check / Config / Live-Sync Button Flow -->
         <button id="btnCheckBtPermission" class="btn btn-outline" style="border-color: #f59e0b; color: #fcd34d;" title="Prüft die macOS Bluetooth-Berechtigung für diese App">
@@ -597,7 +602,7 @@
   <script src="js/side-right.js?v=2"></script>
   <script src="js/side-left.js?v=2"></script>
   <script src="js/side-state.js?v=1"></script>
-  <script src="js/side-routing.js?v=2"></script>
+  <script src="js/side-routing.js?v=4"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=3"></script>
   <script src="js/config-model.js?v=5"></script>
@@ -606,9 +611,9 @@
   <script src="js/macros-ui.js?v=1"></script>
   <script src="js/layout-profiles-ui.js?v=1"></script>
   <script src="js/flash-log.js?v=1"></script>
-  <script src="js/editor-events.js?v=5"></script>
+  <script src="js/editor-events.js?v=6"></script>
   <script src="js/ble.js?v=1"></script>
-  <script src="js/serial.js?v=4"></script>
+  <script src="js/serial.js?v=5"></script>
   <script src="js/live-monitor.js?v=2"></script>
   <script src="js/heatmap.js?v=1"></script>
   <script src="js/matrix-test.js?v=1"></script>

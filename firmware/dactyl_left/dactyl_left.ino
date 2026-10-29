@@ -307,6 +307,8 @@ static uint32_t diagDroppedReported = 0;
 static bool activityRxReady = false;
 static EspNowRestartGuard restartGuard;
 #define HEARTBEAT_INTERVAL_MS 1000
+// Zähler für queueHeartbeat; setupEspNow setzt ihn zurück, damit der Stand gleich nach dem Start ankommt
+static uint8_t heartbeatCounter = 0;
 
 // Vom Sende-Callback (Wi-Fi-Task) geschrieben, in loop() gelesen. Der Callback schreibt zuerst
 // den Status und danach die Nummer; loop() liest in umgekehrter Reihenfolge.
@@ -409,6 +411,7 @@ static bool setupEspNow() {
     return false;
   }
   espNowReady = true;
+  heartbeatCounter = 0;
   Serial.println("ESP-NOW bereit (Kanal 1, verschlüsselt, Ziel 2E:BC:BB:81:61:A6)");
   // Nach einem Neustart hält der Master evtl. noch Eingaben dieser Hälfte (kein Link-Timeout bei kurzem
   // Reboot). RELEASE_ALL löst sie; die Bestätigung meldet zugleich den Link, ohne auf den Heartbeat zu warten.
@@ -491,12 +494,13 @@ void flushSendQueue(unsigned long maxMs) {
   }
 }
 
-// Lebenszeichen für den Master; auch die Grundlage für isConnected() ohne Tastendruck
+// Lebenszeichen für den Master; auch die Grundlage für isConnected() ohne Tastendruck.
+// Meldet regelmäßig den Firmwarestand (queueHeartbeat).
 static void sendHeartbeatIfDue() {
   static unsigned long lastHeartbeatMs = 0;
   if (millis() - lastHeartbeatMs < HEARTBEAT_INTERVAL_MS) return;
   lastHeartbeatMs = millis();
-  if (sendQueue.count == 0) queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  queueHeartbeat(sendQueue, heartbeatCounter);
 }
 
 void setup() {

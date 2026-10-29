@@ -119,6 +119,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 
 ### Config mode, NVS, power
 - Details: `FEATURES.md`, section "Config mode, NVS, power". Read it only before you change this feature.
+- The left half keeps 240 MHz in standby. A `setCpuFrequencyMhz()` change while Wi-Fi runs made every ESP-NOW send fail (hardware finding). Do not add such a change on the left half.
 
 ### Firmware version (`DactylVersion.h`)
 - Details: `FEATURES.md`, section "Firmware version". Read it only before you change this feature.
@@ -151,6 +152,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 ### ESP-NOW encryption (`DactylSplitCrypto.h`)
 - Details: `FEATURES.md`, section "ESP-NOW encryption". Read it only before you change this feature.
 - `firmware/dactyl_right/DactylSplitKey.h` is local state (in `.gitignore`, mode 0600). Create it with `bash scripts/generate-split-key.sh`. Both halves need the same key.
+- Without the key file the build stops with `#error`. After a lost half or a leaked key, generate a new key and flash both halves.
 
 ### Build & flash (both halves use `min_spiffs`)
 - BLE + ESP-NOW do not fit into the default 1.25 MB app partition (`text section exceeds available space`). Both halves use `PartitionScheme=min_spiffs` (1.875 MB app, NVS offset `0x9000` unchanged, so keymaps and the macOS bond survive the switch). `server.py` (`FIRMWARE_FQBN`) and CI use the same FQBN.
@@ -219,7 +221,7 @@ Keys in the matrix use `uint16_t` action codes:
 ## Wireless Bluetooth Config Mode & Staged One-Shot Auto-Sync
 
 - Config mode uses a static random BLE address, because macOS bonds to the public address. `exitConfigMode()` restarts the board.
-- Every change goes through `markPendingSync`; the app then sends the full configuration (`requestLiveSync`, `js/config-sync.js`).
+- Every change goes through `markPendingSync`; the app then sends the full configuration (`requestLiveSync`, `js/config-sync.js`). Never send a single `SET_KEY`, `SET_NAME` or `SET_*` setting command for a live edit: the full sync keeps the device equal to the app.
 - Details: `FEATURES.md`, section "Configuration and Sync". Read it only before you change this feature.
 
 ---

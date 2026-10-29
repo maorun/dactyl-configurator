@@ -414,6 +414,104 @@ test("Split-Diagnose: SPLIT_KEY von der linken Hälfte, fehlende Tasten und ung�
   assert.strictEqual(D.parseSplitKeyLine("SPLIT_KEY:null", "R"), null);
 });
 
+test("Firmwarestand: DEVICE_INFO.fw beider Hälften, Abweichung erst mit beiden Ständen", () => {
+  const fw = D.createFirmwareVersions();
+  assert.strictEqual(fw.status().mismatch, false);
+  fw.noteDeviceInfo("R", { side: "R", fw: 2 });
+  assert.strictEqual(fw.status().mismatch, false);             // linker Stand unbekannt
+  fw.noteDeviceInfo("L", { side: "L", fw: 2 });
+  assert.strictEqual(fw.status().mismatch, false);
+  fw.noteDeviceInfo("L", { side: "L", fw: 3 });
+  assert.strictEqual(fw.status().mismatch, true);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(fw.status().versions)), { R: 2, L: 3 });
+  // Nach dem Flashen gilt der alte Stand nicht mehr
+  fw.forget("L");
+  assert.strictEqual(fw.status().mismatch, false);
+  // Firmware vor dem Feld "fw" zählt als eigener Stand 0
+  fw.noteDeviceInfo("L", { side: "L" });
+  assert.strictEqual(fw.status().mismatch, true);
+  fw.noteDeviceInfo("R", { name: "Dactyl Keyboard" });
+  assert.strictEqual(fw.status().mismatch, false);              // beide ohne Feld: gleich alt
+  fw.noteDeviceInfo("X", { fw: 9 });                            // unbekannte Hälfte: ignoriert
+  fw.noteDeviceInfo("R", { fw: 0x10000 });                      // ungültig: wie ohne Feld
+  assert.strictEqual(fw.status().versions.R, 0);
+});
+
+test("Firmwarestand: der Master meldet den Stand der linken Hälfte (left_fw, SPLIT_FW)", () => {
+  const fw = D.createFirmwareVersions();
+  fw.noteDeviceInfo("R", { side: "R", fw: 2, left_fw: 1 });
+  assert.strictEqual(fw.status().mismatch, true);
+  fw.noteDeviceInfo("R", { side: "R", fw: 2, left_fw: 0 });     // kein Link: Stand vom Master gilt nicht mehr
+  assert.strictEqual(fw.status().versions.L, null);
+  assert.strictEqual(fw.status().mismatch, false);
+  // Ein Stand, den die linke Hälfte selbst gemeldet hat, bleibt bei "kein Link"
+  fw.noteDeviceInfo("L", { side: "L", fw: 3 });
+  fw.noteDeviceInfo("R", { side: "R", fw: 2, left_fw: 0 });
+  fw.noteSenderFw(D.parseSplitFwLine('SPLIT_FW:{"fw":0}', "R"));
+  assert.strictEqual(fw.status().versions.L, 3);
+  fw.noteDeviceInfo("R", { side: "R", fw: 2 });                   // Master ohne left_fw: keine Aussage
+  assert.strictEqual(fw.status().versions.L, 3);
+  fw.noteSenderFw(D.parseSplitFwLine('SPLIT_FW:{"fw":2}', "R"));
+  assert.strictEqual(fw.status().mismatch, false);
+  fw.noteSenderFw(D.parseSplitFwLine('SPLIT_FW:{"fw":-1}', "R")); // linke Firmware ohne Versionsmeldung
+  assert.strictEqual(fw.status().versions.L, 0);
+  assert.strictEqual(fw.status().mismatch, true);
+  // Nur der Master meldet die Sender-Hälfte; kaputte oder fremde Zeilen ändern nichts
+  assert.strictEqual(D.parseSplitFwLine('SPLIT_FW:{"fw":2}', "L"), undefined);
+  assert.strictEqual(D.parseSplitFwLine('SPLIT_FW:{"fw":0}', "R"), null);       // kein Link
+  assert.strictEqual(D.parseSplitFwLine('SPLIT_FW:{"fw":-2}', "R"), undefined);
+  assert.strictEqual(D.parseSplitFwLine('SPLIT_FW:{"fw":1.5}', "R"), undefined);
+  assert.strictEqual(D.parseSplitFwLine("SPLIT_FW:kaputt", "R"), undefined);
+  assert.strictEqual(D.parseSplitFwLine("SPLIT_FW:null", "R"), undefined);
+  assert.strictEqual(D.parseSplitFwLine('SPLIT_KEY:{"fw":2}', "R"), undefined);
+  fw.noteSenderFw(undefined);
+  assert.strictEqual(fw.status().versions.L, 0);
+  // Flash des Masters (forget): der vom Master gemeldete Stand links bleibt, bis der Master "kein Link" meldet
+  fw.forget("R");
+  assert.strictEqual(fw.status().versions.R, null);
+  assert.strictEqual(fw.status().versions.L, 0);
+  fw.noteSenderFw(null);
+  assert.strictEqual(fw.status().versions.L, null);
+  // Flash der linken Hälfte (forget): ein späteres "kein Link" ändert nichts mehr
+  fw.noteSenderFw(2);
+  fw.forget("L");
+  fw.noteSenderFw(null);
+  assert.strictEqual(fw.status().versions.L, null);
+});
+
+test("Firmwarestand: ein erfolgreicher Flash vergisst den Stand der geflashten Hälfte", () => {
+  const src = read("js/editor-events.js");
+  const ok = src.indexOf("if (res.ok && data.success) {");
+  const fail = src.indexOf("} else {", ok);
+  const body = src.slice(ok, fail);
+  assert.ok(ok > 0 && /firmwareVersions\.forget\(side\);\s*updateFirmwareVersionUI\(\);/.test(body));
+});
+
+test("Firmwarestand: DactylVersion.h ist die einzige Quelle beider Hälften", () => {
+  const version = read("firmware/dactyl_right/DactylVersion.h");
+  const v = Number(define(version, "DACTYL_FW_VERSION"));
+  assert.ok(Number.isInteger(v) && v >= 1 && v <= 0xFFFF);
+  assert.ok(logic.includes('#include "DactylVersion.h"'));
+  assert.ok(logic.includes('\\"fw\\":%u'));
+  assert.ok(/DEVICE_INFO_LEFT_FW\(\)\s+splitLeftFwStatus/.test(rightIno));
+  assert.ok(!leftIno.includes("DEVICE_INFO_LEFT_FW"));
+  assert.ok(rightIno.includes('SPLIT_FW:{\\"fw\\":%ld}'));
+});
+
+test("Firmwarestand: links meldet ihn mit dem Lebenszeichen, gleich nach jedem Start von ESP-NOW", () => {
+  const fnBody = (src, sig) => {
+    const start = src.indexOf(sig);
+    assert.ok(start >= 0, `${sig} fehlt`);
+    return src.slice(start, src.indexOf("\n}\n", start));
+  };
+  const heartbeat = fnBody(leftIno, "static void sendHeartbeatIfDue()");
+  assert.ok(heartbeat.includes("queueHeartbeat(sendQueue, heartbeatCounter);"));
+  assert.ok(!heartbeat.includes("SPLIT_OP_HEARTBEAT"));
+  // setupEspNow läuft beim Start, beim Aufwachen und in restartEspNow
+  const setup = fnBody(leftIno, "static bool setupEspNow()");
+  assert.ok(/espNowReady = true;\s*heartbeatCounter = 0;/.test(setup));
+});
+
 test("Split-Diagnose: eine Taste ohne SPLIT_KEY-Release gilt nach dem Timeout als losgelassen", () => {
   const pending = new Map();
   let nextId = 1;

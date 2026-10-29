@@ -152,7 +152,75 @@
     return { press, release, size: () => held.size };
   }
 
+  // Firmwarestand: DEVICE_INFO.fw (DACTYL_FW_VERSION in DactylVersion.h) jeder Hälfte. Der Master meldet
+  // den Stand der Sender-Hälfte in DEVICE_INFO.left_fw und als SPLIT_FW-Zeile auf USB (splitLeftFwStatus):
+  // > 0 = Stand, 0 = unbekannt (kein Link), -1 = Sender-Firmware ohne Versionsmeldung.
+  // Gespeicherter Wert je Hälfte: null = unbekannt, 0 = Firmware vor dem Feld "fw", sonst der Stand.
+  const isFwVersion = v => Number.isInteger(v) && v > 0 && v <= 0xFFFF;
+  // Stand der Sender-Hälfte aus Sicht des Masters; null = kein Link (unbekannt), undefined = ungültiger Wert
+  function senderFwFromMaster(v) {
+    if (isFwVersion(v)) return v;
+    if (v === -1) return 0;
+    return v === 0 ? null : undefined;
+  }
+
+  // SPLIT_FW-Zeile des Masters. Rückgabe: Stand der Sender-Hälfte (wie senderFwFromMaster) oder undefined
+  function parseSplitFwLine(line, lineSide) {
+    const D = root.Dactyl;
+    if (typeof line !== "string" || !line.startsWith("SPLIT_FW:")) return undefined;
+    if (lineSide !== D.getMasterSide() || !D.getSplitSenderSide()) return undefined;
+    try {
+      const evt = JSON.parse(line.substring(9));
+      return evt && typeof evt === "object" ? senderFwFromMaster(evt.fw) : undefined;
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  function createFirmwareVersions() {
+    const D = root.Dactyl;
+    const versions = {};
+    // Hälften, deren Stand nur der Master gemeldet hat (left_fw, SPLIT_FW)
+    const fromMaster = new Set();
+    for (const id of D.SIDE_IDS) versions[id] = null;
+    // DEVICE_INFO einer Hälfte: eigener Stand und, vom Master, der Stand der Sender-Hälfte
+    function noteDeviceInfo(side, info) {
+      if (!Object.prototype.hasOwnProperty.call(versions, side) || !info || typeof info !== "object") return;
+      versions[side] = isFwVersion(info.fw) ? info.fw : 0;
+      fromMaster.delete(side);
+      if (side === D.getMasterSide() && info.left_fw !== undefined) noteSenderFw(senderFwFromMaster(info.left_fw));
+    }
+    // Kein Link (null): ein vom Master gemeldeter Stand gilt nicht mehr, die Hälfte kann inzwischen neu
+    // geflasht sein. Ein Stand, den die Hälfte selbst gemeldet hat, bleibt.
+    function noteSenderFw(fw) {
+      const sender = D.getSplitSenderSide();
+      if (!sender || fw === undefined) return;
+      if (fw === null) {
+        if (fromMaster.has(sender)) {
+          versions[sender] = null;
+          fromMaster.delete(sender);
+        }
+        return;
+      }
+      versions[sender] = fw;
+      fromMaster.add(sender);
+    }
+    // Abweichung, sobald beide Stände bekannt sind; zwei Hälften ohne Feld "fw" gelten als gleich
+    function status() {
+      const known = D.SIDE_IDS.filter(id => versions[id] !== null);
+      const mismatch = known.length === D.SIDE_IDS.length && new Set(known.map(id => versions[id])).size > 1;
+      return { mismatch, versions: { ...versions } };
+    }
+    // Nach dem Flashen einer Hälfte gilt ihr alter Stand nicht mehr, bis sie sich wieder meldet
+    function forget(side) {
+      if (Object.prototype.hasOwnProperty.call(versions, side)) versions[side] = null;
+      fromMaster.delete(side);
+    }
+    return { noteDeviceInfo, noteSenderFw, forget, status };
+  }
+
   root.Dactyl = Object.assign(root.Dactyl || {}, {
+    parseSplitFwLine, createFirmwareVersions,
     parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil
   });

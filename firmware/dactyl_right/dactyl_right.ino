@@ -424,6 +424,8 @@ bool keySentToHost[6][7] = {false};
 bool momentaryLayers[NUM_LAYERS] = {false};
 bool toggleLayers[NUM_LAYERS] = {false};
 
+// DEVICE_INFO enthält auf dem Master auch den Firmwarestand der linken Hälfte (splitLeftFwStatus)
+#define DEVICE_INFO_LEFT_FW() splitLeftFwStatus(bleKeyboard.splitLeft, millis())
 #include "DactylLogic.h"
 #include "DactylConfigBle.h"
 
@@ -526,6 +528,13 @@ void processSplitEvents() {
   if (rep.applied || rep.keyEvents) {
     lastActivityTime = now;
     exitStandby();
+  }
+  // Firmwarestand links bei jeder Änderung für die App (nur USB-Serial; BLE liest DEVICE_INFO.left_fw)
+  static int32_t leftFwReported = 0;
+  int32_t leftFw = splitLeftFwStatus(bleKeyboard.splitLeft, now);
+  if (leftFw != leftFwReported) {
+    leftFwReported = leftFw;
+    Serial.printf("SPLIT_FW:{\"fw\":%ld}\n", (long)leftFw);
   }
   // Ein verlorenes Release löst die App nach SPLIT_KEY_STALE_MS; die Zeile macht den Verlust sichtbar
   if (rep.keyEventsDropped) Serial.printf("SPLIT_KEY_RX_DROPPED (%u verworfen)\n", rep.keyEventsDropped);

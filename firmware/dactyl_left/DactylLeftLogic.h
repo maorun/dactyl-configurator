@@ -156,6 +156,21 @@ bool queueKeyEventDiagnostic(SplitSendQueue &q, bool linkUp, const SplitHidEvent
   return false;
 }
 
+// Lebenszeichen an den Master, einmal pro Intervall. counter zählt die Intervalle: bei 0 geht
+// SPLIT_OP_FW_VERSION raus (wie ein Diagnose-Ereignis, höchstens halbe Warteschlange, damit es auch beim Tippen
+// ankommt; sonst bleibt counter 0 bis zum nächsten Intervall), sonst HEARTBEAT nur bei leerer Warteschlange.
+// Ein Master ohne FW_VERSION verwirft das Paket; die Heartbeats dazwischen halten den Link.
+// Rückgabe: true = eingereiht.
+bool queueHeartbeat(SplitSendQueue &q, uint8_t &counter) {
+  if (counter == 0) {
+    if (!queuePushDiagnostic(q, makeSplitHidEvent(SPLIT_OP_FW_VERSION, (uint16_t)DACTYL_FW_VERSION))) return false;
+    counter = 1;
+    return true;
+  }
+  counter = (uint8_t)((counter + 1) % SPLIT_FW_VERSION_EVERY);
+  return q.count == 0 && queuePush(q, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+}
+
 // Op des Pakets am Kopf der Warteschlange (vor queueOnSendResult lesen), HEARTBEAT bei leerer Warteschlange
 uint8_t queueHeadOp(const SplitSendQueue &q) {
   return q.count ? q.items[q.head].op : (uint8_t)SPLIT_OP_HEARTBEAT;

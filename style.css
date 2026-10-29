@@ -101,6 +101,22 @@ body {
   transition: all 0.25s ease;
 }
 
+.fw-mismatch-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.95rem;
+  border-radius: 20px;
+  font-size: 0.86rem;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+  border: 1px solid var(--warning);
+}
+
+.fw-mismatch-pill[hidden] {
+  display: none;
+}
+
 .bluetooth-status-pill.disconnected {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-muted);

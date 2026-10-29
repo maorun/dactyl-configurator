@@ -352,6 +352,8 @@ async function saveAndFlashToDactyl() {
     }
     if (res.ok && data.success) {
       flashLog.finish(true);
+      firmwareVersions.forget(side);
+      updateFirmwareVersionUI();
       if (hadSerial) {
         try {
           await new Promise(r => setTimeout(r, 1200)); // ESP32 Reboot nach Flashen abwarten

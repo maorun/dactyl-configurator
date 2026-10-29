@@ -89,6 +89,7 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE),
     makeSplitLayerEvent(0x02, 0x08, false),
     makeSplitLayerEvent(0x02, 0x08, true, 1), // links setzt nach eigener Toggle-Änderung
+    makeSplitHidEvent(SPLIT_OP_FW_VERSION, 0xFFFF),
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET); ACTIVITY ist die einzige Op nur der Rückrichtung
   assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT);
@@ -121,6 +122,8 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0x0100, 0),  // REPORT ohne Toggle-Bits
     makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0x0100, 1),  // Ebene 0 rastet nie ein
     makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0, -1),      // Master-Form kommt nie von links
+    makeSplitHidEvent(SPLIT_OP_FW_VERSION, 0),           // 0 = unbekannt, nie gesendet
+    makeSplitHidEvent(SPLIT_OP_FW_VERSION, 1, 1),
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -1423,6 +1426,83 @@ TEST(test_split_peer_is_encrypted_with_lmk) {
   assert(memcmp(lmk, SPLIT_ESPNOW_LMK, SPLIT_ESPNOW_KEY_LEN) == 0);
   // Der LMK ist nicht die PMK (sonst wäre der verschlüsselte Austausch des LMK wirkungslos)
   assert(memcmp(lmk, SPLIT_ESPNOW_PMK, SPLIT_ESPNOW_KEY_LEN) != 0);
+}
+
+// -----------------------------------------------------------------------------
+// Firmwarestand der linken Hälfte (SPLIT_OP_FW_VERSION)
+// -----------------------------------------------------------------------------
+
+TEST(test_fw_version_op_is_valid_only_with_version) {
+  assert(SPLIT_OP_FW_VERSION == 18 && SPLIT_OP_COUNT == 19); // nur anhängen, nie umnummerieren
+  assert(isValidSplitHidEvent(makeSplitHidEvent(SPLIT_OP_FW_VERSION, DACTYL_FW_VERSION)));
+  assert(!isValidSplitHidEvent(makeSplitHidEvent(SPLIT_OP_FW_VERSION, 0)));
+  assert(!isValidSplitHidEvent(makeSplitHidEvent(SPLIT_OP_FW_VERSION, 1, 1)));
+  // Nur links -> Master: die linke Hälfte nimmt das Paket vom Master nicht an
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_FW_VERSION, 1), out;
+  assert(!parseSplitMasterPacket(SPLIT_MASTER_MAC, (const uint8_t *)&ev, sizeof(ev), out));
+}
+
+TEST(test_process_rx_records_left_fw_without_host_and_without_activity) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_FW_VERSION, 7));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 100, nullptr);
+  assert(k.splitLeft.fw == 7 && splitLeftFwStatus(k.splitLeft, 100) == 7);
+  assert(rep.applied == 0 && rep.keyEvents == 0 && k.log.empty());
+  assert(k.splitLeft.linkUp && k.splitLeft.lastRxMs == 100);
+  // Mit Host ebenfalls ohne HID-Wirkung
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_FW_VERSION, 8));
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 200, nullptr);
+  assert(rep.applied == 0 && k.log.empty() && k.splitLeft.fw == 8);
+}
+
+TEST(test_left_fw_status_detects_old_left_firmware) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  assert(splitLeftFwStatus(k.splitLeft, 0) == 0); // kein Link
+  // Linke Firmware ohne FW_VERSION: nur Heartbeats
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1000, nullptr);
+  assert(splitLeftFwStatus(k.splitLeft, 1000 + SPLIT_FW_DETECT_MS - 1) == 0);
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1000 + SPLIT_FW_DETECT_MS - 1, nullptr);
+  assert(splitLeftFwStatus(k.splitLeft, 1000 + SPLIT_FW_DETECT_MS) == -1);
+  // BLE-Task liest millis() vor einem neueren fwSinceMs aus loop(): kein falsches "alt"
+  SplitLeftHeld fresh = {};
+  fresh.linkUp = true;
+  fresh.fwSinceMs = 5000;
+  assert(splitLeftFwStatus(fresh, 4999) == 0);
+  // Fenster > zwei Abstände der Versionsmeldungen (+ 1 s Phase des Heartbeats): eine verlorene Meldung
+  // ergibt kein falsches "alt"
+  assert(SPLIT_FW_DETECT_MS > (2 * SPLIT_FW_VERSION_EVERY + 1) * 1000UL);
+}
+
+TEST(test_new_link_resets_left_fw) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_FW_VERSION, 3));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr);
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100 + SPLIT_LINK_TIMEOUT_MS, nullptr);
+  assert(rep.linkLost && splitLeftFwStatus(k.splitLeft, 100 + SPLIT_LINK_TIMEOUT_MS) == 0);
+  // Linke Hälfte mit älterer Firmware neu geflasht: der alte Stand gilt nicht weiter
+  unsigned long t = 20000;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, t, nullptr);
+  assert(k.splitLeft.fw == 0 && splitLeftFwStatus(k.splitLeft, t) == 0);
+  assert(splitLeftFwStatus(k.splitLeft, t + SPLIT_FW_DETECT_MS) == -1);
+}
+
+TEST(test_combo_release_all_keeps_left_fw) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_FW_VERSION, 4));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL)); // Combo links: releaseAll() bei laufendem Link
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr);
+  assert(splitLeftFwStatus(k.splitLeft, 100) == 4);
 }
 
 int main() {

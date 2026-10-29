@@ -209,6 +209,18 @@ async function startSerialReadLoop(port) {
   }
 }
 
+// Firmwarestand beider Hälften (DEVICE_INFO.fw, left_fw, SPLIT_FW); abweichend: Hinweis "Beide Hälften flashen"
+const firmwareVersions = Dactyl.createFirmwareVersions();
+function updateFirmwareVersionUI() {
+  const pill = document.getElementById("fwMismatchPill");
+  if (!pill) return;
+  const { mismatch, versions } = firmwareVersions.status();
+  const label = v => (v === null ? "unbekannt" : v === 0 ? "ohne Versionsangabe" : `Version ${v}`);
+  pill.hidden = !mismatch;
+  pill.title = "Die Firmware der Hälften ist unterschiedlich. Flashe beide Hälften mit \"Auf Dactyl flashen\". " +
+    Dactyl.SIDE_IDS.map(id => `${SIDE_PROFILES[id].label}: ${label(versions[id])}`).join(", ");
+}
+
 // Gedrückte SPLIT_KEY-Tasten; ein verlorenes Release löst die Taste nach Dactyl.SPLIT_KEY_STALE_MS
 const splitKeyTracker = Dactyl.createSplitKeyTracker(id => {
   const [side, r, c] = id.split("_");
@@ -274,6 +286,8 @@ function handleSerialLine(line, side = null, transport = "ble") {
       const nameText = document.getElementById("btDeviceNameText");
       const statusText = document.getElementById("statusText");
 
+      firmwareVersions.noteDeviceInfo(lineSide, info);
+      updateFirmwareVersionUI();
       const devName = info.name || SIDE_PROFILES[lineSide].deviceName;
       const sideLabel = SIDE_PROFILES[lineSide].label;
       if (pill) {
@@ -347,7 +361,13 @@ function handleSerialLine(line, side = null, transport = "ble") {
     }
   }
 
-  // 2a. Taste der Sender-Hälfte, vom Master über ESP-NOW empfangen (SPLIT_KEY)
+  // 2a. Firmwarestand der Sender-Hälfte, vom Master gemeldet (SPLIT_FW, nur USB)
+  else if (line.startsWith("SPLIT_FW:")) {
+    firmwareVersions.noteSenderFw(Dactyl.parseSplitFwLine(line, lineSide));
+    updateFirmwareVersionUI();
+  }
+
+  // 2b. Taste der Sender-Hälfte, vom Master über ESP-NOW empfangen (SPLIT_KEY)
   else if (line.startsWith("SPLIT_KEY:")) {
     const evt = Dactyl.parseSplitKeyLine(line, lineSide);
     if (!evt) return;

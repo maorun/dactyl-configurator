@@ -121,6 +121,10 @@ static BleKeyboard bleKeyboard("Dactyl Keyboard", "Dactyl DIY", 100);
 void handleConfigCommand(String cmd, bool fromBle = false);
 void sendConfigNotification(String msg, bool addDelay = false);
 
+// Wie dactyl_right.ino: DEVICE_INFO meldet den Stand der linken Hälfte (splitLeftFwStatus)
+static long testLeftFw = 0;
+#define DEVICE_INFO_LEFT_FW() testLeftFw
+
 #include "../dactyl_right/DactylLogic.h"
 
 // =============================================================================
@@ -274,6 +278,24 @@ TEST(test_security_ble_command_rejection) {
   assert(!mockChar.notifications.empty());
   assert(mockChar.value.find("DEVICE_INFO:") != std::string::npos);
   assert(mockChar.value.find("\"side\":\"R\"") != std::string::npos);
+  assert(mockChar.value.find("\"fw\":" + std::to_string(DACTYL_FW_VERSION) + ",") != std::string::npos);
+  // Master-Build: left_fw als letztes Feld, die Zeile endet mit der schließenden Klammer
+  for (long v : {0L, -1L, 65535L}) {
+    testLeftFw = v;
+    handleConfigCommand("GET_INFO", true);
+    std::string tail = ",\"left_fw\":" + std::to_string(v) + "}";
+    assert(mockChar.value.size() > tail.size());
+    assert(mockChar.value.compare(mockChar.value.size() - tail.size(), tail.size(), tail) == 0);
+    assert(mockChar.value.find("\"config_mode\":false,\"left_fw\"") != std::string::npos);
+  }
+  // Ein langer Gerätename schneidet die Zeile nicht ab
+  String savedName = deviceName;
+  deviceName = "1234567890123456789012345678901";
+  testLeftFw = -1;
+  handleConfigCommand("GET_INFO", true);
+  assert(mockChar.value.find("\"left_fw\":-1}") != std::string::npos);
+  deviceName = savedName;
+  testLeftFw = 0;
 
   // ENTER_CONFIG über BLE ist im Tastaturmodus abgelehnt: Config-Modus nur physisch oder per USB
   handleConfigCommand("ENTER_CONFIG", true);

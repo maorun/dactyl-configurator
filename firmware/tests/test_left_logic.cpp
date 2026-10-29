@@ -539,6 +539,40 @@ TEST(test_espnow_boot_retry_stops_after_limit) {
   assert(rtc == 0);
 }
 
+TEST(test_heartbeat_reports_fw_version_first_and_periodically) {
+  SplitSendQueue q;
+  queueReset(q);
+  uint8_t counter = 0;
+  assert(queueHeartbeat(q, counter));
+  assert(q.count == 1 && q.items[q.head].op == SPLIT_OP_FW_VERSION && q.items[q.head].code == DACTYL_FW_VERSION);
+  assert(isValidSplitHidEvent(q.items[q.head]));
+  queueReset(q);
+  // Danach Heartbeats, nach SPLIT_FW_VERSION_EVERY Intervallen wieder der Stand
+  for (int i = 1; i < SPLIT_FW_VERSION_EVERY; i++) {
+    assert(queueHeartbeat(q, counter) && q.items[q.head].op == SPLIT_OP_HEARTBEAT);
+    queueReset(q);
+  }
+  assert(queueHeartbeat(q, counter) && q.items[q.head].op == SPLIT_OP_FW_VERSION);
+}
+
+TEST(test_heartbeat_fw_version_waits_for_queue_room) {
+  SplitSendQueue q;
+  queueReset(q);
+  uint8_t counter = 0;
+  // Beim Tippen ist die Warteschlange nicht leer: der Stand geht trotzdem raus (Diagnose-Grenze)
+  queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  assert(queueHeartbeat(q, counter) && q.count == 2 && counter == 1);
+  // Ein Heartbeat entfällt bei nicht leerer Warteschlange
+  assert(!queueHeartbeat(q, counter) && q.count == 2);
+  // Über der Diagnose-Grenze bleibt der Stand vorgemerkt
+  queueReset(q);
+  counter = 0;
+  while (q.count < SPLIT_DIAG_QUEUE_LIMIT) queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  assert(!queueHeartbeat(q, counter) && counter == 0);
+  queueReset(q);
+  assert(queueHeartbeat(q, counter) && q.items[q.head].op == SPLIT_OP_FW_VERSION);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Firmware Unit Test Suite" << std::endl;

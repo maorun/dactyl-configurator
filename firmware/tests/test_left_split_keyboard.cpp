@@ -335,6 +335,8 @@ TEST(test_get_info_reports_left_names) {
       found = true;
       assert(l.find("\"name\":\"Dactyl Links\"") != std::string::npos);
       assert(l.find("\"side\":\"L\"") != std::string::npos);
+      assert(l.find("\"fw\":" + std::to_string(DACTYL_FW_VERSION) + ",") != std::string::npos);
+      assert(l.find("left_fw") == std::string::npos);
     }
   }
   assert(found);

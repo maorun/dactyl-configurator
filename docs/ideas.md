@@ -18,7 +18,6 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
 
 ## Rangliste
 
-- **Split-Link-Status in der App** `[Firmware/App]` — *Nutzen: mittel · Aufwand: klein* — Der Master kennt Link-Zustand und Drop-Zähler (`SPLIT_KEY_RX_DROPPED`, Link-Timeout). Die App zeigt "Linke Hälfte verbunden / getrennt seit …" und die Zähler. Hilft bei Ausfällen der linken Hälfte und bei den offenen Hardware-Prüfungen.
 - **`GET_CONFIG` mit Combos, Tastenpaaren und Makros** `[Firmware/App]` — *Nutzen: mittel · Aufwand: mittel* — Layout-Diff und "Vom ESP32 laden" lassen diese Teile aus; der Diff zeigt "keine Änderung", obwohl die Makros abweichen können. Mit der Erweiterung ist ein Backup direkt vom Gerät vollständig. Das automatische Backup der App deckt den Hauptfall schon ab.
 - **Mausbewegung (Mouse Keys)** `[Firmware/App]` — *Nutzen: mittel · Aufwand: mittel* — Report ID 3 hat X und Y, es gibt aber nur Klick und Scrollen (`0x130`..`0x134`). Neue Aktionen `MOUSE_UP/DOWN/LEFT/RIGHT` mit Beschleunigung in `processDeferredKeys()`. Die linke Hälfte braucht dafür neue Split-Ops (nur anhängen).
 - **Key Overrides** `[Firmware/App]` — *Nutzen: mittel · Aufwand: mittel* — Modifier + Taste ergibt eine andere Aktion, zum Beispiel `Shift` + `Backspace` = `Delete`. Spart Tastenpaare und Ebenen. Muss `heldModifierMask` und den Zustand in `SplitArbitratedKeyboard` beachten.

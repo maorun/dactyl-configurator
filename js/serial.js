@@ -106,6 +106,7 @@ async function disconnectSerialNow() {
   if (scope.reject) rejectAllPendingAcks("USB-Verbindung getrennt", scope.side);
   serialSide = null;
   serialReader = null;
+  forgetSplitLink();
   abortDeviceSnapshotReadIfDisconnected();
   updateConnectionUI(false, "Nicht verbunden");
   showToast("ESP32 getrennt.");
@@ -221,6 +222,34 @@ function updateFirmwareVersionUI() {
     Dactyl.SIDE_IDS.map(id => `${SIDE_PROFILES[id].label}: ${label(versions[id])}`).join(", ");
 }
 
+// Funkverbindung zur Sender-Hälfte (SPLIT_LINK, DEVICE_INFO.left_link); nur der Master kennt sie
+const splitLinkStatus = Dactyl.createSplitLinkStatus();
+function updateSplitLinkUI() {
+  const pill = document.getElementById("splitLinkPill");
+  const text = document.getElementById("splitLinkText");
+  if (!pill || !text) return;
+  const senderSide = Dactyl.getSplitSenderSide();
+  const view = senderSide
+    ? Dactyl.describeSplitLink(splitLinkStatus.status(), SIDE_PROFILES[senderSide].label,
+        ms => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))
+    : null;
+  pill.hidden = !view;
+  pill.classList.toggle("link-up", !!view && view.state === "up");
+  pill.classList.toggle("link-down", !!view && view.state === "down");
+  if (view) {
+    text.textContent = view.text;
+    pill.title = view.title;
+  }
+}
+// Der Stand stammt nur aus USB zum Master (SPLIT_LINK und DEVICE_INFO.left_link; BLE liefert nur einen
+// Schnappschuss und wird nicht übernommen). Endet diese Verbindung, zeigte der Stand "verbunden", obwohl
+// niemand ihn aktualisiert: vergessen. Eine andere Verbindung (BLE, USB zur Sender-Hälfte) liefert ihn nie.
+function forgetSplitLink() {
+  if (Dactyl.splitLinkStaysValid(connectionState())) return;
+  splitLinkStatus.forget();
+  updateSplitLinkUI();
+}
+
 // Gedrückte SPLIT_KEY-Tasten; ein verlorenes Release löst die Taste nach Dactyl.SPLIT_KEY_STALE_MS
 const splitKeyTracker = Dactyl.createSplitKeyTracker(id => {
   const [side, r, c] = id.split("_");
@@ -288,6 +317,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
 
       firmwareVersions.noteDeviceInfo(lineSide, info);
       updateFirmwareVersionUI();
+      // Nur USB hält den Stand aktuell (SPLIT_LINK); eine BLE-Momentaufnahme veraltete ohne Nachschub
+      if (transport === "usb") {
+        splitLinkStatus.noteDeviceInfo(lineSide, info);
+        updateSplitLinkUI();
+      }
       const devName = info.name || SIDE_PROFILES[lineSide].deviceName;
       const sideLabel = SIDE_PROFILES[lineSide].label;
       if (pill) {
@@ -365,6 +399,12 @@ function handleSerialLine(line, side = null, transport = "ble") {
   else if (line.startsWith("SPLIT_FW:")) {
     firmwareVersions.noteSenderFw(Dactyl.parseSplitFwLine(line, lineSide));
     updateFirmwareVersionUI();
+  }
+
+  // 2a'. Funkverbindung zur Sender-Hälfte, vom Master gemeldet (SPLIT_LINK, nur USB)
+  else if (line.startsWith("SPLIT_LINK:")) {
+    splitLinkStatus.note(Dactyl.parseSplitLinkLine(line, lineSide));
+    updateSplitLinkUI();
   }
 
   // 2b. Taste der Sender-Hälfte, vom Master über ESP-NOW empfangen (SPLIT_KEY)

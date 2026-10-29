@@ -219,8 +219,75 @@
     return { noteDeviceInfo, noteSenderFw, forget, status };
   }
 
+  // Link zur Sender-Hälfte aus Sicht des Masters: SPLIT_LINK-Zeile (USB) und DEVICE_INFO.left_link.
+  // Felder: up (0|1), ms (Zeit seit dem letzten Wechsel), ever (0|1, je ein Paket seit dem Start des Masters),
+  // losses, rx_dropped, key_dropped (Zähler seit dem Start des Masters).
+  const isCount = v => Number.isInteger(v) && v >= 0 && v <= 0xFFFFFFFF;
+  const isFlag = v => v === 0 || v === 1;
+  function sanitizeSplitLink(raw) {
+    if (!raw || typeof raw !== "object") return undefined;
+    if (!isFlag(raw.up) || !isFlag(raw.ever) || !isCount(raw.ms) || !isCount(raw.losses) ||
+        !isCount(raw.rx_dropped) || !isCount(raw.key_dropped)) return undefined;
+    return {
+      up: raw.up === 1, ever: raw.ever === 1, ms: raw.ms,
+      losses: raw.losses, rxDropped: raw.rx_dropped, keyDropped: raw.key_dropped
+    };
+  }
+
+  // SPLIT_LINK-Zeile des Masters. Rückgabe: bereinigter Link-Stand oder undefined
+  function parseSplitLinkLine(line, lineSide) {
+    const D = root.Dactyl;
+    if (typeof line !== "string" || !line.startsWith("SPLIT_LINK:")) return undefined;
+    if (lineSide !== D.getMasterSide() || !D.getSplitSenderSide()) return undefined;
+    try {
+      return sanitizeSplitLink(JSON.parse(line.substring(11)));
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  // Link-Stand mit dem Empfangszeitpunkt: since (Date-ms) = Empfang - ms. Nur der Master kennt den Link.
+  function createSplitLinkStatus(now = Date.now) {
+    const D = root.Dactyl;
+    let state = null;
+    function note(link) {
+      if (!link) return;
+      state = { ...link, since: link.ever ? now() - link.ms : null };
+    }
+    function noteDeviceInfo(side, info) {
+      if (side !== D.getMasterSide() || !info || typeof info !== "object" || info.left_link === undefined) return;
+      // null: der Master empfängt gerade nicht (Config Mode, ESP-NOW nicht gestartet): kein Stand anzeigen
+      if (info.left_link === null) forget();
+      else note(sanitizeSplitLink(info.left_link));
+    }
+    function forget() {
+      state = null;
+    }
+    // null = unbekannt (kein Master verbunden oder Firmware ohne left_link)
+    function status() {
+      return state ? { ...state } : null;
+    }
+    return { note, noteDeviceInfo, forget, status };
+  }
+
+  // USB schiebt jede Änderung des Links nach (SPLIT_LINK), BLE liefert nur den Schnappschuss von GET_INFO.
+  // Der Stand bleibt nur gültig, solange USB zum Master besteht.
+  function splitLinkStaysValid(conn) {
+    return !!(conn.serialUp && conn.serialSide && conn.serialSide === root.Dactyl.getMasterSide());
+  }
+
+  // Anzeige des Links: { state: "up" | "down" | "never", text, title } oder null (nichts anzeigen)
+  function describeSplitLink(status, label, formatTime) {
+    if (!status) return null;
+    const counters = `Verbindungsabbrüche: ${status.losses}, verworfene Pakete (Empfangspuffer): ${status.rxDropped}, ` +
+      `verworfene Tastenmeldungen: ${status.keyDropped} (seit dem Start der rechten Hälfte)`;
+    if (status.up) return { state: "up", text: `${label}: verbunden`, title: counters };
+    if (!status.ever) return { state: "never", text: `${label}: nie verbunden`, title: counters };
+    return { state: "down", text: `${label}: getrennt seit ${formatTime(status.since)}`, title: counters };
+  }
+
   root.Dactyl = Object.assign(root.Dactyl || {}, {
-    parseSplitFwLine, createFirmwareVersions,
+    parseSplitFwLine, createFirmwareVersions, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
     parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil
   });

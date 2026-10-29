@@ -124,6 +124,9 @@ void sendConfigNotification(String msg, bool addDelay = false);
 // Wie dactyl_right.ino: DEVICE_INFO meldet den Stand der linken Hälfte (splitLeftFwStatus)
 static long testLeftFw = 0;
 #define DEVICE_INFO_LEFT_FW() testLeftFw
+// ... und die Link-Statistik (splitLeftLinkJson; das Format prüft test_split_hid.cpp)
+static const char *testLeftLink = "{\"up\":1,\"ms\":1234,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4}";
+#define DEVICE_INFO_LEFT_LINK(buf, size) snprintf(buf, size, "%s", testLeftLink)
 
 #include "../dactyl_right/DactylLogic.h"
 
@@ -279,11 +282,12 @@ TEST(test_security_ble_command_rejection) {
   assert(mockChar.value.find("DEVICE_INFO:") != std::string::npos);
   assert(mockChar.value.find("\"side\":\"R\"") != std::string::npos);
   assert(mockChar.value.find("\"fw\":" + std::to_string(DACTYL_FW_VERSION) + ",") != std::string::npos);
-  // Master-Build: left_fw als letztes Feld, die Zeile endet mit der schließenden Klammer
+  // Master-Build: left_fw und left_link am Ende, die Zeile endet mit der schließenden Klammer
+  std::string linkTail = std::string(",\"left_link\":") + testLeftLink + "}";
   for (long v : {0L, -1L, 65535L}) {
     testLeftFw = v;
     handleConfigCommand("GET_INFO", true);
-    std::string tail = ",\"left_fw\":" + std::to_string(v) + "}";
+    std::string tail = ",\"left_fw\":" + std::to_string(v) + linkTail;
     assert(mockChar.value.size() > tail.size());
     assert(mockChar.value.compare(mockChar.value.size() - tail.size(), tail.size(), tail) == 0);
     assert(mockChar.value.find("\"config_mode\":false,\"left_fw\"") != std::string::npos);
@@ -293,7 +297,19 @@ TEST(test_security_ble_command_rejection) {
   deviceName = "1234567890123456789012345678901";
   testLeftFw = -1;
   handleConfigCommand("GET_INFO", true);
-  assert(mockChar.value.find("\"left_fw\":-1}") != std::string::npos);
+  assert(mockChar.value.find("\"left_fw\":-1" + linkTail) != std::string::npos);
+  // Größte Zahlen in left_link (je 10 Stellen) mit langem Namen: gültig abgeschlossen, im Puffer (448) und
+  // unter dem BLE-Attributlimit (512)
+  testLeftLink = "{\"up\":1,\"ms\":4294967295,\"ever\":1,\"losses\":4294967295,\"rx_dropped\":4294967295,\"key_dropped\":4294967295}";
+  testLeftFw = 65535;
+  handleConfigCommand("GET_INFO", true);
+  std::string maxTail = std::string(",\"left_fw\":65535,\"left_link\":") + testLeftLink + "}";
+  assert(mockChar.value.size() < 448 && mockChar.value.size() > maxTail.size());
+  assert(mockChar.value.compare(mockChar.value.size() - maxTail.size(), maxTail.size(), maxTail) == 0);
+  testLeftLink = "null";                       // Config Mode oder ESP-NOW nicht gestartet (deviceInfoLeftLink)
+  handleConfigCommand("GET_INFO", true);
+  assert(mockChar.value.find(",\"left_link\":null}") != std::string::npos);
+  testLeftLink = "{\"up\":1,\"ms\":1234,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4}";
   deviceName = savedName;
   testLeftFw = 0;
 

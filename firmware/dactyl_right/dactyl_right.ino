@@ -426,6 +426,9 @@ bool toggleLayers[NUM_LAYERS] = {false};
 
 // DEVICE_INFO enthält auf dem Master auch den Firmwarestand der linken Hälfte (splitLeftFwStatus)
 #define DEVICE_INFO_LEFT_FW() splitLeftFwStatus(bleKeyboard.splitLeft, millis())
+// ... und die Link-Statistik der linken Hälfte ("left_link", splitLeftLinkJson)
+int deviceInfoLeftLink(char *buf, size_t size);
+#define DEVICE_INFO_LEFT_LINK(buf, size) deviceInfoLeftLink(buf, size)
 #include "DactylLogic.h"
 #include "DactylConfigBle.h"
 
@@ -435,6 +438,14 @@ static SplitRxQueue splitRxQueue;
 static bool splitRxReady = false;
 static uint32_t splitRxDroppedSeen = 0;
 static bool splitHostWasReady = false;
+static SplitLinkReporter splitLinkReporter;
+
+// DEVICE_INFO.left_link. Im Config Mode und nach einem fehlgeschlagenen Start von ESP-NOW läuft der Empfang
+// nicht (setupSplitReceiver nur im Tastaturmodus): "null" statt eines Stands, der "nie verbunden" vortäuscht.
+int deviceInfoLeftLink(char *buf, size_t size) {
+  if (isConfigMode || !splitRxReady) return snprintf(buf, size, "null");
+  return splitLeftLinkJson(buf, size, bleKeyboard.splitLeft, millis());
+}
 // Eigenes Tippen an die linke Hälfte melden (synchronisierte Inaktivitäts-Timer, DactylSplitHid.h)
 static bool splitActivityPeerReady = false;
 static SplitActivityThrottle splitActivity;
@@ -535,6 +546,12 @@ void processSplitEvents() {
   if (leftFw != leftFwReported) {
     leftFwReported = leftFw;
     Serial.printf("SPLIT_FW:{\"fw\":%ld}\n", (long)leftFw);
+  }
+  // Link-Status und Zähler für die App (nur USB-Serial; BLE liest DEVICE_INFO.left_link)
+  if (splitLinkReportDue(splitLinkReporter, bleKeyboard.splitLeft, now)) {
+    char linkBuf[160];
+    splitLeftLinkJson(linkBuf, sizeof(linkBuf), bleKeyboard.splitLeft, now);
+    Serial.printf("SPLIT_LINK:%s\n", linkBuf);
   }
   // Ein verlorenes Release löst die App nach SPLIT_KEY_STALE_MS; die Zeile macht den Verlust sichtbar
   if (rep.keyEventsDropped) Serial.printf("SPLIT_KEY_RX_DROPPED (%u verworfen)\n", rep.keyEventsDropped);

@@ -1573,7 +1573,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd == "GET_INFO") {
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
-    char buf[320];
+    char buf[448];
     int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
@@ -1583,6 +1583,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW
     n += snprintf(buf + n, sizeof(buf) - n, ",\"left_fw\":%ld", (long)DEVICE_INFO_LEFT_FW());
+    if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
+#endif
+#ifdef DEVICE_INFO_LEFT_LINK
+    n += snprintf(buf + n, sizeof(buf) - n, ",\"left_link\":");
+    if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
+    n += DEVICE_INFO_LEFT_LINK(buf + n, sizeof(buf) - n);
     if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #endif
     snprintf(buf + n, sizeof(buf) - n, "}");

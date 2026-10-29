@@ -14,7 +14,7 @@ Gesammelte Verbesserungsideen für spätere Arbeit. Erledigte Punkte verweisen a
   4. Abhängigkeiten: Eine Voraussetzung steht über dem Eintrag, der sie braucht.
 - Ein langer Plan steht unter "Detailpläne". Der Eintrag in der Rangliste verweist darauf.
 - Ein umgesetzter Eintrag wandert mit seiner PR-Nummer nach "Umgesetzt".
-- Befunde aus Code-Reviews, auch `LOW`, werden im laufenden Review behoben (Regel in `AGENTS.md`). In der Rangliste stehen sie nicht. Unter "Offene LOW-Befunde aus Code-Reviews" stehen nur ausdrücklich zurückgestellte Befunde und Hardware-Prüfungen.
+- Befunde aus Code-Reviews, auch `LOW`, werden im laufenden Review behoben (Regel in `AGENTS.md`). Offene Befunde und Hardware-Prüfungen stehen nicht in dieser Datei, auch zurückgestellte nicht.
 
 ## Rangliste
 

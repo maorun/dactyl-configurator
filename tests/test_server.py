@@ -1647,6 +1647,155 @@ class TestServerHttp(unittest.TestCase):
         finally:
             server.PROFILES_FILE = old
 
+    def with_backup_dirs(self):
+        """Eigene Backup-Ordner je Test; gibt eine Funktion zum Zurücksetzen zurück."""
+        old = (server.BACKUP_DIR, server.LEFT_BACKUP_DIR)
+        folder = tempfile.mkdtemp(dir=self.tmp.name)
+        server.BACKUP_DIR = os.path.join(folder, "right")
+        server.LEFT_BACKUP_DIR = os.path.join(folder, "left")
+
+        def restore():
+            server.BACKUP_DIR, server.LEFT_BACKUP_DIR = old
+        return restore
+
+    def test_backup_skips_same_config_and_limits_sync_rate(self):
+        restore = self.with_backup_dirs()
+        try:
+            a = {"layers": [[[{"tap": "KEY_A"}]]], "source": "user"}
+            b = {"layers": [[[{"tap": "KEY_B"}]]]}
+            c = {"layers": [[[{"tap": "KEY_C"}]]]}
+            t = 1_800_000_000.0
+            first = server.create_backup(a, "R", "sync", now=t)
+            self.assertIsNotNone(first)
+            # Gleicher Inhalt: kein neues Backup, auch nach dem Intervall und beim Flash
+            self.assertIsNone(server.create_backup(a, "R", "flash", now=t + 5000))
+            # Anderer Inhalt innerhalb von 10 Minuten: ein Sync legt keins an, ein Flash schon
+            self.assertIsNone(server.create_backup(b, "R", "sync", now=t + server.BACKUP_MIN_INTERVAL_S - 1))
+            self.assertIsNotNone(server.create_backup(b, "R", "flash", now=t + 10))
+            self.assertIsNotNone(server.create_backup(c, "R", "sync", now=t + 10 + server.BACKUP_MIN_INTERVAL_S))
+            data = server.load_backups("R")
+            self.assertEqual([x["config"]["layers"][0][0][0]["tap"] for x in data["backups"]], ["KEY_C", "KEY_B", "KEY_A"])
+            self.assertEqual([x["reason"] for x in data["backups"]], ["sync", "flash", "sync"])
+            # "source" ist Server-Metadatum und landet nicht im Backup
+            self.assertNotIn("source", data["backups"][-1]["config"])
+            self.assertEqual(data["skipped"], 0)
+            # Die linke Hälfte hat eigene Backups
+            self.assertEqual(server.load_backups("L"), {"backups": [], "skipped": 0})
+            # Eine zurückgestellte Uhr sperrt keine Backups, und das neue Backup bleibt das neueste
+            self.assertIsNotNone(server.create_backup(a, "R", "sync", now=t))
+            self.assertEqual(server.load_backups("R")["backups"][0]["config"], {"layers": [[[{"tap": "KEY_A"}]]]})
+            with self.assertRaises(ValueError):
+                server.create_backup({"layers": []}, "R", "sync", now=t)
+            with self.assertRaises(ValueError):
+                server.create_backup(a, "R", "export", now=t)
+        finally:
+            restore()
+
+    def test_backup_keeps_only_the_newest(self):
+        restore = self.with_backup_dirs()
+        try:
+            t = 1_800_000_000.0
+            for i in range(server.MAX_BACKUPS + 3):
+                # Gleiche Millisekunde für die letzten: die Nummer im Namen trennt sie und hält die Reihenfolge
+                now = t + i if i < server.MAX_BACKUPS else t + server.MAX_BACKUPS
+                cfg = {"layers": [[[{"tap": "KEY_A"}]]], "layerNames": [f"v{i}"]}
+                self.assertIsNotNone(server.create_backup(cfg, "R", "flash", now=now))
+            names = server.backup_file_names(server.BACKUP_DIR)
+            self.assertEqual(len(names), server.MAX_BACKUPS)
+            got = [b["config"]["layerNames"][0] for b in server.load_backups("R")["backups"]]
+            self.assertEqual(got[0], f"v{server.MAX_BACKUPS + 2}")
+            self.assertEqual(got[-1], "v3")
+            # Fremde Dateien im Ordner bleiben unberührt und erscheinen nicht in der Liste
+            self.assertTrue(os.path.exists(os.path.join(server.BACKUP_DIR, ".lock")))
+        finally:
+            restore()
+
+    def test_backup_order_survives_a_clock_set_back(self):
+        restore = self.with_backup_dirs()
+        try:
+            t = 1_800_000_000.0
+            for i in range(server.MAX_BACKUPS):
+                server.create_backup({"layers": [[[{"tap": "KEY_A"}]]], "layerNames": [f"v{i}"]}, "R", "flash", now=t + i)
+            # Uhr um einen Tag zurück: das neue Backup bleibt erhalten, das älteste fällt weg
+            server.create_backup({"layers": [[[{"tap": "KEY_A"}]]], "layerNames": ["neu"]}, "R", "flash", now=t - 86400)
+            got = [b["config"]["layerNames"][0] for b in server.load_backups("R")["backups"]]
+            self.assertEqual(len(got), server.MAX_BACKUPS)
+            self.assertEqual(got[0], "neu")
+            self.assertNotIn("v0", got)
+            self.assertIn("v1", got)
+        finally:
+            restore()
+
+    def test_backup_list_skips_invalid_files(self):
+        restore = self.with_backup_dirs()
+        try:
+            os.makedirs(server.LEFT_BACKUP_DIR)
+            with open(os.path.join(server.LEFT_BACKUP_DIR, "backup-000001-20270101-000000-000.json"), "w", encoding="utf-8") as f:
+                f.write("{kaputt")
+            # R5C0 existiert links nicht: ungültiges Backup
+            bad = {"created": 1, "savedAt": "", "reason": "sync", "config": {"layers": [[[], [], [], [], [], [{"tap": "KEY_A"}]]]}}
+            with open(os.path.join(server.LEFT_BACKUP_DIR, "backup-000002-20270101-000001-000.json"), "w", encoding="utf-8") as f:
+                json.dump(bad, f)
+            self.assertIsNotNone(server.create_backup({"layers": [[[{"tap": "KEY_Q"}]]]}, "L", "sync", now=1_800_000_000.0))
+            data = json.loads(self.request("GET", "/api/backups?side=L")[1])
+            self.assertEqual(len(data["backups"]), 1)
+            self.assertEqual(data["skipped"], 2)
+            self.assertEqual(data["backups"][0]["config"], {"layers": [[[{"tap": "KEY_Q"}]]]})
+        finally:
+            restore()
+
+    def test_backups_http_roundtrip(self):
+        restore = self.with_backup_dirs()
+        origin = {"Origin": "http://localhost:8088"}
+        try:
+            self.assertEqual(json.loads(self.request("GET", "/api/backups?side=R")[1]), {"backups": [], "skipped": 0})
+            cfg = {"layers": [[[{"tap": "KEY_P"}]]]}
+            status, body = self.request("POST", "/api/backups?side=R", body=json.dumps(cfg), headers=origin)
+            self.assertEqual((status, json.loads(body)), (200, {"success": True, "created": True}))
+            # Zweiter Sync direkt danach: kein neues Backup
+            status, body = self.request("POST", "/api/backups?side=R", body=json.dumps({"layers": [[[{"tap": "KEY_O"}]]]}), headers=origin)
+            self.assertEqual((status, json.loads(body)), (200, {"success": True, "created": False}))
+            backups = json.loads(self.request("GET", "/api/backups?side=R")[1])["backups"]
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0]["config"], cfg)
+            self.assertEqual(backups[0]["reason"], "sync")
+            self.assertTrue(backups[0]["id"].startswith("backup-"))
+            self.assertEqual(self.request("POST", "/api/backups?side=R", body=json.dumps({"layers": []}), headers=origin)[0], 400)
+            self.assertEqual(self.request("POST", "/api/backups?side=X", body=json.dumps(cfg), headers=origin)[0], 400)
+            self.assertEqual(self.request("GET", "/api/backups?side=X")[0], 400)
+            self.assertEqual(self.request("POST", "/api/backups?side=R", body=json.dumps(cfg),
+                                          headers={"Origin": "http://evil.example"})[0], 403)
+        finally:
+            restore()
+
+    def test_save_and_flash_creates_a_backup_before_flashing(self):
+        restore = self.with_backup_dirs()
+        old = (server.save_config_and_firmware, server.flash_firmware)
+        seen = {}
+
+        def fake_flash(side, on_output=None):
+            seen["backups"] = len(server.load_backups(side)["backups"])
+            return {"success": True, "port": "/dev/cu.usbserial-a", "side": side}
+
+        server.save_config_and_firmware = lambda cfg, side: None
+        server.flash_firmware = fake_flash
+        try:
+            cfg = {"layers": [[[{"tap": "KEY_F"}]]]}
+            status, _ = self.request("POST", "/api/save_and_flash?side=L", body=json.dumps(cfg),
+                                     headers={"Origin": "http://localhost:8088"})
+            self.assertEqual(status, 200)
+            self.assertEqual(seen["backups"], 1)
+            backup = server.load_backups("L")["backups"][0]
+            self.assertEqual((backup["reason"], backup["config"]), ("flash", cfg))
+            # Ein fehlgeschlagenes Backup hält den Flash nicht auf
+            with mock.patch.object(server, "create_backup", side_effect=OSError("Platte voll")):
+                status, _ = self.request("POST", "/api/save_and_flash?side=L", body=json.dumps(cfg),
+                                         headers={"Origin": "http://localhost:8088"})
+            self.assertEqual(status, 200)
+        finally:
+            server.save_config_and_firmware, server.flash_firmware = old
+            restore()
+
     def test_layout_profiles_are_not_versioned(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
         with open(os.path.join(root, ".gitignore"), encoding="utf-8") as f:
@@ -1657,6 +1806,8 @@ class TestServerHttp(unittest.TestCase):
         for name in ("layout_profiles.json.lock", "layout_profiles_left.json.lock"):
             self.assertIn(name, ignored)
         self.assertIn("layout_profiles*.json.*.bak", ignored)
+        # Automatische Backups vor Sync und Flash
+        self.assertIn("config_backups/", ignored)
 
     def test_save_config_atomic_validation(self):
         # Must reject non-dict or missing layers

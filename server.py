@@ -59,6 +59,13 @@ LEFT_SKETCH_DIR = os.path.join(FIRMWARE_DIR, "dactyl_left")
 PROFILES_FILE = os.path.join(DATA_DIR, "layout_profiles.json")
 LEFT_PROFILES_FILE = os.path.join(DATA_DIR, "layout_profiles_left.json")
 MAX_PROFILES = 32
+# Automatische Backups je Hälfte vor jedem Sync und Flash (lokaler Laufzeitzustand, in .gitignore)
+BACKUP_DIR = os.path.join(DATA_DIR, "config_backups", "right")
+LEFT_BACKUP_DIR = os.path.join(DATA_DIR, "config_backups", "left")
+MAX_BACKUPS = 20
+# Ein Sync legt höchstens alle 10 Minuten ein Backup an (der Live-Sync läuft nach jeder Änderung); ein Flash immer
+BACKUP_MIN_INTERVAL_S = 600
+BACKUP_REASONS = ("sync", "flash")
 # Mit eigenem Datenverzeichnis ist die .ino aus dem Paket die Vorlage; gerendert und kompiliert wird eine Kopie.
 # None: die .ino wird an Ort und Stelle gerendert (Repository).
 SEPARATE_FIRMWARE = FIRMWARE_DIR != SOURCE_FIRMWARE_DIR
@@ -76,9 +83,10 @@ def side_paths(side):
     if side == "L":
         return {"config": LEFT_CONFIG_FILE, "default": LEFT_DEFAULT_CONFIG_FILE, "ino": LEFT_INO_FILE,
                 "template": LEFT_INO_TEMPLATE_FILE or LEFT_INO_FILE, "sketch": LEFT_SKETCH_DIR,
-                "profiles": LEFT_PROFILES_FILE}
+                "profiles": LEFT_PROFILES_FILE, "backups": LEFT_BACKUP_DIR}
     return {"config": CONFIG_FILE, "default": DEFAULT_CONFIG_FILE, "ino": INO_FILE,
-            "template": INO_TEMPLATE_FILE or INO_FILE, "sketch": SKETCH_DIR, "profiles": PROFILES_FILE}
+            "template": INO_TEMPLATE_FILE or INO_FILE, "sketch": SKETCH_DIR, "profiles": PROFILES_FILE,
+            "backups": BACKUP_DIR}
 
 
 def remove_tree(path):
@@ -864,6 +872,93 @@ def save_profiles_atomic(data, side="R"):
         write_file_atomic(path, json.dumps(clean, indent=2))
     return clean["revision"]
 
+# backup-<laufende Nummer>-<UTC-Zeitstempel>.json. Die Nummer legt die Reihenfolge fest, nicht die Uhr:
+# eine zurückgestellte Uhr sortiert ein neues Backup sonst als alt, und das Aufräumen löscht es.
+BACKUP_FILE_RE = re.compile(r"^backup-(\d{6,})-\d{8}-\d{6}-\d{3}\.json$")
+
+
+def backup_file_names(folder):
+    """Backup-Dateien eines Ordners, neueste (höchste Nummer) zuerst."""
+    try:
+        names = os.listdir(folder)
+    except FileNotFoundError:
+        return []
+    matches = [(BACKUP_FILE_RE.match(n), n) for n in names]
+    return [n for _, n in sorted(((int(m.group(1)), n) for m, n in matches if m), reverse=True)]
+
+def backup_sequence(name):
+    return int(BACKUP_FILE_RE.match(name).group(1))
+
+def read_backup_file(path):
+    """Inhalt einer Backup-Datei oder None, wenn sie unlesbar ist."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+def config_fingerprint(config):
+    return json.dumps(config, sort_keys=True, separators=(",", ":"))
+
+def create_backup(config, side="R", reason="sync", now=None):
+    """Speichert die Config einer Hälfte als Backup und behält die letzten MAX_BACKUPS.
+    Kein neues Backup, wenn das letzte dieselbe Config enthält oder (nur reason "sync") jünger als
+    BACKUP_MIN_INTERVAL_S ist. Gibt den Dateinamen zurück, sonst None. Eine ungültige Config ergibt ValueError."""
+    if reason not in BACKUP_REASONS:
+        raise ValueError(f"Ungültiger Backup-Grund: {reason}")
+    config = strip_response_metadata(config)
+    validate_config(config, side)
+    now = time.time() if now is None else now
+    folder = side_paths(side)["backups"]
+    os.makedirs(folder, exist_ok=True)
+    # Prüfen, Schreiben und Aufräumen unter einer Sperre: zwei Fenster oder Sync und Flash gleichzeitig
+    with open(os.path.join(folder, ".lock"), "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        names = backup_file_names(folder)
+        latest = read_backup_file(os.path.join(folder, names[0])) if names else None
+        if latest is not None:
+            if config_fingerprint(latest.get("config")) == config_fingerprint(config):
+                return None
+            created = latest.get("created")
+            # Eine zurückgestellte Uhr (created in der Zukunft) sperrt keine Backups
+            if (reason == "sync" and isinstance(created, (int, float)) and not isinstance(created, bool)
+                    and 0 <= now - created < BACKUP_MIN_INTERVAL_S):
+                return None
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(now)) + f"-{int(now * 1000) % 1000:03d}"
+        # Unter der Sperre ist die nächste Nummer eindeutig
+        sequence = backup_sequence(names[0]) + 1 if names else 1
+        name = f"backup-{sequence:06d}-{stamp}.json"
+        saved_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(now))
+        write_file_atomic(os.path.join(folder, name),
+                          json.dumps({"created": now, "savedAt": saved_at, "reason": reason, "config": config}, indent=2))
+        for old in backup_file_names(folder)[MAX_BACKUPS:]:
+            try:
+                os.remove(os.path.join(folder, old))
+            except FileNotFoundError:
+                pass
+    return name
+
+def load_backups(side="R"):
+    """Backups einer Hälfte, neueste zuerst: { backups: [{ id, savedAt, reason, config }], skipped }.
+    Ein unlesbares oder ungültiges Backup wird übersprungen und nur gezählt."""
+    folder = side_paths(side)["backups"]
+    backups, skipped = [], 0
+    for name in backup_file_names(folder):
+        data = read_backup_file(os.path.join(folder, name))
+        try:
+            if data is None:
+                raise ValueError("unlesbar")
+            config = migrate_config(strip_response_metadata(data.get("config")))
+            validate_config(config, side)
+        except ValueError:
+            skipped += 1
+            continue
+        reason = data.get("reason") if data.get("reason") in BACKUP_REASONS else "sync"
+        saved_at = data.get("savedAt") if isinstance(data.get("savedAt"), str) else ""
+        backups.append({"id": name[:-len(".json")], "savedAt": saved_at, "reason": reason, "config": config})
+    return {"backups": backups, "skipped": skipped}
+
 def find_arduino_cli():
     cli = shutil.which("arduino-cli")
     if cli:
@@ -1224,6 +1319,14 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(200, data)
             return
 
+        if path == "/api/backups":
+            side = parse_side(self.path)
+            if side is None:
+                self.send_json(400, {"success": False, "error": "Ungültiger Parameter 'side' (L oder R)."})
+                return
+            self.send_json(200, load_backups(side))
+            return
+
         if path in STATIC_ALLOWLIST:
             self.path = "/" + STATIC_ALLOWLIST[path]
             super().do_GET()
@@ -1246,7 +1349,7 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
 
-        if path in ("/api/save_and_flash", "/api/config", "/api/profiles"):
+        if path in ("/api/save_and_flash", "/api/config", "/api/profiles", "/api/backups"):
             side = parse_side(self.path)
             if side is None:
                 self.send_json(400, {"success": False, "error": "Ungültiger Parameter 'side' (L oder R)."})
@@ -1273,6 +1376,11 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             except Exception as err:
                 self.send_json(500, {"success": False, "error": str(err)})
                 return
+            # Backup vor dem Flash; ein Fehler dabei hält den Flash nicht auf
+            try:
+                create_backup(config, side, "flash")
+            except (OSError, ValueError) as err:
+                print(f"[BACKUP] Backup vor dem Flash fehlgeschlagen: {err}", file=sys.stderr)
 
             # 2. Flashen (nur auf den Port, der sich als diese Hälfte meldet)
             if parse_qs(urlsplit(self.path).query).get("stream") == ["1"]:
@@ -1295,6 +1403,21 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(500, {"success": False, "error": str(e)})
                 return
             self.send_json(200, {"success": True})
+            return
+
+        if path == "/api/backups":
+            config = self.read_json_body()
+            if config is None:
+                return
+            try:
+                name = create_backup(config, side, "sync")
+            except ValueError as e:
+                self.send_json(400, {"success": False, "error": str(e)})
+                return
+            except OSError as e:
+                self.send_json(500, {"success": False, "error": str(e)})
+                return
+            self.send_json(200, {"success": True, "created": name is not None})
             return
 
         if path == "/api/profiles":

@@ -1771,6 +1771,10 @@ body {
   overflow-wrap: anywhere;
 }
 
+.layout-backups-title {
+  margin: 1rem 0 0.25rem;
+}
+
 .layout-profile-time {
   color: var(--text-muted);
   font-size: 0.8rem;

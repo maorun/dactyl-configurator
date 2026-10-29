@@ -761,6 +761,32 @@ test("README: Aktionscode-Tabelle nennt den Makro-Bereich", () => {
   assert.match(read("README.md"), /\| `0x170` \.\. `0x17F` \| Makro \|/);
 });
 
+test("AGENTS.md: jeder Verweis auf FEATURES.md nennt eine vorhandene Überschrift", () => {
+  const agents = read("AGENTS.md");
+  const features = read("FEATURES.md");
+  const headings = features
+    .split("\n")
+    .filter((l) => /^##+ /.test(l))
+    .map((l) => l.replace(/^#+ /, ""));
+  const refs = [...agents.matchAll(/`FEATURES\.md`, section "([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(refs.length > 10);
+  for (const ref of refs) {
+    assert.ok(
+      headings.some((h) => h.startsWith(ref)),
+      `FEATURES.md hat keine Überschrift "${ref}"`
+    );
+  }
+  assert.doesNotMatch(agents, /^@FEATURES\.md/m);
+});
+
+test("AGENTS.md: Schutzregeln der verschobenen Abschnitte bleiben stehen", () => {
+  const agents = read("AGENTS.md");
+  assert.match(agents, /left half keeps 240 MHz in standby/i);
+  assert.match(agents, /setCpuFrequencyMhz\(\)/);
+  assert.match(agents, /without the key file the build stops with `#error`/i);
+  assert.match(agents, /generate a new key and flash both halves/);
+});
+
 runAll().catch((err) => {
   console.error(err);
   process.exit(1);

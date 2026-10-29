@@ -8,6 +8,8 @@ Ein vollständiges Ökosystem für handverdrahtete ergonomische **Dactyl Manufor
 
 ## ✨ Features
 
+Die vollständige Beschreibung aller Features steht in [`FEATURES.md`](FEATURES.md). Offene Arbeiten stehen in [`ROADMAP.md`](ROADMAP.md).
+
 - **⚡ Kabelloses Live-Remapping:** Über Web-Bluetooth GATT können Tasten und Ebenen-Namen im laufenden Betrieb geändert werden – ohne Neukompilieren oder Kabel. Jede Änderung überträgt die vollständige Konfiguration der verbundenen Hälfte und speichert sie dauerhaft im NVS-Flash des ESP32.
 - **🔌 USB Live-Monitor:** Serieller Echtzeit-Stream (115.200 Baud) zur Anzeige physischer Matrix-Events (`KEY_PRESS`, `KEY_RELEASE`, `LAYER`), entprellt und mit HUD-Visualisierung.
 - **💾 Flashen per Knopfdruck:** Integrierter lokaler Python-Server generiert C++-Keymaps und flasht den ESP32 automatisch per `arduino-cli`.

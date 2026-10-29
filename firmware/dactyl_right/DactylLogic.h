@@ -268,6 +268,11 @@ uint8_t oneShotMaskForAction(uint16_t action) {
 #ifndef MACRO_OUTPUT_READY
 #define MACRO_OUTPUT_READY() true
 #endif
+// Nach jedem nachgeholten Einzel-Tipp (flushDoubleTap). Links: TAP_PENDING 0 sofort hinter den Tipp einreihen,
+// vor die HID-Ereignisse der Taste, die den Tipp ausgelöst hat (DactylSplitHid.h)
+#ifndef DOUBLE_TAP_FLUSHED
+#define DOUBLE_TAP_FLUSHED()
+#endif
 // Abstand zwischen zwei HID-Ereignissen eines Makros (z. B. Drücken und Loslassen eines TAP)
 #define MACRO_STEP_GAP_MS 5
 
@@ -726,6 +731,7 @@ void flushDoubleTap(uint8_t r, uint8_t c) {
   keyPressTime[r][c] = savedPressTime;
   // Die UI hat KEY_RELEASE schon beim Loslassen erhalten; nach dem späten KEY_PRESS erneut senden
   sendKeyReleaseNotification(r, c);
+  DOUBLE_TAP_FLUSHED();
 }
 
 // Eine andere Taste wird gedrückt: wartende Einzel-Tipps vorher senden
@@ -736,6 +742,22 @@ void flushDoubleTapsExcept(uint8_t exceptR, uint8_t exceptC) {
       flushDoubleTap(r, c);
     }
   }
+}
+
+// Ein Tastendruck der anderen Hälfte: alle wartenden Einzel-Tipps vorher senden (Master: vor einem linken
+// Druck aus splitProcessRx; links: auf SPLIT_OP_TAP_FLUSH des Masters)
+void flushAllDoubleTaps() {
+  flushDoubleTapsExcept(NUM_ROWS, NUM_COLS);
+}
+
+// true, wenn ein Einzel-Tipp auf einen möglichen zweiten Tipp wartet (links: SPLIT_OP_TAP_PENDING)
+bool anyDoubleTapWaiting() {
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (doubleTap[r][c].waiting) return true;
+    }
+  }
+  return false;
 }
 
 void doubleTapTick(unsigned long now) {
@@ -890,8 +912,9 @@ void tapHoldTick(unsigned long now) {
 // -----------------------------------------------------------------------------
 // Matrix-Ereignisse (vom Scan in loop() aufgerufen)
 // -----------------------------------------------------------------------------
-void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
-  unsigned long now = millis();
+// now: Zeitpunkt des Anschlags. Der Master führt eine zurückgehaltene Änderung später aus (SplitLocalDefer) und
+// gibt ihre Scan-Zeit mit, damit Tapping-Term und Combo-Fenster die echten Abstände sehen.
+void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long now) {
   if (isPressed) {
     // Wartende Einzel-Tipps anderer Tasten zuerst senden, damit die Reihenfolge der Zeichen stimmt
     flushDoubleTapsExcept(r, c);
@@ -937,14 +960,18 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
   }
 }
 
-void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
-  applyMatrixKeyChange(r, c, isPressed);
+void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long atMs) {
+  applyMatrixKeyChange(r, c, isPressed, atMs);
   // Reines Matrix-Ereignis für die Diagnose (Matrix-Test), unabhängig von Belegung, Ebene und Tap-Hold.
   // Erst nach den HID-Ereignissen senden: die serielle Ausgabe verzögert den Tastendruck nicht.
   // Nur USB-Serial, nie BLE: kein Keylogger-Kanal und keine zusätzliche Last neben den Sync-Acks.
   char matrixBuf[48];
   snprintf(matrixBuf, sizeof(matrixBuf), "MATRIX:{\"r\":%d,\"c\":%d,\"pressed\":%d}", r, c, isPressed ? 1 : 0);
   Serial.println(matrixBuf);
+}
+
+void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
+  onMatrixKeyChange(r, c, isPressed, millis());
 }
 
 // Zeitgesteuerte Entscheidungen: Mod-Tap Tapping-Term, gepufferte Combo-Kandidaten und laufende Makros

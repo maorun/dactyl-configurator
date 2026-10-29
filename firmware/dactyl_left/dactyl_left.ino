@@ -292,7 +292,16 @@ bool toggleLayers[NUM_LAYERS] = {false};
 
 // Makro-Schritte nur bei freiem Platz in der Sendewarteschlange (Reserve für die Tasten des Users)
 #define MACRO_OUTPUT_READY() queueHasRoomForMacro(sendQueue)
+// Doppel-Tipp-Zustand an den Master (SPLIT_OP_TAP_PENDING): TAP_PENDING 0 direkt hinter jedem nachgeholten Tipp
+static SplitTapPendingReporter tapPendingReporter = {};
+static void onDoubleTapFlushed();
+#define DOUBLE_TAP_FLUSHED() onDoubleTapFlushed()
 #include "../dactyl_right/DactylLogic.h"
+
+static void onDoubleTapFlushed() {
+  queueTapPendingIfChanged(sendQueue, tapPendingReporter, !isConfigMode && bleKeyboard.isConnected(),
+                           anyDoubleTapWaiting());
+}
 #include "../dactyl_right/DactylConfigBle.h"
 
 // -----------------------------------------------------------------------------
@@ -317,6 +326,9 @@ static volatile uint32_t callbackSeq = 0;
 
 // Vom Empfangs-Callback (Wi-Fi-Task) gesetzt: Am Master wurde getippt (SPLIT_OP_ACTIVITY)
 static volatile bool masterActivityReceived = false;
+// Vom Empfangs-Callback gesetzt: Der Master hält eine Taste zurück, bis der wartende Einzel-Tipp gesendet ist
+// (SPLIT_OP_TAP_FLUSH); der Melder schickt danach TAP_PENDING 0
+static volatile bool masterTapFlushRequested = false;
 
 // Layer-Abgleich mit dem Master (SPLIT_OP_LAYER_STATE): Briefkasten vom Empfangs-Callback, Sendezustand
 // und die MO-Ebenen des Masters mit Verfall
@@ -337,6 +349,7 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
   SplitHidEvent ev;
   if (info == nullptr || !parseSplitMasterPacket(info->src_addr, data, len, ev)) return;
   if (ev.op == SPLIT_OP_ACTIVITY) masterActivityReceived = true;
+  else if (ev.op == SPLIT_OP_TAP_FLUSH) masterTapFlushRequested = true;
   else splitLayerMailboxPut(masterLayerMailbox, ev);
 }
 
@@ -412,6 +425,8 @@ static bool setupEspNow() {
   }
   espNowReady = true;
   heartbeatCounter = 0;
+  // Der Master löscht die Meldung bei einem neuen Link; ein noch wartender Tipp wird neu gemeldet
+  tapPendingReset(tapPendingReporter, masterTapFlushRequested);
   Serial.println("ESP-NOW bereit (Kanal 1, verschlüsselt, Ziel 2E:BC:BB:81:61:A6)");
   // Nach einem Neustart hält der Master evtl. noch Eingaben dieser Hälfte (kein Link-Timeout bei kurzem
   // Reboot). RELEASE_ALL löst sie; die Bestätigung meldet zugleich den Link, ohne auf den Heartbeat zu warten.
@@ -630,6 +645,9 @@ void loop() {
 
     checkUserCombos();
     processDeferredKeys(millis());
+    // Der Master wartet mit einer Taste: wartende Einzel-Tipps jetzt senden, danach TAP_PENDING 0
+    serviceTapPending(sendQueue, tapPendingReporter, masterTapFlushRequested,
+                      !isConfigMode && bleKeyboard.isConnected(), flushAllDoubleTaps, anyDoubleTapWaiting);
 
     // Config-Combo R0C5 + R4C0 (500 ms gehalten)
     static unsigned long comboStartTime = 0;

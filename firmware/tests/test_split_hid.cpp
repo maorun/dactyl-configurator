@@ -90,8 +90,11 @@ TEST(test_valid_event_per_op) {
     makeSplitLayerEvent(0x02, 0x08, false),
     makeSplitLayerEvent(0x02, 0x08, true, 1), // links setzt nach eigener Toggle-Änderung
     makeSplitHidEvent(SPLIT_OP_FW_VERSION, 0xFFFF),
+    makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1),
+    makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 0),
   };
-  // Alle Ops links -> Master (LAYER_STATE als REPORT und SET); ACTIVITY ist die einzige Op nur der Rückrichtung
+  // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING mit 1 und 0); ACTIVITY und
+  // TAP_FLUSH sind die einzigen Ops nur der Rückrichtung
   assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT);
   for (const SplitHidEvent &ev : ok) assert(parse(SPLIT_LEFT_MAC, ev, out) && out.op == ev.op);
 }
@@ -124,6 +127,9 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0, -1),      // Master-Form kommt nie von links
     makeSplitHidEvent(SPLIT_OP_FW_VERSION, 0),           // 0 = unbekannt, nie gesendet
     makeSplitHidEvent(SPLIT_OP_FW_VERSION, 1, 1),
+    makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 2),
+    makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1, 1),
+    makeSplitHidEvent(SPLIT_OP_TAP_FLUSH),               // nur Master -> links
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -1433,7 +1439,7 @@ TEST(test_split_peer_is_encrypted_with_lmk) {
 // -----------------------------------------------------------------------------
 
 TEST(test_fw_version_op_is_valid_only_with_version) {
-  assert(SPLIT_OP_FW_VERSION == 18 && SPLIT_OP_COUNT == 19); // nur anhängen, nie umnummerieren
+  assert(SPLIT_OP_FW_VERSION == 18); // nur anhängen, nie umnummerieren
   assert(isValidSplitHidEvent(makeSplitHidEvent(SPLIT_OP_FW_VERSION, DACTYL_FW_VERSION)));
   assert(!isValidSplitHidEvent(makeSplitHidEvent(SPLIT_OP_FW_VERSION, 0)));
   assert(!isValidSplitHidEvent(makeSplitHidEvent(SPLIT_OP_FW_VERSION, 1, 1)));
@@ -1613,6 +1619,211 @@ TEST(test_link_report_sends_changes_at_once_and_throttles_counters) {
   g.keyDropped = 2;
   assert(!splitLinkReportDue(w, g, 0xFFFFFF00UL + 500));
   assert(splitLinkReportDue(w, g, 0xFFFFFF00UL + SPLIT_LINK_REPORT_MS));
+}
+
+// -----------------------------------------------------------------------------
+// Doppel-Tipp über beide Hälften (TAP_PENDING, TAP_FLUSH, onBeforeLeftPress, SplitLocalDefer)
+// -----------------------------------------------------------------------------
+TEST(test_tap_ops_are_appended) {
+  assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20 && SPLIT_OP_COUNT == 21);
+}
+
+TEST(test_tap_flush_accepted_only_from_master_without_values) {
+  SplitHidEvent out;
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_TAP_FLUSH), out) && out.op == SPLIT_OP_TAP_FLUSH);
+  assert(!parseMaster(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_TAP_FLUSH), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_TAP_FLUSH, 1), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_TAP_FLUSH, 0, 1), out));
+  // TAP_PENDING geht nur links -> Master
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1), out));
+}
+
+static std::vector<std::string> rxOrder;
+static void recordBeforePress(const SplitHidEvent &ev) { rxOrder.push_back("before" + std::to_string(ev.op)); }
+static void recordAppliedOrder(const SplitHidEvent &ev) { rxOrder.push_back("applied" + std::to_string(ev.op)); }
+
+TEST(test_process_rx_calls_before_left_press_before_each_press) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  rxOrder.clear();
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_RELEASE, 'a'));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_MOUSE_CLICK, 1));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, recordAppliedOrder, nullptr, nullptr, recordBeforePress);
+  // Der Master sendet seine wartenden Tipps vor dem linken Druck; Release, Heartbeat und Meldungen nicht
+  assert((rxOrder == std::vector<std::string>{"before1", "applied1", "applied2", "before10", "applied10"}));
+  assert(k.splitLeft.tapPending);
+}
+
+TEST(test_process_rx_skips_before_left_press_without_host) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  rxOrder.clear();
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, false, 100, recordAppliedOrder, nullptr, nullptr, recordBeforePress);
+  assert(rxOrder.empty());
+}
+
+TEST(test_press_ops_for_before_left_press) {
+  const uint8_t press[] = {SPLIT_OP_KEY_PRESS, SPLIT_OP_KEY_WRITE, SPLIT_OP_MEDIA_PRESS, SPLIT_OP_MEDIA_WRITE,
+                           SPLIT_OP_MOUSE_PRESS, SPLIT_OP_MOUSE_CLICK, SPLIT_OP_MOUSE_SCROLL,
+                           SPLIT_OP_ONE_SHOT_PRESS, SPLIT_OP_CAPS_WORD_TOGGLE};
+  for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
+    bool expected = false;
+    for (uint8_t p : press) if (p == op) expected = true;
+    assert(splitIsPressOp(op) == expected);
+  }
+}
+
+TEST(test_left_tap_pending_from_rx_without_host_and_without_activity) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 1000, nullptr);
+  assert(rep.applied == 0 && rep.keyEvents == 0 && k.log.empty());
+  assert(splitLeftTapPending(k.splitLeft, 1000));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 0));
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1010, nullptr);
+  assert(rep.applied == 0 && k.log.empty() && !splitLeftTapPending(k.splitLeft, 1010));
+}
+
+TEST(test_left_tap_pending_expires_and_clears_on_link_change) {
+  SplitLeftHeld h = {};
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1), 1000);
+  assert(splitLeftTapPending(h, 1000 + SPLIT_TAP_PENDING_MAX_MS - 1));
+  // Eine verlorene 0 bremst den Master nicht dauerhaft
+  assert(!splitLeftTapPending(h, 1000 + SPLIT_TAP_PENDING_MAX_MS));
+  // Überlauf von millis()
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1), 0xFFFFFF00UL);
+  assert(splitLeftTapPending(h, 0xFFFFFF00UL + 300));
+  // Link-Ausfall löscht die Meldung
+  RecordingSink s;
+  assert(splitCheckLinkTimeout(h, 0xFFFFFF00UL + SPLIT_LINK_TIMEOUT_MS, s));
+  assert(!h.tapPending && !splitLeftTapPending(h, 0xFFFFFF00UL + SPLIT_LINK_TIMEOUT_MS));
+  // Ein neuer Link beginnt ohne Meldung, auch wenn tapPending noch gesetzt wäre
+  h.tapPending = true;
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_HEARTBEAT), 5000);
+  assert(!splitLeftTapPending(h, 5000));
+}
+
+TEST(test_local_defer_holds_until_left_tap_sent) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  assert(!splitDeferShouldHold(d, false));       // ohne wartenden linken Tipp: sofort ausführen
+  assert(splitDeferShouldHold(d, true));
+  assert(splitDeferPush(d, 2, 1, true, 1000));
+  assert(splitDeferPush(d, 2, 1, false, 1020));
+  assert(splitDeferShouldHold(d, false));        // ältere Änderungen warten: die neue überholt sie nicht
+  // TAP_FLUSH genau einmal je Runde
+  assert(splitDeferTakeFlushRequest(d));
+  assert(!splitDeferTakeFlushRequest(d));
+  assert(!splitDeferReplayDue(d, true, 1000 + SPLIT_TAP_FLUSH_TIMEOUT_MS - 1));
+  assert(splitDeferReplayDue(d, false, 1001));    // links meldet 0: sofort
+  assert(splitDeferReplayDue(d, true, 1000 + SPLIT_TAP_FLUSH_TIMEOUT_MS)); // Zeitgrenze
+  SplitDeferredKey k;
+  assert(splitDeferPop(d, k) && k.r == 2 && k.c == 1 && k.pressed);
+  assert(splitDeferPop(d, k) && !k.pressed);
+  assert(!splitDeferPop(d, k));
+  assert(!splitDeferReplayDue(d, false, 2000));
+  // Neue Runde: neue Zeitgrenze und neue Anforderung
+  assert(splitDeferPush(d, 0, 0, true, 3000));
+  assert(splitDeferTakeFlushRequest(d));
+  assert(!splitDeferReplayDue(d, true, 3000 + SPLIT_TAP_FLUSH_TIMEOUT_MS - 1));
+}
+
+static std::vector<std::string> deferLog;
+static std::vector<unsigned long> deferTimes;
+static void deferApply(uint8_t r, uint8_t c, bool pressed, unsigned long atMs) {
+  deferLog.push_back(std::string(pressed ? "d" : "u") + std::to_string(r) + std::to_string(c));
+  deferTimes.push_back(atMs);
+}
+static void deferFlush() { deferLog.push_back("flush"); }
+
+TEST(test_defer_apply_or_hold_and_replay_order) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  deferLog.clear();
+  deferTimes.clear();
+  splitDeferApplyOrHold(d, 1, 1, true, false, 100, deferApply);   // ohne linken Tipp: sofort
+  assert((deferLog == std::vector<std::string>{"d11"}));
+  splitDeferApplyOrHold(d, 2, 2, true, true, 110, deferApply);    // zurückgehalten
+  splitDeferApplyOrHold(d, 2, 2, false, false, 120, deferApply);  // hinter der älteren Änderung
+  assert(deferLog.size() == 1 && d.count == 2);
+  splitDeferReplay(d, deferApply);
+  assert((deferLog == std::vector<std::string>{"d11", "d22", "u22"}) && d.count == 0);
+  // Jede Änderung behält ihre Scan-Zeit (Tapping-Term und Combo-Fenster)
+  assert((deferTimes == std::vector<unsigned long>{100, 110, 120}));
+}
+
+TEST(test_defer_full_buffer_applies_oldest_first) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  deferLog.clear();
+  for (int i = 0; i < SPLIT_DEFER_SIZE; i++) splitDeferApplyOrHold(d, 0, (uint8_t)(i % 7), true, true, 100, deferApply);
+  assert(deferLog.empty());
+  splitDeferApplyOrHold(d, 5, 6, true, true, 100, deferApply);
+  assert(deferLog.size() == SPLIT_DEFER_SIZE + 1 && deferLog.front() == "d00" && deferLog.back() == "d56");
+  assert(d.count == 0);
+}
+
+TEST(test_before_left_press_replays_only_without_left_tap_pending) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  deferLog.clear();
+  splitDeferApplyOrHold(d, 3, 4, true, true, 100, deferApply);
+  splitBeforeLeftPress(d, true, deferApply, deferFlush);          // nachgeholter linker Tipp: X bleibt zurück
+  assert((deferLog == std::vector<std::string>{"flush"}) && d.count == 1);
+  splitBeforeLeftPress(d, false, deferApply, deferFlush);         // späterer linker Druck: X zuerst
+  assert((deferLog == std::vector<std::string>{"flush", "d34", "flush"}) && d.count == 0);
+}
+
+// Ablauf am Master: linker Tipp A wartet (TAP_PENDING 1), Master-Taste X wird zurückgehalten. Die Antwort auf
+// TAP_FLUSH bringt A (Press, Release), dann TAP_PENDING 0, dann einen späteren linken Druck Y.
+// Am Mac: A, dann X, dann Y.
+static SplitLocalDefer rxDefer;
+static Kbd *rxKbd = nullptr;
+static void rxDeferApply(uint8_t r, uint8_t c, bool pressed, unsigned long) {
+  rxOrder.push_back(std::string(pressed ? "local-d" : "local-u") + std::to_string(r) + std::to_string(c));
+}
+static void rxBeforePress(const SplitHidEvent &) {
+  splitBeforeLeftPress(rxDefer, splitLeftTapPending(rxKbd->splitLeft, 120), rxDeferApply, [] {});
+}
+static void rxAppliedCode(const SplitHidEvent &ev) {
+  rxOrder.push_back("left-" + std::to_string(ev.op) + ":" + std::to_string(ev.code));
+}
+
+TEST(test_process_rx_sends_flushed_left_tap_before_held_master_key) {
+  Kbd k;
+  rxKbd = &k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  rxOrder.clear();
+  splitDeferReset(rxDefer);
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, rxAppliedCode, nullptr, nullptr, rxBeforePress);
+  splitDeferApplyOrHold(rxDefer, 2, 2, true, splitLeftTapPending(k.splitLeft, 105), 105, rxDeferApply);
+  assert(rxOrder.empty() && rxDefer.count == 1);
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_RELEASE, 'a'));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 0));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'y'));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 120, rxAppliedCode, nullptr, nullptr, rxBeforePress);
+  assert((rxOrder == std::vector<std::string>{"left-1:97", "left-2:97", "local-d22", "left-1:121"}));
+  assert(rxDefer.count == 0);
+}
+
+TEST(test_local_defer_full_buffer_rejects) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  for (int i = 0; i < SPLIT_DEFER_SIZE; i++) assert(splitDeferPush(d, 0, (uint8_t)(i % 7), (i & 1) == 0, 100));
+  assert(!splitDeferPush(d, 1, 1, true, 100));
+  SplitDeferredKey k;
+  assert(splitDeferPop(d, k) && k.c == 0 && k.pressed); // Reihenfolge bleibt
 }
 
 int main() {

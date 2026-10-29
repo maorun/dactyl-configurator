@@ -41,7 +41,9 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_CAPS_WORD_TOGGLE = 16, // Caps Word umschalten, ohne Werte
   SPLIT_OP_LAYER_STATE = 17,  // beide Richtungen: Layer-Zustand des Absenders (makeSplitLayerEvent)
   SPLIT_OP_FW_VERSION = 18,   // links -> Master: code = DACTYL_FW_VERSION (1..65535), ohne HID-Wirkung
-  SPLIT_OP_COUNT = 19
+  SPLIT_OP_TAP_PENDING = 19,  // links -> Master: code 1 = ein Einzel-Tipp wartet auf den zweiten Tipp, 0 = keiner
+  SPLIT_OP_TAP_FLUSH = 20,    // nur Master -> links: wartende Einzel-Tipps jetzt senden, ohne Werte
+  SPLIT_OP_COUNT = 21
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -113,6 +115,8 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
       return isValidSplitLayerEvent(ev);
     case SPLIT_OP_FW_VERSION:
       return ev.code != 0 && ev.arg == 0;
+    case SPLIT_OP_TAP_PENDING:
+      return ev.code <= 1 && ev.arg == 0;
     case SPLIT_OP_KEY_EVENT:
       return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_KEY_EVENT_MASK) == 0 &&
              splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
@@ -141,15 +145,15 @@ inline bool parseSplitHidPacket(const uint8_t *srcMac, const uint8_t *data, int 
 // Paket verschiebt das Einschlafen nur um ein Intervall.
 #define SPLIT_ACTIVITY_INTERVAL_MS 10000
 
-// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY ohne Werte oder ein Master-LAYER_STATE
-// (arg < 0, der Master führt die Toggles)
+// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY oder TAP_FLUSH ohne Werte oder ein
+// Master-LAYER_STATE (arg < 0, der Master führt die Toggles)
 inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, int len, SplitHidEvent &out) {
   if (srcMac == nullptr || data == nullptr) return false;
   if (memcmp(srcMac, SPLIT_MASTER_MAC, sizeof(SPLIT_MASTER_MAC)) != 0) return false;
   if (len != (int)sizeof(SplitHidEvent)) return false;
   SplitHidEvent ev;
   memcpy(&ev, data, sizeof(ev));
-  bool ok = (ev.op == SPLIT_OP_ACTIVITY && ev.code == 0 && ev.arg == 0) ||
+  bool ok = ((ev.op == SPLIT_OP_ACTIVITY || ev.op == SPLIT_OP_TAP_FLUSH) && ev.code == 0 && ev.arg == 0) ||
             isValidSplitMasterLayerEvent(ev);
   if (!ok) return false;
   out = ev;
@@ -543,6 +547,9 @@ struct SplitLeftHeld {
   uint32_t linkLosses;           // Link-Timeouts
   uint32_t rxDropped;            // verworfene Pakete bei vollem Empfangsring
   uint32_t keyDropped;           // KEY_EVENTs über SPLIT_KEY_EVENTS_PER_RX (nicht gemeldet)
+  // Wartender Einzel-Tipp links (SPLIT_OP_TAP_PENDING) und Empfangszeit der Meldung
+  bool tapPending;
+  unsigned long tapPendingMs;
 };
 
 inline void splitCountAdd(uint32_t &counter, uint32_t n) {
@@ -602,14 +609,20 @@ inline void splitReleaseHeld(SplitLeftHeld &h, SplitHidSink &sink) {
 
 // Für jedes gültige Paket der linken Hälfte, vor der Auswertung: Link-Zustand und Firmwarestand.
 // Ein neuer Link setzt den Stand zurück: Flashen der linken Hälfte dauert länger als SPLIT_LINK_TIMEOUT_MS.
+// Ein neuer Link löscht auch einen gemeldeten wartenden Einzel-Tipp (Meldung aus der Zeit vor dem Ausfall).
 inline void splitNoteLeftRx(SplitLeftHeld &h, const SplitHidEvent &ev, unsigned long nowMs) {
   if (!h.linkUp) {
     h.fw = 0;
     h.fwSinceMs = nowMs;
     h.linkChangedMs = nowMs;
     h.everUp = true;
+    h.tapPending = false;
   }
   if (ev.op == SPLIT_OP_FW_VERSION) h.fw = ev.code;
+  if (ev.op == SPLIT_OP_TAP_PENDING) {
+    h.tapPending = ev.code != 0;
+    h.tapPendingMs = nowMs;
+  }
   h.lastRxMs = nowMs;
   h.linkUp = true;
 }
@@ -722,8 +735,136 @@ inline bool splitCheckLinkTimeout(SplitLeftHeld &h, unsigned long nowMs, SplitHi
   h.linkUp = false;
   h.linkChangedMs = h.lastRxMs; // der Link ist seit dem letzten Paket weg, nicht erst seit der Erkennung
   splitCountAdd(h.linkLosses, 1);
+  h.tapPending = false;
   splitReleaseHeld(h, sink);
   return true;
+}
+
+// -----------------------------------------------------------------------------
+// Doppel-Tipp über beide Hälften (SPLIT_OP_TAP_PENDING, SPLIT_OP_TAP_FLUSH)
+// -----------------------------------------------------------------------------
+// Eine Taste mit Doppel-Tipp-Aktion hält ihren Einzel-Tipp bis zum Ende des Tapping-Terms zurück
+// (DactylLogic.h). Eine Taste derselben Hälfte sendet ihn vorher; eine Taste der anderen Hälfte auch:
+// - Master: vor einem linken Druck ruft splitProcessRx onBeforeLeftPress (flushAllDoubleTaps).
+// - Links: die linke Hälfte meldet TAP_PENDING 1, solange ein Einzel-Tipp wartet, und 0 danach. Der Master
+//   hält eigene Matrix-Änderungen in dieser Zeit zurück (SplitLocalDefer), sendet einmal TAP_FLUSH und
+//   führt sie aus, sobald links 0 meldet (nach dem Tipp in derselben Warteschlange) oder nach
+//   SPLIT_TAP_FLUSH_TIMEOUT_MS. Eine Meldung gilt höchstens SPLIT_TAP_PENDING_MAX_MS (länger als der
+//   größte Tapping-Term von 500 ms), damit eine verlorene 0 den Master nicht dauerhaft bremst.
+// Eine linke Firmware ohne TAP_PENDING meldet nie 1: der Master hält nichts zurück (Verhalten wie zuvor).
+#define SPLIT_TAP_PENDING_MAX_MS 600UL
+#define SPLIT_TAP_FLUSH_TIMEOUT_MS 50UL
+#define SPLIT_DEFER_SIZE 16
+
+inline bool splitLeftTapPending(const SplitLeftHeld &h, unsigned long nowMs) {
+  return h.linkUp && h.tapPending && (unsigned long)(nowMs - h.tapPendingMs) < SPLIT_TAP_PENDING_MAX_MS;
+}
+
+// Linke Druck-Operationen: vor ihnen sendet der Master seine wartenden Einzel-Tipps (Zeichenreihenfolge)
+inline bool splitIsPressOp(uint8_t op) {
+  switch (op) {
+    case SPLIT_OP_KEY_PRESS:
+    case SPLIT_OP_KEY_WRITE:
+    case SPLIT_OP_MEDIA_PRESS:
+    case SPLIT_OP_MEDIA_WRITE:
+    case SPLIT_OP_MOUSE_PRESS:
+    case SPLIT_OP_MOUSE_CLICK:
+    case SPLIT_OP_MOUSE_SCROLL:
+    case SPLIT_OP_ONE_SHOT_PRESS:
+    case SPLIT_OP_CAPS_WORD_TOGGLE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// Zurückgehaltene Matrix-Änderungen des Masters in ihrer Reihenfolge
+struct SplitDeferredKey {
+  uint8_t r;
+  uint8_t c;
+  bool pressed;
+  unsigned long atMs;  // Scan-Zeit der Änderung (Tapping-Term und Combo-Fenster beim Ausführen)
+};
+
+struct SplitLocalDefer {
+  SplitDeferredKey items[SPLIT_DEFER_SIZE];
+  uint8_t head;
+  uint8_t count;
+  unsigned long sinceMs;  // erste zurückgehaltene Änderung
+  bool flushSent;         // TAP_FLUSH für diese Runde schon angefordert
+};
+
+inline void splitDeferReset(SplitLocalDefer &d) {
+  memset(&d, 0, sizeof(d));
+}
+
+// true, wenn eine neue Matrix-Änderung zurückzuhalten ist: links wartet ein Einzel-Tipp, oder ältere
+// Änderungen warten noch (sonst überholte die neue sie)
+inline bool splitDeferShouldHold(const SplitLocalDefer &d, bool leftTapPending) {
+  return d.count > 0 || leftTapPending;
+}
+
+// false bei vollem Puffer: der Aufrufer führt dann alle zurückgehaltenen Änderungen und diese sofort aus
+inline bool splitDeferPush(SplitLocalDefer &d, uint8_t r, uint8_t c, bool pressed, unsigned long nowMs) {
+  if (d.count >= SPLIT_DEFER_SIZE) return false;
+  if (d.count == 0) {
+    d.sinceMs = nowMs;
+    d.flushSent = false;
+  }
+  d.items[(d.head + d.count) % SPLIT_DEFER_SIZE] = {r, c, pressed, nowMs};
+  d.count++;
+  return true;
+}
+
+// true genau einmal je Runde: jetzt TAP_FLUSH an die linke Hälfte senden (kein Retry, die Zeitgrenze greift)
+inline bool splitDeferTakeFlushRequest(SplitLocalDefer &d) {
+  if (d.count == 0 || d.flushSent) return false;
+  d.flushSent = true;
+  return true;
+}
+
+// true, wenn die zurückgehaltenen Änderungen jetzt auszuführen sind
+inline bool splitDeferReplayDue(const SplitLocalDefer &d, bool leftTapPending, unsigned long nowMs) {
+  return d.count > 0 && (!leftTapPending || (unsigned long)(nowMs - d.sinceMs) >= SPLIT_TAP_FLUSH_TIMEOUT_MS);
+}
+
+inline bool splitDeferPop(SplitLocalDefer &d, SplitDeferredKey &out) {
+  if (d.count == 0) return false;
+  out = d.items[d.head];
+  d.head = (uint8_t)((d.head + 1) % SPLIT_DEFER_SIZE);
+  d.count--;
+  return true;
+}
+
+// Alle zurückgehaltenen Änderungen in ihrer Reihenfolge ausführen. apply(r, c, pressed, atMs) setzt keyState und
+// ruft onMatrixKeyChange mit der Scan-Zeit (dactyl_right.ino).
+template <class ApplyFn>
+void splitDeferReplay(SplitLocalDefer &d, ApplyFn apply) {
+  SplitDeferredKey k;
+  while (splitDeferPop(d, k)) apply(k.r, k.c, k.pressed, k.atMs);
+}
+
+// Neue Matrix-Änderung des Masters: zurückhalten oder sofort ausführen. Ein voller Puffer führt erst die
+// älteren Änderungen aus, dann diese.
+template <class ApplyFn>
+void splitDeferApplyOrHold(SplitLocalDefer &d, uint8_t r, uint8_t c, bool pressed, bool leftTapPending,
+                           unsigned long nowMs, ApplyFn apply) {
+  if (splitDeferShouldHold(d, leftTapPending)) {
+    if (splitDeferPush(d, r, c, pressed, nowMs)) return;
+    splitDeferReplay(d, apply);
+  }
+  apply(r, c, pressed, nowMs);
+}
+
+// Vor einem linken Druck (onBeforeLeftPress). Meldet links noch einen wartenden Tipp, ist dieser Druck der
+// nachgeholte linke Tipp: er kam vor den zurückgehaltenen Master-Tasten, sie bleiben zurück. Links reiht
+// TAP_PENDING 0 direkt hinter jeden nachgeholten Tipp ein (DOUBLE_TAP_FLUSHED); jeder spätere linke Druck sieht
+// deshalb leftTapPending false und lässt die zurückgehaltenen Master-Tasten zuerst laufen. Danach flush() für die
+// wartenden Einzel-Tipps des Masters.
+template <class ApplyFn, class FlushFn>
+void splitBeforeLeftPress(SplitLocalDefer &d, bool leftTapPending, ApplyFn apply, FlushFn flush) {
+  if (!leftTapPending) splitDeferReplay(d, apply);
+  flush();
 }
 
 // Link-Meldung an die App (SPLIT_LINK-Zeile): ein Wechsel des Links sofort, geänderte Zähler höchstens alle
@@ -1071,11 +1212,14 @@ typedef void (*SplitRxAppliedFn)(const SplitHidEvent &ev);
 //   erzeugt höchstens eine LAYER-Zeile je loop()). Ein SET in einem überholten Paket entfällt damit; die
 //   linke Hälfte sendet es weiter, bis der Master seine Nummer zurückmeldet.
 // - FW_VERSION hat keine HID-Wirkung: splitNoteLeftRx setzt splitLeft.fw auch ohne Host; es zählt nicht als
-//   Aktivität.
+//   Aktivität. TAP_PENDING ebenso (splitLeft.tapPending).
+// - onBeforeLeftPress läuft mit Host vor jeder linken Druck-Operation (splitIsPressOp), auch vor einem
+//   Retry-Duplikat: der Master sendet dort seine wartenden Einzel-Tipps (Zeichenreihenfolge).
 template <class Kbd>
 SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, bool &hostWasReady,
                              bool hostReady, unsigned long nowMs, SplitRxAppliedFn onApplied,
-                             SplitRxAppliedFn onKeyEvent = nullptr, SplitRxAppliedFn onLayer = nullptr) {
+                             SplitRxAppliedFn onKeyEvent = nullptr, SplitRxAppliedFn onLayer = nullptr,
+                             SplitRxAppliedFn onBeforeLeftPress = nullptr) {
   SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -1093,7 +1237,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   uint8_t keyEvents = 0;
   while (splitRxPop(q, ev)) {
     splitNoteLeftRx(kbd.splitLeft, ev, nowMs);
-    if (ev.op == SPLIT_OP_FW_VERSION) continue;
+    if (ev.op == SPLIT_OP_FW_VERSION || ev.op == SPLIT_OP_TAP_PENDING) continue;
     if (ev.op == SPLIT_OP_KEY_EVENT) {
       kbd.splitLeft.lastRxMs = nowMs;
       kbd.splitLeft.linkUp = true;
@@ -1120,6 +1264,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
       kbd.splitLeft.linkUp = true;
       continue;
     }
+    if (onBeforeLeftPress && splitIsPressOp(ev.op)) onBeforeLeftPress(ev);
     if (!splitApplyHidEvent(kbd.splitLeft, ev, nowMs, kbd)) continue;
     if (rep.applied < 255) rep.applied++;
     if (onApplied) onApplied(ev);

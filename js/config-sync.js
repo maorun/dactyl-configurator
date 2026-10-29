@@ -54,6 +54,10 @@ async function writeConfigToESP32(options = {}) {
   let completedSteps = 0;
 
   try {
+    // Vor dem ersten Befehl, nach dem Setzen von isAutoSyncing (kein zweiter Sync während des Wartens):
+    // server.py speichert den Stand als automatisches Backup (höchstens alle 10 Minuten)
+    await backupConfigOnServer(side, cfg);
+
     // Fehler bei SET_K (ungültige Argumente, belegter Mutex) meldet die Firmware asynchron als ERR
     let batchError = null;
     const errWatcher = (okPrefix) => waitForAck(okPrefix, 60000, side).then(ok => { if (ok === false && !batchError) batchError = okPrefix; });
@@ -221,6 +225,41 @@ async function writeConfigToESP32(options = {}) {
       if (progressLabel) progressLabel.style.display = "none";
     }, 600);
   }
+}
+
+// Automatisches Backup vor einem Sync (POST /api/backups?side=L|R). Ein Fehler hält den Sync nicht auf.
+// Ein hängender Server bricht nach BACKUP_TIMEOUT_MS ab: der Sync wartet sonst, und der Config Mode läuft ab.
+const BACKUP_TIMEOUT_MS = 3000;
+// Der Live-Sync läuft nach jeder Änderung: die Warnung erscheint einmal pro Fehlerserie, nicht bei jedem Sync
+let backupFailureShown = false;
+async function backupConfigOnServer(side, cfg) {
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), BACKUP_TIMEOUT_MS) : null;
+  let msg = "Server nicht erreichbar.";
+  try {
+    const res = await fetch(`/api/backups?side=${side}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+      signal: controller ? controller.signal : undefined
+    });
+    if (res.ok) {
+      backupFailureShown = false;
+      return true;
+    }
+    msg = `HTTP ${res.status}`;
+    try { msg = (await res.json()).error || msg; } catch (_) {}
+  } catch (e) {
+    console.warn("Backup vor dem Sync fehlgeschlagen:", e);
+    if (e && e.name === "AbortError") msg = "Server antwortet nicht.";
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+  if (!backupFailureShown) {
+    backupFailureShown = true;
+    showToast(`⚠️ Backup vor dem Sync fehlgeschlagen: ${msg}`, 6000);
+  }
+  return false;
 }
 
 // Einstellungs-Befehle des vollen Syncs, in Sende-Reihenfolge. optional: ältere Firmware ohne diesen Befehl

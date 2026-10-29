@@ -1,6 +1,7 @@
 // =============================================================================
 // Layout-Profile: mehrere benannte Layouts pro Hälfte lokal speichern und laden
-// (GET/POST /api/profiles?side=L|R, Datei layout_profiles*.json im Datenverzeichnis)
+// (GET/POST /api/profiles?side=L|R, Datei layout_profiles*.json im Datenverzeichnis).
+// Darunter die automatischen Backups vor Sync und Flash (GET /api/backups?side=L|R).
 // =============================================================================
 
 // Profilliste der Hälfte, für die der Dialog offen ist (null = Dialog geschlossen oder Liste nicht geladen)
@@ -15,6 +16,12 @@ const layoutProfilesWriteSeq = {};
 const layoutProfilesSkippedShown = {};
 // Jede Schreibaktion sendet die ganze Liste: während eine läuft, startet keine zweite auf veraltetem Stand
 let layoutProfilesBusy = false;
+
+// Automatische Backups der Hälfte, für die der Dialog offen ist (server.py legt sie vor Sync und Flash an)
+let layoutBackups = null;
+// Zählt das Öffnen des Dialogs: ein Lesen aus einem früheren Öffnen darf die Liste nicht überschreiben
+let layoutBackupsSeq = 0;
+const BACKUP_REASON_LABELS = { sync: "vor Sync", flash: "vor Flash" };
 
 function setLayoutProfilesBusy(busy) {
   layoutProfilesBusy = busy;
@@ -109,7 +116,7 @@ async function openLayoutProfilesDialog() {
   renderLayoutProfiles();
   if (!layoutProfilesBusy) setLayoutProfilesStatus("Profile werden geladen …");
   modal.style.display = "flex";
-  await reloadLayoutProfiles(side);
+  await Promise.all([reloadLayoutProfiles(side), reloadLayoutBackups(side)]);
 }
 
 // Liest die Liste der Hälfte (neu) vom Server, z. B. nach dem Öffnen oder nach einem Konflikt (HTTP 409)
@@ -133,11 +140,80 @@ async function reloadLayoutProfiles(side) {
   }
 }
 
+// Liest die Backups der Hälfte vom Server (neueste zuerst)
+async function reloadLayoutBackups(side) {
+  const seq = ++layoutBackupsSeq;
+  layoutBackups = null;
+  renderLayoutBackups();
+  setLayoutBackupsStatus("Backups werden geladen …");
+  try {
+    const res = await fetch(`/api/backups?side=${side}`);
+    let data = null;
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+    if (!data || !Array.isArray(data.backups)) throw new Error("Antwort des Servers enthält keine Backup-Liste.");
+    if (seq !== layoutBackupsSeq || layoutProfilesSide !== side) return;
+    layoutBackups = data.backups;
+    renderLayoutBackups(Number.isInteger(data.skipped) ? data.skipped : 0);
+  } catch (e) {
+    if (seq !== layoutBackupsSeq || layoutProfilesSide !== side) return;
+    setLayoutBackupsStatus(`⚠️ Backups konnten nicht geladen werden: ${e.message}`);
+  }
+}
+
+function setLayoutBackupsStatus(text) {
+  const el = document.getElementById("layoutBackupsStatus");
+  if (el) el.textContent = text;
+}
+
+function renderLayoutBackups(skipped = 0) {
+  const list = document.getElementById("layoutBackupsList");
+  if (!list) return;
+  list.replaceChildren();
+  if (!layoutBackups) return;
+  const skippedText = skipped ? ` ${skipped} unlesbare übersprungen.` : "";
+  if (layoutBackups.length === 0) {
+    setLayoutBackupsStatus(`Noch kein Backup. Der nächste Sync oder Flash legt eines an.${skippedText}`);
+    return;
+  }
+  setLayoutBackupsStatus(`Die letzten ${layoutBackups.length} Stände vor einem Sync oder Flash.${skippedText}`);
+  layoutBackups.forEach(entry => {
+    const li = document.createElement("li");
+    const name = document.createElement("strong");
+    const date = new Date(entry.savedAt);
+    name.textContent = Number.isNaN(date.getTime()) ? entry.id : date.toLocaleString();
+    const reason = document.createElement("span");
+    reason.className = "layout-profile-time";
+    reason.textContent = BACKUP_REASON_LABELS[entry.reason] || "";
+    const btnLoad = document.createElement("button");
+    btnLoad.className = "btn btn-outline btn-sm";
+    btnLoad.textContent = "Laden";
+    btnLoad.addEventListener("click", () => loadLayoutBackup(entry.id));
+    li.append(name, reason, btnLoad);
+    list.appendChild(li);
+  });
+  if (layoutProfilesBusy) setLayoutProfilesBusy(true);
+}
+
+// Ersetzt die Belegung der Hälfte durch ein Backup (wie ein Profil)
+function loadLayoutBackup(id) {
+  const side = layoutProfilesSide;
+  if (!layoutBackups || layoutProfilesBusy || side !== editSide) return;
+  const entry = layoutBackups.find(b => b.id === id);
+  if (!entry) return;
+  const date = new Date(entry.savedAt);
+  const label = Number.isNaN(date.getTime()) ? entry.id : date.toLocaleString();
+  applyLayoutSnapshot(entry.config, `Backup vom ${label}`, {
+    type: "backup_load", title: "Backup geladen", description: label
+  });
+}
+
 function closeLayoutProfilesDialog() {
   const modal = document.getElementById("layoutProfilesModal");
   if (modal) modal.style.display = "none";
   layoutProfilesSide = null;
   layoutProfiles = null;
+  layoutBackups = null;
 }
 
 // Speichert die aktuelle Config der Hälfte unter dem eingegebenen Namen (gleicher Name: Rückfrage, dann ersetzen)
@@ -182,13 +258,20 @@ function loadLayoutProfile(name) {
   if (!layoutProfiles || layoutProfilesBusy || side !== editSide) return;
   const entry = layoutProfiles[findLayoutProfileIndex(layoutProfiles, name)];
   if (!entry) return;
+  applyLayoutSnapshot(entry.config, `Profil "${entry.name}"`, {
+    type: "profile_load", title: "Layout-Profil geladen", description: entry.name
+  });
+}
+
+// Gemeinsam für Profil und Backup: prüfen, nachfragen, ersetzen und als Snapshot-Änderung vormerken
+function applyLayoutSnapshot(config, what, change) {
   try {
-    validateConfigShape(entry.config, activeProfile());
+    validateConfigShape(config, activeProfile());
   } catch (e) {
-    alert(`Profil "${entry.name}" ist ungültig: ${e.message}`);
+    alert(`${what} ist ungültig: ${e.message}`);
     return;
   }
-  if (!confirm(`Profil "${entry.name}" laden? Die aktuelle Belegung wird ersetzt (Rückgängig über die vorgemerkten Änderungen).`)) return;
+  if (!confirm(`${what} laden? Die aktuelle Belegung wird ersetzt (Rückgängig über die vorgemerkten Änderungen).`)) return;
   const oldConfig = JSON.parse(JSON.stringify(currentConfig));
   const rerender = () => {
     applySettingsToInputs(currentConfig.settings);
@@ -198,15 +281,13 @@ function loadLayoutProfile(name) {
     if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
     saveConfigToServer();
   };
-  currentConfig = normalizeConfig(JSON.parse(JSON.stringify(entry.config)), activeProfile());
+  currentConfig = normalizeConfig(JSON.parse(JSON.stringify(config)), activeProfile());
   rerender();
   markPendingSync({
-    type: "profile_load",
+    ...change,
     snapshot: true,
     pairs: true,
     macros: true,
-    title: "Layout-Profil geladen",
-    description: entry.name,
     revert: () => {
       currentConfig = oldConfig;
       rerender();

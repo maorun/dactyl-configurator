@@ -1214,7 +1214,7 @@ function fullSyncHarness(reply, holdMs = null) {
                   set textContent(v) { labels.push(v); } };
   const held = [];
   const w = {
-    console: { error() {}, warn() {} }, sent, reply, delays, held,
+    console: { error() {}, warn() {} }, sent, reply, delays, held, AbortController,
     setTimeout: (fn, ms) => {
       delays.push(ms);
       if (ms === holdMs) { held.push({ fn, cleared: false }); return held.length; }
@@ -1261,6 +1261,65 @@ this.setBle = (char, disconnect) => { bleConfigChar = char; disconnectBle = disc
 }
 
 const okReply = cmd => cmd.startsWith("SET_K ") ? null : `OK ${cmd}`;
+
+asyncTests.push(["Sync: legt vor dem ersten Befehl ein Backup an, ein Fehler hält den Sync nicht auf", async () => {
+  for (const failure of [null, "http", "network"]) {
+    const { w, sent, toasts } = fullSyncHarness(okReply);
+    const backups = [];
+    w.fetch = async (url, opts) => {
+      backups.push({ url, sentBefore: sent.length, body: JSON.parse(opts.body), method: opts.method });
+      if (failure === "network") throw new Error("offline");
+      return failure === "http"
+        ? { ok: false, status: 500, json: async () => ({ error: "Platte voll" }) }
+        : { ok: true, status: 200, json: async () => ({ success: true, created: true }) };
+    };
+    await w.write();
+    assert.strictEqual(backups.length, 1);
+    assert.strictEqual(backups[0].url, "/api/backups?side=R");
+    assert.strictEqual(backups[0].method, "POST");
+    assert.strictEqual(backups[0].sentBefore, 0, "Backup vor dem ersten Befehl");
+    assert.ok(Array.isArray(backups[0].body.layers));
+    assert.ok(sent.includes("SAVE_MACROS"), "der Sync läuft weiter");
+    if (failure) assert.ok(toasts.some(t => t.includes("Backup vor dem Sync fehlgeschlagen")), failure);
+    else assert.ok(!toasts.some(t => t.includes("Backup")));
+  }
+}]);
+
+asyncTests.push(["Sync: Backup-Warnung einmal pro Fehlerserie, hängender Server bricht ab", async () => {
+  const { w, sent, toasts, delays } = fullSyncHarness(okReply);
+  let mode = "fail";
+  const signals = [];
+  w.fetch = async (url, opts) => {
+    signals.push(opts.signal);
+    if (mode === "ok") return { ok: true, status: 200, json: async () => ({ success: true }) };
+    throw new Error("offline");
+  };
+  const warnings = () => toasts.filter(t => t.includes("Backup vor dem Sync fehlgeschlagen")).length;
+  await w.write();
+  await w.write();
+  assert.strictEqual(warnings(), 1, "zweiter Fehler in Folge: keine weitere Warnung");
+  mode = "ok";
+  await w.write();
+  mode = "fail";
+  await w.write();
+  assert.strictEqual(warnings(), 2, "nach einem Erfolg warnt der nächste Fehler wieder");
+  // Jeder Aufruf trägt ein Abbruchsignal mit Zeitlimit
+  assert.ok(signals.every(sig => sig && typeof sig.aborted === "boolean"));
+  assert.ok(delays.includes(vm.runInContext("BACKUP_TIMEOUT_MS", w)));
+  // Abbruch nach dem Zeitlimit: der Sync läuft weiter
+  const hung = fullSyncHarness(okReply, vm.runInContext("BACKUP_TIMEOUT_MS", w));
+  hung.w.fetch = (url, opts) => new Promise((_, reject) => {
+    opts.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+  });
+  const run = hung.w.write();
+  await new Promise(r => setImmediate(r));
+  assert.strictEqual(hung.sent.length, 0, "wartet auf das Backup");
+  assert.strictEqual(hung.held.length, 1);
+  hung.held[0].fn();
+  await run;
+  assert.ok(hung.toasts.some(t => t.includes("Server antwortet nicht")));
+  assert.ok(hung.sent.includes("SAVE_MACROS"));
+}]);
 
 asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async () => {
   const { w, progress, sent } = fullSyncHarness(okReply);
@@ -2154,7 +2213,14 @@ asyncTests.push(["Import: vorgemerkte Änderung trägt pairs und macros", async 
 function profilesHarness(responses) {
   const h = uiHarness();
   const queue = responses.slice();
+  h.backups = { body: { backups: [], skipped: 0 } };
   h.w.fetch = async (url, opts = {}) => {
+    // Backups haben eine eigene Antwort; die Warteschlange gilt nur für /api/profiles
+    if (url.startsWith("/api/backups")) {
+      h.log.backupFetches = (h.log.backupFetches || 0) + 1;
+      const { status = 200, body } = h.backups;
+      return { ok: status >= 200 && status < 300, status, json: async () => body };
+    }
     h.log.fetches.push({ url, method: opts.method || "GET", body: opts.body ? JSON.parse(opts.body) : null });
     const next = queue.shift();
     if (next && next.gate) await next.gate;
@@ -2193,6 +2259,51 @@ asyncTests.push(["Layout-Profile: Laden, Seitenprüfung, Revert und Revision bei
   assert.strictEqual(post.body.revision, 3);
   assert.deepStrictEqual(post.body.profiles.map(p => p.name), ["Gaming", "Neu"]);
   assert.strictEqual(vm.runInContext("layoutProfilesRevision", w), 4);
+}]);
+
+asyncTests.push(["Backups: Dialog listet Backups der Hälfte und lädt eines mit Rückgängig", async () => {
+  const h = profilesHarness([{ body: { profiles: [], revision: 0, skipped: [] } }]);
+  const backupCfg = { layers: [[[{ tap: "KEY_W" }]]] };
+  h.backups = { body: { backups: [
+    { id: "backup-000002-20261029-120000-000", savedAt: "2026-10-29T12:00:00+0100", reason: "flash", config: backupCfg },
+    { id: "backup-000001-20261029-110000-000", savedAt: "", reason: "sync", config: { layers: [[[{ tap: "KEY_V" }]]] } }
+  ], skipped: 1 } };
+  await h.w.openLayoutProfilesDialog();
+  const list = h.dom.document.getElementById("layoutBackupsList");
+  assert.strictEqual(list.children.length, 2);
+  assert.strictEqual(list.children[0].children[1].textContent, "vor Flash");
+  // Ohne gültigen Zeitstempel zeigt die Zeile die ID
+  assert.strictEqual(list.children[1].children[0].textContent, "backup-000001-20261029-110000-000");
+  assert.ok(h.dom.document.getElementById("layoutBackupsStatus").textContent.includes("1 unlesbare"));
+  const before = vm.runInContext("JSON.stringify(currentConfig.layers[0][0][0])", h.w);
+  // Abbruch in der Rückfrage: nichts ändert sich
+  h.log.confirm = false;
+  await list.children[0].children[2].click();
+  assert.strictEqual(h.log.pending.length, 0);
+  h.log.confirm = true;
+  await list.children[0].children[2].click();
+  const change = h.log.pending.at(-1);
+  assert.ok(change.snapshot && change.pairs && change.macros && change.type === "backup_load");
+  assert.strictEqual(vm.runInContext("currentConfig.layers[0][0][0].tap", h.w), "KEY_W");
+  assert.ok(h.log.saved > 0);
+  change.revert();
+  assert.strictEqual(vm.runInContext("JSON.stringify(currentConfig.layers[0][0][0])", h.w), before);
+  // Andere Hälfte bearbeitet: Laden tut nichts
+  await h.w.openLayoutProfilesDialog();
+  vm.runInContext(`editSide = "L";`, h.w);
+  h.w.loadLayoutBackup("backup-000002-20261029-120000-000");
+  assert.strictEqual(h.log.pending.length, 1);
+}]);
+
+asyncTests.push(["Backups: Fehler und leere Liste zeigen einen Hinweis", async () => {
+  const h = profilesHarness([{ body: { profiles: [], revision: 0, skipped: [] } }, { body: { profiles: [], revision: 0, skipped: [] } }]);
+  h.backups = { status: 500, body: { success: false, error: "kaputt" } };
+  await h.w.openLayoutProfilesDialog();
+  assert.ok(h.dom.document.getElementById("layoutBackupsStatus").textContent.includes("kaputt"));
+  h.backups = { body: { backups: [], skipped: 0 } };
+  await h.w.openLayoutProfilesDialog();
+  assert.ok(h.dom.document.getElementById("layoutBackupsStatus").textContent.includes("Noch kein Backup"));
+  assert.strictEqual(h.dom.document.getElementById("layoutBackupsList").children.length, 0);
 }]);
 
 asyncTests.push(["Layout-Profile: Antwort ohne Liste, übersprungene Profile und Konflikt", async () => {

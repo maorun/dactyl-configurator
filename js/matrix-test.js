@@ -38,6 +38,11 @@ function renderMatrixTest() {
       } else {
         cell.textContent = `R${r}C${c}`;
         if (matrixTest.tested.has(`${r}_${c}`)) cell.classList.add("is-ok");
+        const bounces = matrixTest.bounces.get(`${r}_${c}`);
+        if (bounces) {
+          cell.classList.add("is-bouncing");
+          cell.title = `Prellt: ${bounces}× ein Druck innerhalb von ${MATRIX_BOUNCE_MS} ms nach dem Loslassen`;
+        }
       }
       grid.appendChild(cell);
     }
@@ -64,6 +69,36 @@ function renderMatrixTest() {
     });
     suspects.appendChild(list);
   }
+  renderMatrixBounceHint(summary.bouncingKeys);
+}
+
+// Hinweis auf prellende Tasten: Entprellzeit der bearbeiteten Hälfte erhöhen (Einstellung debounceMs)
+function renderMatrixBounceHint(bouncingKeys) {
+  const hint = document.getElementById("matrixTestBounce");
+  if (!hint) return;
+  hint.innerHTML = "";
+  if (!bouncingKeys.length) return;
+  const settings = configFor(editSide).settings || {};
+  const current = settings.debounceMs ?? SETTINGS_RANGES.debounceMs[2];
+  const title = document.createElement("strong");
+  title.textContent = "⚠️ Prellende Tasten:";
+  hint.appendChild(title);
+  const list = document.createElement("ul");
+  bouncingKeys.forEach(({ r, c, count }) => {
+    const li = document.createElement("li");
+    li.textContent = `R${r}C${c} (${count}× innerhalb von ${MATRIX_BOUNCE_MS} ms nach dem Loslassen)`;
+    list.appendChild(li);
+  });
+  hint.appendChild(list);
+  const advice = document.createElement("p");
+  advice.className = "form-hint";
+  // Die Firmware entprellt über das Scan-Intervall: ab einer Entprellzeit von MATRIX_BOUNCE_MS ms kann der
+  // Test kein Prellen mehr sehen. Meldet er es trotzdem, gilt die App-Einstellung nicht auf der Tastatur
+  // (nicht übertragen) oder der Schalter ist defekt.
+  advice.textContent = current < MATRIX_BOUNCE_MS
+    ? `Erhöhe die Entprellzeit im Tab "Firmware & Device" auf mindestens ${MATRIX_BOUNCE_MS} ms (aktuell ${current} ms).`
+    : `Die Entprellzeit der App steht schon auf ${current} ms. Übertrage die Einstellung auf die Tastatur und prüfe den Schalter und die Lötstelle.`;
+  hint.appendChild(advice);
 }
 
 function initMatrixTestUI() {

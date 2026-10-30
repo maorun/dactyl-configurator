@@ -276,6 +276,10 @@ function handleSerialLine(line, side = null, transport = "ble") {
   const isEditSide = lineSide === editSide;
   const cfg = configFor(lineSide);
 
+  // Neue Verbindung, Moduswechsel und Neustart der Tastatur: millis() beginnt neu, gemerkte Loslass-Zeiten des
+  // Prell-Tests gelten nicht mehr (die gezählten Treffer bleiben)
+  if (line.startsWith("DEVICE_INFO:") || line.startsWith("MODE:")) resetMatrixBounceState(matrixTestFor(lineSide));
+
   // Bestätigungen/Fehler zuerst an wartende Sync-Schritte weiterreichen
   resolveAcksForLine(line, side);
   // GET_CONFIG für den Layout-Diff: Gerätedaten nicht in die lokale Config übernehmen (js/config-sync.js).
@@ -390,8 +394,12 @@ function handleSerialLine(line, side = null, transport = "ble") {
   // 2. Reines Matrix-Ereignis (auch Tasten ohne Aktion): nur für den Matrix-Test
   else if (line.startsWith("MATRIX:")) {
     const evt = parseMatrixLine(line);
-    if (evt && evt.pressed && markMatrixKeyTested(matrixTestFor(lineSide), evt.r, evt.c) && isEditSide) {
-      renderMatrixTest();
+    if (evt) {
+      const matrixTest = matrixTestFor(lineSide);
+      // Prellen braucht die Scan-Zeit der Firmware (t); ohne sie bleibt es bei der Tastenerkennung
+      const bounced = evt.t !== undefined && recordMatrixBounce(matrixTest, evt.r, evt.c, evt.pressed, evt.t);
+      const marked = evt.pressed && markMatrixKeyTested(matrixTest, evt.r, evt.c);
+      if ((marked || bounced) && isEditSide) renderMatrixTest();
     }
   }
 

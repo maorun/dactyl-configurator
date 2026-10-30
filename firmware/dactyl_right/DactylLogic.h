@@ -965,8 +965,10 @@ void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long atMs)
   // Reines Matrix-Ereignis für die Diagnose (Matrix-Test), unabhängig von Belegung, Ebene und Tap-Hold.
   // Erst nach den HID-Ereignissen senden: die serielle Ausgabe verzögert den Tastendruck nicht.
   // Nur USB-Serial, nie BLE: kein Keylogger-Kanal und keine zusätzliche Last neben den Sync-Acks.
-  char matrixBuf[48];
-  snprintf(matrixBuf, sizeof(matrixBuf), "MATRIX:{\"r\":%d,\"c\":%d,\"pressed\":%d}", r, c, isPressed ? 1 : 0);
+  // "t" = Scan-Zeit der Änderung (32 Bit, millis()): die App erkennt daran Prellen (Druck kurz nach dem Loslassen)
+  char matrixBuf[64];
+  snprintf(matrixBuf, sizeof(matrixBuf), "MATRIX:{\"r\":%d,\"c\":%d,\"pressed\":%d,\"t\":%lu}", r, c, isPressed ? 1 : 0,
+    (unsigned long)(uint32_t)atMs);
   Serial.println(matrixBuf);
 }
 

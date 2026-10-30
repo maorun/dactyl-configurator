@@ -1706,6 +1706,11 @@ body {
   color: #fff;
 }
 
+.matrix-test-cell.is-bouncing {
+  border-color: var(--warning);
+  box-shadow: inset 0 0 0 2px var(--warning);
+}
+
 .matrix-test-cell.is-absent {
   border-style: dashed;
   opacity: 0.25;

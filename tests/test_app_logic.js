@@ -34,6 +34,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
+             recordMatrixBounce, MATRIX_BOUNCE_MS,
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
@@ -297,6 +298,93 @@ test("Matrix-Test: Tasten werden einmalig und nur innerhalb der Matrix gezählt"
   assert.strictEqual(api.markMatrixKeyTested(t, 6, 0), false);
   assert.strictEqual(api.markMatrixKeyTested(t, 1, "1"), false);
   assert.strictEqual(api.summarizeMatrixTest(t).tested, 1);
+});
+
+test("Matrix-Test: MATRIX:-Zeile liefert die Scan-Zeit t, eine ungültige Zeit nur ohne t", () => {
+  assert.deepStrictEqual({ ...api.parseMatrixLine('MATRIX:{"r":2,"c":1,"pressed":1,"t":1000}') }, { r: 2, c: 1, pressed: true, t: 1000 });
+  assert.strictEqual(api.parseMatrixLine('MATRIX:{"r":5,"c":6,"pressed":1,"t":4294967295}').t, 4294967295);
+  // Ältere Firmware ohne t, und ungültige Zeiten: Zeile gilt, aber ohne Zeit
+  for (const bad of ['"t":-1', '"t":4294967296', '"t":"5"', '"t":1.5', '"t":null']) {
+    const evt = api.parseMatrixLine(`MATRIX:{"r":2,"c":1,"pressed":0,${bad}}`);
+    assert.deepStrictEqual({ ...evt }, { r: 2, c: 1, pressed: false });
+  }
+});
+
+test("Matrix-Test: Druck kurz nach dem Loslassen zählt als Prellen, später nicht", () => {
+  const t = api.createMatrixTest(R);
+  assert.strictEqual(api.MATRIX_BOUNCE_MS, 30);
+  // Erster Druck ohne vorheriges Loslassen: kein Prellen
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 1000), false);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, false, 1100), false);
+  // 10 ms nach dem Loslassen: Prellen
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 1110), true);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, false, 1200), false);
+  // 200 ms nach dem Loslassen: normales Tippen
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 1400), false);
+  // Arrays aus dem VM-Kontext haben einen anderen Prototyp: in einfache Werte kopieren
+  assert.deepStrictEqual([...api.summarizeMatrixTest(t).bouncingKeys].map(k => ({ ...k })), [{ r: 2, c: 1, count: 1 }]);
+});
+
+test("Matrix-Test: Prell-Grenze ist 30 ms, gilt je Taste und jedes Loslassen zählt einmal", () => {
+  const t = api.createMatrixTest(R);
+  api.recordMatrixBounce(t, 2, 1, false, 1000);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 1030), true);   // genau 30 ms
+  api.recordMatrixBounce(t, 2, 1, false, 2000);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 2031), false);  // 31 ms
+  // Eine andere Taste beeinflusst die Zeit nicht
+  api.recordMatrixBounce(t, 2, 2, false, 3000);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 3005), false);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 2, true, 3005), true);
+  // Ein Loslassen erlaubt nur einen Prell-Treffer: der zweite Druck ohne neues Loslassen ist keiner
+  api.recordMatrixBounce(t, 3, 3, false, 4000);
+  assert.strictEqual(api.recordMatrixBounce(t, 3, 3, true, 4005), true);
+  assert.strictEqual(api.recordMatrixBounce(t, 3, 3, true, 4010), false);
+  const keys = [...api.summarizeMatrixTest(t).bouncingKeys].map(k => `${k.r}${k.c}:${k.count}`);
+  assert.deepStrictEqual(keys, ["21:1", "22:1", "33:1"]);
+});
+
+test("Matrix-Test: Prell-Grenze von unten: 0 ms und 29 ms zählen, 31 ms nicht", () => {
+  const t = api.createMatrixTest(R);
+  api.recordMatrixBounce(t, 2, 1, false, 1000);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 1000), true);   // 0 ms
+  api.recordMatrixBounce(t, 2, 1, false, 2000);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 2029), true);   // 29 ms
+  api.recordMatrixBounce(t, 2, 1, false, 3000);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 3031), false);  // 31 ms
+  assert.strictEqual(api.summarizeMatrixTest(t).bouncingKeys[0].count, 2);
+});
+
+test("Matrix-Test: Neustart der Tastatur verwirft gemerkte Loslass-Zeiten, kein falsches Prellen", () => {
+  const t = api.createMatrixTest(R);
+  api.recordMatrixBounce(t, 2, 1, false, 600000);           // altes Loslassen nach 10 Minuten Laufzeit
+  // Neustart: millis() beginnt bei 0. Ein Druck 20 ms nach dem Start läge vor der alten Zeit (Rücksprung)
+  assert.strictEqual(api.recordMatrixBounce(t, 3, 3, false, 5), false);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 20), false);
+  assert.strictEqual(api.summarizeMatrixTest(t).bouncingKeys.length, 0);
+  // Nach dem Neustart arbeitet die Erkennung normal weiter
+  api.recordMatrixBounce(t, 2, 1, false, 100);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 110), true);
+  // Ein Überlauf nach 2^32 ms ist ein Schritt vorwärts und löscht nichts (siehe der nächste Test)
+});
+
+test("Matrix-Test: Prellen übersteht den Überlauf von millis() nach 2^32 ms", () => {
+  const t = api.createMatrixTest(R);
+  api.recordMatrixBounce(t, 2, 1, false, 4294967290);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 5), true);       // 11 ms über den Überlauf
+  api.recordMatrixBounce(t, 2, 1, false, 4294967290);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, 100), false);    // 106 ms
+});
+
+test("Matrix-Test: Prellen ignoriert ungültige Tasten, fehlende Tasten und Ereignisse ohne Zeit", () => {
+  const t = api.createMatrixTest(R);
+  api.recordMatrixBounce(t, 4, 0, false, 1000);                              // R4C0 gibt es rechts nicht
+  assert.strictEqual(api.recordMatrixBounce(t, 4, 0, true, 1001), false);
+  assert.strictEqual(api.recordMatrixBounce(t, 6, 0, true, 1001), false);
+  assert.strictEqual(api.recordMatrixBounce(t, 0, 7, true, 1001), false);
+  api.recordMatrixBounce(t, 2, 1, false, 1000);
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, undefined), false); // ältere Firmware: keine Zeit
+  assert.strictEqual(api.recordMatrixBounce(t, 2, 1, true, "1001"), false);
+  assert.strictEqual(api.summarizeMatrixTest(t).bouncingKeys.length, 0);
 });
 
 test("Matrix-Test: MATRIX:-Zeile der Firmware wird streng geprüft", () => {
@@ -598,11 +686,12 @@ function onTypingStatsChanged(side) { calls.stats.push(side); }
 function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + c); }
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
 ${section("js/serial.js", "// Gedrückte SPLIT_KEY-Tasten", "function switchLayerUI")}
-this.handle = handleSerialLine; this.tested = side => [...tests[side].tested];`, s);
+this.handle = handleSerialLine; this.tested = side => [...tests[side].tested];
+this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);`, s);
   // Arrays aus dem VM-Kontext haben einen anderen Prototyp: für deepStrictEqual in einfache Werte kopieren
   const plain = v => JSON.parse(JSON.stringify(v));
   return {
-    handle: (...a) => s.handle(...a), tested: side => plain(s.tested(side)),
+    handle: (...a) => s.handle(...a), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
     set snapshotActive(v) { s.snapshotActive = v; }
   };
@@ -636,6 +725,46 @@ test("serial.js: MATRIX: markiert nur Drücken, je nach Hälfte der Verbindung",
   // Live-Monitor und Heatmap bleiben bei KEY_PRESS
   assert.deepStrictEqual(s.calls.press, []);
   assert.deepStrictEqual(s.calls.stats, []);
+});
+
+test("serial.js: MATRIX: mit t erkennt Prellen je Hälfte, ohne t nicht", () => {
+  const s = serialLineHarness();
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":1,"t":1000}', "R", "usb");
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":0,"t":1050}', "R", "usb");
+  assert.strictEqual(s.calls.rendered, 1);                                    // nur der erste Druck markiert die Taste
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":1,"t":1060}', "R", "usb");          // 10 ms nach dem Loslassen
+  assert.strictEqual(s.calls.rendered, 2);                                    // Prellen zeichnet die Ansicht neu
+  assert.deepStrictEqual(s.bounces("R"), ["2_1:1"]);
+  assert.deepStrictEqual(s.bounces("L"), []);
+  // Ältere Firmware ohne t: kein Prell-Ergebnis, auch bei schnellem Druck
+  s.handle('MATRIX:{"r":3,"c":1,"pressed":0}', "R", "usb");
+  s.handle('MATRIX:{"r":3,"c":1,"pressed":1}', "R", "usb");
+  assert.deepStrictEqual(s.bounces("R"), ["2_1:1"]);
+  // Linke Hälfte direkt an USB: eigener Zähler, die Ansicht der rechten Hälfte bleibt
+  s.handle('MATRIX:{"r":1,"c":1,"pressed":0,"t":500}', "L", "usb");
+  s.handle('MATRIX:{"r":1,"c":1,"pressed":1,"t":505}', "L", "usb");
+  assert.deepStrictEqual(s.bounces("L"), ["1_1:1"]);
+  assert.deepStrictEqual(s.bounces("R"), ["2_1:1"]);
+});
+
+test("serial.js: DEVICE_INFO und MODE: vergessen die Loslass-Zeiten, die Treffer bleiben", () => {
+  const s = serialLineHarness();
+  for (const marker of ['DEVICE_INFO:{"side":"R","fw":2}', "MODE:CONFIG", "MODE:KEYBOARD"]) {
+    s.handle('MATRIX:{"r":2,"c":1,"pressed":0,"t":1000}', "R", "usb");
+    s.handle(marker, "R", "usb");                                             // Neustart oder Moduswechsel
+    s.handle('MATRIX:{"r":2,"c":1,"pressed":1,"t":1010}', "R", "usb");        // läge 10 ms nach dem alten Loslassen
+    assert.deepStrictEqual(s.bounces("R"), [], marker);
+  }
+  // Ein Treffer vor dem Neustart bleibt erhalten
+  s.handle('MATRIX:{"r":3,"c":1,"pressed":0,"t":2000}', "R", "usb");
+  s.handle('MATRIX:{"r":3,"c":1,"pressed":1,"t":2010}', "R", "usb");
+  s.handle("MODE:KEYBOARD", "R", "usb");
+  assert.deepStrictEqual(s.bounces("R"), ["3_1:1"]);
+  // Die andere Hälfte behält ihre Zeiten
+  s.handle('MATRIX:{"r":1,"c":1,"pressed":0,"t":500}', "L", "usb");
+  s.handle("MODE:KEYBOARD", "R", "usb");
+  s.handle('MATRIX:{"r":1,"c":1,"pressed":1,"t":505}', "L", "usb");
+  assert.deepStrictEqual(s.bounces("L"), ["1_1:1"]);
 });
 
 test("serial.js: SPLIT_KEY drückt und löst die Taste der linken Hälfte", () => {

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dactyl Keyboard Configurator</title>
-  <link rel="stylesheet" href="style.css?v=15">
+  <link rel="stylesheet" href="style.css?v=17">
 </head>
 <body>
   <div class="app-container">
@@ -50,30 +50,63 @@
         <button id="btnConnectBle" class="btn btn-outline" style="border-color: #3b82f6; color: #93c5fd; display: none;" title="Drahtlos per Web-Bluetooth verbinden: Halte auf der Tastatur R4C5 + R0C0 für 0.5s gedrückt und klicke dann hier!">
           <span class="btn-icon">⚡</span> Bluetooth Live-Sync
         </button>
-        <button id="btnConnect" class="btn btn-outline" style="border-color: #6366f1; color: #a5b4fc;" title="Direkte USB-Live-Verbindung zum ESP32 für Matrix-Echtzeit-Anzeige aller Tasten und Layer">
-          <span class="btn-icon">🔌</span> USB Live-Monitor
-        </button>
-        <button id="btnSaveToDactyl" class="btn btn-primary" title="Aktuelle Tastenbelegung kompilieren und direkt per USB auf den ESP32 flashen">
-          <span class="btn-icon">💾</span> Auf Dactyl flashen
-        </button>
-        <button id="btnReadConfig" class="btn btn-outline" style="border-color: #8b5cf6; color: #c4b5fd;" title="Gespeicherte Tastenbelegung & Ebenen-Namen aus dem ESP32 NVS auslesen">
-          <span class="btn-icon">📥</span> Vom ESP32 laden
-        </button>
-        <button id="btnWriteConfig" class="btn btn-outline" style="border-color: #10b981; color: #6ee7b7;" title="Aktuelle Tastenbelegung per Bluetooth oder USB sofort im ESP32 NVS speichern (ohne Flashen)">
-          <span class="btn-icon">⚡</span> Auf ESP32 speichern
-        </button>
-        <button id="btnLayoutProfiles" class="btn btn-outline" title="Mehrere benannte Layouts der bearbeiteten Hälfte lokal speichern und laden">
-          Profile
-        </button>
-        <button id="btnExportJson" class="btn btn-outline">
-          Export JSON
-        </button>
-        <button id="btnImportJson" class="btn btn-outline">
-          Import JSON
-        </button>
-        <input type="file" id="fileInput" accept=".json" style="display: none;">
       </div>
     </header>
+
+    <!-- Wireless Bluetooth Config Mode & Auto-Sync Banner -->
+    <div class="config-mode-guide-card" id="configModeGuideCard">
+      <div class="config-guide-icon" id="configGuideIcon">⚡</div>
+      <div class="config-guide-body" style="flex: 1;">
+        <div class="config-guide-title" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+          <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+            <strong>Drahtloser Konfig-Modus &amp; Combo Auto-Sync</strong>
+            <span class="badge" id="configComboBadge" style="background: rgba(59,130,246,0.25); color: #93c5fd; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px;">Rechte Hand · Combo: R4C5 + R0C0 (0,5s)</span>
+            <span class="config-state-badge state-normal" id="configModeStateBadge">⌨️ Mac-Tastaturmodus aktiv</span>
+            <span class="pending-sync-badge synced" id="pendingSyncBadge" title="Alle Einstellungen sind synchron">✓ Alle Einstellungen synchron</span>
+            <button id="btnTogglePendingDrawer" class="btn-pending-toggle" style="display: none;" title="Vorgemerkte Änderungen anzeigen oder ausblenden">
+              📋 Details anzeigen ▾
+            </button>
+          </div>
+          <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <label style="display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #cbd5e1; cursor: pointer; user-select: none;" title="Wenn aktiv: Sobald du R4C5 + R0C0 auf der Tastatur drückst, verbindet sich die App automatisch, überträgt alle gespeicherten Einstellungen und gibt die Tastatur sofort wieder an den Mac zurück.">
+              <input type="checkbox" id="chkAutoSyncOnCombo" checked style="accent-color: #3b82f6; width: 15px; height: 15px; cursor: pointer;">
+              <span><strong>One-Shot Auto-Sync:</strong> Bei Combo verbinden ➔ übertragen ➔ sofort zum Mac zurück</span>
+            </label>
+            <button id="btnExitConfigBanner" class="btn btn-outline btn-sm" style="display: none; border-color: #ef4444; color: #fca5a5;">
+              🔙 Konfig-Modus beenden
+            </button>
+          </div>
+        </div>
+        <div id="autoSyncProgressLabel" style="display: none; margin-top: 0.55rem; font-size: 0.75rem; color: #94a3b8;"></div>
+        <div id="autoSyncProgressWrap" style="display: none; margin: 0.25rem 0 0.55rem; background: rgba(15,23,42,0.8); border-radius: 6px; height: 8px; overflow: hidden; border: 1px solid rgba(59,130,246,0.3);">
+          <div id="autoSyncProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.15s ease;"></div>
+        </div>
+
+        <!-- Vorgemerkte Änderungen Detail-Drawer -->
+        <div id="pendingChangesDrawer" class="pending-changes-drawer" style="display: none;">
+          <div class="pending-changes-header">
+            <div class="pending-changes-header-left">
+              <span class="pending-changes-title-text">📋 Vorgemerkte Änderungen zur Übertragung</span>
+              <span id="pendingChangesCountBadge" class="pending-changes-count">0</span>
+            </div>
+            <div class="pending-changes-header-right">
+              <button id="btnDiscardAllPending" class="btn btn-outline btn-xs" style="color: #fca5a5; border-color: rgba(239,68,68,0.4);">
+                🗑️ Alle verwerfen
+              </button>
+            </div>
+          </div>
+          <ul id="pendingChangesList" class="pending-changes-list"></ul>
+        </div>
+        <details class="config-guide-details" id="configGuideDetails">
+          <summary class="config-guide-summary">Erklärung &amp; Anleitung anzeigen ▾</summary>
+          <div class="config-guide-desc" id="configGuideDesc">
+            <span><strong>1. In Ruhe einstellen:</strong> Ändere Tasten, Layer-Namen &amp; Timeouts einfach vorab in der App (werden lokal vorgemerkt, während du normal am Mac weiterarbeitest).</span>
+            <span><strong>2. Combo drücken (R4C5 + R0C0 für 0,5s):</strong> Die Tastatur kappt kurz die Mac-Verbindung (eigene Config-MAC), verbindet sich automatisch mit der App, überträgt alle Änderungen in &lt;1s und kehrt sofort wieder zum Mac zurück!</span>
+            <span id="blePermissionHint" style="color: #93c5fd;"><strong>💡 Hinweis:</strong> Beim allerersten Mal einmalig im Konfig-Modus auf <strong>„⚡ Bluetooth Live-Sync“</strong> klicken, damit Chrome die dauerhafte Auto-Sync-Freigabe speichert.</span>
+          </div>
+        </details>
+      </div>
+    </div>
 
     <!-- Navigation Tabs -->
     <nav class="nav-tabs">
@@ -82,6 +115,9 @@
       </button>
       <button class="tab-btn" data-tab="combos-tab">
         <span class="tab-icon">⚡</span> Combos & Chords (2 Tasten gleichzeitig)
+      </button>
+      <button class="tab-btn" data-tab="flash-sync-tab">
+        <span class="tab-icon">💾</span> Flashen &amp; Sync
       </button>
       <button class="tab-btn" data-tab="settings-tab">
         <span class="tab-icon">⚙️</span> Firmware & Device
@@ -136,93 +172,6 @@
         <summary id="layoutLintSummary"></summary>
         <ul class="layout-lint-list" id="layoutLintList"></ul>
       </details>
-
-      <!-- Wireless Bluetooth Config Mode & Auto-Sync Banner -->
-      <div class="config-mode-guide-card" id="configModeGuideCard">
-        <div class="config-guide-icon" id="configGuideIcon">⚡</div>
-        <div class="config-guide-body" style="flex: 1;">
-          <div class="config-guide-title" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
-            <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
-              <strong>Drahtloser Konfig-Modus &amp; Combo Auto-Sync</strong>
-              <span class="badge" id="configComboBadge" style="background: rgba(59,130,246,0.25); color: #93c5fd; font-size: 0.75rem; padding: 3px 8px; border-radius: 4px;">Rechte Hand · Combo: R4C5 + R0C0 (0,5s)</span>
-              <span class="config-state-badge state-normal" id="configModeStateBadge">⌨️ Mac-Tastaturmodus aktiv</span>
-              <span class="pending-sync-badge synced" id="pendingSyncBadge" title="Alle Einstellungen sind synchron">✓ Alle Einstellungen synchron</span>
-              <button id="btnTogglePendingDrawer" class="btn-pending-toggle" style="display: none;" title="Vorgemerkte Änderungen anzeigen oder ausblenden">
-                📋 Details anzeigen ▾
-              </button>
-            </div>
-            <div style="display: flex; align-items: center; gap: 0.75rem;">
-              <label style="display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; color: #cbd5e1; cursor: pointer; user-select: none;" title="Wenn aktiv: Sobald du R4C5 + R0C0 auf der Tastatur drückst, verbindet sich die App automatisch, überträgt alle gespeicherten Einstellungen und gibt die Tastatur sofort wieder an den Mac zurück.">
-                <input type="checkbox" id="chkAutoSyncOnCombo" checked style="accent-color: #3b82f6; width: 15px; height: 15px; cursor: pointer;">
-                <span><strong>One-Shot Auto-Sync:</strong> Bei Combo verbinden ➔ übertragen ➔ sofort zum Mac zurück</span>
-              </label>
-              <button id="btnExitConfigBanner" class="btn btn-outline btn-sm" style="display: none; border-color: #ef4444; color: #fca5a5;">
-                🔙 Konfig-Modus beenden
-              </button>
-            </div>
-          </div>
-          <div id="autoSyncProgressLabel" style="display: none; margin-top: 0.55rem; font-size: 0.75rem; color: #94a3b8;"></div>
-          <div id="autoSyncProgressWrap" style="display: none; margin: 0.25rem 0 0.55rem; background: rgba(15,23,42,0.8); border-radius: 6px; height: 8px; overflow: hidden; border: 1px solid rgba(59,130,246,0.3);">
-            <div id="autoSyncProgressBar" style="width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.15s ease;"></div>
-          </div>
-
-          <!-- Vorgemerkte Änderungen Detail-Drawer -->
-          <div id="pendingChangesDrawer" class="pending-changes-drawer" style="display: none;">
-            <div class="pending-changes-header">
-              <div class="pending-changes-header-left">
-                <span class="pending-changes-title-text">📋 Vorgemerkte Änderungen zur Übertragung</span>
-                <span id="pendingChangesCountBadge" class="pending-changes-count">0</span>
-              </div>
-              <div class="pending-changes-header-right">
-                <button id="btnDiscardAllPending" class="btn btn-outline btn-xs" style="color: #fca5a5; border-color: rgba(239,68,68,0.4);">
-                  🗑️ Alle verwerfen
-                </button>
-              </div>
-            </div>
-            <ul id="pendingChangesList" class="pending-changes-list"></ul>
-          </div>
-          <div class="config-guide-desc" id="configGuideDesc">
-            <span><strong>1. In Ruhe einstellen:</strong> Ändere Tasten, Layer-Namen &amp; Timeouts einfach vorab in der App (werden lokal vorgemerkt, während du normal am Mac weiterarbeitest).</span>
-            <span><strong>2. Combo drücken (R4C5 + R0C0 für 0,5s):</strong> Die Tastatur kappt kurz die Mac-Verbindung (eigene Config-MAC), verbindet sich automatisch mit der App, überträgt alle Änderungen in &lt;1s und kehrt sofort wieder zum Mac zurück!</span>
-            <span id="blePermissionHint" style="color: #93c5fd;"><strong>💡 Hinweis:</strong> Beim allerersten Mal einmalig im Konfig-Modus auf <strong>„⚡ Bluetooth Live-Sync“</strong> klicken, damit Chrome die dauerhafte Auto-Sync-Freigabe speichert.</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Live Keypress Monitor -->
-      <div class="live-monitor-card" id="liveMonitorCard">
-        <div class="live-indicator">
-          <span class="pulse-dot"></span>
-          <span>LIVE-MONITOR</span>
-        </div>
-        
-        <div class="active-key-display">
-          <span class="live-label">Aktuell gedrückt:</span>
-          <span class="big-key-badge" id="liveActiveKey">-</span>
-          <span class="live-coords-badge" id="liveActiveCoords">Bereit</span>
-        </div>
-
-        <div class="live-history-container">
-          <span class="live-label">Letzte Tasten:</span>
-          <div class="recent-keys-stream" id="liveKeyHistory">
-            <span class="stream-pill placeholder">Tippe auf deiner Tastatur...</span>
-          </div>
-        </div>
-
-        <div class="typing-stats" id="typingStats">
-          <span class="live-label">WPM:</span>
-          <span class="stat-badge" id="liveWpm" title="Wörter pro Minute über die letzten 60 Sekunden (5 Anschläge = 1 Wort; zählt alle Tastendrücke inkl. Modifier, Layer- und Maus-Tasten)">0</span>
-          <span class="live-label">Anschläge:</span>
-          <span class="stat-badge" id="liveKeyTotal" title="Gezählte Tastendrücke der rechten Hand seit dem letzten Zurücksetzen">0</span>
-          <button id="btnToggleHeatmap" class="hand-btn" type="button" title="Tasten nach Nutzungshäufigkeit einfärben">🔥 Heatmap</button>
-          <button id="btnResetHeatmap" class="hand-btn" type="button" title="Heatmap und Anschlagzähler zurücksetzen">↺</button>
-        </div>
-
-        <div class="combo-active-alert" id="comboActiveAlert" style="display: none;">
-          <span class="combo-pulse">⚡</span>
-          <span id="comboActiveText">COMBO AKTIV: J + K ➔ Escape</span>
-        </div>
-      </div>
 
       <div class="editor-workspace">
         <!-- Visual Keyboard Canvas -->
@@ -416,8 +365,132 @@
       </div>
     </main>
 
+    <!-- Tab 3: Flashen & Sync (Speichern, Flashen, Profile, Import/Export) -->
+    <main class="tab-content" id="flash-sync-tab">
+      <div class="sync-tab-container">
+        <div class="settings-card">
+          <h3>Flashen &amp; Synchronisieren</h3>
+          <p class="form-hint" style="margin-bottom: 1.25rem;">
+            Übertrage Konfigurationen auf den ESP32, sichere deine Tastenbelegungen in Profilen oder exportiere sie als Datei.
+          </p>
+
+          <div class="sync-actions-grid">
+            <!-- Gruppe 1: Firmware flashen -->
+            <div class="sync-action-card">
+              <div class="sync-action-header">
+                <span class="sync-action-icon">💾</span>
+                <div>
+                  <h4>Firmware flashen</h4>
+                  <p class="form-hint">Kompiliert die aktuelle Belegung als C++ Standardwerte und flasht den ESP32 per USB-Kabel.</p>
+                </div>
+              </div>
+              <div class="sync-action-buttons">
+                <button id="btnSaveToDactyl" class="btn btn-primary" title="Aktuelle Tastenbelegung kompilieren und direkt per USB auf den ESP32 flashen">
+                  <span class="btn-icon">💾</span> Auf Dactyl flashen
+                </button>
+              </div>
+            </div>
+
+            <!-- Gruppe 2: Direktspeicher (NVS) -->
+            <div class="sync-action-card">
+              <div class="sync-action-header">
+                <span class="sync-action-icon">⚡</span>
+                <div>
+                  <h4>Direktspeicher (NVS)</h4>
+                  <p class="form-hint">Speichert Änderungen sofort drahtlos per Bluetooth oder USB im Flash-Speicher des ESP32 (ohne Flashen) oder liest den gespeicherten Stand aus.</p>
+                </div>
+              </div>
+              <div class="sync-action-buttons">
+                <button id="btnWriteConfig" class="btn btn-outline" style="border-color: #10b981; color: #6ee7b7;" title="Aktuelle Tastenbelegung per Bluetooth oder USB sofort im ESP32 NVS speichern (ohne Flashen)">
+                  <span class="btn-icon">⚡</span> Auf ESP32 speichern
+                </button>
+                <button id="btnReadConfig" class="btn btn-outline" style="border-color: #8b5cf6; color: #c4b5fd;" title="Gespeicherte Tastenbelegung & Ebenen-Namen aus dem ESP32 NVS auslesen">
+                  <span class="btn-icon">📥</span> Vom ESP32 laden
+                </button>
+              </div>
+            </div>
+
+            <!-- Gruppe 3: Profile & Backups -->
+            <div class="sync-action-card">
+              <div class="sync-action-header">
+                <span class="sync-action-icon">📑</span>
+                <div>
+                  <h4>Layout-Profile &amp; Backups</h4>
+                  <p class="form-hint">Mehrere benannte Layouts der bearbeiteten Hälfte lokal speichern, wechseln und automatische Sicherungen wiederherstellen.</p>
+                </div>
+              </div>
+              <div class="sync-action-buttons">
+                <button id="btnLayoutProfiles" class="btn btn-outline" title="Mehrere benannte Layouts der bearbeiteten Hälfte lokal speichern und laden">
+                  <span class="btn-icon">📑</span> Profile &amp; Backups
+                </button>
+              </div>
+            </div>
+
+            <!-- Gruppe 4: JSON Datei Import / Export -->
+            <div class="sync-action-card">
+              <div class="sync-action-header">
+                <span class="sync-action-icon">📁</span>
+                <div>
+                  <h4>Datei-Backup (JSON)</h4>
+                  <p class="form-hint">Exportiere die Belegung als JSON-Datei zur externen Sicherung oder importiere eine zuvor gespeicherte JSON-Konfiguration.</p>
+                </div>
+              </div>
+              <div class="sync-action-buttons">
+                <button id="btnExportJson" class="btn btn-outline">
+                  <span class="btn-icon">📤</span> Export JSON
+                </button>
+                <button id="btnImportJson" class="btn btn-outline">
+                  <span class="btn-icon">📥</span> Import JSON
+                </button>
+                <input type="file" id="fileInput" accept=".json" style="display: none;">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
     <!-- Tab 4: Matrix-Test (Löt-Tester) -->
     <main class="tab-content" id="matrix-test-tab">
+      <!-- Live Keypress Monitor -->
+      <div class="live-monitor-card" id="liveMonitorCard">
+        <div class="live-indicator">
+          <span class="pulse-dot"></span>
+          <span>LIVE-MONITOR</span>
+        </div>
+
+        <button id="btnConnect" class="btn btn-outline" style="border-color: #6366f1; color: #a5b4fc;" title="Direkte USB-Live-Verbindung zum ESP32 für Matrix-Echtzeit-Anzeige aller Tasten und Layer">
+          <span class="btn-icon">🔌</span> USB Live-Monitor
+        </button>
+        
+        <div class="active-key-display">
+          <span class="live-label">Aktuell gedrückt:</span>
+          <span class="big-key-badge" id="liveActiveKey">-</span>
+          <span class="live-coords-badge" id="liveActiveCoords">Bereit</span>
+        </div>
+
+        <div class="live-history-container">
+          <span class="live-label">Letzte Tasten:</span>
+          <div class="recent-keys-stream" id="liveKeyHistory">
+            <span class="stream-pill placeholder">Tippe auf deiner Tastatur...</span>
+          </div>
+        </div>
+
+        <div class="typing-stats" id="typingStats">
+          <span class="live-label">WPM:</span>
+          <span class="stat-badge" id="liveWpm" title="Wörter pro Minute über die letzten 60 Sekunden (5 Anschläge = 1 Wort; zählt alle Tastendrücke inkl. Modifier, Layer- und Maus-Tasten)">0</span>
+          <span class="live-label">Anschläge:</span>
+          <span class="stat-badge" id="liveKeyTotal" title="Gezählte Tastendrücke der rechten Hand seit dem letzten Zurücksetzen">0</span>
+          <button id="btnToggleHeatmap" class="hand-btn" type="button" title="Tasten nach Nutzungshäufigkeit einfärben">🔥 Heatmap</button>
+          <button id="btnResetHeatmap" class="hand-btn" type="button" title="Heatmap und Anschlagzähler zurücksetzen">↺</button>
+        </div>
+
+        <div class="combo-active-alert" id="comboActiveAlert" style="display: none;">
+          <span class="combo-pulse">⚡</span>
+          <span id="comboActiveText">COMBO AKTIV: J + K ➔ Escape</span>
+        </div>
+      </div>
+
       <div class="settings-card matrix-test-card">
         <h3>Matrix-Test (Löt- und Dioden-Tester)</h3>
         <p class="form-hint" id="matrixTestSideHint">Rechte Hand · Dioden: Kathode zur Zeile</p>
@@ -625,7 +698,7 @@
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=3"></script>
   <script src="js/config-model.js?v=5"></script>
-  <script src="js/editor.js?v=4"></script>
+  <script src="js/editor.js?v=6"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/macros-ui.js?v=1"></script>
   <script src="js/layout-profiles-ui.js?v=2"></script>

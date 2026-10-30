@@ -40,7 +40,7 @@ body {
   flex-direction: column;
   min-height: 100vh;
   padding: 1.5rem;
-  max-width: 1400px;
+  max-width: 1800px;
   margin: 0 auto;
   width: 100%;
 }
@@ -471,6 +471,100 @@ body {
   .editor-workspace {
     grid-template-columns: 1fr;
   }
+}
+
+/* Split-View: Tastaturen nebeneinander, Tasten-Inspektor darunter */
+.editor-workspace.split-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  width: 100%;
+}
+
+.editor-workspace.split-view .keyboard-preview-container {
+  width: 100%;
+}
+
+.editor-workspace.split-view .matrix-grid-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  padding: 0.5rem 0;
+}
+
+.editor-workspace.split-view .matrix-grid {
+  min-width: unset;
+  width: 100%;
+  align-items: stretch;
+}
+
+.editor-workspace.split-view .split-keyboards-row {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: stretch;
+  gap: 1.5rem;
+  width: 100%;
+  flex-wrap: nowrap;
+}
+
+.editor-workspace.split-view .split-keyboard-col {
+  flex: 1 1 0;
+  min-width: 540px;
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.editor-workspace.split-view .split-keyboard-col.is-active-pane {
+  border-color: rgba(16, 185, 129, 0.55);
+  box-shadow: 0 0 16px rgba(16, 185, 129, 0.12);
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.editor-workspace.split-view .split-keyboard-col .split-pane-header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.editor-workspace.split-view .split-keyboard-col .split-pane-header h4 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.editor-workspace.split-view .split-keyboard-col .matrix-half {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 20px;
+  flex: 1;
+}
+
+.editor-workspace.split-view .key-inspector {
+  width: 100%;
+  max-width: 100%;
+}
+
+.editor-workspace.split-view #inspectorBody:not([style*="display: none"]) {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.editor-workspace.split-view .inspector-actions {
+  grid-column: 1 / -1;
 }
 
 .keyboard-preview-container {
@@ -1316,6 +1410,32 @@ body {
   font-size: 0.82rem;
 }
 
+.config-guide-details {
+  margin-top: 0.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 0.4rem;
+}
+
+.config-guide-summary {
+  font-size: 0.82rem;
+  color: #93c5fd;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: color 0.15s;
+}
+
+.config-guide-summary:hover {
+  color: #bfdbfe;
+}
+
+.config-guide-details[open] .config-guide-summary {
+  margin-bottom: 0.45rem;
+}
+
 /* Config Combo Key Highlight */
 .key-cap.is-config-combo-key {
   border-color: rgba(59, 130, 246, 0.6) !important;
@@ -1848,4 +1968,52 @@ body {
 .layout-profile-time {
   color: var(--text-muted);
   font-size: 0.8rem;
+}
+
+/* Flashen & Sync Tab */
+.sync-tab-container {
+  max-width: 100%;
+}
+
+.sync-actions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.25rem;
+  margin-top: 1rem;
+}
+
+.sync-action-card {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.sync-action-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+}
+
+.sync-action-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.sync-action-header h4 {
+  font-size: 0.98rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: var(--text-main);
+}
+
+.sync-action-buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
 }

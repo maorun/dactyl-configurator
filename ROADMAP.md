@@ -82,16 +82,6 @@ No open entry.
 - **Goal:** Let the arrow keys change the selected key in the matrix.
 - **Acceptance test:** A test shows that the arrow keys move the selection and stop at the edge of the matrix.
 
-### Repeat the last action
-
-- **Rank:** Feature model. Total 18/40 (typing 6, configuration 3, harmony 5, safety 4). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylCommon.h`.
-- **Goal:** Add an action `REPEAT` that runs the last resolved action again. This includes combo actions, key pairs, umlauts, macros and media keys, not only the last key code.
-- **Goal:** Store the resolved action, not the matrix position. A held `REPEAT` acts like the held original action.
-- **Decision needed:** Exclude layer actions, one-shot keys and `CAPS_WORD`. Decide how the action repeats across both halves: the master knows only HID events, not the action of the left half.
-- **Acceptance test:** A firmware test shows that `REPEAT` after a macro plays the same macro.
-
 ### Heatmap export
 
 - **Rank:** Feature model. Total 17/40 (typing 0, configuration 3, harmony 6, safety 8). Effort S. Estimate.

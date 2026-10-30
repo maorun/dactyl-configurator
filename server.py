@@ -244,7 +244,7 @@ KEY_TO_CPP = {
     "UMLAUT_UE_UPPER": "ACT_UMLAUT_UE_UPPER", "UMLAUT_SZ": "ACT_UMLAUT_SZ",
     "OSM_LCTRL": "ACT_OSM_LCTRL", "OSM_LSHIFT": "ACT_OSM_LSHIFT", "OSM_LALT": "ACT_OSM_LALT",
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
-    "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD",
+    "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "REPEAT": "ACT_REPEAT",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -452,8 +452,8 @@ def validate_combo_key(key, field):
     c = validate_int(key.get("c"), 0, NUM_COLS - 1, f"{field}.c")
     return r, c
 
-# One-Shot- und Caps-Word-Aktionen (Codes > 0xFF): als Combo nur mit KEY_PRESS
-ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD"}
+# One-Shot-, Caps-Word- und Repeat-Aktionen (Codes > 0xFF): als Combo nur mit KEY_PRESS
+ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD", "ACT_REPEAT"}
 
 def generate_combos_cpp(combos):
     if combos is None:
@@ -474,9 +474,9 @@ def generate_combos_cpp(combos):
         act = code_to_cpp(action if isinstance(action, str) else "0")
         if act.startswith("(ACT_MACRO_BASE"):
             raise ValueError("Combos unterstützen keine Makros.")
-        # MODIFIER_HOLD hält einen Code 1..255; One-Shot und Caps Word (> 0xFF) sendeten dort nichts
+        # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts
         if beh == 1 and act in ONE_SHOT_CPP:
-            raise ValueError("Modifier Hold unterstützt keine One-Shot- oder Caps-Word-Aktion.")
+            raise ValueError("Modifier Hold unterstützt keine One-Shot-, Caps-Word- oder Repeat-Aktion.")
         # KeyCombo hat exakt 6 Felder (r1, c1, r2, c2, behavior, action)
         cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act} }}")
     lines = [

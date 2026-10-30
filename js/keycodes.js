@@ -63,7 +63,7 @@ const KEYCODES = [
     { code: "KEY_RIGHT_ALT", label: "Alt/Option (Rechts)", char: "" },
     { code: "KEY_RIGHT_GUI", label: "Cmd/Win (Rechts)", char: "" }
   ]},
-  { group: "One-Shot & Caps Word", keys: [
+  { group: "One-Shot, Caps Word & Repeat", keys: [
     { code: "OSM_LSHIFT", label: "One-Shot Umschalt (nächste Taste)", char: "" },
     { code: "OSM_LCTRL", label: "One-Shot Strg (nächste Taste)", char: "" },
     { code: "OSM_LALT", label: "One-Shot Alt/Option (nächste Taste)", char: "" },
@@ -72,7 +72,8 @@ const KEYCODES = [
     { code: "OSM_RCTRL", label: "One-Shot Strg rechts (nächste Taste)", char: "" },
     { code: "OSM_RALT", label: "One-Shot Alt/Option rechts (nächste Taste)", char: "" },
     { code: "OSM_RGUI", label: "One-Shot Cmd/Win rechts (nächste Taste)", char: "" },
-    { code: "CAPS_WORD", label: "Caps Word (ein Wort in Großbuchstaben)", char: "" }
+    { code: "CAPS_WORD", label: "Caps Word (ein Wort in Großbuchstaben)", char: "" },
+    { code: "REPEAT", label: "Repeat (letzte Aktion wiederholen)", char: "" }
   ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
@@ -249,6 +250,7 @@ const ACTION_TO_NUMERIC = {
   "OSM_LCTRL": 0x160, "OSM_LSHIFT": 0x161, "OSM_LALT": 0x162, "OSM_LGUI": 0x163,
   "OSM_RCTRL": 0x164, "OSM_RSHIFT": 0x165, "OSM_RALT": 0x166, "OSM_RGUI": 0x167,
   "CAPS_WORD": 0x168,
+  "REPEAT": 0x169,
 
   // Mouse Actions (0x130..0x134)
   "MOUSE_LEFT": 0x130,
@@ -268,14 +270,14 @@ const UMLAUT_LABELS = {
   UMLAUT_AE: "ä", UMLAUT_OE: "ö", UMLAUT_UE: "ü", UMLAUT_AE_UPPER: "Ä", UMLAUT_OE_UPPER: "Ö", UMLAUT_UE_UPPER: "Ü", UMLAUT_SZ: "ß"
 };
 
-// Kurze Beschriftung der One-Shot- und Caps-Word-Aktionen (Keycap, GET_CONFIG-Rückweg, Halte-Unterzeile)
+// Kurze Beschriftung der One-Shot-, Caps-Word- und Repeat-Aktionen (Keycap, GET_CONFIG-Rückweg, Halte-Unterzeile)
 const ONE_SHOT_LABELS = {
   OSM_LCTRL: "OS Ctrl", OSM_LSHIFT: "OS Shift", OSM_LALT: "OS Alt", OSM_LGUI: "OS Cmd",
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
-  CAPS_WORD: "CapsWd"
+  CAPS_WORD: "CapsWd", REPEAT: "Repeat"
 };
 
-// true für One-Shot- und Caps-Word-Codes (Combos nur mit KEY_PRESS, nicht mit MODIFIER_HOLD)
+// true für One-Shot-, Caps-Word- und Repeat-Codes (Combos nur mit KEY_PRESS, nicht mit MODIFIER_HOLD)
 function isOneShotOrCapsWordCode(code) {
   // Der Server akzeptiert auch den Firmware-Namen (ACT_OSM_LSHIFT, ACT_CAPS_WORD)
   const name = String(code || "").replace(/^ACT_/, "");

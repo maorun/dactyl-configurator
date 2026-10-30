@@ -292,6 +292,17 @@ bool toggleLayers[NUM_LAYERS] = {false};
 
 // Makro-Schritte nur bei freiem Platz in der Sendewarteschlange (Reserve für die Tasten des Users)
 #define MACRO_OUTPUT_READY() queueHasRoomForMacro(sendQueue)
+// Repeat über beide Hälften: die Repeat-Taste links meldet sich beim Master (SPLIT_OP_REPEAT), der entscheidet,
+// welche Hälfte wiederholt. Der Master schickt die Wiederholung links als SPLIT_OP_REPEAT_RUN zurück.
+bool leftRepeatRemotePress(uint8_t r, uint8_t c);
+void leftRepeatRemoteRelease(uint8_t r, uint8_t c);
+void leftRepeatRecorded();
+void leftRepeatReleaseHeldPairs();
+#define REPEAT_REMOTE_PRESS(r, c) leftRepeatRemotePress(r, c)
+#define REPEAT_REMOTE_RELEASE(r, c) leftRepeatRemoteRelease(r, c)
+// Der Master muss wissen, dass links zuletzt eine Aktion aufgezeichnet hat (Repeat rechts)
+#define REPEAT_RECORDED() leftRepeatRecorded()
+#define REPEAT_RELEASE_HELD_PAIRS() leftRepeatReleaseHeldPairs()
 // Doppel-Tipp-Zustand an den Master (SPLIT_OP_TAP_PENDING): TAP_PENDING 0 direkt hinter jedem nachgeholten Tipp
 static SplitTapPendingReporter tapPendingReporter = {};
 static void onDoubleTapFlushed();
@@ -329,6 +340,26 @@ static volatile bool masterActivityReceived = false;
 // Vom Empfangs-Callback gesetzt: Der Master hält eine Taste zurück, bis der wartende Einzel-Tipp gesendet ist
 // (SPLIT_OP_TAP_FLUSH); der Melder schickt danach TAP_PENDING 0
 static volatile bool masterTapFlushRequested = false;
+// REPEAT_RUN des Masters in Reihenfolge (nicht "neuestes gewinnt" wie der Layer-Zustand): Drücken und Loslassen
+// dürfen nicht verschwinden. Der Empfangs-Callback schreibt, loop() liest (SPSC-Ring).
+static SplitRxQueue masterRepeatRing;
+static SplitRepeatRun masterRepeatRun = {};
+// Repeat-Taste links: Nummern je Taste und die Notiz an den Master (DactylLeftLogic.h, getestet)
+static LeftRepeatLink leftRepeatLink = {};
+
+bool leftRepeatRemotePress(uint8_t r, uint8_t c) {
+  return leftRepeatPress(leftRepeatLink, sendQueue, r, c);
+}
+
+void leftRepeatRemoteRelease(uint8_t r, uint8_t c) {
+  leftRepeatRelease(leftRepeatLink, sendQueue, r, c, []() { flushSendQueue(50); });
+}
+
+// Notiz an den Master: links hat zuletzt eine Aktion aufgezeichnet. Sie wird vorgemerkt und gesendet, sobald die
+// Warteschlange Platz hat (serviceRepeatNote in loop())
+void leftRepeatRecorded() {
+  leftRepeatNoteRecorded(leftRepeatLink);
+}
 
 // Layer-Abgleich mit dem Master (SPLIT_OP_LAYER_STATE): Briefkasten vom Empfangs-Callback, Sendezustand
 // und die MO-Ebenen des Masters mit Verfall
@@ -350,7 +381,33 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
   if (info == nullptr || !parseSplitMasterPacket(info->src_addr, data, len, ev)) return;
   if (ev.op == SPLIT_OP_ACTIVITY) masterActivityReceived = true;
   else if (ev.op == SPLIT_OP_TAP_FLUSH) masterTapFlushRequested = true;
+  else if (ev.op == SPLIT_OP_REPEAT_RUN) splitRxPush(masterRepeatRing, ev);
   else splitLayerMailboxPut(masterLayerMailbox, ev);
+}
+
+// Vom Master gestartete Wiederholung der letzten Aktion dieser Hälfte. Läuft unter configMutex im Scan.
+struct LeftRepeatEnv {
+  uint16_t lastAction() { return lastRepeatAction; }
+  void press(uint16_t a) { repeatPress(a); }
+  void release(uint16_t a) { repeatRelease(a); }
+};
+
+static void processMasterRepeat() {
+  LeftRepeatEnv env;
+  unsigned long now = millis();
+  SplitHidEvent ev;
+  while (splitRxPop(masterRepeatRing, ev)) splitRepeatLeftRunEvent(masterRepeatRun, ev, now, env);
+  // Ohne Auffrischung des Masters endet der Lauf (verlorenes Loslassen, Master aus)
+  splitRepeatLeftRunTick(masterRepeatRun, now, env);
+}
+
+// Vor einer Änderung der Paar-Tabelle: ein Paar lösen, das eine Wiederholung des Masters hält
+void leftRepeatReleaseHeldPairs() {
+  if (masterRepeatRun.action && isKeyPairAction(masterRepeatRun.action)) {
+    repeatRelease(masterRepeatRun.action);
+    masterRepeatRun.action = 0;
+    masterRepeatRun.active = false;
+  }
 }
 
 // Layer-Zustand des Masters übernehmen: seine MO-Ebenen immer, seine Toggles ohne offenes eigenes SET
@@ -398,6 +455,9 @@ static bool setupEspNow() {
     Serial.println("ERR ESPNOW_INIT");
     return false;
   }
+  // Vor der Registrierung des Empfangs-Callbacks: danach schreibt der Wi-Fi-Task in den Ring
+  splitRxReset(masterRepeatRing);
+  masterRepeatRun = {};
   esp_now_register_send_cb(onEspNowSent);
   // Layer-Zustand sofort neu melden. Nach restartEspNow bleibt ein offenes SET offen (eigener Toggle aus
   // dem Ausfall); nach Start und Aufwachen ist der Zustand leer (setup). Fremde MO-Ebenen gelten erst nach Empfang.
@@ -434,6 +494,11 @@ static bool setupEspNow() {
   // Ein laufendes Makro endet: seine Codes löst dasselbe RELEASE_ALL.
   stopMacro(false);
   bleKeyboard.releaseAll();
+  // Stand der letzten aufgezeichneten Aktion für Repeat rechts: nach einem Neustart ist links leer (code 3)
+  leftRepeatLink.noteDue = false;
+  leftRepeatLink.haveAction = lastRepeatAction != 0;
+  leftRepeatLink.lastNoteMs = millis();
+  queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_REPEAT, lastRepeatAction ? 2 : 3));
   return true;
 }
 
@@ -620,6 +685,7 @@ void loop() {
 
   if (scanMutexTaken) {
     unsigned long now = millis();
+    processMasterRepeat();
     for (int c = 0; c < NUM_COLS; c++) {
       pinMode(LEFT_COL_PINS[c], OUTPUT);
       digitalWrite(LEFT_COL_PINS[c], LOW);
@@ -716,6 +782,7 @@ void loop() {
     queueSplitLayerStateIfDue();
     processMasterLayerState();
     sendHeartbeatIfDue();
+    leftRepeatServiceNote(leftRepeatLink, sendQueue, millis());
     serviceSendQueue();
     // Tippen am Master zählt als Aktivität: Standby beenden, Deep Sleep verschieben.
     // Im Config Mode läuft dieser Block nicht; ein dort gesetztes Flag ist ohne Folge, weil der

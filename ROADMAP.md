@@ -146,6 +146,21 @@ These entries need a decision of the maintainer before the work starts.
 - **Code:** `firmware/dactyl_right/DactylConfigBle.h`, `server.py`.
 - **Problem:** The user needs a USB cable to flash a half, especially the left half.
 - **Goal:** Use the two OTA slots of `min_spiffs` to flash over BLE in config mode.
+- **Image size:** The app image has approximately 1.7 MB (`dactyl_right.ino.bin` 1,715,360 B, `dactyl_left.ino.bin` 1,698,672 B, 2026-10-30). One app slot has 1.875 MB.
+- **Transport options:**
+  - BLE in config mode (recommended): Use the config BLE server of each half (`Dactyl Config`, `Dactyl Config L`). This transport needs no Wi-Fi credentials. Stop the 3 min config-mode timeout during the update.
+  - Wi-Fi (`ArduinoOTA` / `espota`): This transport is fast, but the device needs Wi-Fi credentials. On the left half, ESP-NOW uses the fixed channel 1. An access point sets its own channel.
+  - Relay over the master (ESP-NOW to the left half): This transport is the most complex and the slowest. It has no advantage over BLE.
+- **Speed comparison:** The values are estimates for an image of 1.7 MB. Measure them before the decision.
+
+  | Transport | Throughput | Time for one half |
+  |---|---|---|
+  | USB, CH340 at `UploadSpeed=115200` (esptool compresses the image) | ~11 KB/s on the wire | ~1–2 min |
+  | BLE, Web Bluetooth write without response (depends on the MTU) | ~5–20 KB/s | ~1.5–6 min |
+  | Wi-Fi (`espota`) | ~100–500 KB/s | ~5–20 s |
+
+  At best, BLE is as fast as USB. Usually, BLE is slower. The advantage of BLE is that no cable is necessary, not the speed. On the left half, BLE and ESP-NOW share the radio. This makes the transfer slower.
+- **Requirements:** Check the signature of the image before the boot slot changes, for example with Ed25519, because the config characteristic has no authentication. Check if the precompiled Arduino bootloader supports `APP_ROLLBACK`. Keep the NVS partition (`0x9000`) and the macOS bond. Keep USB as the recovery path.
 - **Decision needed:** The risk is high: rollback, signature and the unauthenticated config characteristic (see "BLE Command Authorization" in `AGENTS.md`).
 - **Acceptance test:** A flash over BLE keeps the keymap and the macOS bond, and a failed update boots the old firmware again.
 

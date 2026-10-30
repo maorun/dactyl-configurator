@@ -53,8 +53,8 @@ Deine Dactyl Manuform hat **35 Tasten rechts** und **35 Tasten links** = **70 Ta
 
 | LED-Typ | Bauform & Montage am Switch | Verdrahtung pro Hälfte (35 Tasten) | Einzelne Farbe pro Taste? | Zusatzbauteile pro Hälfte | Preis (75–100 Stk.) |
 |---|---|---|---|---|---|
-| **1. `SK6812 Mini-E`** *(Top-Empfehlung für Per-Key RGB)* | `3,2 × 2,8 mm` mit **4 langen, abgewinkelten Metall-Flügeln ("Gullwing-Beinchen")**. Liegt perfekt über dem LED-Fenster von MX-Switches. | `VCC` & `GND` als durchgehende Schienen + **1 Datenleitung** (`DOUT` -> `DIN` von Taste zu Taste). Belegt nur **1 Daten-Pin am ESP32 (`GPIO 5`)**! | **Ja, voll adressierbar** (jede der 70 Tasten eigene Farbe, z. B. passend zur Tastenbelegung auf dem aktiven Layer). | **0 Vorwiderstände** (Konstantstromquelle ist in jeder LED integriert) + **1× P-MOSFET** zum Abschalten im Deep Sleep. | ca. **8–12 €** |
-| **2. `WS2812B` auf Mini-Rundplatine (9 mm / 10 mm PCB)** | Fertig verlötet auf kleiner runder Platine mit 6 großen Lötpads (`+5V`, `GND`, `DI`, `DO`). Wird von unten unter den Switch geklebt. | Sehr einfach mit normaler Litze zu löten, da große Pads auf der Mini-Platine. Nur **1 Daten-Pin am ESP32 (`GPIO 5`)**. | **Ja, voll adressierbar**. | **0 Vorwiderstände** + **1× P-MOSFET** für Deep Sleep. | ca. **10–15 €** |
+| **1. `SK6812 Mini-E`** *(Top-Empfehlung für Per-Key RGB)* | `3,2 × 2,8 mm` mit **4 langen, abgewinkelten Metall-Flügeln ("Gullwing-Beinchen")**. Liegt perfekt über dem LED-Fenster von MX-Switches. | `VCC` & `GND` als durchgehende Schienen + **1 Datenleitung** (`DOUT` -> `DIN` von Taste zu Taste). Belegt nur **1 Daten-Pin am ESP32 (`GPIO 5`)**! | **Ja, voll adressierbar** (jede der 70 Tasten eigene Farbe, z. B. passend zur Tastenbelegung auf dem aktiven Layer). | **0 Vorwiderstände** (Konstantstromquelle ist in jeder LED integriert) + **1× P-MOSFET** mit **1× N-MOSFET** als Gate-Treiber zum Abschalten im Deep Sleep (siehe 4.2). | ca. **6–12 €** |
+| **2. `WS2812B` auf Mini-Rundplatine (9 mm / 10 mm PCB)** | Fertig verlötet auf kleiner runder Platine mit 6 großen Lötpads (`+5V`, `GND`, `DI`, `DO`). Wird von unten unter den Switch geklebt. | Sehr einfach mit normaler Litze zu löten, da große Pads auf der Mini-Platine. Nur **1 Daten-Pin am ESP32 (`GPIO 5`)**. | **Ja, voll adressierbar**. | **0 Vorwiderstände** + **1× P-MOSFET** mit **1× N-MOSFET** als Gate-Treiber für Deep Sleep. | ca. **10–15 €** |
 | **3. `1,8 mm` oder `2×3×4 mm` THT-LED (einfarbig)** | Klassische bedrahtete LED mit **2 langen Drahtbeinchen**, wird direkt durch die zwei LED-Löcher im MX-Switch gesteckt. | Drahtbeinchen werden direkt zu Reihen/Spalten gebogen. Sehr stabil ohne Kleber. | Nein (einheitliche Hintergrundfarbe). | 35 Widerstände + 1 MOSFET. | ca. **3–5 €** |
 | **4. Vorhandene `Everlight 1616` (`LED EL SMD RGB`)** | `1,6 × 1,6 mm` ohne Beinchen. | 4 Kupferlackdrähte + 3 Widerstände pro LED. | Nein (nur für **1–2 Status-LEDs** oder **6–10 Underglow-LEDs** sinnvoll). | 3 Widerstände pro LED (+ 3 MOSFETs ab 3 LEDs). | **0 €** (vorhanden) |
 
@@ -114,6 +114,23 @@ Wenn du den ursprünglichen Plan umsetzen willst, **jede einzelne Taste mit eine
 > Bei **35 LEDs pro Hälfte** sind das **`21 mA bis 35 mA` Dauerstrom**, selbst wenn die Tastatur im Deep Sleep (`~10 µA`) schläft — ein `1000 mAh` LiPo-Akku wäre dann nach 30 Stunden im Ruhezustand komplett leer!
 > **Lösung:** Schalte die `+`-Versorgung (`VDD`) der 35 LEDs über einen kleinen **P-Kanal-MOSFET (`AO3401` oder `SI2301`)** hart ab, sobald die Tastatur in den Standby oder Deep Sleep geht.
 
+> [!CAUTION]
+> **Steuere das Gate des P-MOSFET nicht direkt mit einem GPIO.**
+> Der Pull-Up am Gate liegt an `BAT+` (bis `4,2 V`). Ein GPIO auf `HIGH` liefert nur `3,3 V`. Dann ist $V_{GS} \approx -0,9\text{ V}$. Die Schwelle des `AO3401` liegt bei `−0,5 V` bis `−1,3 V`. Der MOSFET sperrt also nicht sicher, und die LEDs ziehen weiter Ruhestrom. Zusätzlich fließt Strom von `BAT+` über den Pull-Up und die Schutzdiode in den GPIO.
+> **Lösung:** Ein N-Kanal-MOSFET (`2N7002` oder `BSS138`) zieht das Gate des `AO3401` auf `GND`. `GPIO 15` steuert nur den N-MOSFET.
+
+**Logik des Power-Gates:**
+
+| `GPIO 15` (`LED_PWR_EN`) | `2N7002` | Gate `AO3401` | LEDs |
+|---|---|---|---|
+| `HIGH` (`3,3 V`) | leitet | `0 V` ($V_{GS} = -V_{BAT}$) | **an** |
+| `LOW` | sperrt | `BAT+` über `100 kΩ` ($V_{GS} = 0\text{ V}$) | **aus** |
+| Reset, Boot, Deep Sleep (Pin nicht getrieben) | sperrt (`10 kΩ` Pull-Down) | `BAT+` über `100 kΩ` | **aus** |
+
+> [!IMPORTANT]
+> **Pull-Down am `2N7002` mit `10 kΩ`, nicht mit `100 kΩ`:** `GPIO 15` ist ein Strapping-Pin und hat beim Reset einen internen Pull-Up (ca. `45 kΩ`). Mit `100 kΩ` Pull-Down liegen beim Booten ca. `2,3 V` am Gate. Das reicht, damit der `2N7002` (Schwelle `1–2,5 V`) teilweise leitet. Mit `10 kΩ` liegen nur ca. `0,6 V` am Gate, und der `2N7002` sperrt sicher. Nebenwirkung: `GPIO 15 = LOW` beim Booten unterdrückt nur das Boot-Log des ROM-Bootloaders.
+> Schalte den internen Pull-Up von `GPIO 15` vor dem Deep Sleep in der Firmware ab (`rtc_gpio_pullup_dis(GPIO_NUM_15)`). Sonst fließen ca. `60 µA` über den `10 kΩ` Pull-Down.
+
 ```mermaid
 flowchart LR
   subgraph LIPO["LiPo-Akku / JST-Buchse"]
@@ -123,12 +140,15 @@ flowchart LR
 
   subgraph ESP32["WEMOS LOLIN32 Lite"]
     IO5["Pin 6 Links: IO5 (RMT DATA)"]
-    IO15["Pin 10 Links: IO15 (LED_PWR_EN)"]
+    IO15["Pin 10 Links: IO15 (LED_PWR_EN, HIGH = AN)"]
   end
 
   subgraph GATE["High-Side Power-Gate"]
+    NMOS["N-MOSFET 2N7002 (Source=GND, Drain=Gate AO3401)"]
+    RPD["10 kΩ Pull-Down (Gate 2N7002 -> GND)"]
     PMOS["P-MOSFET AO3401 (Source=BAT+, Drain=LED_VDD)"]
-    RPU["100 kΩ Pull-Up (Gate -> BAT+)"]
+    RPU["100 kΩ Pull-Up (Gate AO3401 -> BAT+)"]
+    CBULK["Elko 220–470 µF (LED_VDD -> GND)"]
     RD["330 Ω Daten-Schutzwiderstand"]
   end
 
@@ -140,7 +160,12 @@ flowchart LR
 
   VBAT --> PMOS
   VBAT --> RPU
-  IO15 -->|LOW = AN / HIGH = AUS| PMOS
+  RPU --> PMOS
+  IO15 --> NMOS
+  RPD --> NMOS
+  NMOS -->|zieht Gate auf GND = AN| PMOS
+  NMOS --> GND
+  PMOS -->|LED_VDD| CBULK
   PMOS -->|LED_VDD| L0
   PMOS -->|LED_VDD| L1
   PMOS -->|LED_VDD| L34
@@ -152,11 +177,17 @@ flowchart LR
   L1 -->|...| L34
 ```
 
+- **Elko am Kettenanfang:** Löte den Elko (`220–470 µF`, mindestens `6,3 V`) direkt hinter den Drain des `AO3401` zwischen `LED_VDD` und `GND`. Er fängt die Stromspitzen beim Einschalten ab.
+- **100 nF je Zeile:** Löte pro Zeile einen `100 nF` Keramik-Kondensator zwischen die `VDD`- und `GND`-Schiene.
+- **Datenleitung vor dem Abschalten auf `LOW`:** Setze `GPIO 5` auf `LOW`, bevor `GPIO 15` die LEDs abschaltet. Sonst versorgt `DIN` die erste LED über ihre Schutzdiode.
+
 ### 4.3 Warum an LiPo-Spannung (`3,7 V`) kein Level-Shifter nötig ist
 
 - An `5 V` (USB) verlangen `WS2812B`/`SK6812` laut Datenblatt mindestens $0,7 \times V_{DD} = 3,5\text{ V}$ am Daten-Pin `DIN`, was mit einem `3,3 V` ESP32 oft zu Flackern führt.
 - Wenn du die `SK6812 Mini-E` jedoch über den `AO3401` P-MOSFET direkt aus dem **LiPo-Akku (`BAT+`, typ. `3,7 V`)** versorgst, liegt die Schaltschwelle bei $0,7 \times 3,7\text{ V} = 2,59\text{ V}$.
 - Das `3,3 V` Ausgangssignal von **`GPIO 5`** liegt damit sicher über der Schwelle und wird **ohne Level-Shifter** sauber erkannt. Zusätzlich entlastest du den kleinen `3,3 V`-Spannungsregler (`ME6211`) auf dem LOLIN32 Lite.
+- Bei vollem Akku (`4,2 V`) liegt die Schwelle bei $0,7 \times 4,2\text{ V} = 2,94\text{ V}$. Auch dieser Wert liegt unter `3,3 V`.
+- **Untere Spannungsgrenze:** Die Mindestspannung der `SK6812` liegt laut Datenblatt je nach Hersteller bei `3,5–3,7 V`. Darunter werden die LEDs dunkler, oder Blau und Grün flackern. Schalte die LEDs in der Firmware unter ca. `3,6 V` Akkuspannung ab (Messung über `BAT_SENSE`, `GPIO 35`).
 
 ### 4.4 Verdrahtungs-Reihenfolge (Schlangenlinie durch die 35 Tasten)
 
@@ -178,7 +209,28 @@ Bei voller weißer Helligkeit (`255, 255, 255`) zieht eine `SK6812 Mini-E` ca. `
 |---|---|---|---|---|
 | **1. Nur aktive Spezial-Tasten auf Layer `1..7`** *(Empfohlen)* | **0 LEDs auf Layer 0**, ca. **6–12 LEDs** auf Layer `1..7` (nur Tasten, die auf dem aktiven Layer belegt sind!) | `20 / 255` (~8 %) | **Layer 0: `0 mA`** (MOSFET aus!)<br>**Layer 1..7: ca. `15–25 mA`** | Du siehst beim Halten von `MO_1` / `MO_2` sofort farblich, wo Pfeile, Numpad oder F-Tasten liegen; im normalen Tippen (Layer 0) verbraucht die Beleuchtung **0 mA**! |
 | **2. Gedimmtes Per-Key-Backlight (alle 35 Tasten)** | 35 LEDs | `15 / 255` (~6 %) | **ca. `60–85 mA`** | Dezente Tastenbeleuchtung im Dunkeln in der Farbe des aktiven Layers. |
-| **3. Standby & Deep Sleep** | 0 LEDs (MOSFET sperrt) | Aus | **`0 µA`** (`GPIO 5` = `LOW`, `GPIO 15` = `INPUT` mit `100 kΩ` Pull-Up an `BAT+`) | Volle Deep-Sleep-Laufzeit des ESP32 bleibt erhalten. |
+| **3. Standby & Deep Sleep** | 0 LEDs (MOSFET sperrt) | Aus | **`0 µA`** (`GPIO 5` = `LOW`, `GPIO 15` = `LOW` bzw. nicht getrieben mit `10 kΩ` Pull-Down am `2N7002`) | Volle Deep-Sleep-Laufzeit des ESP32 bleibt erhalten. |
+
+### 4.6 Einkaufsliste (beide Hälften)
+
+| Teil | Menge | Zweck |
+|---|---|---|
+| `SK6812 Mini-E` (3228, 5 V), z. B. [Amazon B0DQJ8KF18](https://www.amazon.de/dp/B0DQJ8KF18) (100 Stück) | 70 (+30 Reserve) | Eine LED pro Taste |
+| P-MOSFET `AO3401` oder `SI2301` (SOT-23) | 2 (+2 Reserve) | Trennt `BAT+` von `LED_VDD` |
+| N-MOSFET `2N7002` oder `BSS138` (SOT-23) | 2 (+2 Reserve) | Gate-Treiber für den P-MOSFET |
+| Widerstand `100 kΩ` | 2 | Pull-Up Gate `AO3401` → `BAT+` |
+| Widerstand `10 kΩ` | 2 | Pull-Down Gate `2N7002` → `GND` |
+| Widerstand `330 Ω` | 2 | Schutz der Datenleitung `GPIO 5` → `DIN` |
+| Elko `220–470 µF`, mindestens `6,3 V` | 2 | Puffer am Anfang der LED-Kette |
+| Keramik-Kondensator `100 nF` | ca. 20 | Ein Kondensator pro Zeile zwischen `VDD` und `GND` |
+| Blanker Kupfer- oder Silberdraht `0,4 mm` | ca. 3 m | `VDD`- und `GND`-Schienen entlang der Zeilen |
+| Dünne Litze oder Kupferlackdraht | ca. 2 m | Datenbrücken `DOUT` → `DIN` |
+| Kapton-Band, Sekundenkleber oder Heißkleber, Schrumpfschlauch | — | Montage und Isolation |
+
+**Voraussetzungen prüfen:**
+- **Switches:** Die Switches brauchen ein LED-Fenster im Gehäuse. Die `SK6812 Mini-E` strahlt im Reverse-Mount durch dieses Fenster.
+- **Keycaps:** Ohne Shine-Through-Keycaps ist das Licht nur als Schein unter der Kappe sichtbar.
+- **Test:** Prüfe jede LED direkt nach dem Einlöten mit einem kurzen Testprogramm. Eine defekte LED unterbricht die Datenkette für alle folgenden LEDs.
 
 ---
 
@@ -246,4 +298,4 @@ Egal ob du **Variante A/B** (analoge PWM auf `GPIO 5 / 15 / 2`) oder **Per-Key `
      - **Belegte Tasten auf dem Layer:** Leuchten in der Layer-Farbe (oder je nach Aktionstyp: Pfeiltasten = Blau, Zahlen = Grün, Media = Türkis, Layer-Taste = Violett, `Caps Word` = Gelb).
      - **Transparente / unbelegte Tasten (`0`):** Bleiben komplett dunkel (`0, 0, 0`), was bis zu **80 % Akkustrom spart** und das Layout optisch hervorhebt.
    - Im **Config Mode (`Dactyl Config` / `Dactyl Config L`):** Die beiden Config-Combo-Tasten (`R0C0 + R4C5` rechts bzw. `R0C5 + R4C0` links) pulsieren Cyan.
-   - In **`enterStandby()` und `enterDeepSleep()`:** Schaltet `GPIO 15` (`LED_PWR_EN`) auf `HIGH` (P-MOSFET sperrt) und `GPIO 5` auf `LOW` -> **`0 µA` Ruhestrom**.
+   - In **`enterStandby()` und `enterDeepSleep()`:** Setzt zuerst `GPIO 5` auf `LOW`, dann `GPIO 15` (`LED_PWR_EN`) auf `LOW` (`2N7002` und `AO3401` sperren) und schaltet den internen Pull-Up von `GPIO 15` ab -> **`0 µA` Ruhestrom**.

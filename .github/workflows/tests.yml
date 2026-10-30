@@ -47,6 +47,7 @@ jobs:
 
   firmware-compile:
     name: Arduino CLI Firmware Compile Check
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository

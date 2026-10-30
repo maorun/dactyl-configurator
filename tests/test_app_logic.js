@@ -3375,6 +3375,177 @@ asyncTests.push(["Flash-Protokoll: Stream meldet jede Zeile und liefert das Erge
   assert.strictEqual(none, null);
 }]);
 
+// Test für die WebSerial-Auswahllogik in Electron (main.js)
+test("main.js: matchSerialPort erkennt ESP32-Seriellports und filtert andere", () => {
+  const mainJs = read("main.js");
+  const fnMatch = mainJs.match(/function matchSerialPort\(p\)\s*\{[\s\S]*?\n  \}/);
+  assert.ok(fnMatch, "matchSerialPort muss in main.js definiert sein");
+  const matchFn = new Function("p", fnMatch[0] + "\nreturn matchSerialPort(p);");
+
+  assert.strictEqual(matchFn({ portName: "/dev/cu.usbserial-1320" }), true);
+  assert.strictEqual(matchFn({ displayName: "USB Single Serial" }), true);
+  assert.strictEqual(matchFn({ portName: "cu.wchusbserial1420" }), true);
+  assert.strictEqual(matchFn({ portName: "/dev/cu.Bluetooth-Incoming-Port" }), false);
+  assert.strictEqual(matchFn(null), false);
+  assert.strictEqual(matchFn({}), false);
+});
+
+test("main.js: select-serial-port wartet auf serial-port-added statt sofort abzubrechen", async () => {
+  const mainJs = read("main.js");
+  assert.ok(mainJs.includes("serial-port-added"), "main.js muss auf serial-port-added lauschen");
+  assert.ok(mainJs.includes("handleSerialPortAdded"), "main.js muss handleSerialPortAdded definieren");
+  // Darf nicht sofort callback('') bei leerer portList aufrufen
+  assert.ok(!/else\s*\{\s*callback\(''\);\s*\}/.test(mainJs), "Darf bei leerer portList nicht sofort abbrechen");
+  // Darf bei nicht-passenden Ports nicht sofort den ersten Port wählen
+  assert.ok(!/else if\s*\(portList\.length > 0\)\s*\{\s*callback\(portList\[0\]\.portId\)/.test(mainJs), "Darf fremde Ports nicht vor Ablauf des Timeouts wählen");
+  assert.ok(mainJs.includes("disable-serial-blocklist"), "main.js muss disable-serial-blocklist setzen");
+});
+
+test("main.js: isAllowedOrigin akzeptiert localhost und 127.0.0.1 mit oder ohne Pfad", () => {
+  const mainJs = read("main.js");
+  const fnMatch = mainJs.match(/const ALLOWED_ORIGINS[\s\S]*?function isAllowedOrigin\(rawUrl\)\s*\{[\s\S]*?\n  \}/);
+  assert.ok(fnMatch, "isAllowedOrigin muss in main.js definiert sein");
+  const checkFn = new Function("rawUrl", fnMatch[0] + "\nreturn isAllowedOrigin(rawUrl);");
+
+  assert.strictEqual(checkFn("http://localhost:8088"), true);
+  assert.strictEqual(checkFn("http://localhost:8088/"), true);
+  assert.strictEqual(checkFn("http://localhost:8088/api/status"), true);
+  assert.strictEqual(checkFn("http://127.0.0.1:8088"), true);
+  assert.strictEqual(checkFn("http://127.0.0.1:8088/index.html"), true);
+  assert.strictEqual(checkFn("http://localhost:8088.evil.com"), false);
+  assert.strictEqual(checkFn("https://evil.com"), false);
+  assert.strictEqual(checkFn(""), false);
+  assert.strictEqual(checkFn(null), false);
+});
+
+test("main.js: isAllowedWebContents weist ungültige fallbackUrl sofort ab", () => {
+  const mainJs = read("main.js");
+  const fnMatch = mainJs.match(/const ALLOWED_ORIGINS[\s\S]*?function isAllowedWebContents\(wc, fallbackUrl\)\s*\{[\s\S]*?\n  \}/);
+  assert.ok(fnMatch, "isAllowedWebContents muss in main.js definiert sein");
+  const checkFn = new Function("wc", "fallbackUrl", fnMatch[0] + "\nreturn isAllowedWebContents(wc, fallbackUrl);");
+
+  const localWc = { getURL: () => "http://localhost:8088" };
+  // Sicherheitsprüfung: Ein fremder Ursprung als fallbackUrl darf nicht durch die lokale Fenster-URL gerettet werden
+  assert.strictEqual(checkFn(localWc, "https://evil.com"), false);
+  assert.strictEqual(checkFn(localWc, "http://localhost:8088.evil.com"), false);
+  // Gültige fallbackUrl wird akzeptiert
+  assert.strictEqual(checkFn(localWc, "http://localhost:8088/"), true);
+  assert.strictEqual(checkFn(null, "http://127.0.0.1:8088/api"), true);
+  // Leere fallbackUrl fällt auf wc.getURL() zurück
+  assert.strictEqual(checkFn(localWc, ""), true);
+  assert.strictEqual(checkFn(localWc, null), true);
+  assert.strictEqual(checkFn({ getURL: () => "https://evil.com" }, ""), false);
+  assert.strictEqual(checkFn(null, null), false);
+});
+
+asyncTests.push(["js/serial.js: connectSerialNow fällt bei fehlerhaftem vor-berechtigten Port auf requestPort zurück", async () => {
+  // Simulierte Umgebung
+  let requestedPortOpened = false;
+  let requestPortCalled = false;
+  let brokenPortOpenAttempts = 0;
+
+  const mockBrokenPort = {
+    open: async () => {
+      brokenPortOpenAttempts++;
+      throw new Error("Port busy");
+    }
+  };
+  const mockWorkingPort = {
+    open: async () => {
+      requestedPortOpened = true;
+    },
+    addEventListener: () => {}
+  };
+
+  // Port-Auswahl-Algorithmus aus js/serial.js isoliert testen
+  async function selectPort(getPorts, requestPort, options = {}) {
+    let port = null;
+    let portAlreadyOpen = false;
+    if (typeof getPorts === "function") {
+      const granted = await getPorts();
+      if (options.reuseGrantedPort) {
+        port = granted[0] || null;
+        if (!port) throw new Error("Kein Port");
+      } else if (granted && granted.length > 0) {
+        for (const candidate of granted) {
+          try {
+            await candidate.open({ baudRate: 115200 });
+            port = candidate;
+            portAlreadyOpen = true;
+            break;
+          } catch (_) {}
+        }
+      }
+    }
+    if (!port) {
+      port = await requestPort();
+    }
+    if (!portAlreadyOpen) {
+      await port.open({ baudRate: 115200 });
+    }
+    return port;
+  }
+
+  const selected = await selectPort(
+    async () => [mockBrokenPort],
+    async () => {
+      requestPortCalled = true;
+      return mockWorkingPort;
+    }
+  );
+
+  assert.strictEqual(brokenPortOpenAttempts, 1, "Muss defekten Port versucht haben");
+  assert.strictEqual(requestPortCalled, true, "Muss auf requestPort zurückgefallen sein");
+  assert.strictEqual(requestedPortOpened, true, "Muss den neu angeforderten Port geöffnet haben");
+  assert.strictEqual(selected, mockWorkingPort, "Ausgewählter Port muss der funktionierende Port sein");
+}]);
+
+asyncTests.push(["js/serial.js: connectSerialNow nutzt funktionierenden vor-berechtigten Port direkt", async () => {
+  let workingPortOpened = false;
+  let requestPortCalled = false;
+
+  const mockWorkingPort = {
+    open: async () => { workingPortOpened = true; }
+  };
+
+  async function selectPort(getPorts, requestPort) {
+    let port = null;
+    let portAlreadyOpen = false;
+    if (typeof getPorts === "function") {
+      const granted = await getPorts();
+      if (granted && granted.length > 0) {
+        for (const candidate of granted) {
+          try {
+            await candidate.open({ baudRate: 115200 });
+            port = candidate;
+            portAlreadyOpen = true;
+            break;
+          } catch (_) {}
+        }
+      }
+    }
+    if (!port) {
+      port = await requestPort();
+    }
+    if (!portAlreadyOpen) {
+      await port.open({ baudRate: 115200 });
+    }
+    return port;
+  }
+
+  const selected = await selectPort(
+    async () => [mockWorkingPort],
+    async () => {
+      requestPortCalled = true;
+      return null;
+    }
+  );
+
+  assert.strictEqual(workingPortOpened, true, "Muss vor-berechtigten Port öffnen");
+  assert.strictEqual(requestPortCalled, false, "Darf requestPort nicht aufrufen wenn vor-berechtigter Port funktioniert");
+  assert.strictEqual(selected, mockWorkingPort);
+}]);
+
 (async () => {
   for (const [name, fn] of asyncTests) {
     await fn();

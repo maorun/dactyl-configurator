@@ -6,6 +6,7 @@ const fs = require('fs');
 
 app.commandLine.appendSwitch('enable-experimental-web-platform-features');
 app.commandLine.appendSwitch('enable-web-bluetooth');
+app.commandLine.appendSwitch('disable-serial-blocklist');
 
 const os = require('os');
 const LOG_FILE = path.join(os.homedir(), '.dactyl_electron.log');
@@ -162,29 +163,133 @@ function createWindow() {
 
   // Bei zwei angeschlossenen Hälften wählt dies den ersten USB-Port. Die App erkennt die Hälfte danach
   // über DEVICE_INFO.side und sendet Befehle nur an die passende Hälfte (siehe sendDeviceCommand in js/ble.js).
-  ses.on('select-serial-port', (event, portList, webContents, callback) => {
-    event.preventDefault();
-    const espPort = portList.find(p => p.portName && (p.portName.includes('usbserial') || p.portName.includes('wchusb')));
-    if (espPort) {
-      callback(espPort.portId);
-    } else if (portList.length > 0) {
-      callback(portList[0].portId);
-    } else {
-      callback('');
+  let activeSerialCallback = null;
+  let serialScanTimeout = null;
+  let candidatePorts = [];
+
+  function matchSerialPort(p) {
+    if (!p) return false;
+    const name = ((p.portName || '') + ' ' + (p.displayName || '')).toLowerCase();
+    return name.includes('usbserial') || name.includes('wchusb') || name.includes('serial');
+  }
+
+  function clearSerialScan() {
+    if (serialScanTimeout) {
+      clearTimeout(serialScanTimeout);
+      serialScanTimeout = null;
     }
+    candidatePorts = [];
+    activeSerialCallback = null;
+  }
+
+  function handleSerialPortSelect(event, portList, webContents, callback) {
+    event.preventDefault();
+    logElectron(`select-serial-port fired with ${portList.length} ports: ` + JSON.stringify(portList));
+    if (activeSerialCallback) {
+      activeSerialCallback('');
+      clearSerialScan();
+    }
+    activeSerialCallback = callback;
+    candidatePorts = [...portList];
+
+    const espPort = candidatePorts.find(matchSerialPort);
+    if (espPort) {
+      logElectron(`Auto-selecting Serial Port: ${espPort.portName || espPort.displayName || espPort.portId}`);
+      callback(espPort.portId);
+      clearSerialScan();
+      return;
+    }
+
+    // Wenn noch kein passender ESP-Port in portList ist: auf serial-port-added warten
+    serialScanTimeout = setTimeout(() => {
+      if (activeSerialCallback) {
+        if (candidatePorts.length > 0) {
+          logElectron(`Fallback on timeout: selecting first serial port: ${candidatePorts[0].portName || candidatePorts[0].displayName || candidatePorts[0].portId}`);
+          activeSerialCallback(candidatePorts[0].portId);
+        } else {
+          logElectron('Serial port scan timed out after 5s without finding port.');
+          activeSerialCallback('');
+        }
+      }
+      clearSerialScan();
+    }, 5000);
+  }
+
+  function handleSerialPortAdded(event, port) {
+    logElectron(`serial-port-added fired: ` + JSON.stringify(port));
+    if (!candidatePorts.some(p => p.portId === port.portId)) {
+      candidatePorts.push(port);
+    }
+    if (activeSerialCallback) {
+      if (matchSerialPort(port)) {
+        logElectron(`Auto-selecting added Serial Port: ${port.portName || port.displayName || port.portId}`);
+        activeSerialCallback(port.portId);
+        clearSerialScan();
+      }
+    }
+  }
+
+  mainWindow.webContents.on('select-serial-port', handleSerialPortSelect);
+  ses.on('select-serial-port', handleSerialPortSelect);
+  mainWindow.webContents.on('serial-port-added', handleSerialPortAdded);
+  ses.on('serial-port-added', handleSerialPortAdded);
+  logElectron('Registered select-serial-port and serial-port-added handlers on mainWindow.webContents and session.');
+
+  mainWindow.webContents.on('console-message', (event, level, message) => {
+    logElectron(`[Renderer Console] ${message}`);
   });
 
-  const ALLOWED_ORIGIN = 'http://localhost:8088';
+  const ALLOWED_ORIGINS = new Set([
+    'http://localhost:8088',
+    'http://127.0.0.1:8088'
+  ]);
 
-  ses.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
-    return requestingOrigin === ALLOWED_ORIGIN;
+  function isAllowedOrigin(rawUrl) {
+    if (!rawUrl) return false;
+    try {
+      const parsed = new URL(rawUrl);
+      return ALLOWED_ORIGINS.has(parsed.origin);
+    } catch (_) {
+      const trimmed = String(rawUrl).replace(/\/+$/, '');
+      return ALLOWED_ORIGINS.has(trimmed);
+    }
+  }
+
+  function isAllowedWebContents(wc, fallbackUrl) {
+    if (fallbackUrl) {
+      return isAllowedOrigin(fallbackUrl);
+    }
+    if (wc && typeof wc.getURL === 'function') {
+      return isAllowedOrigin(wc.getURL());
+    }
+    return false;
+  }
+
+  ses.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    const origin = requestingOrigin || details?.requestingUrl || (webContents && webContents.getURL()) || '';
+    const allowed = isAllowedWebContents(webContents, origin);
+    logElectron(`setPermissionCheckHandler: permission=${permission}, origin=${origin} -> ${allowed}`);
+    return allowed;
   });
+
   ses.setDevicePermissionHandler((details) => {
-    return details.origin === ALLOWED_ORIGIN;
+    if (details && details.deviceType === 'serial') {
+      const origin = details.origin || '';
+      const allowed = isAllowedOrigin(origin) || origin === '';
+      logElectron(`setDevicePermissionHandler: serial access -> ${allowed} (origin=${origin})`);
+      return allowed;
+    }
+    const origin = details?.origin || '';
+    const allowed = isAllowedOrigin(origin);
+    logElectron(`setDevicePermissionHandler: deviceType=${details?.deviceType}, origin=${origin} -> ${allowed}`);
+    return allowed;
   });
+
   ses.setPermissionRequestHandler((webContents, permission, callback, details) => {
-    const origin = details?.requestingUrl ? new URL(details.requestingUrl).origin : '';
-    callback(origin === ALLOWED_ORIGIN);
+    const url = details?.requestingUrl || details?.securityOrigin || (webContents && webContents.getURL()) || '';
+    const allowed = isAllowedWebContents(webContents, url);
+    logElectron(`setPermissionRequestHandler: permission=${permission}, url=${url} -> ${allowed}`);
+    callback(allowed);
   });
 
   mainWindow.webContents.setWindowOpenHandler(() => {
@@ -192,10 +297,7 @@ function createWindow() {
   });
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
-    let origin = '';
-    try { origin = new URL(url).origin; } catch (e) {}
-    // Exakter Origin-Vergleich: startsWith ließe z. B. http://localhost:8088.evil.com zu
-    if (origin !== ALLOWED_ORIGIN) {
+    if (!isAllowedOrigin(url)) {
       event.preventDefault();
       logElectron(`Blocked navigation to untrusted URL: ${url}`);
     }
@@ -204,6 +306,18 @@ function createWindow() {
   mainWindow.loadURL(APP_URL);
 
   mainWindow.on('closed', () => {
+    if (activeBluetoothCallback) {
+      activeBluetoothCallback('');
+      activeBluetoothCallback = null;
+    }
+    if (bluetoothScanTimeout) {
+      clearTimeout(bluetoothScanTimeout);
+      bluetoothScanTimeout = null;
+    }
+    if (activeSerialCallback) {
+      activeSerialCallback('');
+      clearSerialScan();
+    }
     mainWindow = null;
   });
 }

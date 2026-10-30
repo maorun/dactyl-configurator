@@ -1125,6 +1125,10 @@ class TestServerAndCodegen(unittest.TestCase):
         with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
             name = json.load(f)["name"]
         self.assertIn("path.join(app.getPath('userData'), 'data')", main_js)
+        # WebSerial-Portauswahl: Handler fängt select-serial-port ab und wartet auf serial-port-added
+        self.assertIn("select-serial-port", main_js)
+        self.assertIn("serial-port-added", main_js)
+        self.assertIn("matchSerialPort", main_js)
         with open(os.path.join(root, "scripts", "build-app.sh"), encoding="utf-8") as f:
             self.assertIn(f"$HOME/Library/Application Support/{name}/data", f.read())
 

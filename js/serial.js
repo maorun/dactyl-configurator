@@ -32,15 +32,32 @@ async function connectSerialNow(options = {}) {
   if (serialPort) return; // bereits verbunden
 
   let port = null;
+  let portAlreadyOpen = false;
   try {
-    if (options.reuseGrantedPort && typeof navigator.serial.getPorts === "function") {
+    if (typeof navigator.serial.getPorts === "function") {
       const granted = await navigator.serial.getPorts();
-      port = granted[0] || null;
-      if (!port) throw new Error("Kein bereits freigegebener USB-Port gefunden. Bitte manuell verbinden.");
-    } else {
+      if (options.reuseGrantedPort) {
+        port = granted[0] || null;
+        if (!port) throw new Error("Kein bereits freigegebener USB-Port gefunden. Bitte manuell verbinden.");
+      } else if (granted && granted.length > 0) {
+        for (const candidate of granted) {
+          try {
+            await candidate.open({ baudRate: 115200 });
+            port = candidate;
+            portAlreadyOpen = true;
+            break;
+          } catch (_) {
+            // Port nicht erreichbar; nächster Port oder requestPort()
+          }
+        }
+      }
+    }
+    if (!port) {
       port = await navigator.serial.requestPort();
     }
-    await port.open({ baudRate: 115200 });
+    if (!portAlreadyOpen) {
+      await port.open({ baudRate: 115200 });
+    }
     // Erst nach erfolgreichem open() als aktive Verbindung übernehmen; Hälfte folgt aus DEVICE_INFO
     serialPort = port;
     serialSide = null;
@@ -63,13 +80,13 @@ async function connectSerialNow(options = {}) {
     }, 300);
 
   } catch (err) {
-    console.error("Serial connection error:", err);
+    console.error("Serial connection error:", err && (err.message || err.toString()));
     if (port && port !== serialPort) {
       try { await port.close(); } catch (_) {}
     }
     serialPort = null;
     updateConnectionUI(false, "Verbindung fehlgeschlagen");
-    showToast("Verbindung abgebrochen oder Fehler: " + err.message);
+    showToast("Verbindung abgebrochen oder Fehler: " + (err && err.message ? err.message : err));
   }
 }
 

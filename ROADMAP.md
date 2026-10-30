@@ -17,11 +17,37 @@ Rules for this file:
 
 ## Priority 1: Faults that disturb daily typing
 
-No open entry.
+### Mod-Tap decision across both halves
+
+- **Rank:** Feature model. Total 25/40 (typing 8, configuration 3, harmony 9, safety 5). Effort L. Estimate.
+- **Area:** Firmware (both halves).
+- **Code:** `firmware/dactyl_right/DactylLogic.h` (`resolvePendingTapHoldsAsHold`), `firmware/dactyl_right/DactylSplitHid.h` (`SplitLocalDefer`), `firmware/dactyl_left/DactylLeftLogic.h`.
+- **Problem:** A key press of the other half does not decide an open Mod-Tap key as hold. Example: the right `R5C0` holds `MO_1` and a left key follows within the tapping term. The right half then sends its tap action (`Delete`) and the left key acts on layer 0.
+- **Goal:** Let a key press of one half decide an open Mod-Tap key of the other half as hold, before the press acts. Use the pattern of "Double-tap across both halves": append new split ops, hold the press for a short time, and apply it after the layer change.
+- **Goal:** Keep the old behavior when one half has an older firmware. Increase `DACTYL_FW_VERSION`.
+- **Acceptance test:** A test with both halves shows that a held `MO_1` on one half and a key press on the other half gives the layer 1 action and no tap action.
 
 ## Priority 2
 
-No open entry.
+### Bounce detection in the matrix test
+
+- **Rank:** Feature model. Total 29/40 (typing 3, configuration 9, harmony 8, safety 9). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylLogic.h` (`onMatrixKeyChange`), `js/config-model.js` (`parseMatrixLine`, `summarizeMatrixTest`), `js/matrix-test.js`.
+- **Problem:** A worn or badly soldered switch can type a key twice. The matrix test shows only that a key works, not that it bounces.
+- **Goal:** Add the scan time `t` to the `MATRIX:` line. Count a press that follows a release of the same key within a short limit as a bounce.
+- **Goal:** Mark bouncing keys in the matrix test and show a hint to increase `debounceMs`. A line without `t` gives no bounce result.
+- **Acceptance test:** A test shows that a press 10 ms after a release counts as a bounce and a press 200 ms after a release does not.
+
+### Layout check
+
+- **Rank:** Feature model. Total 29/40 (typing 3, configuration 9, harmony 8, safety 9). Effort M. Estimate.
+- **Area:** App.
+- **Code:** `js/config-model.js` (`validateConfigShape`, `isKeyPairUsed`, `isMacroUsed`), `js/side-profiles.js` (`cellHasAction`), `js/config-sync.js` (`writeConfigWithDiff`).
+- **Problem:** The app checks only the shape of a configuration. An action on a key that does not exist has no effect and no warning. A layer that the user cannot reach, or cannot leave, also gives no warning.
+- **Goal:** Add a pure function that checks both halves together, because both halves share the active layer. Report: an action on a missing key, a layer without a way in, a toggled layer without a way out, an unused key pair or macro, a duplicate combo, and a combo key with a hold or double-tap action.
+- **Goal:** Show the result in the matrix tab, in the layout diff and before "Auf Dactyl flashen". A warning does not block the sync.
+- **Acceptance test:** A test shows each check with one positive and one negative case, including an action on `R5C5` of the right half.
 
 ## Priority 3
 

@@ -34,7 +34,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
-             recordMatrixBounce, MATRIX_BOUNCE_MS,
+             recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts,
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
@@ -2623,6 +2623,547 @@ test("Flash-Protokoll: Phasen-Namen", () => {
   assert.strictEqual(api.flashStageLabel("upload"), "Upload");
   assert.strictEqual(api.flashStageLabel("port"), "USB-Port");
   assert.strictEqual(api.flashStageLabel(undefined), "Flashen");
+});
+
+// =============================================================================
+// Layout-Prüfung (lintLayouts, js/config-model.js)
+// =============================================================================
+// Leere Konfiguration mit transparenten Ebenen; set() belegt eine Taste, combo() fügt eine Combo hinzu
+function lintCfg() {
+  return { layers: Array.from({ length: 8 }, () => api.transparentLayer()), combos: [], keyPairs: [], macros: [] };
+}
+function lintSet(cfg, l, r, c, tap, hold = "NONE", dtap = "NONE") {
+  cfg.layers[l][r][c] = { label: "x", tap, hold, dtap };
+}
+function lintCombo(cfg, k1, k2, behavior = "KEY_PRESS", action = "KEY_A") {
+  cfg.combos.push({ key1: { r: k1[0], c: k1[1] }, key2: { r: k2[0], c: k2[1] }, behavior, action });
+}
+// Beide Hälften mit einem Weg in und aus Ebene 1 (MO_1 auf Ebene 0, rechts), damit nur der geprüfte Fall auffällt
+function lintBoth(right, left = lintCfg()) {
+  return api.lintLayouts({ R: right, L: left }, api.SIDE_PROFILES);
+}
+function lintCodes(findings, code) {
+  return [...findings].filter(f => f.code === code).map(f => ({ ...f }));
+}
+
+test("Layout-Prüfung: leeres Layout ohne Befund, ohne Konfiguration kein Absturz", () => {
+  assert.deepStrictEqual([...lintBoth(lintCfg())], []);
+  assert.deepStrictEqual([...api.lintLayouts({}, api.SIDE_PROFILES)], []);
+  assert.deepStrictEqual([...api.lintLayouts(undefined, undefined)], []);
+  // Eine Hälfte ohne Profil oder Konfiguration wird übersprungen
+  assert.deepStrictEqual([...api.lintLayouts({ R: lintCfg(), X: lintCfg(), L: null }, api.SIDE_PROFILES)], []);
+});
+
+test("Layout-Prüfung: Aktion auf einer fehlenden Taste (R5C5 rechts, R2C6 außerhalb der Matrix)", () => {
+  const cfg = lintCfg();
+  for (let l = 0; l < 8; l++) lintSet(cfg, l, 5, 5, "KEY_BACKSPACE");
+  lintSet(cfg, 0, 2, 6, "KEY_DELETE");
+  lintSet(cfg, 3, 2, 6, "KEY_DELETE");
+  lintSet(cfg, 0, 4, 0, "KEY_A", "KEY_B");               // R4C0 fehlt rechts
+  const found = lintCodes(lintBoth(cfg), "absent-key-action");
+  assert.deepStrictEqual(found.map(f => f.side), ["R", "R", "R"]);
+  const text = found.map(f => f.message).join("\n");
+  assert.ok(text.includes("R5C5 hat auf allen Ebenen"), text);
+  assert.ok(text.includes("R2C6 hat auf Ebenen 0, 3"), text);
+  assert.ok(text.includes("R4C0 hat auf Ebene 0"), text);
+  assert.ok(found.every(f => f.level === "warn"));
+  // Dieselben Positionen sind links echte Tasten (R5C5) oder fehlen auch (R4C0 ist links vorhanden)
+  const left = lintCfg();
+  lintSet(left, 0, 5, 5, "KEY_UP_ARROW");
+  lintSet(left, 0, 4, 0, "KEY_LEFT_CTRL");
+  assert.deepStrictEqual(lintCodes(lintBoth(lintCfg(), left), "absent-key-action"), []);
+  // Links fehlen R4C5 und R5C0
+  const left2 = lintCfg();
+  lintSet(left2, 1, 5, 0, "KEY_A");
+  const f2 = lintCodes(lintBoth(lintCfg(), left2), "absent-key-action");
+  assert.strictEqual(f2.length, 1);
+  assert.strictEqual(f2[0].side, "L");
+  assert.ok(f2[0].message.includes("R5C0 hat auf Ebene 1"));
+});
+
+test("Layout-Prüfung: nur eine Halte- oder Doppel-Tipp-Aktion auf einer fehlenden Taste zählt auch", () => {
+  const holdOnly = lintCfg();
+  lintSet(holdOnly, 0, 5, 5, "NONE", "KEY_LEFT_CTRL");
+  assert.strictEqual(lintCodes(lintBoth(holdOnly), "absent-key-action").length, 1);
+  const dtapOnly = lintCfg();
+  lintSet(dtapOnly, 0, 5, 5, "NONE", "NONE", "KEY_A");
+  assert.strictEqual(lintCodes(lintBoth(dtapOnly), "absent-key-action").length, 1);
+  // Eine Zelle als reiner Code-String (älteres Format) und "0" als leere Aktion
+  const stringCell = lintCfg();
+  stringCell.layers[0][5][5] = "KEY_A";
+  assert.strictEqual(lintCodes(lintBoth(stringCell), "absent-key-action").length, 1);
+  const zero = lintCfg();
+  zero.layers[0][5][5] = { tap: "0", hold: "", dtap: "NONE" };
+  assert.strictEqual(lintCodes(lintBoth(zero), "absent-key-action").length, 0);
+});
+
+test("Layout-Prüfung: Ebene ohne Weg hinein ist unerreichbar, mit MO, TG, Combo oder der anderen Hälfte nicht", () => {
+  const unreachable = lintCfg();
+  lintSet(unreachable, 2, 1, 1, "KEY_A");
+  let found = lintCodes(lintBoth(unreachable), "layer-unreachable");
+  assert.strictEqual(found.length, 1);
+  assert.strictEqual(found[0].side, null);
+  assert.ok(found[0].message.startsWith("Ebene 2 hat eigene Belegung"), found[0].message);
+
+  // MO_2 auf Ebene 0 der rechten Hälfte
+  const mo = lintCfg();
+  lintSet(mo, 2, 1, 1, "KEY_A");
+  lintSet(mo, 0, 5, 0, "MO_2");
+  assert.deepStrictEqual(lintCodes(lintBoth(mo), "layer-unreachable"), []);
+  // Als Halte-Aktion (Layer-Tap)
+  const hold = lintCfg();
+  lintSet(hold, 2, 1, 1, "KEY_A");
+  lintSet(hold, 0, 5, 0, "KEY_DELETE", "MO_2");
+  assert.deepStrictEqual(lintCodes(lintBoth(hold), "layer-unreachable"), []);
+  // Der Weg liegt auf der anderen Hälfte: die Ebene gilt für beide
+  const left = lintCfg();
+  lintSet(left, 0, 5, 1, "TG_2");
+  assert.deepStrictEqual(lintCodes(lintBoth(unreachable, left), "layer-unreachable"), []);
+  // Eine Combo "Layer umschalten" (Aktion & 7 = Ebene)
+  const combo = lintCfg();
+  lintSet(combo, 2, 1, 1, "KEY_A");
+  lintCombo(combo, [2, 1], [2, 2], "LAYER_TOGGLE", "TG_2");
+  assert.deepStrictEqual(lintCodes(lintBoth(combo), "layer-unreachable"), []);
+  // Eine Ebene ohne eigene Belegung (nur Kopie von Ebene 0) ist nicht unerreichbar
+  const copy = lintCfg();
+  lintSet(copy, 0, 1, 1, "KEY_A");
+  lintSet(copy, 4, 1, 1, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(copy), "layer-unreachable"), []);
+});
+
+test("Layout-Prüfung: erreichbar nur über eine unerreichbare Ebene bleibt unerreichbar, über LAYER_UP/DOWN nicht", () => {
+  // Ebene 3 hat MO_4, aber Ebene 3 selbst ist nicht erreichbar: Ebene 4 auch nicht
+  const chain = lintCfg();
+  lintSet(chain, 3, 0, 0, "MO_4");
+  lintSet(chain, 4, 1, 1, "KEY_A");
+  const found = lintCodes(lintBoth(chain), "layer-unreachable");
+  assert.strictEqual(found.length, 1);
+  assert.ok(found[0].message.startsWith("Ebenen 3, 4 haben eigene Belegung"), found[0].message);
+  // Ketten über erreichbare Ebenen: 0 -> 1 -> 2
+  const ok = lintCfg();
+  lintSet(ok, 0, 5, 0, "MO_1");
+  lintSet(ok, 1, 0, 0, "MO_2");
+  lintSet(ok, 2, 1, 1, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(ok), "layer-unreachable"), []);
+  // LAYER_UP von Ebene 0 führt nach Ebene 1, LAYER_DOWN von Ebene 0 nach Ebene 7 (Umlauf)
+  const up = lintCfg();
+  lintSet(up, 0, 5, 0, "LAYER_UP");
+  lintSet(up, 1, 1, 1, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(up), "layer-unreachable"), []);
+  const down = lintCfg();
+  lintSet(down, 0, 5, 0, "LAYER_DOWN");
+  lintSet(down, 7, 1, 1, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(down), "layer-unreachable"), []);
+  // Die Firmware-Schreibweise ACT_MO_n zählt wie MO_n
+  const act = lintCfg();
+  lintSet(act, 0, 5, 0, "ACT_MO_5");
+  lintSet(act, 5, 1, 1, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(act), "layer-unreachable"), []);
+});
+
+test("Layout-Prüfung: Aktionen auf einer fehlenden Taste öffnen keinen Weg in eine Ebene", () => {
+  // MO_2 liegt auf R5C5 (rechts nicht vorhanden): kein Weg
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 5, 5, "MO_2");
+  lintSet(cfg, 2, 1, 1, "KEY_A");
+  assert.strictEqual(lintCodes(lintBoth(cfg), "layer-unreachable").length, 1);
+});
+
+test("Layout-Prüfung: eingerastete Ebene ohne Weg zurück ist eine Falle, mit Rückweg nicht", () => {
+  // TG_1 auf Ebene 0; auf Ebene 1 belegt eine andere Taste die TG_1-Taste, es gibt keine Taste zurück
+  const trap = lintCfg();
+  lintSet(trap, 0, 0, 0, "TG_1");
+  lintSet(trap, 1, 0, 0, "KEY_A");
+  const found = lintCodes(lintBoth(trap), "layer-trap");
+  assert.strictEqual(found.length, 1);
+  assert.ok(found[0].message.startsWith("Ebene 1 lässt sich einrasten"), found[0].message);
+  // Ist die TG_1-Taste auf Ebene 1 transparent, gilt dort wie in der Firmware der Rückfall auf Ebene 0:
+  // dieselbe Taste schaltet die Ebene wieder aus. Das ist ein Rückweg.
+  const fallback = lintCfg();
+  lintSet(fallback, 0, 0, 0, "TG_1");
+  assert.deepStrictEqual(lintCodes(lintBoth(fallback), "layer-trap"), []);
+  // Eigene TG-Taste auf Ebene 1
+  const own = lintCfg();
+  lintSet(own, 0, 0, 0, "TG_1");
+  lintSet(own, 1, 0, 0, "TG_1");
+  lintSet(own, 1, 1, 1, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(own), "layer-trap"), []);
+  // TG_0 auf Ebene 1 löscht alle eingerasteten Ebenen
+  const tg0 = lintCfg();
+  lintSet(tg0, 0, 0, 0, "TG_1");
+  lintSet(tg0, 1, 0, 0, "TG_0");
+  assert.deepStrictEqual(lintCodes(lintBoth(tg0), "layer-trap"), []);
+  // LAYER_UP/DOWN auf Ebene 1 führt ebenfalls weiter
+  const step = lintCfg();
+  lintSet(step, 0, 0, 0, "TG_1");
+  lintSet(step, 1, 0, 0, "LAYER_DOWN");
+  assert.deepStrictEqual(lintCodes(lintBoth(step), "layer-trap"), []);
+  // Der Rückweg liegt auf der anderen Hälfte
+  const left = lintCfg();
+  lintSet(left, 1, 0, 0, "TG_1");
+  const keepBack = lintCfg();
+  lintSet(keepBack, 0, 0, 0, "TG_1");
+  lintSet(keepBack, 1, 1, 1, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(keepBack, left), "layer-trap"), []);
+  // MO_n rastet nicht ein: eine Ebene nur über MO braucht keinen Rückweg
+  const mo = lintCfg();
+  lintSet(mo, 0, 5, 0, "MO_1");
+  lintSet(mo, 1, 1, 1, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(mo), "layer-trap"), []);
+});
+
+test("Layout-Prüfung: Falle durch LAYER_UP und durch Combo", () => {
+  // LAYER_UP von Ebene 0 rastet Ebene 1 ein; Ebene 1 hat selbst LAYER_UP/DOWN nur auf R5C5 (fehlt)
+  const up = lintCfg();
+  lintSet(up, 0, 0, 0, "LAYER_UP");
+  lintSet(up, 1, 0, 0, "KEY_B");
+  lintSet(up, 1, 5, 5, "LAYER_DOWN");
+  const found = lintCodes(lintBoth(up), "layer-trap");
+  assert.strictEqual(found.length, 1);
+  // Eine Combo "Layer umschalten" auf Ebene 2 ist der Weg hinein und zurück
+  const combo = lintCfg();
+  lintSet(combo, 2, 1, 1, "KEY_A");
+  lintCombo(combo, [2, 1], [2, 2], "LAYER_TOGGLE", "TG_2");
+  assert.deepStrictEqual(lintCodes(lintBoth(combo), "layer-trap"), []);
+  // Combo mit TG_0 löscht alle eingerasteten Ebenen und ist ein Rückweg
+  const reset = lintCfg();
+  lintSet(reset, 0, 0, 0, "TG_3");
+  lintSet(reset, 3, 1, 1, "KEY_A");
+  lintCombo(reset, [2, 1], [2, 2], "LAYER_TOGGLE", "TG_0");
+  assert.deepStrictEqual(lintCodes(lintBoth(reset), "layer-trap"), []);
+});
+
+test("Layout-Prüfung: ungenutzte Tastenpaare und Makros, belegte nicht", () => {
+  const cfg = lintCfg();
+  cfg.keyPairs = [{ first: "KEY_LEFT_SHIFT", second: "KEY_PERIOD" }, { first: "KEY_TAB", second: "KEY_SLASH" }, { first: "KEY_A", second: "KEY_B" }];
+  cfg.macros = [{ name: "Copy", steps: [] }, { name: "Paste", steps: [] }];
+  lintSet(cfg, 0, 1, 1, "PAIR_1");
+  lintSet(cfg, 2, 3, 3, "KEY_X", "MACRO_0");             // als Halte-Aktion
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "PAIR_2"); // in einer Combo
+  const findings = lintBoth(cfg);
+  const pairs = lintCodes(findings, "pair-unused");
+  assert.deepStrictEqual(pairs.map(f => f.message), ["Tastenpaar 0 (KEY_LEFT_SHIFT + KEY_PERIOD) wird nirgends verwendet."]);
+  const macros = lintCodes(findings, "macro-unused");
+  assert.deepStrictEqual(macros.map(f => f.message), ["Makro 1 (Paste) wird nirgends verwendet."]);
+  assert.ok([...pairs, ...macros].every(f => f.level === "info" && f.side === "R"));
+  // Das Etikett eines Tastenpaars kommt aus labelFor
+  const labelled = api.lintLayouts({ R: cfg, L: lintCfg() }, api.SIDE_PROFILES, code => `<${code}>`);
+  assert.ok(lintCodes(labelled, "pair-unused")[0].message.includes("<KEY_LEFT_SHIFT> + <KEY_PERIOD>"));
+  // Die Belegung der anderen Hälfte nutzt das Paar dieser Hälfte nicht: jede Hälfte hat ihre eigene Liste
+  const left = lintCfg();
+  lintSet(left, 0, 1, 1, "PAIR_0");
+  assert.strictEqual(lintCodes(lintBoth(cfg, left), "pair-unused").length, 1);
+});
+
+test("Layout-Prüfung: doppelte Combo über dieselben zwei Tasten, auch in anderer Reihenfolge", () => {
+  const cfg = lintCfg();
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  lintCombo(cfg, [2, 2], [2, 1], "MODIFIER_HOLD", "KEY_LEFT_CTRL");
+  lintCombo(cfg, [2, 1], [2, 3], "KEY_PRESS", "KEY_B");
+  const found = lintCodes(lintBoth(cfg), "combo-duplicate");
+  assert.strictEqual(found.length, 1);
+  assert.ok(found[0].message.startsWith("Combo 1 und Combo 2 "), found[0].message);
+  assert.strictEqual(found[0].level, "warn");
+  // Keine Doppelung ohne gleiches Paar
+  const other = lintCfg();
+  lintCombo(other, [2, 1], [2, 2]);
+  lintCombo(other, [2, 1], [2, 3]);
+  assert.deepStrictEqual(lintCodes(lintBoth(other), "combo-duplicate"), []);
+  // Kaputte Einträge stürzen nicht ab
+  const broken = lintCfg();
+  broken.combos = [null, { key1: { r: 1, c: 1 } }, { key1: { r: 1, c: 1 }, key2: { r: 1, c: 2 } }];
+  assert.doesNotThrow(() => lintBoth(broken));
+});
+
+test("Layout-Prüfung: Combo-Taste mit Halte- oder Doppel-Tipp-Aktion ist ein Hinweis", () => {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 2, 1, "KEY_J", "KEY_LEFT_CTRL");
+  lintSet(cfg, 3, 2, 1, "KEY_J", "NONE", "KEY_U");
+  lintSet(cfg, 0, 2, 2, "KEY_K");
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  const found = lintCodes(lintBoth(cfg), "combo-hold-cancelled");
+  assert.strictEqual(found.length, 1);
+  assert.strictEqual(found[0].level, "info");
+  // Ebene 3 hat eine eigene Belegung ohne Halten, aber mit Doppel-Tipp; die übrigen Ebenen sind transparent und erben
+  // wie in der Firmware die Halte-Aktion von Ebene 0
+  assert.ok(found[0].message.startsWith("Taste R2C1 ist Teil von Combo 1 und hat auf allen Ebenen "), found[0].message);
+  // Ohne Halte- oder Doppel-Tipp-Aktion kein Hinweis
+  const plain = lintCfg();
+  lintSet(plain, 0, 2, 1, "KEY_J");
+  lintSet(plain, 0, 2, 2, "KEY_K");
+  lintCombo(plain, [2, 1], [2, 2]);
+  assert.deepStrictEqual(lintCodes(lintBoth(plain), "combo-hold-cancelled"), []);
+  // Taste ohne Combo: kein Hinweis
+  const noCombo = lintCfg();
+  lintSet(noCombo, 0, 2, 1, "KEY_J", "KEY_LEFT_CTRL");
+  assert.deepStrictEqual(lintCodes(lintBoth(noCombo), "combo-hold-cancelled"), []);
+});
+
+test("Layout-Prüfung: Warnungen stehen vor Hinweisen, jede Hälfte wird zugeordnet", () => {
+  const right = lintCfg();
+  right.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  lintSet(right, 0, 5, 5, "KEY_A");
+  const left = lintCfg();
+  lintSet(left, 0, 5, 0, "KEY_A");
+  const findings = [...lintBoth(right, left)];
+  const levels = findings.map(f => f.level);
+  assert.deepStrictEqual(levels, ["warn", "warn", "info"]);
+  assert.deepStrictEqual(findings.map(f => f.side), ["R", "L", "R"]);
+  // Die Prüfung ändert die Konfiguration nicht
+  const before = JSON.stringify(right);
+  lintBoth(right, left);
+  assert.strictEqual(JSON.stringify(right), before);
+});
+
+test("Layout-Prüfung: das gespeicherte Layout des Nutzers hat die Aktionen auf R5C5 und R2C6 rechts", () => {
+  // Gleiche Form wie current_config.json: Backspace auf R5C5 und Delete auf R2C6 in allen Ebenen der rechten Hälfte
+  const cfg = lintCfg();
+  for (let l = 0; l < 8; l++) { lintSet(cfg, l, 5, 5, "KEY_BACKSPACE"); lintSet(cfg, l, 2, 6, "KEY_DELETE"); }
+  lintSet(cfg, 0, 5, 0, "KEY_DELETE", "MO_1");
+  lintSet(cfg, 1, 0, 0, "TG_1");
+  const found = lintBoth(cfg);
+  const absent = lintCodes(found, "absent-key-action").map(f => f.message);
+  assert.strictEqual(absent.length, 2);
+  assert.ok(absent[0].startsWith("Taste R2C6 hat auf allen Ebenen"), absent[0]);
+  assert.ok(absent[1].startsWith("Taste R5C5 hat auf allen Ebenen"), absent[1]);
+  assert.deepStrictEqual(lintCodes(found, "layer-unreachable"), []);
+  assert.deepStrictEqual(lintCodes(found, "layer-trap"), []);
+});
+
+// -----------------------------------------------------------------------------
+// js/layout-lint-ui.js: Liste im Matrix-Tab, Diff-Dialog und Flash-Protokoll (DOM-Stub)
+// -----------------------------------------------------------------------------
+function lintUiHarness(rightCfg, leftCfg) {
+  const dom = fakeDom();
+  const w = { console: { log() {}, warn() {}, error() {} }, document: dom.document };
+  vm.createContext(w);
+  vm.runInContext(`${code}
+var configsBySide = {};
+function configFor(side) { return configsBySide[side]; }
+function keycodeLabel(c) { return c; }
+${read("js/layout-lint-ui.js")}`, w);
+  w.configsBySide = { R: rightCfg, L: leftCfg };
+  return { w, dom };
+}
+
+test("Layout-Prüfung (Anzeige): ohne Befund bleibt das Panel verborgen", () => {
+  const { w, dom } = lintUiHarness(lintCfg(), lintCfg());
+  w.renderLayoutLint();
+  assert.strictEqual(dom.document.getElementById("layoutLintPanel").style.display, "none");
+  w.renderSyncDiffLint();
+  assert.strictEqual(dom.document.getElementById("syncDiffLintSection").style.display, "none");
+});
+
+test("Layout-Prüfung (Anzeige): Panel zeigt Zähler und Befunde, der Diff nur Warnungen", () => {
+  const right = lintCfg();
+  lintSet(right, 0, 5, 5, "KEY_A");
+  right.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  const { w, dom } = lintUiHarness(right, lintCfg());
+  w.renderLayoutLint();
+  const panel = dom.document.getElementById("layoutLintPanel");
+  assert.strictEqual(panel.style.display, "");
+  assert.strictEqual(dom.document.getElementById("layoutLintSummary").textContent, "⚠️ Layout-Prüfung: 1 Warnung, 1 Hinweis");
+  const items = dom.document.getElementById("layoutLintList").children;
+  assert.strictEqual(items.length, 2);
+  assert.ok(items[0].textContent.startsWith("⚠️ Rechte Hand: Taste R5C5"), items[0].textContent);
+  assert.strictEqual(items[0].className, "layout-lint-warn");
+  assert.ok(items[1].textContent.startsWith("ℹ️ Rechte Hand: Tastenpaar 0"), items[1].textContent);
+  assert.strictEqual(items[1].className, "layout-lint-info");
+  // Diff-Dialog: nur die Warnung
+  w.renderSyncDiffLint();
+  assert.strictEqual(dom.document.getElementById("syncDiffLintSection").style.display, "");
+  assert.strictEqual(dom.document.getElementById("syncDiffLint").children.length, 1);
+});
+
+test("Layout-Prüfung (Anzeige): nur Hinweise zeigen kein Warnzeichen, der Diff bleibt verborgen", () => {
+  const right = lintCfg();
+  right.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  const { w, dom } = lintUiHarness(right, lintCfg());
+  w.renderLayoutLint();
+  assert.strictEqual(dom.document.getElementById("layoutLintSummary").textContent, "ℹ️ Layout-Prüfung: 1 Hinweis");
+  w.renderSyncDiffLint();
+  assert.strictEqual(dom.document.getElementById("syncDiffLintSection").style.display, "none");
+});
+
+test("Layout-Prüfung (Anzeige): Befund über beide Hälften nennt keine einzelne Hälfte", () => {
+  const right = lintCfg();
+  lintSet(right, 2, 1, 1, "KEY_A");
+  const { w, dom } = lintUiHarness(right, lintCfg());
+  w.renderLayoutLint();
+  const text = dom.document.getElementById("layoutLintList").children[0].textContent;
+  assert.ok(text.startsWith("⚠️ Beide Hälften: Ebene 2 hat eigene Belegung"), text);
+});
+
+test("Layout-Prüfung (Anzeige): Warnungen gehen ins Flash-Protokoll, Hinweise nicht", () => {
+  const right = lintCfg();
+  lintSet(right, 0, 5, 5, "KEY_A");
+  right.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  const { w } = lintUiHarness(right, lintCfg());
+  const events = [];
+  w.logLayoutLintToFlashLog({ onEvent: e => events.push(JSON.parse(JSON.stringify(e))) });
+  assert.strictEqual(events.length, 1);
+  assert.strictEqual(events[0].type, "log");
+  assert.ok(events[0].line.startsWith("Layout-Prüfung: Rechte Hand: Taste R5C5"), events[0].line);
+  // Ohne Warnung bleibt das Protokoll leer
+  const clean = lintUiHarness(lintCfg(), lintCfg());
+  const none = [];
+  clean.w.logLayoutLintToFlashLog({ onEvent: e => none.push(e) });
+  assert.deepStrictEqual(none, []);
+});
+
+test("Layout-Prüfung (Anzeige): fehlende Elemente stürzen nicht ab", () => {
+  const { w } = lintUiHarness(lintCfg(), lintCfg());
+  w.document = { getElementById: () => null, createElement: () => ({}) };
+  assert.doesNotThrow(() => { w.renderLayoutLint(); w.renderSyncDiffLint(); });
+});
+
+test("Layout-Prüfung: fehlerhafte Combos (Import) stürzen nicht ab und zählen nicht als Weg", () => {
+  // Aktion kein String, Combos kein Array, Tasten fehlen oder sind keine Zahlen
+  const bad = lintCfg();
+  bad.combos = [
+    { key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "LAYER_TOGGLE", action: 5 },
+    { key1: { r: 2, c: 1 }, key2: { r: 2, c: 3 }, behavior: "LAYER_TOGGLE", action: { x: 1 } },
+    { key1: { r: "2", c: 1 }, key2: { r: 2, c: 4 }, behavior: "LAYER_TOGGLE", action: "TG_2" },
+    { key1: null, key2: { r: 2, c: 4 }, behavior: "LAYER_TOGGLE", action: "TG_2" },
+    "kaputt", 7, null
+  ];
+  lintSet(bad, 2, 1, 1, "KEY_A");
+  assert.doesNotThrow(() => lintBoth(bad));
+  assert.strictEqual(lintCodes(lintBoth(bad), "layer-unreachable").length, 1);
+  const notArray = lintCfg();
+  notArray.combos = { length: 3 };
+  notArray.keyPairs = "x";
+  notArray.macros = 5;
+  assert.doesNotThrow(() => lintBoth(notArray));
+  // Eine fehlende Konfiguration der Ebenen bricht die Prüfung nicht
+  assert.doesNotThrow(() => api.lintLayouts({ R: { combos: [] }, L: {} }, api.SIDE_PROFILES));
+});
+
+test("Layout-Prüfung: eine Combo auf einer fehlenden Taste ist kein Weg und kein Hinweis", () => {
+  // R5C5 gibt es rechts nicht: die Combo löst nie aus, Ebene 2 bleibt unerreichbar
+  const cfg = lintCfg();
+  lintSet(cfg, 2, 1, 1, "KEY_A");
+  lintCombo(cfg, [5, 5], [2, 2], "LAYER_TOGGLE", "TG_2");
+  assert.strictEqual(lintCodes(lintBoth(cfg), "layer-unreachable").length, 1);
+  // Mit zwei vorhandenen Tasten ist dieselbe Combo ein Weg
+  const ok = lintCfg();
+  lintSet(ok, 2, 1, 1, "KEY_A");
+  lintCombo(ok, [2, 1], [2, 2], "LAYER_TOGGLE", "TG_2");
+  assert.deepStrictEqual(lintCodes(lintBoth(ok), "layer-unreachable"), []);
+  // Hinweis "combo-hold-cancelled" nur für Combos, die auslösen können
+  const hint = lintCfg();
+  lintSet(hint, 0, 5, 5, "KEY_A", "KEY_B");
+  lintCombo(hint, [5, 5], [2, 2]);
+  assert.deepStrictEqual(lintCodes(lintBoth(hint), "combo-hold-cancelled"), []);
+  const real = lintCfg();
+  lintSet(real, 0, 2, 1, "KEY_A", "KEY_B");
+  lintCombo(real, [2, 1], [2, 2]);
+  assert.strictEqual(lintCodes(lintBoth(real), "combo-hold-cancelled").length, 1);
+});
+
+test("Layout-Prüfung: Hinweis zur Combo-Taste folgt dem Rückfall auf Ebene 0 und nennt nur eigene Ebenen", () => {
+  // Nur Ebene 0 hat Halten; Ebene 2 belegt die Taste ohne Halten. Die transparenten Ebenen erben Halten von Ebene 0.
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 2, 1, "KEY_J", "KEY_LEFT_CTRL");
+  lintSet(cfg, 2, 2, 1, "KEY_J");
+  lintCombo(cfg, [2, 1], [2, 2]);
+  const msg = lintCodes(lintBoth(cfg), "combo-hold-cancelled")[0].message;
+  assert.ok(msg.includes("auf Ebenen 0, 1, 3, 4, 5, 6, 7 eine"), msg);
+  assert.ok(!msg.includes("2, "), msg);
+});
+
+test("Layout-Prüfung: Firmware-Schreibweise ACT_TG_n in einer Combo ist ein Weg in die Ebene", () => {
+  for (const action of ["ACT_TG_2", "TG_2"]) {
+    const cfg = lintCfg();
+    lintSet(cfg, 2, 1, 1, "KEY_A");
+    lintCombo(cfg, [2, 1], [2, 2], "LAYER_TOGGLE", action);
+    assert.deepStrictEqual(lintCodes(lintBoth(cfg), "layer-unreachable"), [], action);
+    // Dieselbe Combo schaltet auf jeder Ebene zurück: keine Falle
+    assert.deepStrictEqual(lintCodes(lintBoth(cfg), "layer-trap"), [], action);
+  }
+});
+
+test("Layout-Prüfung: Koordinaten als Text sind keine doppelte Combo und lösen nie aus", () => {
+  const cfg = lintCfg();
+  lintCombo(cfg, [2, 1], [2, 2]);
+  cfg.combos.push({ key1: { r: "2", c: "1" }, key2: { r: "2", c: "2" }, behavior: "KEY_PRESS", action: "KEY_B" });
+  assert.deepStrictEqual(lintCodes(lintBoth(cfg), "combo-duplicate"), []);
+  // Zwei gültige Combos mit denselben Tasten bleiben eine Dopplung
+  lintCombo(cfg, [2, 2], [2, 1]);
+  assert.strictEqual(lintCodes(lintBoth(cfg), "combo-duplicate").length, 1);
+});
+
+test("Layout-Prüfung: ein Makro mit Namen aus Nicht-Text zeigt kein [object Object]", () => {
+  const cfg = lintCfg();
+  cfg.macros = [{ name: { x: 1 }, steps: [] }, { name: "", steps: [] }, null, { name: "Copy", steps: [] }];
+  const texts = lintCodes(lintBoth(cfg), "macro-unused").map(f => f.message);
+  assert.strictEqual(texts.length, 4);
+  assert.ok(texts.every(t => !t.includes("[object Object]")), texts.join("\n"));
+  assert.strictEqual(texts[0], "Makro 0 (ohne Name) wird nirgends verwendet.");
+  assert.strictEqual(texts[3], "Makro 3 (Copy) wird nirgends verwendet.");
+});
+
+test("Flash-Protokoll: eine Zeile ohne Phase lässt die Phasenanzeige stehen", () => {
+  const dom = fakeDom();
+  const w = { console: { log() {}, warn() {}, error() {} }, document: dom.document };
+  vm.createContext(w);
+  // code enthält flash-log.js schon (openFlashLogDialog liegt dort)
+  vm.runInContext(code, w);
+  const profile = api.SIDE_PROFILES.R;
+  const log = w.openFlashLogDialog(profile);
+  const stage = dom.document.getElementById("flashLogStage");
+  assert.strictEqual(stage.textContent, "Speichere die Konfiguration ...");
+  log.onEvent({ type: "log", line: "Layout-Prüfung: Warnung" });
+  assert.strictEqual(stage.textContent, "Speichere die Konfiguration ...");
+  assert.ok(dom.document.getElementById("flashLogOutput").textContent.includes("Layout-Prüfung: Warnung"));
+  // Mit Phase wie bisher
+  log.onEvent({ type: "log", stage: "compile", line: "x" });
+  assert.strictEqual(stage.textContent, "Phase: Kompilieren");
+});
+
+test("Layout-Prüfung: LAYER_DOWN von Ebene 0 rastet Ebene 7 ein (Umlauf) und braucht einen Weg zurück", () => {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 0, 0, "LAYER_DOWN");
+  lintSet(cfg, 7, 0, 0, "KEY_B");
+  lintSet(cfg, 7, 1, 1, "KEY_A");
+  const trap = lintCodes(lintBoth(cfg), "layer-trap");
+  assert.strictEqual(trap.length, 1);
+  assert.ok(trap[0].message.startsWith("Ebene 7 lässt sich einrasten"), trap[0].message);
+  // Mit LAYER_UP auf Ebene 7 (Umlauf nach Ebene 0) gibt es einen Weg zurück
+  lintSet(cfg, 7, 2, 2, "LAYER_UP");
+  assert.deepStrictEqual(lintCodes(lintBoth(cfg), "layer-trap"), []);
+});
+
+test("Layout-Prüfung (Anzeige): ein Fehler in der Prüfung gibt keinen Befund und stoppt nichts", () => {
+  const { w, dom } = lintUiHarness(lintCfg(), lintCfg());
+  // configFor liefert für eine Hälfte eine Konfiguration, die lintLayouts zum Absturz bringt
+  Object.defineProperty(w.configsBySide, "R", { get() { throw new Error("kaputt"); } });
+  assert.doesNotThrow(() => { w.renderLayoutLint(); w.renderSyncDiffLint(); });
+  assert.strictEqual(dom.document.getElementById("layoutLintPanel").style.display, "none");
+  assert.strictEqual(dom.document.getElementById("syncDiffLintSection").style.display, "none");
+  const events = [];
+  assert.doesNotThrow(() => w.logLayoutLintToFlashLog({ onEvent: e => events.push(e) }));
+  assert.deepStrictEqual(events, []);
+});
+
+// Die Aufrufe sitzen an den drei Stellen aus dem Auftrag (Matrix, Diff, Flashen); ohne sie bliebe jeder andere Test grün
+test("Layout-Prüfung: renderMatrix, Diff-Dialog und Flashen rufen die Anzeige auf", () => {
+  const between = (file, start, end) => section(file, start, end);
+  assert.ok(between("js/editor.js", "function renderMatrix()", "function createHalfMatrix").includes("renderLayoutLint();"),
+    "renderMatrix ruft renderLayoutLint nicht auf");
+  assert.ok(between("js/config-sync.js", "function showSyncDiffDialog", "async function writeConfigWithDiff").includes("renderSyncDiffLint();"),
+    "showSyncDiffDialog ruft renderSyncDiffLint nicht auf");
+  const flash = between("js/editor-events.js", "async function saveAndFlashToDactyl", "function populateComboKeyDropdowns");
+  const open = flash.indexOf("openFlashLogDialog(profile)");
+  const lint = flash.indexOf("logLayoutLintToFlashLog(flashLog)");
+  assert.ok(open >= 0 && lint > open, "saveAndFlashToDactyl schreibt die Warnungen nicht ins Flash-Protokoll");
+  // Der Index.html lädt das Modul vor app.js, und der Server liefert es aus
+  const html = read("index.html");
+  assert.ok(html.indexOf("js/layout-lint-ui.js") > html.indexOf("js/matrix-test.js") &&
+    html.indexOf("js/layout-lint-ui.js") < html.indexOf('src="app.js'), "Skript-Tag fehlt oder steht an der falschen Stelle");
+  for (const id of ["layoutLintPanel", "layoutLintSummary", "layoutLintList", "syncDiffLintSection", "syncDiffLint"]) {
+    assert.ok(html.includes(`id="${id}"`), `index.html ohne ${id}`);
+  }
 });
 
 // Body mit getReader() aus Byte-Stücken

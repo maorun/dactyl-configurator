@@ -333,6 +333,8 @@ async function saveAndFlashToDactyl() {
 
   showToast(`Kompiliere & Flashe Firmware auf die ${profile.label}... Bitte warten.`);
   const flashLog = openFlashLogDialog(profile);
+  // Warnungen der Layout-Prüfung stehen im Protokoll; das Flashen läuft trotzdem
+  logLayoutLintToFlashLog(flashLog);
 
   try {
     // Der Server wählt den USB-Port, dessen Board sich per DEVICE_INFO als diese Hälfte meldet.

@@ -29,15 +29,7 @@ Rules for this file:
 
 ## Priority 2
 
-### Layout check
-
-- **Rank:** Feature model. Total 29/40 (typing 3, configuration 9, harmony 8, safety 9). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js` (`validateConfigShape`, `isKeyPairUsed`, `isMacroUsed`), `js/side-profiles.js` (`cellHasAction`), `js/config-sync.js` (`writeConfigWithDiff`).
-- **Problem:** The app checks only the shape of a configuration. An action on a key that does not exist has no effect and no warning. A layer that the user cannot reach, or cannot leave, also gives no warning.
-- **Goal:** Add a pure function that checks both halves together, because both halves share the active layer. Report: an action on a missing key, a layer without a way in, a toggled layer without a way out, an unused key pair or macro, a duplicate combo, and a combo key with a hold or double-tap action.
-- **Goal:** Show the result in the matrix tab, in the layout diff and before "Auf Dactyl flashen". A warning does not block the sync.
-- **Acceptance test:** A test shows each check with one positive and one negative case, including an action on `R5C5` of the right half.
+No open entry.
 
 ## Priority 3
 

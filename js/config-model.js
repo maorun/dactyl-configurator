@@ -611,3 +611,219 @@ function removeLayoutProfile(profiles, name) {
   const idx = findLayoutProfileIndex(profiles, name);
   return idx < 0 ? profiles : profiles.filter((_, i) => i !== idx);
 }
+
+// =============================================================================
+// Layout-Prüfung (DOM-frei): Belegungen ohne Wirkung, Ebenen ohne Weg hinein oder hinaus
+// =============================================================================
+
+// Tap, Halten und Doppel-Tipp einer Zelle; "NONE" steht für keine Aktion (auch "", "0" und fehlende Werte)
+function lintCellActions(cell) {
+  const norm = v => (typeof v === "string" && v !== "" && v !== "0") ? v : "NONE";
+  if (typeof cell === "string") return { tap: norm(cell), hold: "NONE", dtap: "NONE" };
+  const c = cell && typeof cell === "object" ? cell : {};
+  return { tap: norm(c.tap), hold: norm(c.hold), dtap: norm(c.dtap) };
+}
+
+function lintHasAction(a) {
+  return a.tap !== "NONE" || a.hold !== "NONE" || a.dtap !== "NONE";
+}
+
+function lintCellAt(cfg, layer, r, c) {
+  const row = cfg.layers && cfg.layers[layer] && cfg.layers[layer][r];
+  return lintCellActions(row && row[c]);
+}
+
+// Tap, Halten und Doppel-Tipp einer Taste auf der aktiven Ebene. Wie resolveKeyActions in der Firmware:
+// eine Taste ohne jede Aktion fällt auf Ebene 0 zurück, eine Halte-Aktion ohne Tap wirkt wie ein Tap,
+// ein Doppel-Tipp ohne Tap bleibt ohne Wirkung.
+function lintResolvedCell(cfg, layer, r, c) {
+  let a = lintCellAt(cfg, layer, r, c);
+  if (layer > 0 && !lintHasAction(a)) a = lintCellAt(cfg, 0, r, c);
+  if (a.tap === "NONE") return { tap: a.hold, hold: "NONE", dtap: "NONE" };
+  return a;
+}
+
+// Alle Aktionen, die diese aufgelöste Taste auslösen kann
+function lintEffectiveActions(cfg, layer, r, c) {
+  const a = lintResolvedCell(cfg, layer, r, c);
+  return [a.tap, a.hold, a.dtap].filter(x => x !== "NONE");
+}
+
+// MO_n / TG_n / LAYER_UP / LAYER_DOWN (auch als Firmware-Name ACT_...); sonst null
+function lintLayerAction(code) {
+  const name = String(code || "").replace(/^ACT_/, "");
+  const m = /^(MO|TG)_([0-7])$/.exec(name);
+  if (m) return { kind: m[1], layer: Number(m[2]) };
+  if (name === "LAYER_UP" || name === "LAYER_DOWN") return { kind: name };
+  return null;
+}
+
+// Eine Combo kann nur auslösen, wenn beide Tasten an der Hälfte existieren
+function lintComboCanFire(cb, profile) {
+  return !!cb && typeof cb === "object" && !!cb.key1 && !!cb.key2 &&
+    isWiredSwitch(cb.key1.r, cb.key1.c, profile) && isWiredSwitch(cb.key2.r, cb.key2.c, profile);
+}
+
+function lintLayerName(layers) {
+  return (layers.length === 1 ? "Ebene " : "Ebenen ") + layers.join(", ");
+}
+
+function lintOnLayers(layers) {
+  return layers.length === NUM_LAYERS ? "auf allen Ebenen" : "auf " + lintLayerName(layers);
+}
+
+// Eine Ebene hat eigene Belegung, wenn eine vorhandene Taste dort etwas anderes tut als auf Ebene 0
+function lintLayerHasOwnContent(cfg, profile, layer) {
+  for (let r = 0; r < NUM_ROWS; r++) {
+    for (let c = 0; c < NUM_COLS; c++) {
+      if (!isWiredSwitch(r, c, profile)) continue;
+      const own = lintCellAt(cfg, layer, r, c);
+      if (!lintHasAction(own)) continue;
+      const base = lintCellAt(cfg, 0, r, c);
+      if (own.tap !== base.tap || own.hold !== base.hold || own.dtap !== base.dtap) return true;
+    }
+  }
+  return false;
+}
+
+// Prüft die Konfigurationen beider Hälften gemeinsam, weil sie die aktive Ebene teilen (Layer-Abgleich).
+// configs: { [side]: config }, profiles: SIDE_PROFILES, labelFor: Anzeigename eines Tastencodes (für Tastenpaare).
+// Rückgabe: Liste { level: "warn" | "info", side: Hälfte oder null (beide), code, message }, Warnungen zuerst.
+// Die Prüfung ändert nichts und blockiert nichts.
+function lintLayouts(configs, profiles, labelFor = code => code) {
+  const out = [];
+  const add = (level, side, code, message) => out.push({ level, side, code, message });
+  const sides = Object.keys(configs || {}).filter(s => configs[s] && profiles && profiles[s]);
+
+  // 1. Aktion auf einer Taste, die es an der Hälfte nicht gibt (auch außerhalb der Matrix, z. B. R2C6)
+  for (const side of sides) {
+    const found = new Map();
+    for (let l = 0; l < NUM_LAYERS; l++) {
+      for (let r = 0; r < NUM_ROWS; r++) {
+        for (let c = 0; c < NUM_COLS; c++) {
+          if (isWiredSwitch(r, c, profiles[side]) || !lintHasAction(lintCellAt(configs[side], l, r, c))) continue;
+          const id = `R${r}C${c}`;
+          if (!found.has(id)) found.set(id, []);
+          found.get(id).push(l);
+        }
+      }
+    }
+    for (const [id, layers] of found) {
+      add("warn", side, "absent-key-action",
+        `Taste ${id} hat ${lintOnLayers(layers)} eine Aktion, aber diese Taste gibt es nicht. Die Aktion hat keine Wirkung.`);
+    }
+  }
+
+  // 2. Ebenen-Graph: Ebenen-Aktionen je Ebene (beide Hälften), Einrast-Combos (Verhalten "Layer umschalten")
+  const onLayer = Array.from({ length: NUM_LAYERS }, () => []);
+  for (const side of sides) {
+    for (let l = 0; l < NUM_LAYERS; l++) {
+      for (let r = 0; r < NUM_ROWS; r++) {
+        for (let c = 0; c < NUM_COLS; c++) {
+          if (!isWiredSwitch(r, c, profiles[side])) continue;
+          for (const code of lintEffectiveActions(configs[side], l, r, c)) {
+            const a = lintLayerAction(code);
+            if (a) onLayer[l].push(a);
+          }
+        }
+      }
+    }
+  }
+  // Wie die Firmware: Ebene = Aktionscode & 7 (0 löscht alle eingerasteten Ebenen). Combos gelten auf jeder Ebene.
+  const comboToggles = new Set();
+  for (const side of sides) {
+    for (const cb of Array.isArray(configs[side].combos) ? configs[side].combos : []) {
+      // Eine Combo auf einer fehlenden Taste löst nie aus und ist kein Weg; ein Nicht-String als Aktion (Import) auch nicht
+      if (cb && cb.behavior === "LAYER_TOGGLE" && typeof cb.action === "string" && lintComboCanFire(cb, profiles[side])) {
+        // Auch die Firmware-Schreibweise ACT_TG_n (wie bei den Tasten); actionCodeToNumeric kennt sie nicht
+        const toggle = lintLayerAction(cb.action);
+        comboToggles.add(toggle && toggle.layer !== undefined ? toggle.layer : actionCodeToNumeric(cb.action) & 7);
+      }
+    }
+  }
+  const reachable = new Set([0]);
+  const lockable = new Set();   // Ebenen, die sich einrasten lassen (TG, LAYER_UP/DOWN, Combo)
+  for (const n of comboToggles) {
+    if (n > 0) { reachable.add(n); lockable.add(n); }
+  }
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const l of [...reachable]) {
+      for (const a of onLayer[l]) {
+        let target = -1;
+        let lock = false;
+        if (a.kind === "MO") target = a.layer;
+        else if (a.kind === "TG") { target = a.layer; lock = true; }
+        else if (a.kind === "LAYER_UP") { target = (l + 1) % NUM_LAYERS; lock = true; }
+        else if (a.kind === "LAYER_DOWN") { target = (l + NUM_LAYERS - 1) % NUM_LAYERS; lock = true; }
+        if (target < 0) continue;
+        if (lock && target > 0) lockable.add(target);
+        if (!reachable.has(target)) { reachable.add(target); grew = true; }
+      }
+    }
+  }
+
+  const unreachable = [];
+  for (let n = 1; n < NUM_LAYERS; n++) {
+    if (!reachable.has(n) && sides.some(s => lintLayerHasOwnContent(configs[s], profiles[s], n))) unreachable.push(n);
+  }
+  if (unreachable.length) {
+    add("warn", null, "layer-unreachable",
+      `${lintLayerName(unreachable)} ${unreachable.length === 1 ? "hat" : "haben"} eigene Belegung, aber keine Taste und keine Combo führt dorthin.`);
+  }
+
+  // Einrastbare Ebene ohne Rückweg: TG der Ebene oder TG_0, LAYER_UP/DOWN auf der Ebene oder eine Einrast-Combo
+  const trapped = [...lockable].sort((a, b) => a - b).filter(n =>
+    !comboToggles.has(n) && !comboToggles.has(0) &&
+    !onLayer[n].some(a => (a.kind === "TG" && (a.layer === n || a.layer === 0)) || a.kind === "LAYER_UP" || a.kind === "LAYER_DOWN"));
+  if (trapped.length) {
+    add("warn", null, "layer-trap",
+      `${lintLayerName(trapped)} ${trapped.length === 1 ? "lässt" : "lassen"} sich einrasten, aber dort gibt es keine Taste zurück ` +
+      "(TG der Ebene, TG_0, LAYER_UP, LAYER_DOWN oder eine Combo \"Layer umschalten\").");
+  }
+
+  // 3. Je Hälfte: ungenutzte Tastenpaare und Makros, doppelte Combos, Combo-Tasten mit Halte- oder Doppel-Tipp-Aktion
+  for (const side of sides) {
+    const cfg = configs[side];
+    const combos = Array.isArray(cfg.combos) ? cfg.combos : [];
+    (Array.isArray(cfg.keyPairs) ? cfg.keyPairs : []).forEach((pair, i) => {
+      if (isKeyPairUsed(cfg.layers, i) || combos.some(cb => cb && cb.action === `PAIR_${i}`)) return;
+      add("info", side, "pair-unused", `Tastenpaar ${i} (${keyPairLabel(pair, labelFor)}) wird nirgends verwendet.`);
+    });
+    (Array.isArray(cfg.macros) ? cfg.macros : []).forEach((macro, i) => {
+      if (isMacroUsed(cfg.layers, i)) return;
+      const name = macro && typeof macro.name === "string" && macro.name ? macro.name : "ohne Name";
+      add("info", side, "macro-unused", `Makro ${i} (${name}) wird nirgends verwendet.`);
+    });
+    const seen = new Map();
+    combos.forEach((cb, i) => {
+      // Nur Combos, die auslösen können: Koordinaten als Text ("2") oder fehlende Tasten sind keine Dopplung
+      if (!lintComboCanFire(cb, profiles[side])) return;
+      const ids = [`${cb.key1.r}_${cb.key1.c}`, `${cb.key2.r}_${cb.key2.c}`].sort().join("|");
+      if (seen.has(ids)) {
+        add("warn", side, "combo-duplicate", `Combo ${seen.get(ids) + 1} und Combo ${i + 1} nutzen dieselben zwei Tasten. Beide lösen gleichzeitig aus.`);
+      } else {
+        seen.set(ids, i);
+      }
+    });
+    combos.forEach((cb, i) => {
+      // Eine Taste, die es an der Hälfte nicht gibt, meldet schon "absent-key-action"; die Combo löst nie aus
+      if (!lintComboCanFire(cb, profiles[side])) return;
+      for (const key of [cb.key1, cb.key2]) {
+        const layers = [];
+        for (let l = 0; l < NUM_LAYERS; l++) {
+          // Mit dem Rückfall auf Ebene 0 wie die Firmware: eine transparente Taste erbt dort Halten und Doppel-Tipp
+          const a = lintResolvedCell(cfg, l, key.r, key.c);
+          if (a.tap !== "NONE" && (a.hold !== "NONE" || a.dtap !== "NONE")) layers.push(l);
+        }
+        if (layers.length) {
+          add("info", side, "combo-hold-cancelled",
+            `Taste R${key.r}C${key.c} ist Teil von Combo ${i + 1} und hat ${lintOnLayers(layers)} eine Halte- oder Doppel-Tipp-Aktion. ` +
+            "Löst die Combo aus, bricht sie diese Aktion ab.");
+        }
+      }
+    });
+  }
+
+  return [...out.filter(f => f.level === "warn"), ...out.filter(f => f.level !== "warn")];
+}

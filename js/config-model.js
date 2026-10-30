@@ -36,8 +36,11 @@ function isWiredSwitch(r, c, profile) {
 }
 
 // Matrix-Test (Löt-Tester) einer Hälfte; Leitungen laut Profil (AGENTS.md / docs/lolin32_lite_wiring.svg)
+// Ein Druck so kurz nach dem Loslassen derselben Taste ist kein Tippen mehr, sondern Prellen des Schalters
+const MATRIX_BOUNCE_MS = 30;
+
 function createMatrixTest(profile) {
-  return { tested: new Set(), profile };
+  return { tested: new Set(), profile, bounces: new Map(), lastRelease: new Map(), lastT: null };
 }
 
 function markMatrixKeyTested(test, r, c) {
@@ -48,7 +51,9 @@ function markMatrixKeyTested(test, r, c) {
   return true;
 }
 
-// MATRIX:-Zeile der Firmware: reines Matrix-Ereignis, auch für Tasten ohne Aktion. Rückgabe { r, c, pressed } oder null.
+// MATRIX:-Zeile der Firmware: reines Matrix-Ereignis, auch für Tasten ohne Aktion.
+// Rückgabe { r, c, pressed } oder null; mit der Scan-Zeit "t" (32 Bit, ms) auch { t }. Eine Zeile älterer Firmware
+// hat kein "t", ein ungültiges "t" lässt die Zeile gelten, ohne Zeit (kein Prell-Ergebnis).
 function parseMatrixLine(line) {
   if (typeof line !== "string" || !line.startsWith("MATRIX:")) return null;
   let evt;
@@ -60,7 +65,42 @@ function parseMatrixLine(line) {
   if (!evt || typeof evt !== "object") return null;
   if (!isValidIndex(evt.r, NUM_ROWS) || !isValidIndex(evt.c, NUM_COLS)) return null;
   if (evt.pressed !== 0 && evt.pressed !== 1) return null;
-  return { r: evt.r, c: evt.c, pressed: evt.pressed === 1 };
+  const parsed = { r: evt.r, c: evt.c, pressed: evt.pressed === 1 };
+  if (Number.isInteger(evt.t) && evt.t >= 0 && evt.t <= 0xFFFFFFFF) parsed.t = evt.t;
+  return parsed;
+}
+
+// Prellen einer Taste: ein Druck höchstens MATRIX_BOUNCE_MS nach dem Loslassen derselben Taste (Scan-Zeit "t").
+// Der Abstand wird modulo 2^32 gebildet, weil millis() nach etwa 49 Tagen überläuft. Ohne "t" (ältere Firmware,
+// SPLIT_KEY vom Master) gibt es kein Ergebnis. Rückgabe true, wenn dieses Ereignis ein Prellen war.
+// Springt die Zeit zurück (Abstand modulo 2^32 größer als 2^31), hat die Tastatur neu gestartet (millis() beginnt
+// bei 0): die gemerkten Loslass-Zeiten stammen dann aus dem alten Lauf und werden verworfen. Ein Überlauf nach
+// 2^32 ms ist ein kleiner Schritt vorwärts und löscht nichts. Der Rücksprung erkennt einen Neustart erst am
+// ersten Ereignis danach; liegt dieses höchstens 30 ms nach der alten Loslass-Zeit derselben Taste, bleibt ein
+// falscher Treffer möglich. Deshalb setzt die App den Zustand zusätzlich bei DEVICE_INFO und MODE: zurück
+// (resetMatrixBounceState).
+function recordMatrixBounce(test, r, c, pressed, t) {
+  if (!isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS) || !isWiredSwitch(r, c, test.profile)) return false;
+  if (!Number.isInteger(t)) return false;
+  if (test.lastT !== null && ((t - test.lastT) >>> 0) > 0x80000000) test.lastRelease.clear();
+  test.lastT = t;
+  const id = `${r}_${c}`;
+  if (!pressed) {
+    test.lastRelease.set(id, t);
+    return false;
+  }
+  if (!test.lastRelease.has(id)) return false;
+  const gap = (t - test.lastRelease.get(id)) >>> 0;
+  test.lastRelease.delete(id);
+  if (gap > MATRIX_BOUNCE_MS) return false;
+  test.bounces.set(id, (test.bounces.get(id) || 0) + 1);
+  return true;
+}
+
+// Vergisst die Loslass-Zeiten (Neustart, neue Verbindung, anderes Board). Die gezählten Treffer bleiben.
+function resetMatrixBounceState(test) {
+  test.lastRelease.clear();
+  test.lastT = null;
 }
 
 // Fortschritt und verdächtige Leitungen: Zeile/Spalte ohne erkannte Taste, obwohl andere Tasten funktionieren
@@ -78,7 +118,15 @@ function summarizeMatrixTest(test) {
   const tested = test.tested.size;
   const suspectRows = tested ? rowHits.map((n, r) => n === 0 ? r : -1).filter(r => r >= 0) : [];
   const suspectCols = tested ? colHits.map((n, c) => n === 0 ? c : -1).filter(c => c >= 0) : [];
-  return { tested, total, suspectRows, suspectCols };
+  // Prellende Tasten mit Zähler, sortiert nach Zeile und Spalte
+  const bouncingKeys = [];
+  for (let r = 0; r < NUM_ROWS; r++) {
+    for (let c = 0; c < NUM_COLS; c++) {
+      const count = test.bounces.get(`${r}_${c}`);
+      if (count) bouncingKeys.push({ r, c, count });
+    }
+  }
+  return { tested, total, suspectRows, suspectCols, bouncingKeys };
 }
 
 // Entfernt Steuerzeichen (z. B. Zeilenumbrüche = Befehlsinjektion über Serial), Quotes & Backslashes

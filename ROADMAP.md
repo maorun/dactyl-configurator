@@ -29,16 +29,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Bounce detection in the matrix test
-
-- **Rank:** Feature model. Total 29/40 (typing 3, configuration 9, harmony 8, safety 9). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (`onMatrixKeyChange`), `js/config-model.js` (`parseMatrixLine`, `summarizeMatrixTest`), `js/matrix-test.js`.
-- **Problem:** A worn or badly soldered switch can type a key twice. The matrix test shows only that a key works, not that it bounces.
-- **Goal:** Add the scan time `t` to the `MATRIX:` line. Count a press that follows a release of the same key within a short limit as a bounce.
-- **Goal:** Mark bouncing keys in the matrix test and show a hint to increase `debounceMs`. A line without `t` gives no bounce result.
-- **Acceptance test:** A test shows that a press 10 ms after a release counts as a bounce and a press 200 ms after a release does not.
-
 ### Layout check
 
 - **Rank:** Feature model. Total 29/40 (typing 3, configuration 9, harmony 8, safety 9). Effort M. Estimate.

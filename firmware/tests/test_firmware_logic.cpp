@@ -494,8 +494,8 @@ TEST(test_matrix_event_for_key_without_action) {
   setMillis(1050);
   keyState[2][1] = false;
   onMatrixKeyChange(2, 1, false);
-  assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":1}") == 1);
-  assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":0}") == 1);
+  assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":1,\"t\":1000}") == 1);
+  assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":0,\"t\":1050}") == 1);
   assert(!hasOutputPrefix("KEY_PRESS:")); // Aktion 0 sendet weiterhin kein KEY_PRESS
   assert(bleKeyboard.pressHistory.empty());
 }
@@ -511,10 +511,10 @@ TEST(test_matrix_event_after_hid_press) {
   onMatrixKeyChange(2, 1, true);
   assert(!bleKeyboard.pressHistory.empty());
   assert(!Serial.outputLines.empty());
-  assert(Serial.outputLines.back() == "MATRIX:{\"r\":2,\"c\":1,\"pressed\":1}");
+  assert(Serial.outputLines.back() == "MATRIX:{\"r\":2,\"c\":1,\"pressed\":1,\"t\":1000}");
   keyState[2][1] = false;
   onMatrixKeyChange(2, 1, false);
-  assert(Serial.outputLines.back() == "MATRIX:{\"r\":2,\"c\":1,\"pressed\":0}");
+  assert(Serial.outputLines.back() == "MATRIX:{\"r\":2,\"c\":1,\"pressed\":0,\"t\":1000}");
 }
 
 // MATRIX: geht nur auf USB-Serial, auch im Config-Modus nie als BLE-Notification
@@ -530,7 +530,7 @@ TEST(test_matrix_event_never_over_ble) {
     onMatrixKeyChange(2, 1, true);
     keyState[2][1] = false;
     onMatrixKeyChange(2, 1, false);
-    assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":1}") == 1);
+    assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":1,\"t\":1000}") == 1);
     for (const auto& n : mockChar.notifications) assert(n.rfind("MATRIX:", 0) != 0);
   }
   isConfigMode = false;
@@ -544,13 +544,40 @@ TEST(test_matrix_event_on_physical_change_for_tap_hold_key) {
   keyState[5][3] = true;
   onMatrixKeyChange(5, 3, true);
   // Die Tap-Hold-Entscheidung ist offen, das Matrix-Ereignis kommt trotzdem sofort
-  assert(countOutput("MATRIX:{\"r\":5,\"c\":3,\"pressed\":1}") == 1);
+  assert(countOutput("MATRIX:{\"r\":5,\"c\":3,\"pressed\":1,\"t\":1000}") == 1);
   assert(!hasOutputPrefix("KEY_PRESS:"));
   setMillis(1050);
   keyState[5][3] = false;
   onMatrixKeyChange(5, 3, false);
-  assert(countOutput("MATRIX:{\"r\":5,\"c\":3,\"pressed\":0}") == 1);
+  assert(countOutput("MATRIX:{\"r\":5,\"c\":3,\"pressed\":0,\"t\":1050}") == 1);
   HOLDMAP[0][5][3] = 0;
+}
+
+// "t" ist die Scan-Zeit der Änderung (atMs), nicht der Zeitpunkt der Ausgabe: der Master führt eine zurückgehaltene
+// Taste später aus. Die App erkennt Prellen nur mit der echten Scan-Zeit.
+TEST(test_matrix_event_reports_scan_time_not_print_time) {
+  resetState();
+  KEYMAP[0][2][1] = 0;
+  HOLDMAP[0][2][1] = 0;
+  DTAPMAP[0][2][1] = 0;
+  setMillis(5000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true, 4321);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false, 4330);
+  assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":1,\"t\":4321}") == 1);
+  assert(countOutput("MATRIX:{\"r\":2,\"c\":1,\"pressed\":0,\"t\":4330}") == 1);
+}
+
+// millis() läuft nach etwa 49 Tagen über 32 Bit: die längste Zeile (R5C6, t = 4294967295, 47 Zeichen) passt in den Puffer
+TEST(test_matrix_event_longest_line_fits_buffer) {
+  resetState();
+  KEYMAP[0][5][4] = 0;
+  HOLDMAP[0][5][4] = 0;
+  DTAPMAP[0][5][4] = 0;
+  keyState[5][4] = true;
+  onMatrixKeyChange(5, 4, true, 4294967295UL);
+  assert(countOutput("MATRIX:{\"r\":5,\"c\":4,\"pressed\":1,\"t\":4294967295}") == 1);
 }
 
 // -----------------------------------------------------------------------------

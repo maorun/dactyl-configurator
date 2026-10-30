@@ -3546,6 +3546,80 @@ asyncTests.push(["js/serial.js: connectSerialNow nutzt funktionierenden vor-bere
   assert.strictEqual(selected, mockWorkingPort);
 }]);
 
+test("UI-Restrukturierung: Neuer Tab Flashen & Sync enthält Verschiebe-Buttons, nicht im Header", () => {
+  const html = read("index.html");
+  assert.ok(html.includes('data-tab="flash-sync-tab"'), "Tab-Button flash-sync-tab fehlt");
+
+  const tabStart = html.indexOf('id="flash-sync-tab"');
+  assert.ok(tabStart >= 0, "Tab-Content flash-sync-tab fehlt");
+  const tabEnd = html.indexOf('</main>', tabStart);
+  const tabContent = html.slice(tabStart, tabEnd);
+
+  const expectedButtons = [
+    "btnSaveToDactyl",
+    "btnReadConfig",
+    "btnWriteConfig",
+    "btnLayoutProfiles",
+    "btnExportJson",
+    "btnImportJson",
+    "fileInput"
+  ];
+  for (const id of expectedButtons) {
+    assert.ok(tabContent.includes(`id="${id}"`), `${id} fehlt im Tab flash-sync-tab`);
+  }
+
+  const header = html.slice(html.indexOf('<header class="app-header">'), html.indexOf('</header>'));
+  for (const id of expectedButtons) {
+    assert.ok(!header.includes(`id="${id}"`), `${id} darf nicht mehr im Header liegen`);
+  }
+});
+
+test("UI-Restrukturierung: USB-Live-Monitor und Connect-Button liegen im Tab Matrix-Test", () => {
+  const html = read("index.html");
+  const matrixTestStart = html.indexOf('id="matrix-test-tab"');
+  assert.ok(matrixTestStart >= 0, "matrix-test-tab fehlt in index.html");
+  const matrixTestEnd = html.indexOf('</main>', matrixTestStart);
+  const matrixTestContent = html.slice(matrixTestStart, matrixTestEnd);
+
+  assert.ok(matrixTestContent.includes('id="liveMonitorCard"'), "liveMonitorCard fehlt in matrix-test-tab");
+  assert.ok(matrixTestContent.includes('id="btnConnect"'), "btnConnect fehlt in matrix-test-tab");
+
+  const matrixTabStart = html.indexOf('id="matrix-tab"');
+  const matrixTabEnd = html.indexOf('</main>', matrixTabStart);
+  const matrixTabContent = html.slice(matrixTabStart, matrixTabEnd);
+  assert.ok(!matrixTabContent.includes('id="liveMonitorCard"'), "liveMonitorCard darf nicht in matrix-tab liegen");
+});
+
+test("UI-Restrukturierung: Drahtloser Konfig-Modus steht oberhalb der Tabs mit einklappbarer Erklärung", () => {
+  const html = read("index.html");
+  const configCardPos = html.indexOf('id="configModeGuideCard"');
+  const navTabsPos = html.indexOf('class="nav-tabs"');
+  assert.ok(configCardPos >= 0, "configModeGuideCard fehlt");
+  assert.ok(navTabsPos >= 0, "nav-tabs fehlt");
+  assert.ok(configCardPos < navTabsPos, "configModeGuideCard muss oberhalb von nav-tabs stehen");
+
+  const detailsMatch = /<details[^>]*id="configGuideDetails"[^>]*>([\s\S]*?)<\/details>/.exec(html);
+  assert.ok(detailsMatch, "configGuideDetails <details>-Element fehlt");
+  assert.ok(!detailsMatch[0].includes(" open"), "configGuideDetails darf nicht standardmäßig open sein");
+  assert.ok(detailsMatch[1].includes('id="configGuideDesc"'), "configGuideDesc muss in configGuideDetails liegen");
+});
+
+test("UI-Restrukturierung: Split-View aktiviert nebeneinander stehende Tastaturen und Inspektor darunter", () => {
+  const editorJs = read("js/editor.js");
+  assert.ok(editorJs.includes('.classList.toggle("split-view", activeHandView === "both")'), "split-view Klasse muss getoggled werden");
+  assert.ok(editorJs.includes('splitWrapper.style.flexWrap = "nowrap"'), "Split-Tastaturen müssen flexWrap nowrap haben");
+  assert.ok(editorJs.includes('split-keyboard-col'), "Split-Keyboard Spalten müssen als Panes gerendert werden");
+  assert.ok(editorJs.includes('split-pane-header'), "Panes müssen Header mit Beschriftung haben");
+  assert.ok(editorJs.includes('is-active-pane'), "Aktive Pane muss hervorgehoben werden");
+
+  const css = read("style.css");
+  assert.ok(css.includes(".editor-workspace.split-view"), "CSS muss .editor-workspace.split-view definieren");
+  assert.ok(css.includes(".split-keyboards-row"), "CSS muss .split-keyboards-row definieren");
+  assert.ok(css.includes(".split-keyboard-col"), "CSS muss .split-keyboard-col Pane-Stile definieren");
+  assert.ok(css.includes("flex: 1 1 0"), "Panes müssen flex: 1 1 0 für gleichmäßiges Vergrößern haben");
+  assert.ok(css.includes("max-width: 1800px"), ".app-container muss breitere Bildschirme unterstützen");
+});
+
 (async () => {
   for (const [name, fn] of asyncTests) {
     await fn();

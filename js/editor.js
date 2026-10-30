@@ -518,6 +518,11 @@ function renderMatrix() {
   const container = document.getElementById("matrixGrid");
   container.innerHTML = "";
 
+  const editorWorkspace = document.querySelector(".editor-workspace");
+  if (editorWorkspace) {
+    editorWorkspace.classList.toggle("split-view", activeHandView === "both");
+  }
+
   const layerOf = side => {
     const cfg = configFor(side);
     return cfg.layers[activeLayerIndex] || cfg.layers[0];
@@ -525,18 +530,45 @@ function renderMatrix() {
 
   if (activeHandView === "both") {
     const splitWrapper = document.createElement("div");
-    splitWrapper.style.display = "flex";
-    splitWrapper.style.gap = "36px";
-    splitWrapper.style.justifyContent = "center";
-    splitWrapper.style.flexWrap = "wrap";
+    splitWrapper.className = "split-keyboards-row";
+    splitWrapper.style.flexWrap = "nowrap";
 
     for (const side of Dactyl.sidesInDisplayOrder()) {
       const col = document.createElement("div");
+      col.className = "split-keyboard-col" + (side === editSide ? " is-active-pane" : "");
+      col.style.cursor = side === editSide ? "default" : "pointer";
+
+      const paneHeader = document.createElement("div");
+      paneHeader.className = "split-pane-header";
+
       const title = document.createElement("h4");
-      title.style.cssText = `margin-bottom: 12px; text-align: center; color: ${side === editSide ? "#10b981" : "#94a3b8"};`;
-      title.textContent = SIDE_PROFILES[side].label + (side === editSide ? " (wird bearbeitet)" : "");
-      col.appendChild(title);
+      title.style.margin = "0";
+      title.style.color = side === editSide ? "#10b981" : "#94a3b8";
+      title.textContent = SIDE_PROFILES[side].label;
+      paneHeader.appendChild(title);
+
+      const badge = document.createElement("span");
+      badge.className = "badge";
+      if (side === editSide) {
+        badge.style.background = "rgba(16, 185, 129, 0.2)";
+        badge.style.color = "#6ee7b7";
+        badge.textContent = "Wird bearbeitet";
+      } else {
+        badge.style.background = "rgba(148, 163, 184, 0.15)";
+        badge.style.color = "#94a3b8";
+        badge.textContent = "Klicken zum Bearbeiten";
+      }
+      paneHeader.appendChild(badge);
+
+      col.appendChild(paneHeader);
       col.appendChild(createHalfMatrix(layerOf(side), side));
+
+      col.addEventListener("click", (e) => {
+        if (side !== editSide && !e.target.closest(".key-cap")) {
+          switchEditSide(side);
+        }
+      });
+
       splitWrapper.appendChild(col);
     }
     container.appendChild(splitWrapper);

@@ -3399,6 +3399,109 @@ TEST(test_one_shot_candidate_is_recorded_unless_a_combo_consumed_it) {
 }
 
 
+// -----------------------------------------------------------------------------
+// Mod-Tap über beide Hälften, Master-Seite: ein Druck der linken Hälfte entscheidet offene Mod-Tap-Tasten als Halten
+// (resolveAllPendingTapHoldsAsHold, anyTapHoldPending)
+// -----------------------------------------------------------------------------
+TEST(test_cross_half_press_decides_open_mod_tap_key_as_hold_layer) {
+  resetState();
+  // Rechts R5C0: Tap = Delete, Hold = MO_1. Die linke Taste meldet sich, bevor der Tapping-Term abläuft.
+  KEYMAP[0][5][0] = KEY_DELETE;
+  HOLDMAP[0][5][0] = ACT_MO_1;
+  setMillis(1000);
+  keyState[5][0] = true;
+  onMatrixKeyChange(5, 0, true);
+  assert(anyTapHoldPending() && getActiveLayer() == 0);
+  assert(bleKeyboard.pressHistory.empty());                  // unentschieden: nichts am Host
+  // Ein Druck der anderen Hälfte (onSplitBeforeLeftPress): vor ihm entscheiden
+  setMillis(1030);
+  resolveAllPendingTapHoldsAsHold();
+  assert(!anyTapHoldPending());
+  assert(getActiveLayer() == 1 && momentaryLayers[1]);       // die linke Taste sieht Ebene 1
+  assert(bleKeyboard.pressHistory.empty());                  // auch jetzt kein Delete: der Tipp entfällt
+  // Loslassen nach der Entscheidung: kein nachträglicher Tipp (Delete)
+  setMillis(1200);
+  keyState[5][0] = false;
+  onMatrixKeyChange(5, 0, false);
+  assert(bleKeyboard.pressHistory.empty());
+  assert(getActiveLayer() == 0 && !momentaryLayers[1]);
+}
+
+TEST(test_cross_half_press_without_hold_action_changes_nothing) {
+  resetState();
+  KEYMAP[0][2][1] = 'j';
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  assert(!anyTapHoldPending());
+  resolveAllPendingTapHoldsAsHold();                          // nichts offen
+  assert(getActiveLayer() == 0);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'j');
+}
+
+TEST(test_cross_half_press_decides_every_open_key_not_only_one) {
+  resetState();
+  // Zwei offene Mod-Tap-Tasten (Ctrl und Layer): beide gelten als Halten
+  KEYMAP[0][5][3] = ' ';
+  HOLDMAP[0][5][3] = KEY_LEFT_CTRL;
+  KEYMAP[0][5][0] = KEY_DELETE;
+  HOLDMAP[0][5][0] = ACT_MO_2;
+  setMillis(1000);
+  keyState[5][3] = true;
+  onMatrixKeyChange(5, 3, true);
+  setMillis(1010);
+  keyState[5][0] = true;                                      // die zweite Taste entscheidet die erste schon
+  onMatrixKeyChange(5, 0, true);
+  assert(tapHold[5][3].holdActive && tapHold[5][0].pending);   // eine ist offen
+  assert(anyTapHoldPending());
+  setMillis(1020);
+  resolveAllPendingTapHoldsAsHold();
+  assert(!anyTapHoldPending() && tapHold[5][0].holdActive);
+  assert(getActiveLayer() == 2);
+}
+
+TEST(test_cross_half_resolve_after_tap_decision_is_a_noop) {
+  resetState();
+  // Die Taste ist schon als Tipp entschieden (schnell losgelassen): ein späteres HOLD_RESOLVE ändert nichts
+  KEYMAP[0][5][0] = KEY_DELETE;
+  HOLDMAP[0][5][0] = ACT_MO_1;
+  setMillis(1000);
+  keyState[5][0] = true;
+  onMatrixKeyChange(5, 0, true);
+  setMillis(1050);
+  keyState[5][0] = false;
+  onMatrixKeyChange(5, 0, false);
+  assert(!anyTapHoldPending());
+  size_t history = bleKeyboard.pressHistory.size();
+  resolveAllPendingTapHoldsAsHold();
+  assert(bleKeyboard.pressHistory.size() == history && getActiveLayer() == 0);
+}
+
+TEST(test_cross_half_resolve_is_idempotent) {
+  resetState();
+  KEYMAP[0][5][0] = KEY_DELETE;
+  HOLDMAP[0][5][0] = ACT_MO_1;
+  setMillis(1000);
+  keyState[5][0] = true;
+  onMatrixKeyChange(5, 0, true);
+  resolveAllPendingTapHoldsAsHold();
+  resolveAllPendingTapHoldsAsHold();                          // ein Retry-Duplikat von HOLD_RESOLVE
+  assert(getActiveLayer() == 1 && !anyTapHoldPending() && bleKeyboard.pressHistory.empty());
+}
+
+TEST(test_cross_half_combo_clears_pending_state) {
+  resetState();
+  // Eine Combo verbraucht die Taste: kein offener Zustand bleibt, der die andere Hälfte bremst
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  assert(anyTapHoldPending());
+  cancelTapHoldForCombo(2, 1);
+  assert(!anyTapHoldPending());
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

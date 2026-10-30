@@ -1044,6 +1044,22 @@ void resolvePendingTapHoldsAsHold(uint8_t exceptR, uint8_t exceptC) {
   }
 }
 
+// true, wenn eine Mod-Tap-Taste noch unentschieden ist (links und rechts: SPLIT_OP_HOLD_PENDING an die andere Hälfte)
+bool anyTapHoldPending() {
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (tapHold[r][c].pending) return true;
+    }
+  }
+  return false;
+}
+
+// Ein Druck der anderen Hälfte (SPLIT_OP_HOLD_RESOLVE, Master: vor einem linken Druck): alle offenen Mod-Tap-Tasten
+// als Halten entscheiden. Eine Layer-Taste setzt dabei ihre Ebene; der Aufrufer meldet sie danach (LAYER_STATE).
+void resolveAllPendingTapHoldsAsHold() {
+  resolvePendingTapHoldsAsHold(NUM_ROWS, NUM_COLS);
+}
+
 // Gibt true zurück, wenn die Taste vom Tap-Hold-Automaten behandelt wurde.
 // dtapAct != 0: ein Tipp wird nicht sofort gesendet, sondern wartet auf einen möglichen zweiten Tipp.
 bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct = 0) {

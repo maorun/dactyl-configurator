@@ -45,7 +45,9 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_TAP_FLUSH = 20,    // nur Master -> links: wartende Einzel-Tipps jetzt senden, ohne Werte
   SPLIT_OP_REPEAT = 21,       // links -> Master: Repeat-Taste (code 1/0, arg = Nummer) oder Notiz (code 2 = Aktion aufgezeichnet, 3 = keine)
   SPLIT_OP_REPEAT_RUN = 22,   // nur Master -> links: Repeat links ausführen, code 1/0 wie REPEAT, arg = Nummer 1..127
-  SPLIT_OP_COUNT = 23
+  SPLIT_OP_HOLD_PENDING = 23, // beide Richtungen: code 1 = eine Mod-Tap-Taste des Absenders ist noch unentschieden, 0 = keine
+  SPLIT_OP_HOLD_RESOLVE = 24, // beide Richtungen: offene Mod-Tap-Tasten des Empfängers jetzt als Halten entscheiden, ohne Werte
+  SPLIT_OP_COUNT = 25
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -118,7 +120,10 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
     case SPLIT_OP_FW_VERSION:
       return ev.code != 0 && ev.arg == 0;
     case SPLIT_OP_TAP_PENDING:
+    case SPLIT_OP_HOLD_PENDING:
       return ev.code <= 1 && ev.arg == 0;
+    case SPLIT_OP_HOLD_RESOLVE:
+      return ev.code == 0 && ev.arg == 0;
     case SPLIT_OP_REPEAT:
       // 0/1 = Repeat-Taste losgelassen/gedrückt, arg = Nummer 1..127; 2/3 = Notiz ohne Nummer
       return (ev.code <= 1 && ev.arg >= 1) || ((ev.code == 2 || ev.code == 3) && ev.arg == 0);
@@ -150,15 +155,18 @@ inline bool parseSplitHidPacket(const uint8_t *srcMac, const uint8_t *data, int 
 // Paket verschiebt das Einschlafen nur um ein Intervall.
 #define SPLIT_ACTIVITY_INTERVAL_MS 10000
 
-// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY oder TAP_FLUSH ohne Werte, ein
-// Master-LAYER_STATE (arg < 0, der Master führt die Toggles) oder ein REPEAT_RUN (code 0/1, Nummer 1..127)
+// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY, TAP_FLUSH oder HOLD_RESOLVE ohne Werte, ein
+// HOLD_PENDING (code 0/1), ein Master-LAYER_STATE (arg < 0, der Master führt die Toggles) oder ein REPEAT_RUN
+// (code 0/1, Nummer 1..127)
 inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, int len, SplitHidEvent &out) {
   if (srcMac == nullptr || data == nullptr) return false;
   if (memcmp(srcMac, SPLIT_MASTER_MAC, sizeof(SPLIT_MASTER_MAC)) != 0) return false;
   if (len != (int)sizeof(SplitHidEvent)) return false;
   SplitHidEvent ev;
   memcpy(&ev, data, sizeof(ev));
-  bool ok = ((ev.op == SPLIT_OP_ACTIVITY || ev.op == SPLIT_OP_TAP_FLUSH) && ev.code == 0 && ev.arg == 0) ||
+  bool ok = ((ev.op == SPLIT_OP_ACTIVITY || ev.op == SPLIT_OP_TAP_FLUSH || ev.op == SPLIT_OP_HOLD_RESOLVE) &&
+             ev.code == 0 && ev.arg == 0) ||
+            (ev.op == SPLIT_OP_HOLD_PENDING && ev.code <= 1 && ev.arg == 0) ||
             isValidSplitMasterLayerEvent(ev) ||
             (ev.op == SPLIT_OP_REPEAT_RUN && ev.code <= 1 && ev.arg >= 1);
   if (!ok) return false;
@@ -556,6 +564,9 @@ struct SplitLeftHeld {
   // Wartender Einzel-Tipp links (SPLIT_OP_TAP_PENDING) und Empfangszeit der Meldung
   bool tapPending;
   unsigned long tapPendingMs;
+  // Unentschiedene Mod-Tap-Taste links (SPLIT_OP_HOLD_PENDING) und Empfangszeit der Meldung
+  bool holdPending;
+  unsigned long holdPendingMs;
   // Die linke Hälfte hat zuletzt eine Aktion aufgezeichnet (Notiz SPLIT_OP_REPEAT code 2): Repeat rechts lässt
   // sie dann links wiederholen. Rechts löscht es beim Aufzeichnen einer eigenen Aktion; die linke Hälfte setzt es
   // mit code 3 zurück, wenn sie neu startet (ein Link-Ausfall allein ändert nichts: links behält ihre Aktion).
@@ -965,12 +976,17 @@ inline void splitNoteLeftRx(SplitLeftHeld &h, const SplitHidEvent &ev, unsigned 
     h.linkChangedMs = nowMs;
     h.everUp = true;
     h.tapPending = false;
+    h.holdPending = false;
   }
   if (ev.op == SPLIT_OP_REPEAT && ev.code >= 2) h.repeatLastLeft = ev.code == 2;
   if (ev.op == SPLIT_OP_FW_VERSION) h.fw = ev.code;
   if (ev.op == SPLIT_OP_TAP_PENDING) {
     h.tapPending = ev.code != 0;
     h.tapPendingMs = nowMs;
+  }
+  if (ev.op == SPLIT_OP_HOLD_PENDING) {
+    h.holdPending = ev.code != 0;
+    h.holdPendingMs = nowMs;
   }
   h.lastRxMs = nowMs;
   h.linkUp = true;
@@ -1085,6 +1101,7 @@ inline bool splitCheckLinkTimeout(SplitLeftHeld &h, unsigned long nowMs, SplitHi
   h.linkChangedMs = h.lastRxMs; // der Link ist seit dem letzten Paket weg, nicht erst seit der Erkennung
   splitCountAdd(h.linkLosses, 1);
   h.tapPending = false;
+  h.holdPending = false;
   splitReleaseHeld(h, sink); // eine offene Repeat-Taste links löst der Aufrufer (splitRepeatLeftCancel)
   return true;
 }
@@ -1107,6 +1124,33 @@ inline bool splitCheckLinkTimeout(SplitLeftHeld &h, unsigned long nowMs, SplitHi
 
 inline bool splitLeftTapPending(const SplitLeftHeld &h, unsigned long nowMs) {
   return h.linkUp && h.tapPending && (unsigned long)(nowMs - h.tapPendingMs) < SPLIT_TAP_PENDING_MAX_MS;
+}
+
+// -----------------------------------------------------------------------------
+// Mod-Tap über beide Hälften (SPLIT_OP_HOLD_PENDING, SPLIT_OP_HOLD_RESOLVE)
+// -----------------------------------------------------------------------------
+// Eine Taste mit Halte-Aktion bleibt unentschieden (DactylLogic.h, tapHold[].pending), bis der Tapping-Term
+// abläuft oder eine andere Taste drückt: dann gilt sie als Halten (resolvePendingTapHoldsAsHold). Dieselbe Regel gilt
+// über beide Hälften. Beide Hälften sind gleichberechtigt; jede löst ihre Tasten mit ihrer eigenen Ebene auf:
+// - Jede Hälfte meldet HOLD_PENDING 1, solange bei ihr eine Taste unentschieden ist, und 0 danach.
+// - Die andere Hälfte hält ihre eigene Matrix-Änderung zurück (SplitLocalDefer), solange die Meldung 1 lautet, und
+//   sendet einmal HOLD_RESOLVE. Der Absender entscheidet seine offenen Tasten als Halten, sendet die neue Ebene
+//   (LAYER_STATE) und danach HOLD_PENDING 0. Dann führt die andere Hälfte die zurückgehaltene Änderung mit der neuen
+//   Ebene aus, spätestens nach SPLIT_TAP_FLUSH_TIMEOUT_MS (50 ms).
+// - Der Master entscheidet zusätzlich vor jedem linken Druck seine offenen Tasten als Halten (Druck der anderen Hälfte).
+// Eine Firmware ohne diese Ops meldet nie 1 und beantwortet HOLD_RESOLVE nicht: die andere Hälfte hält nichts
+// zurück (Verhalten wie zuvor). Eine Meldung gilt höchstens SPLIT_HOLD_PENDING_MAX_MS (länger als der größte
+// Tapping-Term von 500 ms), damit eine verlorene 0 die Gegenseite nicht dauerhaft bremst.
+#define SPLIT_HOLD_PENDING_MAX_MS 600UL
+
+// Gilt eine Meldung noch? flag/sinceMs: Zustand und Empfangszeit (Master: SplitLeftHeld, links: Variablen aus dem
+// Empfangs-Callback)
+inline bool splitHoldPendingValid(bool flag, unsigned long sinceMs, unsigned long nowMs) {
+  return flag && (unsigned long)(nowMs - sinceMs) < SPLIT_HOLD_PENDING_MAX_MS;
+}
+
+inline bool splitLeftHoldPending(const SplitLeftHeld &h, unsigned long nowMs) {
+  return h.linkUp && splitHoldPendingValid(h.holdPending, h.holdPendingMs, nowMs);
 }
 
 // Linke Druck-Operationen: vor ihnen sendet der Master seine wartenden Einzel-Tipps (Zeichenreihenfolge)
@@ -1141,7 +1185,15 @@ struct SplitLocalDefer {
   uint8_t count;
   unsigned long sinceMs;  // erste zurückgehaltene Änderung
   bool flushSent;         // TAP_FLUSH für diese Runde schon angefordert
+  bool resolveSent;       // HOLD_RESOLVE für diese Runde schon angefordert
 };
+
+// true, wenn links etwas die eigene Matrix-Änderung zurückhält: ein wartender Einzel-Tipp (TAP_PENDING) oder eine
+// unentschiedene Mod-Tap-Taste (HOLD_PENDING). Der Parameter leftTapPending der Defer-Funktionen trägt dieses
+// Ergebnis: beide Gründe teilen sich Puffer, Zeitgrenze und Ablauf.
+inline bool splitLeftHolds(const SplitLeftHeld &h, unsigned long nowMs) {
+  return splitLeftTapPending(h, nowMs) || splitLeftHoldPending(h, nowMs);
+}
 
 inline void splitDeferReset(SplitLocalDefer &d) {
   memset(&d, 0, sizeof(d));
@@ -1159,6 +1211,7 @@ inline bool splitDeferPush(SplitLocalDefer &d, uint8_t r, uint8_t c, bool presse
   if (d.count == 0) {
     d.sinceMs = nowMs;
     d.flushSent = false;
+    d.resolveSent = false;
   }
   d.items[(d.head + d.count) % SPLIT_DEFER_SIZE] = {r, c, pressed, nowMs};
   d.count++;
@@ -1177,6 +1230,24 @@ inline bool splitDeferReplayDue(const SplitLocalDefer &d, bool leftTapPending, u
   return d.count > 0 && (!leftTapPending || (unsigned long)(nowMs - d.sinceMs) >= SPLIT_TAP_FLUSH_TIMEOUT_MS);
 }
 
+// true, wenn eine zurückgehaltene Änderung ein Drücken ist. Nur ein Drücken entscheidet eine offene Mod-Tap-Taste der
+// anderen Hälfte als Halten (wie applyMatrixKeyChange bei der gleichen Hälfte); ein Loslassen (z. B. beim Überlappen
+// zweier Tasten: a drücken, Mod-Tap drücken, a loslassen) lässt sie offen.
+inline bool splitDeferHasPress(const SplitLocalDefer &d) {
+  for (uint8_t i = 0; i < d.count; i++) {
+    if (d.items[(d.head + i) % SPLIT_DEFER_SIZE].pressed) return true;
+  }
+  return false;
+}
+
+// Wie splitDeferTakeFlushRequest, aber für HOLD_RESOLVE: nur wenn eine zurückgehaltene Änderung ein Drücken ist. Eine
+// Runde mit reinem Loslassen verbraucht keine Anforderung: ein später folgendes Drücken fordert sie noch an.
+inline bool splitDeferTakeResolveRequest(SplitLocalDefer &d) {
+  if (d.count == 0 || d.resolveSent || !splitDeferHasPress(d)) return false;
+  d.resolveSent = true;
+  return true;
+}
+
 inline bool splitDeferPop(SplitLocalDefer &d, SplitDeferredKey &out) {
   if (d.count == 0) return false;
   out = d.items[d.head];
@@ -1193,6 +1264,20 @@ void splitDeferReplay(SplitLocalDefer &d, ApplyFn apply) {
   while (splitDeferPop(d, k)) apply(k.r, k.c, k.pressed, k.atMs);
 }
 
+// Ein Druck der anderen Hälfte entscheidet die offenen Mod-Tap-Tasten als Halten (resolve). Ein Loslassen, das diese
+// Hälfte schon vor dem Druck hielt (a gedrückt, Mod-Tap gedrückt, Mod-Tap losgelassen), gehört vor die Entscheidung: die
+// Taste war dann schon ein Tipp. Deshalb zuerst die zurückgehaltenen Änderungen bis zum ersten Drücken ausführen (nur
+// Loslassen davor), danach entscheiden. Weiter hinten stehende Änderungen bleiben für den Aufrufer.
+template <class ApplyFn, class ResolveFn>
+void splitDeferReplayReleasesThenResolve(SplitLocalDefer &d, ApplyFn apply, ResolveFn resolve) {
+  while (d.count > 0 && !d.items[d.head].pressed) {
+    SplitDeferredKey k;
+    splitDeferPop(d, k);
+    apply(k.r, k.c, k.pressed, k.atMs);
+  }
+  resolve();
+}
+
 // Neue Matrix-Änderung des Masters: zurückhalten oder sofort ausführen. Ein voller Puffer führt erst die
 // älteren Änderungen aus, dann diese.
 template <class ApplyFn>
@@ -1203,6 +1288,53 @@ void splitDeferApplyOrHold(SplitLocalDefer &d, uint8_t r, uint8_t c, bool presse
     splitDeferReplay(d, apply);
   }
   apply(r, c, pressed, nowMs);
+}
+
+// Meldung "eine Mod-Tap-Taste ist unentschieden" (SPLIT_OP_HOLD_PENDING) an die andere Hälfte, nur bei einer
+// Änderung. Beide Hälften nutzen dieselbe Logik: der Master sendet mit esp_now_send, links mit der Sendewarteschlange.
+// send(ev) liefert true, wenn das Paket gesendet oder eingereiht ist; erst dann gilt der Stand als gemeldet, ein
+// Fehlschlag meldet im nächsten Durchlauf erneut. Ohne Link gilt nichts als gemeldet: die andere Hälfte löscht die
+// Meldung bei einem neuen Link, ein noch offener Zustand wird danach neu gemeldet.
+struct SplitHoldReporter {
+  bool reported;
+};
+
+template <class SendFn>
+bool splitHoldReportIfChanged(SplitHoldReporter &rep, bool linkUp, bool pending, SendFn send) {
+  if (!linkUp) {
+    rep.reported = false;
+    return false;
+  }
+  if (pending == rep.reported) return false;
+  if (!send(makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, pending ? 1 : 0))) return false;
+  rep.reported = pending;
+  return true;
+}
+
+// true, wenn der zuletzt erfolgreich gesendete Layer-Zustand dem aktuellen entspricht. splitLayerSendIfDue liefert
+// auch false, wenn nichts zu senden war; nur dieser Vergleich unterscheidet "schon gesendet" von "Senden gescheitert"
+// (ein Fehlschlag stellt den Stand vor dem Versuch wieder her).
+inline bool splitLayerInSync(const SplitLayerSync &s, uint8_t momentary, uint8_t toggles) {
+  return s.everSent && s.sentMomentary == momentary && s.sentToggles == (uint8_t)(toggles & 0xFE);
+}
+
+// Layer-Zustand und HOLD_PENDING-Meldung gemeinsam senden (Master). Die 0 ("entschieden") geht nur raus, wenn der
+// Layer-Zustand dieser Entscheidung gesendet ist: kommt die 0 an, führt die linke Hälfte ihre Taste aus und braucht die
+// neue Ebene. Ohne diese Bedingung gäbe es zwei unabhängige esp_now_send ohne Reihenfolge: ginge das Layer-Paket
+// verloren und die 0 käme an, liefe die Taste auf der alten Ebene. Ein gesendeter Zustand geht nach SPLIT_LAYER_REPEAT_MS
+// noch einmal raus (Duplikat, harmlos). Die Meldung 1 (offen) braucht keine Ebene und geht immer sofort raus.
+template <class LayerSendFn, class HoldSendFn>
+inline void splitSendLayerThenHold(SplitLayerSync &layer, SplitHoldReporter &rep, bool linkUp, bool pending,
+                                   uint8_t momentary, uint8_t toggles, LayerSendFn sendLayer, HoldSendFn sendHold) {
+  sendLayer();
+  if (!pending && !splitLayerInSync(layer, momentary, toggles)) return;
+  splitHoldReportIfChanged(rep, linkUp, pending, sendHold);
+}
+
+// Eine zurückgehaltene Änderung anfordern lassen, ohne dass TAP_FLUSH oder HOLD_RESOLVE gesendet wurden: der
+// Aufrufer ruft das auf, wenn das Senden scheiterte (Warteschlange voll), damit die nächste Runde es erneut versucht.
+inline void splitDeferRequestResolveAgain(SplitLocalDefer &d) {
+  d.resolveSent = false;
 }
 
 // Vor einem linken Druck (onBeforeLeftPress). Meldet links noch einen wartenden Tipp, ist dieser Druck der
@@ -1568,7 +1700,8 @@ template <class Kbd>
 SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, bool &hostWasReady,
                              bool hostReady, unsigned long nowMs, SplitRxAppliedFn onApplied,
                              SplitRxAppliedFn onKeyEvent = nullptr, SplitRxAppliedFn onLayer = nullptr,
-                             SplitRxAppliedFn onBeforeLeftPress = nullptr, SplitRxAppliedFn onRepeat = nullptr) {
+                             SplitRxAppliedFn onBeforeLeftPress = nullptr, SplitRxAppliedFn onRepeat = nullptr,
+                             SplitRxAppliedFn onHoldResolve = nullptr) {
   SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -1586,7 +1719,15 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   uint8_t keyEvents = 0;
   while (splitRxPop(q, ev)) {
     splitNoteLeftRx(kbd.splitLeft, ev, nowMs);
-    if (ev.op == SPLIT_OP_FW_VERSION || ev.op == SPLIT_OP_TAP_PENDING) continue;
+    if (ev.op == SPLIT_OP_FW_VERSION || ev.op == SPLIT_OP_TAP_PENDING || ev.op == SPLIT_OP_HOLD_PENDING) continue;
+    // Links wartet mit einer Taste auf die Entscheidung unserer Mod-Tap-Tasten: sie als Halten entscheiden, dann
+    // meldet der Master die neue Ebene und den Stand (onHoldResolve). Ohne Mac-Verbindung gibt es nichts zu entscheiden.
+    if (ev.op == SPLIT_OP_HOLD_RESOLVE) {
+      kbd.splitLeft.lastRxMs = nowMs;
+      kbd.splitLeft.linkUp = true;
+      if (hostReady && onHoldResolve) onHoldResolve(ev);
+      continue;
+    }
     if (ev.op == SPLIT_OP_REPEAT && ev.code >= 2) continue; // Notiz: splitNoteLeftRx hat sie schon übernommen
     if (ev.op == SPLIT_OP_KEY_EVENT) {
       kbd.splitLeft.lastRxMs = nowMs;

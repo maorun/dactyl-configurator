@@ -284,6 +284,9 @@ uint16_t DTAPMAP[NUM_LAYERS][6][7] = {};
 // [[[END_DEFAULTS_ID]]]
 
 bool keyState[6][7] = {false};
+// Entprellter Zustand der Matrix. keyState folgt ihm erst, wenn die Änderung ausgeführt ist: Meldet der Master eine
+// unentschiedene Mod-Tap-Taste (SPLIT_OP_HOLD_PENDING), hält leftDefer die Änderung kurz zurück.
+bool rawKeyState[6][7] = {false};
 uint16_t pressedAction[6][7] = {0};
 unsigned long keyPressTime[6][7] = {0};
 bool keySentToHost[6][7] = {false};
@@ -340,6 +343,13 @@ static volatile bool masterActivityReceived = false;
 // Vom Empfangs-Callback gesetzt: Der Master hält eine Taste zurück, bis der wartende Einzel-Tipp gesendet ist
 // (SPLIT_OP_TAP_FLUSH); der Melder schickt danach TAP_PENDING 0
 static volatile bool masterTapFlushRequested = false;
+// Mod-Tap über beide Hälften (SPLIT_OP_HOLD_PENDING / SPLIT_OP_HOLD_RESOLVE): der Master meldet eine unentschiedene
+// Mod-Tap-Taste (Empfangs-Callback), HOLD_RESOLVE des Masters entscheidet die offenen Tasten links als Halten
+static MasterHoldState masterHold = {};
+static volatile bool masterHoldResolveRequested = false;
+// Eigene offene Mod-Tap-Tasten an den Master melden, links hält eigene Änderungen zurück, solange der Master wartet
+static SplitHoldReporter holdReporter = {};
+static SplitLocalDefer leftDefer = {};
 // REPEAT_RUN des Masters in Reihenfolge (nicht "neuestes gewinnt" wie der Layer-Zustand): Drücken und Loslassen
 // dürfen nicht verschwinden. Der Empfangs-Callback schreibt, loop() liest (SPSC-Ring).
 static SplitRxQueue masterRepeatRing;
@@ -381,6 +391,8 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
   if (info == nullptr || !parseSplitMasterPacket(info->src_addr, data, len, ev)) return;
   if (ev.op == SPLIT_OP_ACTIVITY) masterActivityReceived = true;
   else if (ev.op == SPLIT_OP_TAP_FLUSH) masterTapFlushRequested = true;
+  else if (ev.op == SPLIT_OP_HOLD_PENDING) masterHoldNote(masterHold, ev.code != 0, millis());
+  else if (ev.op == SPLIT_OP_HOLD_RESOLVE) masterHoldResolveRequested = true;
   else if (ev.op == SPLIT_OP_REPEAT_RUN) splitRxPush(masterRepeatRing, ev);
   else splitLayerMailboxPut(masterLayerMailbox, ev);
 }
@@ -408,6 +420,22 @@ void leftRepeatReleaseHeldPairs() {
     masterRepeatRun.action = 0;
     masterRepeatRun.active = false;
   }
+}
+
+// Eine Matrix-Änderung dieser Hälfte ausführen. Die Ebene vor der Aktion steht im Live-Monitor-Ereignis: ein MO/TG
+// auf dieser Taste wechselt sie erst. now = Scan-Zeit (Tapping-Term und Combo-Fenster beim Ausführen).
+static void applyLeftKeyChange(uint8_t r, uint8_t c, bool pressed, unsigned long atMs) {
+  keyState[r][c] = pressed;
+  uint8_t layer = getActiveLayer();
+  onMatrixKeyChange(r, c, pressed, atMs);
+  // Matrix-Position für den Live-Monitor am Master, nach den HID-Ereignissen dieser Taste
+  queueKeyEventDiagnostic(sendQueue, bleKeyboard.isConnected(), makeSplitHidEvent(SPLIT_OP_KEY_EVENT,
+    splitKeyEventCode(r, c, pressed, layer)), diagDropped);
+}
+
+// Der Master hält eine Mod-Tap-Taste unentschieden: die eigene Änderung wartet auf seine Entscheidung
+static bool masterHoldNow() {
+  return !isConfigMode && bleKeyboard.isConnected() && masterHoldPending(masterHold, millis());
 }
 
 // Layer-Zustand des Masters übernehmen: seine MO-Ebenen immer, seine Toggles ohne offenes eigenes SET
@@ -487,6 +515,17 @@ static bool setupEspNow() {
   heartbeatCounter = 0;
   // Der Master löscht die Meldung bei einem neuen Link; ein noch wartender Tipp wird neu gemeldet
   tapPendingReset(tapPendingReporter, masterTapFlushRequested);
+  // Dasselbe für Mod-Tap: nichts gilt als gemeldet, eine alte Meldung und Anforderung des Masters entfallen,
+  // zurückgehaltene Änderungen gehören zur Zeit vor dem Neustart des Funks
+  holdReporter.reported = false;
+  masterHoldReset(masterHold);
+  masterHoldResolveRequested = false;
+  splitDeferReset(leftDefer);
+  // Der eingegangene Zustand folgt dem ausgeführten, sonst fehlte einer zurückgehaltenen Taste ihr Drücken und ihr
+  // Loslassen liefe allein (wie beim Config-Combo-Zurücksetzen)
+  for (int rr = 0; rr < NUM_ROWS; rr++) {
+    for (int cc = 0; cc < NUM_COLS; cc++) rawKeyState[rr][cc] = keyState[rr][cc];
+  }
   Serial.println("ESP-NOW bereit (Kanal 1, verschlüsselt, Ziel 2E:BC:BB:81:61:A6)");
   // Nach einem Neustart hält der Master evtl. noch Eingaben dieser Hälfte (kein Link-Timeout bei kurzem
   // Reboot). RELEASE_ALL löst sie; die Bestätigung meldet zugleich den Link, ohne auf den Heartbeat zu warten.
@@ -686,6 +725,10 @@ void loop() {
   if (scanMutexTaken) {
     unsigned long now = millis();
     processMasterRepeat();
+    // Zurückgehaltene Änderungen ausführen: der Master hat entschieden (HOLD_PENDING 0) oder die Zeitgrenze ist um.
+    // Die neue Ebene des Masters wird vorher übernommen: der Empfangs-Callback legt sie nur in den Briefkasten, ohne
+    // diesen Schritt liefe die Taste noch auf der alten Ebene (Reihenfolge: DactylLeftLogic.h, leftReplayHeld).
+    leftReplayHeld(leftDefer, now, masterHoldNow, [] { if (!isConfigMode) processMasterLayerState(); }, applyLeftKeyChange);
     for (int c = 0; c < NUM_COLS; c++) {
       pinMode(LEFT_COL_PINS[c], OUTPUT);
       digitalWrite(LEFT_COL_PINS[c], LOW);
@@ -693,20 +736,23 @@ void loop() {
 
       for (int r = 0; r < NUM_ROWS; r++) {
         bool raw = (digitalRead(LEFT_ROW_PINS[r]) == LOW);
-        if (updateLeftKey(r, c, raw, now, debounceMs) && leftKeys[r][c].stable != keyState[r][c]) {
-          keyState[r][c] = leftKeys[r][c].stable;
+        if (updateLeftKey(r, c, raw, now, debounceMs) && leftKeys[r][c].stable != rawKeyState[r][c]) {
+          rawKeyState[r][c] = leftKeys[r][c].stable;
           lastActivityTime = millis();
           exitStandby();
-          // Ebene vor der Aktion lesen: ein MO/TG auf dieser Taste wechselt sie erst
-          uint8_t layer = getActiveLayer();
-          onMatrixKeyChange(r, c, keyState[r][c]);
-          // Matrix-Position für den Live-Monitor am Master, nach den HID-Ereignissen dieser Taste
-          queueKeyEventDiagnostic(sendQueue, bleKeyboard.isConnected(), makeSplitHidEvent(SPLIT_OP_KEY_EVENT,
-            splitKeyEventCode((uint8_t)r, (uint8_t)c, keyState[r][c], layer)), diagDropped);
+          // Hinter einer unentschiedenen Mod-Tap-Taste am Master zurückhalten (Entscheidung zuerst, dann die Ebene)
+          splitDeferApplyOrHold(leftDefer, r, c, rawKeyState[r][c], masterHoldNow(), millis(), applyLeftKeyChange);
         }
       }
 
       pinMode(LEFT_COL_PINS[c], INPUT);
+    }
+
+    // Eine Taste wurde zurückgehalten: dem Master einmal sagen, dass er seine offenen Mod-Tap-Tasten jetzt entscheiden
+    // soll (kein Retry, nach SPLIT_TAP_FLUSH_TIMEOUT_MS führt links die Taste ohnehin aus)
+    // Nur für ein Drücken: ein Loslassen entscheidet die offene Taste des Masters nicht (wie die gleiche Hälfte)
+    if (splitDeferTakeResolveRequest(leftDefer)) {
+      if (!queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE))) splitDeferRequestResolveAgain(leftDefer);
     }
 
     checkUserCombos();
@@ -714,6 +760,16 @@ void loop() {
     // Der Master wartet mit einer Taste: wartende Einzel-Tipps jetzt senden, danach TAP_PENDING 0
     serviceTapPending(sendQueue, tapPendingReporter, masterTapFlushRequested,
                       !isConfigMode && bleKeyboard.isConnected(), flushAllDoubleTaps, anyDoubleTapWaiting);
+    // Der Master hat HOLD_RESOLVE gesendet: offene Mod-Tap-Tasten links als Halten entscheiden. Die neue Ebene geht mit
+    // dem nächsten queueSplitLayerStateIfDue raus, vor dem HOLD_PENDING 0 darunter (gleiche Warteschlange, Reihenfolge)
+    if (masterHoldResolveRequested) {
+      masterHoldResolveRequested = false;
+      // Ein Loslassen einer offenen Taste, das diese Hälfte schon hielt, läuft vor der Entscheidung (sie war ein Tipp)
+      splitDeferReplayReleasesThenResolve(leftDefer, applyLeftKeyChange, resolveAllPendingTapHoldsAsHold);
+    }
+    queueSplitLayerStateIfDue();
+    splitHoldReportIfChanged(holdReporter, !isConfigMode && bleKeyboard.isConnected(), anyTapHoldPending(),
+                             [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); });
 
     // Config-Combo R0C5 + R4C0 (500 ms gehalten)
     static unsigned long comboStartTime = 0;
@@ -730,6 +786,12 @@ void loop() {
         pressedAction[CONFIG_COMBO_R2][CONFIG_COMBO_C2] = 0;
         keyState[CONFIG_COMBO_R1][CONFIG_COMBO_C1] = false;
         keyState[CONFIG_COMBO_R2][CONFIG_COMBO_C2] = false;
+        // Zurückgehaltene Änderungen gehören zur Zeit vor dem Moduswechsel (wie am Master). Der eingegangene Zustand
+        // folgt dann dem ausgeführten, sonst fehlte einer zurückgehaltenen Taste ihr Drücken und ihr Loslassen liefe allein.
+        splitDeferReset(leftDefer);
+        for (int rr = 0; rr < NUM_ROWS; rr++) {
+          for (int cc = 0; cc < NUM_COLS; cc++) rawKeyState[rr][cc] = keyState[rr][cc];
+        }
         sendConfigNotification("KEY_RELEASE:{\"r\":" + String(CONFIG_COMBO_R1) + ",\"c\":" + String(CONFIG_COMBO_C1) + "}");
         sendConfigNotification("KEY_RELEASE:{\"r\":" + String(CONFIG_COMBO_R2) + ",\"c\":" + String(CONFIG_COMBO_C2) + "}");
 

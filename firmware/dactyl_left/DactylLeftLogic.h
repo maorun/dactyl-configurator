@@ -260,6 +260,51 @@ void serviceTapPending(SplitSendQueue &q, SplitTapPendingReporter &rep, volatile
   queueTapPendingIfChanged(q, rep, linkUp, waiting());
 }
 
+// -----------------------------------------------------------------------------
+// Mod-Tap über beide Hälften, linke Seite (SPLIT_OP_HOLD_PENDING, SPLIT_OP_HOLD_RESOLVE)
+// -----------------------------------------------------------------------------
+// Der Master meldet HOLD_PENDING 1, solange bei ihm eine Mod-Tap-Taste unentschieden ist. Links hält dann die eigene
+// Matrix-Änderung zurück (SplitLocalDefer, derselbe Puffer wie am Master), sendet einmal HOLD_RESOLVE und führt die
+// Änderung aus, sobald der Master 0 meldet (nach der neuen Ebene) oder nach SPLIT_TAP_FLUSH_TIMEOUT_MS.
+// Die Meldung des Masters kommt vom Wi-Fi-Task (volatile Variablen); loop() liest sie.
+struct MasterHoldState {
+  volatile bool pending;
+  volatile unsigned long sinceMs;
+};
+
+// Meldung des Masters übernehmen (Empfangs-Callback). Ein neuer Link oder ein Neustart setzt sie zurück.
+inline void masterHoldNote(MasterHoldState &m, bool pending, unsigned long nowMs) {
+  m.sinceMs = nowMs;
+  // Die Ebene des Masters liegt schon im Briefkasten (der Master sendet sie vor der 0): erst danach den Stand freigeben
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  m.pending = pending;
+}
+
+inline void masterHoldReset(MasterHoldState &m) {
+  m.pending = false;
+  m.sinceMs = 0;
+}
+
+inline bool masterHoldPending(const MasterHoldState &m, unsigned long nowMs) {
+  bool pending = m.pending;
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  return splitHoldPendingValid(pending, m.sinceMs, nowMs);
+}
+
+// Zurückgehaltene linke Änderungen ausführen, in der Reihenfolge, die den Zustand des Masters nicht überholt:
+// 1. Den Stand "Master wartet" zuerst lesen. Meldet er 0, kam die Ebene des Masters schon vorher im Briefkasten an
+//    (der Master sendet die Ebene vor der 0).
+// 2. Danach die Ebene übernehmen (takeLayer). Würde die Ebene nach dem Lesen der 0 übernommen, liefe die Taste noch auf
+//    der alten Ebene.
+// 3. Erst dann ausführen: bei gemeldeter 0 sofort, sonst nach SPLIT_TAP_FLUSH_TIMEOUT_MS.
+template <class MasterHoldsFn, class TakeLayerFn, class ApplyFn>
+inline void leftReplayHeld(SplitLocalDefer &d, unsigned long nowMs, MasterHoldsFn masterHolds, TakeLayerFn takeLayer,
+                           ApplyFn apply) {
+  bool holds = masterHolds();
+  takeLayer();
+  if (splitDeferReplayDue(d, holds, nowMs)) splitDeferReplay(d, apply);
+}
+
 // Op des Pakets am Kopf der Warteschlange (vor queueOnSendResult lesen), HEARTBEAT bei leerer Warteschlange
 uint8_t queueHeadOp(const SplitSendQueue &q) {
   return q.count ? q.items[q.head].op : (uint8_t)SPLIT_OP_HEARTBEAT;

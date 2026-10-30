@@ -511,8 +511,30 @@ static void applyLocalKeyChange(uint8_t r, uint8_t c, bool pressed, unsigned lon
   onMatrixKeyChange(r, c, pressed, atMs);
 }
 
+// Links hält die eigene Matrix-Änderung zurück: ein wartender Einzel-Tipp oder eine unentschiedene Mod-Tap-Taste
 static bool leftTapPendingNow() {
-  return !isConfigMode && splitLeftTapPending(bleKeyboard.splitLeft, millis());
+  return !isConfigMode && splitLeftHolds(bleKeyboard.splitLeft, millis());
+}
+
+// Links ist eine Mod-Tap-Taste unentschieden: der Master sendet HOLD_RESOLVE statt TAP_FLUSH
+static bool leftHoldPendingNow() {
+  return !isConfigMode && splitLeftHoldPending(bleKeyboard.splitLeft, millis());
+}
+
+// Eigene offene Mod-Tap-Tasten an die linke Hälfte melden (SPLIT_OP_HOLD_PENDING, nur bei einer Änderung)
+static SplitHoldReporter splitHoldReporter;
+
+void sendSplitLayerStateIfDue();
+
+// Layer-Zustand und Meldung "Mod-Tap offen/entschieden" gemeinsam: die 0 geht erst, wenn der Layer-Zustand der
+// Entscheidung gesendet ist (DactylSplitHid.h, splitSendLayerThenHold). linkUp: ohne Link gilt nichts als gemeldet.
+static void sendSplitLayerAndHoldIfDue() {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  splitSendLayerThenHold(splitLayerSync, splitHoldReporter, bleKeyboard.splitLeft.linkUp, anyTapHoldPending(),
+                         localMomentaryLayerMask(), toggleLayerMask(), [] { sendSplitLayerStateIfDue(); },
+                         [](const SplitHidEvent &ev) {
+                           return esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK;
+                         });
 }
 
 // Läuft auf dem Wi-Fi-Task: nur prüfen und einreihen, kein Serial, kein BLE
@@ -553,6 +575,7 @@ void setupSplitReceiver() {
   peer.ifidx = WIFI_IF_STA;
   splitPeerSetEncryption(peer.encrypt, peer.lmk);
   splitActivityReset(splitActivity);
+  splitHoldReporter.reported = false; // nach (Neu-)Start gilt nichts als gemeldet
   splitLayerReset(splitLayerSync);
   splitRemoteLayersReset(splitRemoteLayers);
   splitActivityPeerReady = (esp_now_add_peer(&peer) == ESP_OK);
@@ -588,8 +611,31 @@ static void onSplitBeforeLeftPress(const SplitHidEvent &ev) {
     Serial.println("WARN: configMutex busy, Einzel-Tipp nicht vor linker Taste gesendet");
     return;
   }
-  splitBeforeLeftPress(splitLocalDefer, leftTapPendingNow(), applyLocalKeyChange, flushAllDoubleTaps);
+  // Ein Druck der linken Hälfte entscheidet offene Mod-Tap-Tasten des Masters als Halten, bevor er wirkt. Die
+  // Ebene (MO) gilt dann sofort am Master; die linke Hälfte bekommt sie mit dem nächsten LAYER_STATE. Ein Loslassen
+  // einer offenen Taste, das der Master schon hielt, läuft vorher: sie war dann ein Tipp.
+  splitDeferReplayReleasesThenResolve(splitLocalDefer, applyLocalKeyChange, resolveAllPendingTapHoldsAsHold);
+  // Nur ein wartender linker Einzel-Tipp hält zurückgehaltene Master-Tasten hinter diesem Druck (der Druck ist dann der
+  // nachgeholte Tipp, er kam vor ihnen). Eine offene linke Mod-Tap-Taste (HOLD_PENDING) nicht: dieser Druck ist ein
+  // anderer, später gedrückt als die zurückgehaltenen Master-Tasten, also laufen sie zuerst.
+  splitBeforeLeftPress(splitLocalDefer, !isConfigMode && splitLeftTapPending(bleKeyboard.splitLeft, millis()),
+                       applyLocalKeyChange, flushAllDoubleTaps);
   if (configMutex) xSemaphoreGive(configMutex);
+}
+
+// HOLD_RESOLVE der linken Hälfte: sie hält einen Druck zurück, bis der Master seine offenen Mod-Tap-Tasten entschieden
+// hat. Entscheiden, die neue Ebene und danach den Stand (HOLD_PENDING 0) senden: die linke Hälfte führt ihren Druck
+// erst nach der 0 aus und sieht die Ebene (gleiche Funkstrecke, Reihenfolge der Sendungen).
+static void onSplitHoldResolve(const SplitHidEvent &ev) {
+  (void)ev;
+  if (configMutex && xSemaphoreTake(configMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+    Serial.println("WARN: configMutex busy, Mod-Tap nicht für linke Taste entschieden");
+    return;
+  }
+  // Ein Loslassen einer offenen Taste, das der Master schon hielt, läuft vor der Entscheidung (sie war dann ein Tipp)
+  splitDeferReplayReleasesThenResolve(splitLocalDefer, applyLocalKeyChange, resolveAllPendingTapHoldsAsHold);
+  if (configMutex) xSemaphoreGive(configMutex);
+  sendSplitLayerAndHoldIfDue();
 }
 
 // Repeat-Taste links (SPLIT_OP_REPEAT) und RELEASE_ALL der linken Hälfte: der Master entscheidet, wer
@@ -640,7 +686,7 @@ void processSplitEvents() {
   bool linkWasUp = bleKeyboard.splitLeft.linkUp;
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
                                      hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer,
-                                     onSplitBeforeLeftPress, onSplitRepeat);
+                                     onSplitBeforeLeftPress, onSplitRepeat, onSplitHoldResolve);
   // Linke Hälfte gerade erreichbar (Start, Aufwachen): sofort den Layer-Zustand des Masters senden
   // Linke Hälfte nicht erreichbar, aus oder im Deep Sleep: ihre gehaltenen MO-Ebenen verfallen
   if (splitLayerMasterAfterRx(splitLayerSync, splitRemoteLayers, linkWasUp, bleKeyboard.splitLeft.linkUp,
@@ -836,11 +882,19 @@ void loop() {
       pinMode(ROW_PINS[r], INPUT);
     }
 
-    // Eine Taste wurde zurückgehalten: links den wartenden Tipp einmal sofort senden lassen (kein Retry,
-    // nach SPLIT_TAP_FLUSH_TIMEOUT_MS führt der Master die Taste ohnehin aus)
+    // Eine Taste wurde zurückgehalten: links den wartenden Tipp und die offene Mod-Tap-Taste einmal sofort entscheiden
+    // lassen (kein Retry, nach SPLIT_TAP_FLUSH_TIMEOUT_MS führt der Master die Taste ohnehin aus)
+    // HOLD_RESOLVE nur für ein Drücken (wie die gleiche Hälfte): ein Loslassen entscheidet nichts. Die Anforderung für
+    // TAP_FLUSH (Zeichenreihenfolge) bleibt für jede zurückgehaltene Änderung.
+    if (splitActivityPeerReady && leftHoldPendingNow() && splitDeferTakeResolveRequest(splitLocalDefer)) {
+      SplitHidEvent resolveEv = makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE);
+      esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&resolveEv, sizeof(resolveEv));
+    }
     if (splitDeferTakeFlushRequest(splitLocalDefer) && splitActivityPeerReady) {
-      SplitHidEvent flushEv = makeSplitHidEvent(SPLIT_OP_TAP_FLUSH);
-      esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&flushEv, sizeof(flushEv));
+      if (splitLeftTapPending(bleKeyboard.splitLeft, millis())) {
+        SplitHidEvent flushEv = makeSplitHidEvent(SPLIT_OP_TAP_FLUSH);
+        esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&flushEv, sizeof(flushEv));
+      }
     }
 
     // Benutzerdefinierte Tasten-Chords / Combos prüfen (Item 10)
@@ -925,7 +979,8 @@ void loop() {
   servicePendingRepeat();
   sendSplitRepeatCopyIfDue();
   sendSplitActivityIfDue();
-  sendSplitLayerStateIfDue();
+  // Layer-Zustand und Meldung "Mod-Tap offen/entschieden" zusammen: die linke Hälfte sieht die neue Ebene vor der 0
+  sendSplitLayerAndHoldIfDue();
 
   // Deferriertes Starten/Beenden des Config-Modus aus loopTask
   if (enterConfigRequested) {

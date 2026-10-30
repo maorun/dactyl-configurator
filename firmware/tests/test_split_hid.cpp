@@ -94,10 +94,20 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 0),
     makeSplitHidEvent(SPLIT_OP_REPEAT, 1, 1),
     makeSplitHidEvent(SPLIT_OP_REPEAT, 0, 1),
+    makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1),
+    makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0),
+    makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE),
   };
-  // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING und REPEAT mit 1 und 0); ACTIVITY,
-  // TAP_FLUSH und REPEAT_RUN sind die einzigen Ops nur der Rückrichtung
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT);
+  // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
+  // ACTIVITY, TAP_FLUSH und REPEAT_RUN sind die einzigen Ops nur der Rückrichtung. Jede dieser drei fehlt, vier Ops
+  // stehen doppelt: die Anzahl der Einträge ist SPLIT_OP_COUNT - 3 + 4.
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 3 + 4);
+  for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
+    if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN) continue;
+    bool seen = false;
+    for (const SplitHidEvent &ev : ok) if (ev.op == op) seen = true;
+    assert(seen); // jede Op links -> Master kommt vor: ein neuer Op-Wert ohne Eintrag fällt auf
+  }
   for (const SplitHidEvent &ev : ok) assert(parse(SPLIT_LEFT_MAC, ev, out) && out.op == ev.op);
 }
 
@@ -132,6 +142,11 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 2),
     makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1, 1),
     makeSplitHidEvent(SPLIT_OP_TAP_FLUSH),               // nur Master -> links
+    makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 2),         // nur 0 oder 1
+    makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1, 1),
+    makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0, -1),
+    makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE, 1),         // ohne Werte
+    makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE, 0, 1),
     makeSplitHidEvent(SPLIT_OP_REPEAT, 1),               // Taste ohne Nummer
     makeSplitHidEvent(SPLIT_OP_REPEAT, 2, 1),            // Notiz mit Nummer
     makeSplitHidEvent(SPLIT_OP_REPEAT, 4),
@@ -1632,7 +1647,8 @@ TEST(test_link_report_sends_changes_at_once_and_throttles_counters) {
 // -----------------------------------------------------------------------------
 TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
-  assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22 && SPLIT_OP_COUNT == 23);
+  assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
+  assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_COUNT == 25);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -2318,6 +2334,362 @@ TEST(test_process_rx_cancels_an_open_repeat_on_link_loss_overflow_and_host_loss)
   }
 }
 
+
+
+// -----------------------------------------------------------------------------
+// Mod-Tap über beide Hälften (HOLD_PENDING, HOLD_RESOLVE)
+// -----------------------------------------------------------------------------
+TEST(test_hold_ops_are_directional_and_range_checked) {
+  SplitHidEvent out;
+  // HOLD_PENDING: beide Richtungen, code 0/1, ohne arg
+  assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1), out) && out.op == SPLIT_OP_HOLD_PENDING);
+  assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0), out));
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1), out) && out.code == 1);
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 2), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1, 1), out));
+  // HOLD_RESOLVE: beide Richtungen, ohne Werte
+  assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE), out) && out.op == SPLIT_OP_HOLD_RESOLVE);
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE), out) && out.op == SPLIT_OP_HOLD_RESOLVE);
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE, 1), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE, 0, 1), out));
+  // Falscher Absender: das Master-Paket von der linken MAC und umgekehrt
+  assert(!parseMaster(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE), out));
+  assert(!parse(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1), out));
+  // Ein HOLD-Paket hat keine HID-Wirkung und ist kein Druck
+  assert(!splitIsPressOp(SPLIT_OP_HOLD_PENDING) && !splitIsPressOp(SPLIT_OP_HOLD_RESOLVE));
+  // Wiederholbar: ein Duplikat ändert nichts (Zustand, nicht Ereignis)
+  assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1)));
+  assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE)));
+}
+
+TEST(test_left_hold_pending_from_rx_without_host_and_without_activity) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 1000, nullptr);
+  assert(rep.applied == 0 && k.log.empty());      // keine HID-Wirkung, keine Aktivität
+  assert(splitLeftHoldPending(k.splitLeft, 1000));
+  assert(splitLeftHolds(k.splitLeft, 1000));
+  // 0 löscht die Meldung
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1010, nullptr);
+  assert(!splitLeftHoldPending(k.splitLeft, 1010) && !splitLeftHolds(k.splitLeft, 1010));
+}
+
+TEST(test_left_hold_pending_expires_and_clears_on_link_loss) {
+  SplitLeftHeld h;
+  splitHeldReset(h);
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1), 1000);
+  assert(splitLeftHoldPending(h, 1000 + SPLIT_HOLD_PENDING_MAX_MS - 1));
+  assert(!splitLeftHoldPending(h, 1000 + SPLIT_HOLD_PENDING_MAX_MS));      // eine verlorene 0 bremst nicht dauerhaft
+  assert(SPLIT_HOLD_PENDING_MAX_MS > 500);                                 // länger als der größte Tapping-Term
+  // Überlauf von millis()
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1), 0xFFFFFF00UL);
+  assert(splitLeftHoldPending(h, 0xFFFFFF00UL + 300));
+  // Link-Ausfall löscht die Meldung
+  RecordingSink s;
+  assert(splitCheckLinkTimeout(h, 0xFFFFFF00UL + SPLIT_LINK_TIMEOUT_MS, s));
+  assert(!h.holdPending && !splitLeftHoldPending(h, 0xFFFFFF00UL + SPLIT_LINK_TIMEOUT_MS));
+  // Ein neuer Link beginnt ohne Meldung
+  h.holdPending = true;
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_HEARTBEAT), 5000);
+  assert(!splitLeftHoldPending(h, 5000));
+  // Ohne Link gilt keine Meldung
+  splitHeldReset(h);
+  h.holdPending = true;
+  h.holdPendingMs = 100;
+  assert(!splitLeftHoldPending(h, 100));
+}
+
+TEST(test_tap_and_hold_pending_are_independent_but_share_the_hold_back) {
+  SplitLeftHeld h;
+  splitHeldReset(h);
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1), 1000);
+  assert(splitLeftTapPending(h, 1000) && !splitLeftHoldPending(h, 1000) && splitLeftHolds(h, 1000));
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 0), 1010);
+  assert(!splitLeftHolds(h, 1010));
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1), 1020);
+  assert(!splitLeftTapPending(h, 1020) && splitLeftHoldPending(h, 1020) && splitLeftHolds(h, 1020));
+  // Beide gleichzeitig: erst wenn beide 0 melden, löst sich das Zurückhalten
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1), 1030);
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0), 1040);
+  assert(splitLeftHolds(h, 1040));
+  splitNoteLeftRx(h, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 0), 1050);
+  assert(!splitLeftHolds(h, 1050));
+}
+
+TEST(test_hold_reporter_reports_changes_once_and_retries_a_failed_send) {
+  SplitHoldReporter rep = {};
+  std::vector<SplitHidEvent> sent;
+  bool ok = true;
+  auto send = [&](const SplitHidEvent &ev) { if (ok) sent.push_back(ev); return ok; };
+  // Nichts offen und nichts gemeldet: kein Paket
+  assert(!splitHoldReportIfChanged(rep, true, false, send) && sent.empty());
+  // Offen: 1 genau einmal
+  assert(splitHoldReportIfChanged(rep, true, true, send));
+  assert(!splitHoldReportIfChanged(rep, true, true, send));
+  assert(sent.size() == 1 && sent[0].op == SPLIT_OP_HOLD_PENDING && sent[0].code == 1);
+  // Entschieden: 0 genau einmal
+  assert(splitHoldReportIfChanged(rep, true, false, send));
+  assert(!splitHoldReportIfChanged(rep, true, false, send));
+  assert(sent.size() == 2 && sent[1].code == 0);
+  // Ein Sendefehler gilt nicht als gemeldet: der nächste Durchlauf versucht es erneut
+  ok = false;
+  assert(!splitHoldReportIfChanged(rep, true, true, send) && !rep.reported);
+  ok = true;
+  assert(splitHoldReportIfChanged(rep, true, true, send) && rep.reported);
+  // Ohne Link gilt nichts als gemeldet: nach dem Link-Aufbau wird ein offener Zustand neu gemeldet
+  size_t before = sent.size();
+  assert(!splitHoldReportIfChanged(rep, false, true, send) && !rep.reported && sent.size() == before);
+  assert(splitHoldReportIfChanged(rep, true, true, send) && sent.size() == before + 1);
+}
+
+// Ablauf am Master, Richtung links -> Master: links hält MO_1 unentschieden (HOLD_PENDING 1). Eine Master-Taste X wird
+// zurückgehalten und löst HOLD_RESOLVE aus. Die linke Hälfte entscheidet, meldet die Ebene (LAYER_STATE) und HOLD_PENDING 0;
+// erst dann führt der Master X aus, und X sieht die neue Ebene.
+static unsigned rxLayerSeen = 0;
+static void rxLayerSeenCount(const SplitHidEvent &) { rxLayerSeen++; }
+
+TEST(test_left_hold_pending_holds_master_key_until_layer_and_zero_arrive) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  rxOrder.clear();
+  splitDeferReset(rxDefer);
+  rxLayerSeen = 0;
+  // Links meldet eine unentschiedene Mod-Tap-Taste
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, rxAppliedCode);
+  assert(splitLeftHolds(k.splitLeft, 105));
+  // Master-Taste X: zurückgehalten, HOLD_RESOLVE wird angefordert (genau einmal)
+  splitDeferApplyOrHold(rxDefer, 2, 2, true, splitLeftHolds(k.splitLeft, 105), 105, rxDeferApply);
+  assert(rxOrder.empty() && rxDefer.count == 1);
+  assert(splitDeferTakeFlushRequest(rxDefer) && !splitDeferTakeFlushRequest(rxDefer));
+  // Noch keine Entscheidung und die Zeitgrenze nicht erreicht: X wartet
+  assert(!splitDeferReplayDue(rxDefer, splitLeftHolds(k.splitLeft, 110), 110));
+  // Links entscheidet: erst die Ebene, dann HOLD_PENDING 0. Beide gehen in dieser Reihenfolge durch den Ring.
+  splitRxPush(rxq, makeSplitLayerEvent(0x02, 0, false));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 112, rxAppliedCode, nullptr, rxLayerSeenCount);
+  assert(rxLayerSeen == 1);                                     // die Ebene ist übernommen, bevor X läuft
+  assert(!splitLeftHolds(k.splitLeft, 112));
+  assert(splitDeferReplayDue(rxDefer, splitLeftHolds(k.splitLeft, 112), 112));
+  splitDeferReplay(rxDefer, rxDeferApply);
+  assert((rxOrder == std::vector<std::string>{"local-d22"}));
+}
+
+TEST(test_hold_resolve_from_left_calls_hook_only_with_host) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  static unsigned resolves;
+  resolves = 0;
+  auto onResolve = [](const SplitHidEvent &) { resolves++; };
+  // Mit Host: der Hook läuft (der Master entscheidet seine offenen Mod-Tap-Tasten)
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, nullptr, nullptr,
+                                     nullptr, onResolve);
+  assert(resolves == 1 && rep.applied == 0 && k.log.empty());   // keine HID-Ausgabe, keine Aktivität
+  assert(k.splitLeft.linkUp);                                     // das Paket hält den Link
+  // Ohne Host gibt es nichts zu entscheiden
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, false, 200, nullptr, nullptr, nullptr, nullptr, nullptr, onResolve);
+  assert(resolves == 1 && k.splitLeft.linkUp);
+  // Mehrere HOLD_RESOLVE in einem Durchlauf rufen den Hook je Paket (er ist idempotent)
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 300, nullptr, nullptr, nullptr, nullptr, nullptr, onResolve);
+  assert(resolves == 3);
+}
+
+TEST(test_hold_pending_and_resolve_do_not_count_as_left_key_or_trigger_before_left_press) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  rxOrder.clear();
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, recordAppliedOrder, nullptr, nullptr,
+                                     recordBeforePress);
+  assert(rxOrder.empty() && rep.applied == 0 && rep.keyEvents == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Mod-Tap über beide Hälften: Befunde aus dem Review (Reihenfolge, Loslassen, Replay vor dem linken Druck)
+// -----------------------------------------------------------------------------
+TEST(test_resolve_request_only_for_a_held_press) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  // Nur ein Loslassen zurückgehalten (Überlappen: a drücken, Mod-Tap drücken, a loslassen): kein HOLD_RESOLVE
+  assert(splitDeferPush(d, 1, 1, false, 100));
+  assert(!splitDeferHasPress(d));
+  assert(!splitDeferTakeResolveRequest(d));
+  assert(splitDeferTakeFlushRequest(d));                 // TAP_FLUSH bleibt unabhängig davon möglich
+  // Kommt ein Drücken dazu, fordert die Runde HOLD_RESOLVE genau einmal an
+  assert(splitDeferPush(d, 2, 2, true, 110));
+  assert(splitDeferHasPress(d));
+  assert(splitDeferTakeResolveRequest(d) && !splitDeferTakeResolveRequest(d));
+  // Beide Anforderungen sind getrennt: HOLD_RESOLVE verbraucht TAP_FLUSH nicht
+  splitDeferReset(d);
+  assert(splitDeferPush(d, 3, 3, true, 200));
+  assert(splitDeferTakeResolveRequest(d));
+  assert(splitDeferTakeFlushRequest(d));
+  // Eine neue Runde setzt beide zurück
+  SplitDeferredKey k;
+  while (splitDeferPop(d, k)) {}
+  assert(splitDeferPush(d, 4, 4, true, 300));
+  assert(splitDeferTakeResolveRequest(d) && splitDeferTakeFlushRequest(d));
+  // Nach einem Fehlschlag beim Senden fordert die nächste Runde HOLD_RESOLVE erneut an
+  splitDeferRequestResolveAgain(d);
+  assert(splitDeferTakeResolveRequest(d));
+  // Ohne zurückgehaltene Änderung gibt es nichts anzufordern
+  while (splitDeferPop(d, k)) {}
+  assert(!splitDeferTakeResolveRequest(d));
+}
+
+TEST(test_left_hold_pending_does_not_hold_master_keys_behind_a_left_press) {
+  // Master-Taste X wurde zuerst gedrückt und zurückgehalten, weil links eine Mod-Tap-Taste offen ist. Ein späterer linker
+  // Druck Y ist ein anderer Druck als der Tipp von TAP_PENDING: X läuft zuerst (Reihenfolge der Anschläge).
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  rxOrder.clear();
+  splitDeferReset(rxDefer);
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, rxAppliedCode);
+  splitDeferApplyOrHold(rxDefer, 2, 2, true, splitLeftHolds(k.splitLeft, 105), 105, rxDeferApply);
+  assert(rxDefer.count == 1);
+  // Der Master-Weg (onSplitBeforeLeftPress) übergibt nur das Merkmal "wartender linker Tipp"
+  splitBeforeLeftPress(rxDefer, splitLeftTapPending(k.splitLeft, 110), rxDeferApply, [] {});
+  assert((rxOrder == std::vector<std::string>{"local-d22"}) && rxDefer.count == 0);
+  // Wartet dagegen ein linker Tipp (TAP_PENDING), bleibt X hinter ihm zurück
+  rxOrder.clear();
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 120, rxAppliedCode);
+  splitDeferApplyOrHold(rxDefer, 3, 3, true, splitLeftHolds(k.splitLeft, 125), 125, rxDeferApply);
+  splitBeforeLeftPress(rxDefer, splitLeftTapPending(k.splitLeft, 126), rxDeferApply, [] {});
+  assert(rxOrder.empty() && rxDefer.count == 1);
+}
+
+TEST(test_layer_and_hold_zero_are_sent_together_the_zero_waits_for_the_layer) {
+  SplitLayerSync layer;
+  splitLayerReset(layer);
+  SplitHoldReporter rep = {};
+  std::vector<std::string> sent;
+  bool layerOk = true;
+  uint8_t mo = 0;
+  auto sendLayer = [&] {
+    splitLayerSendIfDue(layer, mo, 0, true, 1000, true, [&](const SplitHidEvent &ev) {
+      if (!layerOk) return false;
+      sent.push_back("layer" + std::to_string(splitLayerMomentary(ev)));
+      return true;
+    });
+  };
+  auto sendHold = [&](const SplitHidEvent &ev) { sent.push_back("hold" + std::to_string(ev.code)); return true; };
+  // Eine offene Mod-Tap-Taste: die 1 geht sofort raus (sie braucht keine Ebene)
+  splitSendLayerThenHold(layer, rep, true, true, mo, 0, sendLayer, sendHold);
+  assert(sent.back() == "hold1");
+  // Entschieden: MO_1 gilt. Geht das Layer-Paket nicht raus, geht auch die 0 nicht raus
+  sent.clear();
+  mo = 0x02;
+  layerOk = false;
+  splitSendLayerThenHold(layer, rep, true, false, mo, 0, sendLayer, sendHold);
+  assert(sent.empty() && rep.reported);                   // die 1 gilt weiter als gemeldet, die 0 wartet
+  // Nächster Durchlauf, das Senden gelingt: erst die Ebene, dann die 0
+  layerOk = true;
+  splitSendLayerThenHold(layer, rep, true, false, mo, 0, sendLayer, sendHold);
+  assert((sent == std::vector<std::string>{"layer2", "hold0"}) && !rep.reported);
+  // Ohne Änderung der Ebene (Entscheidung ohne Layer-Taste) geht die 0 sofort
+  sent.clear();
+  splitSendLayerThenHold(layer, rep, true, true, mo, 0, sendLayer, sendHold);
+  sent.clear();
+  splitSendLayerThenHold(layer, rep, true, false, mo, 0, sendLayer, sendHold);
+  assert((sent == std::vector<std::string>{"hold0"}));
+}
+
+TEST(test_layer_in_sync_tracks_the_last_sent_state) {
+  SplitLayerSync layer;
+  splitLayerReset(layer);
+  assert(!splitLayerInSync(layer, 0, 0));                 // nichts gesendet
+  splitLayerSendIfDue(layer, 0x02, 0x08, true, 1000, true, [](const SplitHidEvent &) { return true; });
+  assert(splitLayerInSync(layer, 0x02, 0x08));
+  assert(splitLayerInSync(layer, 0x02, 0x09));            // Bit 0 (Ebene 0) rastet nie ein und zählt nicht
+  assert(!splitLayerInSync(layer, 0x04, 0x08));
+  assert(!splitLayerInSync(layer, 0x02, 0x00));
+  // Ein gescheiterter Versand ändert den gesendeten Stand nicht
+  splitLayerSendIfDue(layer, 0x04, 0x08, true, 2000, true, [](const SplitHidEvent &) { return false; });
+  assert(!splitLayerInSync(layer, 0x04, 0x08) && splitLayerInSync(layer, 0x02, 0x08));
+}
+
+TEST(test_master_hold_zero_seen_means_the_layer_is_already_in_the_mailbox) {
+  // Reihenfolge am Master -> links: Layer-Paket (Briefkasten), dann HOLD_PENDING 0 (Stand). Der Empfangs-Callback legt
+  // beide in dieser Reihenfolge ab. Wer die 0 sieht, findet die Ebene im Briefkasten: die linke Schleife liest den Stand
+  // vor dem Übernehmen der Ebene (leftReplayHeld) und läuft deshalb nie mit der 0 und der alten Ebene.
+  SplitLayerMailbox box = {};
+  uint32_t seen = 0;
+  bool holdPending = true;
+  // Callback 1: Layer-Paket, Callback 2: HOLD_PENDING 0
+  splitLayerMailboxPut(box, makeSplitMasterLayerEvent(0x02, 0, 0));
+  holdPending = false;
+  // loop(): erst den Stand lesen, dann die Ebene nehmen
+  bool zeroSeen = !holdPending;
+  SplitHidEvent ev;
+  bool took = splitLayerMailboxTake(box, seen, ev);
+  assert(zeroSeen && took && splitLayerMomentary(ev) == 0x02);
+  assert(!splitLayerMailboxTake(box, seen, ev));          // ein zweites Lesen ohne neues Paket liefert nichts
+}
+
+// -----------------------------------------------------------------------------
+// Mod-Tap über beide Hälften: Befunde aus Zyklus 2 (Loslassen vor der Entscheidung)
+// -----------------------------------------------------------------------------
+TEST(test_held_release_runs_before_the_decision_so_a_released_mod_tap_key_stays_a_tap) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  deferLog.clear();
+  // Die Hälfte hält: Loslassen der Mod-Tap-Taste (1,1) und danach ein Drücken (2,2)
+  assert(splitDeferPush(d, 1, 1, false, 100));
+  assert(splitDeferPush(d, 2, 2, true, 110));
+  splitDeferReplayReleasesThenResolve(d, deferApply, [] { deferLog.push_back("resolve"); });
+  // Das Loslassen lief vor der Entscheidung; das Drücken bleibt für den Aufrufer (es läuft danach, mit der neuen Ebene)
+  assert((deferLog == std::vector<std::string>{"u11", "resolve"}) && d.count == 1);
+  SplitDeferredKey k;
+  assert(splitDeferPop(d, k) && k.pressed && k.r == 2 && k.c == 2);
+}
+
+TEST(test_resolve_without_any_held_release_runs_immediately_and_keeps_the_presses) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  deferLog.clear();
+  // Leerer Puffer: nur entscheiden
+  splitDeferReplayReleasesThenResolve(d, deferApply, [] { deferLog.push_back("resolve"); });
+  assert((deferLog == std::vector<std::string>{"resolve"}) && d.count == 0);
+  // Drücken zuerst: nichts davor, die Reihenfolge der Drücken und Loslassen danach bleibt
+  deferLog.clear();
+  assert(splitDeferPush(d, 3, 3, true, 200));
+  assert(splitDeferPush(d, 4, 4, false, 210));
+  splitDeferReplayReleasesThenResolve(d, deferApply, [] { deferLog.push_back("resolve"); });
+  assert((deferLog == std::vector<std::string>{"resolve"}) && d.count == 2);
+  SplitDeferredKey k;
+  assert(splitDeferPop(d, k) && k.pressed && k.r == 3);
+  assert(splitDeferPop(d, k) && !k.pressed && k.r == 4);
+}
+
+TEST(test_several_held_releases_before_the_first_press_all_run_in_order) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  deferLog.clear();
+  assert(splitDeferPush(d, 1, 1, false, 100));
+  assert(splitDeferPush(d, 1, 2, false, 105));
+  assert(splitDeferPush(d, 2, 2, true, 110));
+  assert(splitDeferPush(d, 1, 3, false, 115));            // nach dem Drücken: bleibt zurück
+  splitDeferReplayReleasesThenResolve(d, deferApply, [] { deferLog.push_back("resolve"); });
+  assert((deferLog == std::vector<std::string>{"u11", "u12", "resolve"}) && d.count == 2);
+  // Die Scan-Zeit jeder ausgeführten Änderung bleibt erhalten
+  assert(deferTimes.size() >= 2 && deferTimes[deferTimes.size() - 2] == 100 && deferTimes.back() == 105);
+}
 
 int main() {
   std::cout << "==================================================" << std::endl;

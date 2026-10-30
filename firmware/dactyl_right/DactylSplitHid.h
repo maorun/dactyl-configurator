@@ -43,7 +43,9 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_FW_VERSION = 18,   // links -> Master: code = DACTYL_FW_VERSION (1..65535), ohne HID-Wirkung
   SPLIT_OP_TAP_PENDING = 19,  // links -> Master: code 1 = ein Einzel-Tipp wartet auf den zweiten Tipp, 0 = keiner
   SPLIT_OP_TAP_FLUSH = 20,    // nur Master -> links: wartende Einzel-Tipps jetzt senden, ohne Werte
-  SPLIT_OP_COUNT = 21
+  SPLIT_OP_REPEAT = 21,       // links -> Master: Repeat-Taste (code 1/0, arg = Nummer) oder Notiz (code 2 = Aktion aufgezeichnet, 3 = keine)
+  SPLIT_OP_REPEAT_RUN = 22,   // nur Master -> links: Repeat links ausführen, code 1/0 wie REPEAT, arg = Nummer 1..127
+  SPLIT_OP_COUNT = 23
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -117,6 +119,9 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
       return ev.code != 0 && ev.arg == 0;
     case SPLIT_OP_TAP_PENDING:
       return ev.code <= 1 && ev.arg == 0;
+    case SPLIT_OP_REPEAT:
+      // 0/1 = Repeat-Taste losgelassen/gedrückt, arg = Nummer 1..127; 2/3 = Notiz ohne Nummer
+      return (ev.code <= 1 && ev.arg >= 1) || ((ev.code == 2 || ev.code == 3) && ev.arg == 0);
     case SPLIT_OP_KEY_EVENT:
       return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_KEY_EVENT_MASK) == 0 &&
              splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
@@ -145,8 +150,8 @@ inline bool parseSplitHidPacket(const uint8_t *srcMac, const uint8_t *data, int 
 // Paket verschiebt das Einschlafen nur um ein Intervall.
 #define SPLIT_ACTIVITY_INTERVAL_MS 10000
 
-// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY oder TAP_FLUSH ohne Werte oder ein
-// Master-LAYER_STATE (arg < 0, der Master führt die Toggles)
+// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY oder TAP_FLUSH ohne Werte, ein
+// Master-LAYER_STATE (arg < 0, der Master führt die Toggles) oder ein REPEAT_RUN (code 0/1, Nummer 1..127)
 inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, int len, SplitHidEvent &out) {
   if (srcMac == nullptr || data == nullptr) return false;
   if (memcmp(srcMac, SPLIT_MASTER_MAC, sizeof(SPLIT_MASTER_MAC)) != 0) return false;
@@ -154,7 +159,8 @@ inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, i
   SplitHidEvent ev;
   memcpy(&ev, data, sizeof(ev));
   bool ok = ((ev.op == SPLIT_OP_ACTIVITY || ev.op == SPLIT_OP_TAP_FLUSH) && ev.code == 0 && ev.arg == 0) ||
-            isValidSplitMasterLayerEvent(ev);
+            isValidSplitMasterLayerEvent(ev) ||
+            (ev.op == SPLIT_OP_REPEAT_RUN && ev.code <= 1 && ev.arg >= 1);
   if (!ok) return false;
   out = ev;
   return true;
@@ -550,6 +556,16 @@ struct SplitLeftHeld {
   // Wartender Einzel-Tipp links (SPLIT_OP_TAP_PENDING) und Empfangszeit der Meldung
   bool tapPending;
   unsigned long tapPendingMs;
+  // Die linke Hälfte hat zuletzt eine Aktion aufgezeichnet (Notiz SPLIT_OP_REPEAT code 2): Repeat rechts lässt
+  // sie dann links wiederholen. Rechts löscht es beim Aufzeichnen einer eigenen Aktion; die linke Hälfte setzt es
+  // mit code 3 zurück, wenn sie neu startet (ein Link-Ausfall allein ändert nichts: links behält ihre Aktion).
+  bool repeatLastLeft;
+  // Offene Repeat-Taste links (SPLIT_OP_REPEAT): wer die Wiederholung ausführt, ihre Nummer (REPEAT_RUN) und
+  // die rechts ausgeführte Aktion
+  uint8_t repeatReq;       // SPLIT_REPEAT_REQ_*
+  uint8_t repeatReqSeq;    // Nummer des REPEAT_RUN, wenn links wiederholt
+  uint8_t repeatKeySeq;    // Nummer der offenen Repeat-Taste links (SPLIT_OP_REPEAT arg)
+  uint16_t repeatReqAction;
 };
 
 inline void splitCountAdd(uint32_t &counter, uint32_t n) {
@@ -566,6 +582,338 @@ inline bool splitHeldKey(const SplitLeftHeld &h, uint8_t code) {
 
 inline bool splitHeldAny(const SplitLeftHeld &h) {
   return splitSetAny(h.set);
+}
+
+// -----------------------------------------------------------------------------
+// Repeat über beide Hälften (SPLIT_OP_REPEAT, SPLIT_OP_REPEAT_RUN)
+// -----------------------------------------------------------------------------
+// Jede Hälfte zeichnet ihre letzte Aktion auf (DactylLogic.h) und führt eine Wiederholung selbst aus: nur sie
+// kennt ihre Tastenpaare und Makros. Der Master merkt sich nur, welche Hälfte zuletzt eine Aktion aufgezeichnet
+// hat: die linke Hälfte meldet es mit der Notiz SPLIT_OP_REPEAT code 2 (code 3 = nichts aufgezeichnet, beim Start
+// von ESP-NOW), rechts löscht eine aufgezeichnete eigene Aktion das Merkmal (repeatLastLeft).
+// - Repeat-Taste rechts, links war zuletzt: REPEAT_RUN an die linke Hälfte (Drücken und Loslassen, gleiche Nummer).
+// - Repeat-Taste links: SPLIT_OP_REPEAT (code 1/0, arg = Nummer) an den Master. War rechts zuletzt, wiederholt der
+//   Master seine Aktion; war links zuletzt, schickt er REPEAT_RUN zurück.
+// Der Master hat keine Warteschlange mit Wiederholung. Er schickt jedes REPEAT_RUN nach SPLIT_REPEAT_COPY_MS und
+// SPLIT_REPEAT_COPY2_MS noch einmal und frischt das offene Drücken jede SPLIT_REPEAT_REFRESH_MS auf. Die Nummer
+// macht Kopien wirkungslos. Links beendet ein Lauf ohne Auffrischung nach SPLIT_REPEAT_RUN_TIMEOUT_MS: ein
+// verlorenes Loslassen hält keine Taste dauerhaft.
+#define SPLIT_REPEAT_COPY_MS 30
+#define SPLIT_REPEAT_COPY2_MS 100
+#define SPLIT_REPEAT_PENDING 8
+#define SPLIT_REPEAT_REFRESH_MS 1000
+#define SPLIT_REPEAT_RUN_TIMEOUT_MS 3000
+// Nach so langer Ruhe gilt jede Nummer als neu (Master neu gestartet: seine Nummern beginnen zufällig)
+#define SPLIT_REPEAT_STALE_MS 500
+
+enum SplitRepeatReq : uint8_t {
+  SPLIT_REPEAT_REQ_NONE = 0,
+  SPLIT_REPEAT_REQ_RIGHT = 1, // der Master führt die Wiederholung aus
+  SPLIT_REPEAT_REQ_LEFT = 2   // die linke Hälfte führt sie aus (REPEAT_RUN gesendet)
+};
+
+enum SplitRepeatStep : uint8_t {
+  SPLIT_REPEAT_STEP_NONE = 0,
+  SPLIT_REPEAT_STEP_LOCAL_PRESS,
+  SPLIT_REPEAT_STEP_LOCAL_RELEASE,
+  SPLIT_REPEAT_STEP_SEND
+};
+
+// Master: Absender der REPEAT_RUN-Pakete mit Nummer, Kopien und Auffrischung des offenen Drückens
+struct SplitRepeatSender {
+  SplitHidEvent pend[SPLIT_REPEAT_PENDING];
+  unsigned long due[SPLIT_REPEAT_PENDING];
+  uint8_t count;
+  uint8_t seq;
+  bool open;               // ein REPEAT_RUN-Drücken ist offen (Auffrischung läuft)
+  uint8_t openSeq;
+  unsigned long refreshDue;
+};
+
+inline void splitRepeatSenderReset(SplitRepeatSender &s, uint8_t seed) {
+  memset(&s, 0, sizeof(s));
+  s.seq = (uint8_t)(seed % 127);
+}
+
+inline uint8_t splitRepeatNextSeq(SplitRepeatSender &s) {
+  s.seq = (uint8_t)((s.seq % 127) + 1);
+  return s.seq;
+}
+
+// Das Paket wurde gerade gesendet (auch bei einem Sendefehler): zwei Kopien vormerken
+inline void splitRepeatSchedule(SplitRepeatSender &s, const SplitHidEvent &ev, unsigned long nowMs) {
+  const unsigned long gaps[2] = {SPLIT_REPEAT_COPY_MS, SPLIT_REPEAT_COPY2_MS};
+  for (unsigned long gap : gaps) {
+    if (s.count >= SPLIT_REPEAT_PENDING) return;
+    s.pend[s.count] = ev;
+    s.due[s.count] = nowMs + gap;
+    s.count++;
+  }
+}
+
+inline bool splitRepeatDue(SplitRepeatSender &s, unsigned long nowMs, SplitHidEvent &out) {
+  for (uint8_t i = 0; i < s.count; i++) {
+    if ((long)(nowMs - s.due[i]) < 0) continue;
+    out = s.pend[i];
+    for (uint8_t j = i + 1; j < s.count; j++) {
+      s.pend[j - 1] = s.pend[j];
+      s.due[j - 1] = s.due[j];
+    }
+    s.count--;
+    return true;
+  }
+  return false;
+}
+
+inline SplitHidEvent makeSplitRepeatRun(bool press, uint8_t seq) {
+  return makeSplitHidEvent(SPLIT_OP_REPEAT_RUN, press ? 1 : 0, (int8_t)seq);
+}
+
+// Offenes Drücken: die Auffrischung läuft, bis es endet oder ein neues Drücken es ersetzt (links gilt nur eines)
+inline void splitRepeatOpen(SplitRepeatSender &s, uint8_t seq, unsigned long nowMs) {
+  s.open = true;
+  s.openSeq = seq;
+  s.refreshDue = nowMs + SPLIT_REPEAT_REFRESH_MS;
+}
+
+inline void splitRepeatClose(SplitRepeatSender &s, uint8_t seq) {
+  if (s.open && s.openSeq == seq) s.open = false;
+}
+
+// Auffrischung des offenen Drückens (gleiche Nummer: links nur ein Lebenszeichen, kein neuer Druck)
+inline bool splitRepeatRefresh(SplitRepeatSender &s, unsigned long nowMs, SplitHidEvent &out) {
+  if (!s.open || (long)(nowMs - s.refreshDue) < 0) return false;
+  s.refreshDue = nowMs + SPLIT_REPEAT_REFRESH_MS;
+  out = makeSplitRepeatRun(true, s.openSeq);
+  return true;
+}
+
+// Master: Repeat-Taste rechts. true = die linke Hälfte führt aus; run ist das Paket zum Senden.
+inline bool splitRepeatRightPress(const SplitLeftHeld &h, SplitRepeatSender &s, SplitHidEvent &run,
+                                  unsigned long nowMs) {
+  if (!h.linkUp || !h.repeatLastLeft) return false;
+  uint8_t seq = splitRepeatNextSeq(s);
+  run = makeSplitRepeatRun(true, seq);
+  splitRepeatOpen(s, seq, nowMs);
+  return true;
+}
+
+// Master: Repeat-Taste rechts losgelassen, die linke Hälfte hat ausgeführt. Liefert das Loslassen.
+inline SplitHidEvent splitRepeatRightRelease(SplitRepeatSender &s, uint8_t seq) {
+  splitRepeatClose(s, seq);
+  return makeSplitRepeatRun(false, seq);
+}
+
+// Eine offene Repeat-Taste links endet: was der Aufrufer jetzt tun muss
+struct SplitRepeatEnd {
+  uint16_t rightAction;  // rechts gehaltene Aktion lösen (0 = keine)
+  bool sendRun;          // REPEAT_RUN-Loslassen an die linke Hälfte senden
+  SplitHidEvent run;
+};
+
+// Master: die offene Repeat-Taste links endet ohne ihr Loslassen (RELEASE_ALL, Link-Ausfall, voller Ring,
+// Mac getrennt, neues Drücken mit anderer Nummer).
+inline SplitRepeatEnd splitRepeatLeftCancel(SplitLeftHeld &h, SplitRepeatSender &s) {
+  SplitRepeatEnd e = {};
+  if (h.repeatReq == SPLIT_REPEAT_REQ_RIGHT) {
+    e.rightAction = h.repeatReqAction;
+  } else if (h.repeatReq == SPLIT_REPEAT_REQ_LEFT) {
+    e.sendRun = true;
+    e.run = splitRepeatRightRelease(s, h.repeatReqSeq);
+  }
+  h.repeatReq = SPLIT_REPEAT_REQ_NONE;
+  h.repeatReqAction = 0;
+  return e;
+}
+
+// Master: Repeat-Taste links (SPLIT_OP_REPEAT). Ein Retry-Duplikat (gleiche Nummer) ändert nichts; ein Drücken mit
+// anderer Nummer ersetzt eine offene Taste, deren Loslassen verloren ging (old beschreibt, was dann zu beenden ist).
+inline SplitRepeatStep splitRepeatLeftKey(SplitLeftHeld &h, const SplitHidEvent &ev, SplitRepeatSender &s,
+                                          SplitHidEvent &run, SplitRepeatEnd &old, unsigned long nowMs) {
+  old = SplitRepeatEnd();
+  if (ev.op != SPLIT_OP_REPEAT || ev.code > 1) return SPLIT_REPEAT_STEP_NONE;
+  uint8_t keySeq = (uint8_t)ev.arg;
+  if (ev.code == 1) {
+    if (h.repeatReq != SPLIT_REPEAT_REQ_NONE) {
+      if (keySeq == h.repeatKeySeq) return SPLIT_REPEAT_STEP_NONE;
+      old = splitRepeatLeftCancel(h, s);
+    }
+    h.repeatKeySeq = keySeq;
+    if (h.repeatLastLeft && h.linkUp) {
+      h.repeatReq = SPLIT_REPEAT_REQ_LEFT;
+      h.repeatReqSeq = splitRepeatNextSeq(s);
+      run = makeSplitRepeatRun(true, h.repeatReqSeq);
+      splitRepeatOpen(s, h.repeatReqSeq, nowMs);
+      return SPLIT_REPEAT_STEP_SEND;
+    }
+    h.repeatReq = SPLIT_REPEAT_REQ_RIGHT;
+    return SPLIT_REPEAT_STEP_LOCAL_PRESS;
+  }
+  if (h.repeatReq == SPLIT_REPEAT_REQ_NONE || keySeq != h.repeatKeySeq) return SPLIT_REPEAT_STEP_NONE;
+  if (h.repeatReq == SPLIT_REPEAT_REQ_RIGHT) {
+    h.repeatReq = SPLIT_REPEAT_REQ_NONE;
+    return SPLIT_REPEAT_STEP_LOCAL_RELEASE;
+  }
+  h.repeatReq = SPLIT_REPEAT_REQ_NONE;
+  run = splitRepeatRightRelease(s, h.repeatReqSeq);
+  return SPLIT_REPEAT_STEP_SEND;
+}
+
+// Master: ein Repeat-Ereignis der linken Hälfte ausführen (SPLIT_OP_REPEAT oder RELEASE_ALL). Env liefert die
+// Ausführung: uint16_t lastAction(), void localPress(uint16_t), void localRelease(uint16_t) und
+// void sendRun(const SplitHidEvent &). Der Aufrufer hält den Mutex der Logik (DactylLogic.h).
+template <class Env>
+inline void splitRepeatApplyEnd(const SplitRepeatEnd &e, Env &env) {
+  if (e.rightAction) env.localRelease(e.rightAction);
+  if (e.sendRun) env.sendRun(e.run);
+}
+
+template <class Env>
+inline void splitRepeatMasterEvent(SplitLeftHeld &h, SplitRepeatSender &s, const SplitHidEvent &ev,
+                                   unsigned long nowMs, Env &env) {
+  if (ev.op == SPLIT_OP_RELEASE_ALL) {
+    splitRepeatApplyEnd(splitRepeatLeftCancel(h, s), env);
+    return;
+  }
+  SplitHidEvent run = {};
+  SplitRepeatEnd old = {};
+  SplitRepeatStep step = splitRepeatLeftKey(h, ev, s, run, old, nowMs);
+  splitRepeatApplyEnd(old, env);
+  if (step == SPLIT_REPEAT_STEP_LOCAL_PRESS) {
+    uint16_t a = env.lastAction();
+    h.repeatReqAction = a;
+    if (a) env.localPress(a);
+  } else if (step == SPLIT_REPEAT_STEP_LOCAL_RELEASE) {
+    uint16_t a = h.repeatReqAction;
+    h.repeatReqAction = 0;
+    if (a) env.localRelease(a);
+  } else if (step == SPLIT_REPEAT_STEP_SEND) {
+    env.sendRun(run);
+  }
+}
+
+// Ein Ende (Loslassen, RELEASE_ALL) darf nicht verloren gehen, wenn der Mutex der Logik belegt ist: der Master
+// merkt es sich und führt es beim nächsten Durchlauf aus. RELEASE_ALL beendet auch ein einzelnes Loslassen.
+struct SplitRepeatDeferred {
+  SplitHidEvent ev;
+  bool valid;
+};
+
+inline bool splitRepeatDeferrable(const SplitHidEvent &ev) {
+  return ev.op == SPLIT_OP_RELEASE_ALL || (ev.op == SPLIT_OP_REPEAT && ev.code == 0);
+}
+
+// Ein zweites Ende einer anderen Taste ersetzt das ältere nicht: beide zusammen beendet RELEASE_ALL
+inline void splitRepeatDefer(SplitRepeatDeferred &d, const SplitHidEvent &ev) {
+  if (!splitRepeatDeferrable(ev)) return;
+  if (d.valid && d.ev.op == SPLIT_OP_RELEASE_ALL) return;
+  if (d.valid && ev.op == SPLIT_OP_REPEAT && (d.ev.op != SPLIT_OP_REPEAT || d.ev.arg != ev.arg)) {
+    d.ev = makeSplitHidEvent(SPLIT_OP_RELEASE_ALL);
+    return;
+  }
+  d.ev = ev;
+  d.valid = true;
+}
+
+// Ein vorgemerktes Ende ausführen. tryApply(ev) liefert false, wenn der Mutex der Logik belegt ist.
+template <class Apply>
+inline void splitRepeatServicePending(SplitRepeatDeferred &d, Apply tryApply) {
+  if (d.valid && tryApply(d.ev)) d.valid = false;
+}
+
+// Ein Ereignis der linken Hälfte zustellen: ein älteres vorgemerktes Ende läuft zuerst (Reihenfolge). Gelingt es
+// nicht, ist der Mutex belegt; das neue Ereignis wartet dann nicht noch einmal, sondern wird vorgemerkt (loop()
+// bliebe sonst doppelt so lange stehen). Ein Drücken geht in diesem Fall verloren, ein Loslassen nicht.
+// Rückgabe: true = zugestellt.
+template <class Apply>
+inline bool splitRepeatDeliver(SplitRepeatDeferred &d, const SplitHidEvent &ev, Apply tryApply) {
+  splitRepeatServicePending(d, tryApply);
+  if (!d.valid && tryApply(ev)) return true;
+  splitRepeatDefer(d, ev);
+  return false;
+}
+
+// Master: ein Tastenpaar, das die rechte Hälfte für eine linke Repeat-Taste hält, vor einer Änderung der
+// Paar-Tabelle lösen. Liefert die zu lösende Aktion (0 = keine); die Aktion ist danach aus dem Zustand entfernt.
+template <class IsPair>
+inline uint16_t splitRepeatTakeHeldPair(SplitLeftHeld &h, IsPair isPair) {
+  if (h.repeatReq != SPLIT_REPEAT_REQ_RIGHT || !h.repeatReqAction || !isPair(h.repeatReqAction)) return 0;
+  uint16_t a = h.repeatReqAction;
+  h.repeatReqAction = 0;
+  return a;
+}
+
+// Links: Zustand eines vom Master gestarteten Repeat
+struct SplitRepeatRun {
+  uint8_t seq;          // Nummer des letzten Drückens
+  bool active;
+  uint16_t action;      // ausgeführte Aktion (0 = keine)
+  unsigned long lastMs; // letztes Drücken oder Auffrischen
+};
+
+enum SplitRepeatRunResult : uint8_t {
+  SPLIT_REPEAT_RUN_NONE = 0,
+  SPLIT_REPEAT_RUN_PRESS,
+  SPLIT_REPEAT_RUN_RELEASE
+};
+
+// a ist in der Reihenfolge 1..127 (mit Umlauf) neuer als b: Abstand 1..63
+inline bool splitRepeatSeqNewer(uint8_t a, uint8_t b) {
+  int d = ((int)a - (int)b + 127) % 127;
+  return d >= 1 && d <= 63;
+}
+
+// Ein Duplikat (gleiche Nummer) frischt nur auf; ein Loslassen mit anderer Nummer ändert nichts. Ein Drücken mit
+// neuerer Nummer ersetzt einen noch offenen Lauf (verlorenes Loslassen). Eine späte Kopie eines älteren Drückens
+// (der Master sendet sie 30 und 100 ms später, ein neues Drücken kann dazwischen liegen) startet nichts. Nach
+// SPLIT_REPEAT_STALE_MS Ruhe gilt jede Nummer als neu.
+inline SplitRepeatRunResult splitRepeatRunStep(SplitRepeatRun &s, const SplitHidEvent &ev, unsigned long nowMs) {
+  if (ev.op != SPLIT_OP_REPEAT_RUN) return SPLIT_REPEAT_RUN_NONE;
+  if (ev.code == 1) {
+    if ((uint8_t)ev.arg == s.seq) {
+      if (s.active) s.lastMs = nowMs;
+      return SPLIT_REPEAT_RUN_NONE;
+    }
+    bool fresh = s.seq == 0 || (!s.active && (unsigned long)(nowMs - s.lastMs) >= SPLIT_REPEAT_STALE_MS);
+    if (!fresh && !splitRepeatSeqNewer((uint8_t)ev.arg, s.seq)) return SPLIT_REPEAT_RUN_NONE;
+    s.seq = (uint8_t)ev.arg;
+    s.active = true;
+    s.lastMs = nowMs;
+    return SPLIT_REPEAT_RUN_PRESS;
+  }
+  if (!s.active || (uint8_t)ev.arg != s.seq) return SPLIT_REPEAT_RUN_NONE;
+  s.active = false;
+  return SPLIT_REPEAT_RUN_RELEASE;
+}
+
+// Ohne Auffrischung endet der Lauf: das Loslassen des Masters ging verloren oder der Master ist weg
+inline bool splitRepeatRunExpired(SplitRepeatRun &s, unsigned long nowMs) {
+  if (!s.active || (unsigned long)(nowMs - s.lastMs) < SPLIT_REPEAT_RUN_TIMEOUT_MS) return false;
+  s.active = false;
+  return true;
+}
+
+// Links: ein REPEAT_RUN ausführen. Env: uint16_t lastAction(), void press(uint16_t), void release(uint16_t).
+template <class Env>
+inline void splitRepeatLeftRunEvent(SplitRepeatRun &r, const SplitHidEvent &ev, unsigned long nowMs, Env &env) {
+  bool wasActive = r.active;
+  uint16_t oldAction = r.action;
+  SplitRepeatRunResult res = splitRepeatRunStep(r, ev, nowMs);
+  if (res == SPLIT_REPEAT_RUN_PRESS) {
+    if (wasActive && oldAction) env.release(oldAction);
+    r.action = env.lastAction();
+    if (r.action) env.press(r.action);
+  } else if (res == SPLIT_REPEAT_RUN_RELEASE) {
+    if (r.action) env.release(r.action);
+    r.action = 0;
+  }
+}
+
+template <class Env>
+inline void splitRepeatLeftRunTick(SplitRepeatRun &r, unsigned long nowMs, Env &env) {
+  if (!splitRepeatRunExpired(r, nowMs)) return;
+  if (r.action) env.release(r.action);
+  r.action = 0;
 }
 
 // HID-Ausgabe, die der Master für jede Operation der linken Hälfte ausführt
@@ -618,6 +966,7 @@ inline void splitNoteLeftRx(SplitLeftHeld &h, const SplitHidEvent &ev, unsigned 
     h.everUp = true;
     h.tapPending = false;
   }
+  if (ev.op == SPLIT_OP_REPEAT && ev.code >= 2) h.repeatLastLeft = ev.code == 2;
   if (ev.op == SPLIT_OP_FW_VERSION) h.fw = ev.code;
   if (ev.op == SPLIT_OP_TAP_PENDING) {
     h.tapPending = ev.code != 0;
@@ -736,7 +1085,7 @@ inline bool splitCheckLinkTimeout(SplitLeftHeld &h, unsigned long nowMs, SplitHi
   h.linkChangedMs = h.lastRxMs; // der Link ist seit dem letzten Paket weg, nicht erst seit der Erkennung
   splitCountAdd(h.linkLosses, 1);
   h.tapPending = false;
-  splitReleaseHeld(h, sink);
+  splitReleaseHeld(h, sink); // eine offene Repeat-Taste links löst der Aufrufer (splitRepeatLeftCancel)
   return true;
 }
 
@@ -1219,7 +1568,7 @@ template <class Kbd>
 SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, bool &hostWasReady,
                              bool hostReady, unsigned long nowMs, SplitRxAppliedFn onApplied,
                              SplitRxAppliedFn onKeyEvent = nullptr, SplitRxAppliedFn onLayer = nullptr,
-                             SplitRxAppliedFn onBeforeLeftPress = nullptr) {
+                             SplitRxAppliedFn onBeforeLeftPress = nullptr, SplitRxAppliedFn onRepeat = nullptr) {
   SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -1238,6 +1587,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   while (splitRxPop(q, ev)) {
     splitNoteLeftRx(kbd.splitLeft, ev, nowMs);
     if (ev.op == SPLIT_OP_FW_VERSION || ev.op == SPLIT_OP_TAP_PENDING) continue;
+    if (ev.op == SPLIT_OP_REPEAT && ev.code >= 2) continue; // Notiz: splitNoteLeftRx hat sie schon übernommen
     if (ev.op == SPLIT_OP_KEY_EVENT) {
       kbd.splitLeft.lastRxMs = nowMs;
       kbd.splitLeft.linkUp = true;
@@ -1264,6 +1614,19 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
       kbd.splitLeft.linkUp = true;
       continue;
     }
+    // Repeat-Taste links: der Master entscheidet, wer wiederholt (onRepeat). Ein Druck gilt wie ein linker
+    // Tastendruck (wartende eigene Einzel-Tipps zuerst). RELEASE_ALL beendet eine offene Repeat-Taste.
+    // Ein Retry-Duplikat zählt nicht als Ausführung (splitRepeatLeftKey ignoriert es).
+    if (ev.op == SPLIT_OP_REPEAT) {
+      kbd.splitLeft.lastRxMs = nowMs;
+      kbd.splitLeft.linkUp = true;
+      if (ev.code == 1 && onBeforeLeftPress) onBeforeLeftPress(ev);
+      if (onRepeat) onRepeat(ev);
+      if (rep.applied < 255) rep.applied++;
+      if (onApplied) onApplied(ev);
+      continue;
+    }
+    if (ev.op == SPLIT_OP_RELEASE_ALL && onRepeat) onRepeat(ev);
     if (onBeforeLeftPress && splitIsPressOp(ev.op)) onBeforeLeftPress(ev);
     if (!splitApplyHidEvent(kbd.splitLeft, ev, nowMs, kbd)) continue;
     if (rep.applied < 255) rep.applied++;
@@ -1279,6 +1642,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   }
   if (haveLayer && onLayer) onLayer(layerEv);
   if (splitCheckLinkTimeout(kbd.splitLeft, nowMs, kbd)) rep.linkLost = true;
+  // Link weg, Ring voll oder Mac getrennt: eine offene Repeat-Taste links endet ohne ihr Loslassen
+  if (onRepeat && (rep.linkLost || rep.overflow || rep.hostLost)) onRepeat(makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
   return rep;
 }
 

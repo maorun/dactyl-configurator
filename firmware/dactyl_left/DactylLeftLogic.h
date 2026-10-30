@@ -146,6 +146,56 @@ bool queuePushAfterDrain(SplitSendQueue &q, const SplitHidEvent &ev, DrainFn dra
   return queuePush(q, ev);
 }
 
+// -----------------------------------------------------------------------------
+// Repeat-Taste links (SPLIT_OP_REPEAT)
+// -----------------------------------------------------------------------------
+// Die linke Hälfte führt eine Wiederholung nie selbst aus, wenn ihre Repeat-Taste gedrückt wird: der Master
+// entscheidet (DactylSplitHid.h). Jede Taste trägt eine Nummer 1..127; Drücken und Loslassen tragen sie, ein
+// Retry-Duplikat ändert am Master nichts. Die Notiz "links hat eine Aktion aufgezeichnet" (code 2) wird
+// vorgemerkt und gesendet, sobald die Warteschlange Platz hat; sie geht nie verloren.
+// Die Notiz wird zusätzlich alle LEFT_REPEAT_NOTE_EVERY_MS wiederholt, solange links eine Aktion aufgezeichnet ist:
+// ein neu gestarteter Master (Ende des Config Mode) oder ein nach allen Retries verlorenes Paket kennt sie sonst nie.
+#define LEFT_REPEAT_NOTE_EVERY_MS 5000
+struct LeftRepeatLink {
+  uint8_t keySeq[LEFT_NUM_ROWS][LEFT_NUM_COLS];
+  uint8_t counter;
+  bool noteDue;
+  bool haveAction;           // links ist eine Aktion aufgezeichnet
+  unsigned long lastNoteMs;  // Zeit der letzten gesendeten Notiz
+};
+
+// Eine volle Warteschlange verwirft das Drücken (der Master hört nichts). Rückgabe immer true: die Taste gilt als
+// übergeben, sonst wiederholte die linke Hälfte lokal eine Aktion, obwohl rechts zuletzt gehandelt hat.
+inline bool leftRepeatPress(LeftRepeatLink &l, SplitSendQueue &q, uint8_t r, uint8_t c) {
+  l.counter = (uint8_t)((l.counter % 127) + 1);
+  l.keySeq[r][c] = l.counter;
+  if (!queuePush(q, makeSplitHidEvent(SPLIT_OP_REPEAT, 1, (int8_t)l.counter))) l.keySeq[r][c] = 0;
+  return true;
+}
+
+// Ein Loslassen ist wichtiger als ein Diagnose-Ereignis: bei voller Warteschlange erst senden (drain), dann einreihen
+template <class DrainFn>
+inline void leftRepeatRelease(LeftRepeatLink &l, SplitSendQueue &q, uint8_t r, uint8_t c, DrainFn drain) {
+  uint8_t seq = l.keySeq[r][c];
+  if (seq == 0) return;
+  l.keySeq[r][c] = 0;
+  queuePushAfterDrain(q, makeSplitHidEvent(SPLIT_OP_REPEAT, 0, (int8_t)seq), drain);
+}
+
+inline void leftRepeatNoteRecorded(LeftRepeatLink &l) {
+  l.noteDue = true;
+  l.haveAction = true;
+}
+
+// Je loop()-Durchlauf: eine vorgemerkte oder fällige Notiz einreihen, wenn Platz ist
+inline void leftRepeatServiceNote(LeftRepeatLink &l, SplitSendQueue &q, unsigned long nowMs) {
+  if (!l.noteDue && l.haveAction && (unsigned long)(nowMs - l.lastNoteMs) >= LEFT_REPEAT_NOTE_EVERY_MS) l.noteDue = true;
+  if (l.noteDue && queuePush(q, makeSplitHidEvent(SPLIT_OP_REPEAT, 2))) {
+    l.noteDue = false;
+    l.lastNoteMs = nowMs;
+  }
+}
+
 // Matrix-Position für den Live-Monitor am Master einreihen, nach den HID-Ereignissen der Taste.
 // Ohne Link sendet die Hälfte nichts (wie DactylLogic.h ohne Master). Ein Ereignis, das die
 // Warteschlangen-Grenze verwirft, zählt droppedCount. Rückgabe: true = eingereiht.

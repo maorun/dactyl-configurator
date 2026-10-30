@@ -243,6 +243,7 @@ dactyl_configurator/
 | `0x127` | Apple Mac Globe | `ACT_MAC_GLOBE` (`0x029D`) | Emojis / Fn-Tastenkombinationen |
 | `0x160` .. `0x167` | One-Shot-Modifier | `ACT_OSM_LCTRL` .. `ACT_OSM_RGUI` (`OSM_*`) | Tippen: Modifier nur für die nächste Taste (beide Hälften); Halten: normaler Modifier |
 | `0x168` | Caps Word | `ACT_CAPS_WORD` (`CAPS_WORD`) | Buchstaben groß bis zum Wortende (Leertaste, Satzzeichen) |
+| `0x169` | Repeat | `ACT_REPEAT` (`REPEAT`) | Wiederholt die zuletzt ausgeführte Aktion, auch die der anderen Hälfte (Layer-Aktionen und reine Modifier zählen nicht) |
 | `0x170` .. `0x17F` | Makro | `ACT_MACRO_BASE` + n (`MACRO_0` .. `MACRO_15`) | Spielt eine Folge aus Tippen, Drücken, Loslassen und Pausen (max. 32 Schritte) |
 
 ---

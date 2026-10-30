@@ -432,6 +432,15 @@ bool toggleLayers[NUM_LAYERS] = {false};
 // ... und die Link-Statistik der linken Hälfte ("left_link", splitLeftLinkJson)
 int deviceInfoLeftLink(char *buf, size_t size);
 #define DEVICE_INFO_LEFT_LINK(buf, size) deviceInfoLeftLink(buf, size)
+// Repeat über beide Hälften (SPLIT_OP_REPEAT / SPLIT_OP_REPEAT_RUN): war links zuletzt, führt die linke Hälfte
+// die Wiederholung aus; eine aufgezeichnete rechte Aktion macht rechts wieder zur letzten Hälfte
+bool masterRepeatRemotePress(uint8_t r, uint8_t c);
+void masterRepeatRemoteRelease(uint8_t r, uint8_t c);
+#define REPEAT_REMOTE_PRESS(r, c) masterRepeatRemotePress(r, c)
+#define REPEAT_REMOTE_RELEASE(r, c) masterRepeatRemoteRelease(r, c)
+#define REPEAT_RECORDED() (bleKeyboard.splitLeft.repeatLastLeft = false)
+void masterRepeatReleaseHeldPairs();
+#define REPEAT_RELEASE_HELD_PAIRS() masterRepeatReleaseHeldPairs()
 #include "DactylLogic.h"
 #include "DactylConfigBle.h"
 
@@ -455,6 +464,45 @@ static SplitActivityThrottle splitActivity;
 // Layer-Abgleich mit der linken Hälfte (SPLIT_OP_LAYER_STATE, DactylSplitHid.h)
 static SplitLayerSync splitLayerSync;
 static SplitRemoteLayers splitRemoteLayers;
+// REPEAT_RUN an die linke Hälfte, mit zweitem Versand nach SPLIT_REPEAT_COPY_MS (kein Retry wie links)
+static SplitRepeatSender splitRepeatSender;
+// Ein Loslassen oder RELEASE_ALL darf nicht verloren gehen, wenn GET_INFO den Mutex hält: es bleibt vorgemerkt
+// und läuft beim nächsten Durchlauf (sonst bliebe die rechte Taste am Mac gehalten)
+static SplitRepeatDeferred splitRepeatDeferred;
+// Nummer des REPEAT_RUN-Drückens je Repeat-Taste rechts, für das passende Loslassen
+static uint8_t masterRepeatRunSeq[NUM_ROWS][NUM_COLS] = {};
+
+// Ein Sendefehler ändert nichts: die Kopien (und beim Drücken die Auffrischung) senden das Paket noch einmal
+static void sendRepeatRun(const SplitHidEvent &ev) {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+  splitRepeatSchedule(splitRepeatSender, ev, millis());
+}
+
+bool masterRepeatRemotePress(uint8_t r, uint8_t c) {
+  SplitHidEvent run;
+  if (!splitRepeatRightPress(bleKeyboard.splitLeft, splitRepeatSender, run, millis())) return false;
+  masterRepeatRunSeq[r][c] = (uint8_t)run.arg;
+  sendRepeatRun(run);
+  return true;
+}
+
+void masterRepeatRemoteRelease(uint8_t r, uint8_t c) {
+  sendRepeatRun(splitRepeatRightRelease(splitRepeatSender, masterRepeatRunSeq[r][c]));
+}
+
+// Kopien eines REPEAT_RUN und die Auffrischung des offenen Drückens senden, wenn sie fällig sind
+static void sendSplitRepeatCopyIfDue() {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  SplitHidEvent ev;
+  unsigned long now = millis();
+  while (splitRepeatDue(splitRepeatSender, now, ev)) {
+    esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+  }
+  if (splitRepeatRefresh(splitRepeatSender, now, ev)) {
+    esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+  }
+}
 // Eigene Matrix-Änderungen, die auf einen wartenden linken Einzel-Tipp warten (DactylSplitHid.h)
 static SplitLocalDefer splitLocalDefer;
 
@@ -478,6 +526,8 @@ static void onSplitDataRecv(const esp_now_recv_info_t *info, const uint8_t *data
 void setupSplitReceiver() {
   splitRxReset(splitRxQueue);
   splitHeldReset(bleKeyboard.splitLeft);
+  splitRepeatSenderReset(splitRepeatSender, esp_random());
+  splitRepeatDeferred = {};
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   esp_wifi_set_channel(SPLIT_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
@@ -542,6 +592,40 @@ static void onSplitBeforeLeftPress(const SplitHidEvent &ev) {
   if (configMutex) xSemaphoreGive(configMutex);
 }
 
+// Repeat-Taste links (SPLIT_OP_REPEAT) und RELEASE_ALL der linken Hälfte: der Master entscheidet, wer
+// wiederholt (DactylSplitHid.h). Die Wiederholung rechts braucht den Mutex wie jede Ausführung einer Aktion.
+struct MasterRepeatEnv {
+  uint16_t lastAction() { return lastRepeatAction; }
+  void localPress(uint16_t a) { repeatPress(a); }
+  void localRelease(uint16_t a) { repeatRelease(a); }
+  void sendRun(const SplitHidEvent &e) { sendRepeatRun(e); }
+};
+
+static bool applyRepeatLocked(const SplitHidEvent &ev) {
+  if (configMutex && xSemaphoreTake(configMutex, pdMS_TO_TICKS(200)) != pdTRUE) return false;
+  MasterRepeatEnv env;
+  splitRepeatMasterEvent(bleKeyboard.splitLeft, splitRepeatSender, ev, millis(), env);
+  if (configMutex) xSemaphoreGive(configMutex);
+  return true;
+}
+
+// Vor CLEAR_PAIRS (releaseHeldKeyPairs): ein Paar lösen, das eine linke Repeat-Taste hält.
+// Läuft im Befehlspfad unter configMutex, also ohne eigenen Take.
+void masterRepeatReleaseHeldPairs() {
+  uint16_t a = splitRepeatTakeHeldPair(bleKeyboard.splitLeft, [](uint16_t x) { return isKeyPairAction(x); });
+  if (a) repeatRelease(a);
+}
+
+static void servicePendingRepeat() {
+  splitRepeatServicePending(splitRepeatDeferred, applyRepeatLocked);
+}
+
+static void onSplitRepeat(const SplitHidEvent &ev) {
+  if (!splitRepeatDeliver(splitRepeatDeferred, ev, applyRepeatLocked)) {
+    Serial.println("WARN: configMutex busy, Repeat der linken Hälfte verzögert");
+  }
+}
+
 // Layer-Zustand der linken Hälfte: ihre MO-Ebenen, mit SET auch ihre Toggle-Änderung
 static void onSplitLayer(const SplitHidEvent &ev) {
   bool set = splitLayerMasterReceive(splitLayerSync, splitRemoteLayers, ev, millis());
@@ -556,7 +640,7 @@ void processSplitEvents() {
   bool linkWasUp = bleKeyboard.splitLeft.linkUp;
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
                                      hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer,
-                                     onSplitBeforeLeftPress);
+                                     onSplitBeforeLeftPress, onSplitRepeat);
   // Linke Hälfte gerade erreichbar (Start, Aufwachen): sofort den Layer-Zustand des Masters senden
   // Linke Hälfte nicht erreichbar, aus oder im Deep Sleep: ihre gehaltenen MO-Ebenen verfallen
   if (splitLayerMasterAfterRx(splitLayerSync, splitRemoteLayers, linkWasUp, bleKeyboard.splitLeft.linkUp,
@@ -838,6 +922,8 @@ void loop() {
 
   // Ereignisse der linken Hälfte (ESP-NOW) anzeigen
   processSplitEvents();
+  servicePendingRepeat();
+  sendSplitRepeatCopyIfDue();
   sendSplitActivityIfDue();
   sendSplitLayerStateIfDue();
 

@@ -156,7 +156,7 @@ function setupEventListeners() {
       return;
     }
     if (behavior === "MODIFIER_HOLD" && isOneShotOrCapsWordCode(action)) {
-      alert("Modifier Hold unterstützt keine One-Shot- oder Caps-Word-Aktion. Bitte \"Einzeltaste senden\" wählen.");
+      alert("Modifier Hold unterstützt keine One-Shot-, Caps-Word- oder Repeat-Aktion. Bitte \"Einzeltaste senden\" wählen.");
       return;
     }
 

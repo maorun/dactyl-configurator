@@ -70,6 +70,8 @@
 #define NUM_ONE_SHOT_ACTIONS     8
 // Caps Word: Buchstaben groß, bis eine Taste außer Buchstabe, Ziffer, -, _, Backspace, Delete kommt
 #define ACT_CAPS_WORD            0x168
+// Repeat: wiederholt die zuletzt ausgeführte Aktion beider Hälften (nicht Layer-Aktionen, nicht sich selbst)
+#define ACT_REPEAT               0x169
 
 #define NUM_LAYERS 8
 

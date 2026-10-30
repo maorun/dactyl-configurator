@@ -1645,7 +1645,7 @@ test("One-Shot-Modifier und Caps Word: Aktionscodes wie DactylCommon.h, Labels u
   // Reihenfolge = Modifier-Bit (KEY_LEFT_CTRL + i), wie oneShotMaskForAction in der Firmware
   codes.forEach((code, i) => assert.strictEqual(api.actionCodeToNumeric(code), fw("ONE_SHOT_BASE") + i, code));
   const all = api.KEYCODES.flatMap(g => g.keys);
-  for (const code of [...codes, "CAPS_WORD"]) {
+  for (const code of [...codes, "CAPS_WORD", "REPEAT"]) {
     const n = api.actionCodeToNumeric(code);
     assert.strictEqual(n, fw(code), code);
     const label = api.ONE_SHOT_LABELS[code];
@@ -1656,6 +1656,8 @@ test("One-Shot-Modifier und Caps Word: Aktionscodes wie DactylCommon.h, Labels u
     assert.ok(all.some(k => k.code === code), `${code} in der Auswahl`);
   }
   assert.strictEqual(fw("CAPS_WORD"), 0x168);
+  // Repeat liegt direkt hinter Caps Word, in keinem anderen Bereich (Makros 0x170, Umlaute 0x150)
+  assert.strictEqual(fw("REPEAT"), 0x169);
 });
 
 test("Preset Deutsch QWERTZ: Umlaut-Aktionen und US-Codes, keine deutschen Beschriftungen auf US-Tasten", () => {
@@ -2079,7 +2081,7 @@ test("Layout-Profile: Namen werden wie str.casefold() in server.py verglichen", 
 
 test("Combos: Modifier Hold mit One-Shot und Caps Word wird abgelehnt oder migriert", () => {
   const combo = (behavior, action) => ({ layers: [[[]]], combos: [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior, action }] });
-  for (const action of ["OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD"]) {
+  for (const action of ["OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD", "REPEAT"]) {
     assert.ok(api.isOneShotOrCapsWordCode(action));
     const migrated = combo("MODIFIER_HOLD", action);
     api.validateConfigShape(migrated, R);
@@ -2090,6 +2092,7 @@ test("Combos: Modifier Hold mit One-Shot und Caps Word wird abgelehnt oder migri
   assert.ok(!api.isOneShotOrCapsWordCode("constructor"));
   // Firmware-Namen, die server.py ebenfalls annimmt
   assert.ok(api.isOneShotOrCapsWordCode("ACT_OSM_LSHIFT") && api.isOneShotOrCapsWordCode("ACT_CAPS_WORD"));
+  assert.ok(api.isOneShotOrCapsWordCode("ACT_REPEAT"));
   assert.ok(!api.isOneShotOrCapsWordCode("ACT_MOUSE_LEFT"));
   // Gespeicherte Configs mit der alten Form: validateConfigShape wandelt die Combo in KEY_PRESS um, statt abzulehnen
   const legacy = combo("MODIFIER_HOLD", "CAPS_WORD");
@@ -2314,7 +2317,7 @@ asyncTests.push(["Combo-Dialog: Modifier Hold mit One-Shot oder Caps Word wird n
   };
   const count = () => vm.runInContext("currentConfig.combos.length", w);
   const before = count();
-  for (const action of ["OSM_LSHIFT", "CAPS_WORD"]) {
+  for (const action of ["OSM_LSHIFT", "CAPS_WORD", "REPEAT"]) {
     await save("MODIFIER_HOLD", action);
     assert.strictEqual(count(), before);
     assert.ok(log.alerts.at(-1).includes("Modifier Hold"));

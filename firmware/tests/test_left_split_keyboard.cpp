@@ -102,6 +102,9 @@ static void resetState() {
   numMacros = 0;
   for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
   macroRun = {};
+  lastRepeatAction = 0;
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++) { repeatResolved[r][c] = 0; repeatRemote[r][c] = false; }
   isConfigMode = false;
   setMillis(1000);
   // Gehaltene Eingaben des vorigen Tests vergessen; Master hat einmal bestätigt: Proxy meldet "verbunden".
@@ -491,6 +494,92 @@ TEST(test_tap_pending_reset_after_espnow_setup) {
   tapPendingReset(rep, flushRequested);
   assert(!rep.reported && !flushRequested);
 }
+
+// -----------------------------------------------------------------------------
+// Repeat-Taste links (SPLIT_OP_REPEAT, leftRepeatPress / leftRepeatRelease / Notiz)
+// -----------------------------------------------------------------------------
+static LeftRepeatLink repeatLink;
+
+TEST(test_left_repeat_key_queues_numbered_press_and_release) {
+  repeatLink = {};
+  assert(leftRepeatPress(repeatLink, sendQueue, 2, 3));
+  assert(leftRepeatPress(repeatLink, sendQueue, 4, 1));
+  leftRepeatRelease(repeatLink, sendQueue, 2, 3, []() {});
+  leftRepeatRelease(repeatLink, sendQueue, 2, 3, []() {});          // zweites Loslassen sendet nichts
+  leftRepeatRelease(repeatLink, sendQueue, 4, 1, []() {});
+  auto ev = drain();
+  assert(ev.size() == 4);
+  assert(ev[0].op == SPLIT_OP_REPEAT && ev[0].code == 1 && ev[0].arg == 1);
+  assert(ev[1].op == SPLIT_OP_REPEAT && ev[1].code == 1 && ev[1].arg == 2);
+  assert(ev[2].code == 0 && ev[2].arg == 1);                        // Loslassen trägt die Nummer des Drückens
+  assert(ev[3].code == 0 && ev[3].arg == 2);
+}
+
+TEST(test_left_repeat_numbers_stay_within_one_to_127) {
+  repeatLink = {};
+  repeatLink.counter = 126;
+  leftRepeatPress(repeatLink, sendQueue, 0, 0);
+  leftRepeatPress(repeatLink, sendQueue, 0, 1);
+  auto ev = drain();
+  assert(ev[0].arg == 127 && ev[1].arg == 1);
+}
+
+TEST(test_left_repeat_release_drains_a_full_queue_first) {
+  repeatLink = {};
+  leftRepeatPress(repeatLink, sendQueue, 1, 1);
+  queueReset(sendQueue);                                           // Nummer bleibt, Warteschlange ist leer
+  for (int i = 0; i < SPLIT_QUEUE_SIZE; i++) queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  assert(sendQueue.count == SPLIT_QUEUE_SIZE);
+  int drained = 0;
+  leftRepeatRelease(repeatLink, sendQueue, 1, 1, [&]() { drained++; queueReset(sendQueue); });
+  assert(drained == 1);                                            // das Loslassen leert die Warteschlange und geht raus
+  auto ev = drain();
+  assert(ev.size() == 1 && ev[0].op == SPLIT_OP_REPEAT && ev[0].code == 0);
+}
+
+TEST(test_left_repeat_press_on_a_full_queue_forgets_the_number) {
+  repeatLink = {};
+  for (int i = 0; i < SPLIT_QUEUE_SIZE; i++) queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  assert(leftRepeatPress(repeatLink, sendQueue, 1, 1));            // die Taste gilt als übergeben
+  assert(repeatLink.keySeq[1][1] == 0);                            // aber ohne Nummer: kein Loslassen ohne Drücken
+  int drained = 0;
+  leftRepeatRelease(repeatLink, sendQueue, 1, 1, [&]() { drained++; });
+  assert(drained == 0);
+}
+
+TEST(test_left_repeat_note_waits_for_room_and_is_never_dropped) {
+  repeatLink = {};
+  leftRepeatNoteRecorded(repeatLink);
+  for (int i = 0; i < SPLIT_QUEUE_SIZE; i++) queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  leftRepeatServiceNote(repeatLink, sendQueue, 1000);
+  assert(repeatLink.noteDue);                                      // keine Platz: die Notiz bleibt vorgemerkt
+  queueReset(sendQueue);
+  leftRepeatServiceNote(repeatLink, sendQueue, 1010);
+  assert(!repeatLink.noteDue);
+  auto ev = drain();
+  assert(ev.size() == 1 && ev[0].op == SPLIT_OP_REPEAT && ev[0].code == 2 && ev[0].arg == 0);
+  leftRepeatServiceNote(repeatLink, sendQueue, 1020);              // genau eine Notiz je Aufzeichnung
+  assert(sendQueue.count == 0);
+}
+
+TEST(test_left_repeat_note_is_resent_while_an_action_is_recorded) {
+  repeatLink = {};
+  leftRepeatNoteRecorded(repeatLink);
+  leftRepeatServiceNote(repeatLink, sendQueue, 1000);
+  drain();
+  // Kein Paket vor Ablauf des Abstands
+  leftRepeatServiceNote(repeatLink, sendQueue, 1000 + LEFT_REPEAT_NOTE_EVERY_MS - 1);
+  assert(sendQueue.count == 0);
+  // Danach wieder: ein neu gestarteter Master oder ein verlorenes Paket lernt den Stand doch noch
+  leftRepeatServiceNote(repeatLink, sendQueue, 1000 + LEFT_REPEAT_NOTE_EVERY_MS);
+  auto ev = drain();
+  assert(ev.size() == 1 && ev[0].op == SPLIT_OP_REPEAT && ev[0].code == 2);
+  // Ohne aufgezeichnete Aktion links gibt es nichts zu wiederholen
+  repeatLink = {};
+  leftRepeatServiceNote(repeatLink, sendQueue, 99999);
+  assert(sendQueue.count == 0);
+}
+
 
 int main() {
   std::cout << "==================================================" << std::endl;

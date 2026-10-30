@@ -92,9 +92,11 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_FW_VERSION, 0xFFFF),
     makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1),
     makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 0),
+    makeSplitHidEvent(SPLIT_OP_REPEAT, 1, 1),
+    makeSplitHidEvent(SPLIT_OP_REPEAT, 0, 1),
   };
-  // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING mit 1 und 0); ACTIVITY und
-  // TAP_FLUSH sind die einzigen Ops nur der Rückrichtung
+  // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING und REPEAT mit 1 und 0); ACTIVITY,
+  // TAP_FLUSH und REPEAT_RUN sind die einzigen Ops nur der Rückrichtung
   assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT);
   for (const SplitHidEvent &ev : ok) assert(parse(SPLIT_LEFT_MAC, ev, out) && out.op == ev.op);
 }
@@ -130,6 +132,10 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 2),
     makeSplitHidEvent(SPLIT_OP_TAP_PENDING, 1, 1),
     makeSplitHidEvent(SPLIT_OP_TAP_FLUSH),               // nur Master -> links
+    makeSplitHidEvent(SPLIT_OP_REPEAT, 1),               // Taste ohne Nummer
+    makeSplitHidEvent(SPLIT_OP_REPEAT, 2, 1),            // Notiz mit Nummer
+    makeSplitHidEvent(SPLIT_OP_REPEAT, 4),
+    makeSplitRepeatRun(true, 1),                         // nur Master -> links
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -1625,7 +1631,8 @@ TEST(test_link_report_sends_changes_at_once_and_throttles_counters) {
 // Doppel-Tipp über beide Hälften (TAP_PENDING, TAP_FLUSH, onBeforeLeftPress, SplitLocalDefer)
 // -----------------------------------------------------------------------------
 TEST(test_tap_ops_are_appended) {
-  assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20 && SPLIT_OP_COUNT == 21);
+  assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
+  assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22 && SPLIT_OP_COUNT == 23);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -1825,6 +1832,492 @@ TEST(test_local_defer_full_buffer_rejects) {
   SplitDeferredKey k;
   assert(splitDeferPop(d, k) && k.c == 0 && k.pressed); // Reihenfolge bleibt
 }
+
+// -----------------------------------------------------------------------------
+// Repeat über beide Hälften (REPEAT, REPEAT_RUN)
+// -----------------------------------------------------------------------------
+TEST(test_repeat_ops_are_appended_and_directional) {
+  SplitHidEvent out;
+  assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
+  // REPEAT als Taste: code 0/1 mit Nummer 1..127
+  assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 1, 5), out));
+  assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 0, 127), out));
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 1, 0), out));    // ohne Nummer
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 1, -1), out));
+  // REPEAT als Notiz: code 2 oder 3 ohne Nummer
+  assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 2), out));
+  assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 3), out));
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 2, 1), out));
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 4), out));
+  // REPEAT_RUN: nur Master -> links, mit Nummer 1..127
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitRepeatRun(true, 5), out));
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitRepeatRun(true, 5), out) && out.op == SPLIT_OP_REPEAT_RUN);
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitRepeatRun(false, 127), out));
+  assert(!parseMaster(SPLIT_LEFT_MAC, makeSplitRepeatRun(true, 5), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT_RUN, 1, 0), out));   // ohne Nummer
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT_RUN, 2, 3), out));   // code > 1
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT_RUN, 1, -3), out));  // negative Nummer
+}
+
+TEST(test_left_note_sets_and_clears_the_left_as_last_flag) {
+  assert(!held.repeatLastLeft);
+  splitNoteLeftRx(held, makeSplitHidEvent(SPLIT_OP_REPEAT, 2), 100);
+  assert(held.repeatLastLeft);
+  // Ein Tastendruck ohne Notiz ändert das Merkmal nicht (kein Raten aus HID-Operationen)
+  held.repeatLastLeft = false;
+  apply(SPLIT_OP_KEY_PRESS, 'a');
+  assert(!held.repeatLastLeft);
+  splitNoteLeftRx(held, makeSplitHidEvent(SPLIT_OP_REPEAT, 2), 200);
+  splitNoteLeftRx(held, makeSplitHidEvent(SPLIT_OP_REPEAT, 3), 300);   // Neustart links: nichts aufgezeichnet
+  assert(!held.repeatLastLeft);
+  // Eine Taste (code 0/1) ändert das Merkmal nicht
+  splitNoteLeftRx(held, makeSplitHidEvent(SPLIT_OP_REPEAT, 2), 400);
+  splitNoteLeftRx(held, makeSplitHidEvent(SPLIT_OP_REPEAT, 1, 3), 500);
+  assert(held.repeatLastLeft);
+}
+
+TEST(test_right_repeat_goes_left_only_when_left_acted_last) {
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  SplitHidEvent run;
+  held.linkUp = true;
+  assert(!splitRepeatRightPress(held, s, run, 100));           // nichts passiert: rechts wiederholt lokal
+  held.repeatLastLeft = true;
+  assert(splitRepeatRightPress(held, s, run, 100));
+  assert(run.op == SPLIT_OP_REPEAT_RUN && run.code == 1 && run.arg == 1);
+  SplitHidEvent run2;
+  assert(splitRepeatRightPress(held, s, run2, 100) && run2.arg == 2);   // jedes Drücken hat eine neue Nummer
+  held.linkUp = false;
+  assert(!splitRepeatRightPress(held, s, run, 100));           // ohne Link bleibt es lokal
+}
+
+TEST(test_repeat_sequence_stays_within_one_to_127) {
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 126);
+  assert(splitRepeatNextSeq(s) == 127);
+  assert(splitRepeatNextSeq(s) == 1);
+  // Ein zufälliger Startwert (esp_random) bleibt im Bereich 1..127, auch bei 0 und 127
+  for (unsigned seed : {0u, 127u, 254u, 255u}) {
+    splitRepeatSenderReset(s, (uint8_t)seed);
+    uint8_t n = splitRepeatNextSeq(s);
+    assert(n >= 1 && n <= 127);
+  }
+}
+
+static SplitHidEvent keyEv(bool down, int8_t seq) { return makeSplitHidEvent(SPLIT_OP_REPEAT, down ? 1 : 0, seq); }
+
+TEST(test_left_repeat_key_runs_right_when_right_acted_last) {
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  held.linkUp = true;
+  SplitHidEvent run = {};
+  SplitRepeatEnd old;
+  assert(splitRepeatLeftKey(held, keyEv(true, 4), s, run, old, 100) == SPLIT_REPEAT_STEP_LOCAL_PRESS);
+  // Retry-Duplikat des Drückens (gleiche Nummer) ändert nichts
+  assert(splitRepeatLeftKey(held, keyEv(true, 4), s, run, old, 100) == SPLIT_REPEAT_STEP_NONE);
+  // Ein Loslassen mit fremder Nummer ändert nichts
+  assert(splitRepeatLeftKey(held, keyEv(false, 9), s, run, old, 100) == SPLIT_REPEAT_STEP_NONE);
+  assert(splitRepeatLeftKey(held, keyEv(false, 4), s, run, old, 100) == SPLIT_REPEAT_STEP_LOCAL_RELEASE);
+  assert(splitRepeatLeftKey(held, keyEv(false, 4), s, run, old, 100) == SPLIT_REPEAT_STEP_NONE);   // Duplikat
+}
+
+TEST(test_left_repeat_key_sends_the_run_back_when_left_acted_last) {
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  held.linkUp = true;
+  held.repeatLastLeft = true;
+  SplitHidEvent run = {};
+  SplitRepeatEnd old;
+  assert(splitRepeatLeftKey(held, keyEv(true, 7), s, run, old, 100) == SPLIT_REPEAT_STEP_SEND);
+  assert(run.op == SPLIT_OP_REPEAT_RUN && run.code == 1 && run.arg == 1);
+  assert(s.open && s.openSeq == 1);                           // die Auffrischung läuft
+  assert(splitRepeatLeftKey(held, keyEv(true, 7), s, run, old, 100) == SPLIT_REPEAT_STEP_NONE);
+  assert(splitRepeatLeftKey(held, keyEv(false, 7), s, run, old, 100) == SPLIT_REPEAT_STEP_SEND);
+  assert(run.code == 0 && run.arg == 1);                       // Loslassen trägt die Nummer des Drückens
+  assert(!s.open);                                            // keine Auffrischung nach dem Loslassen
+}
+
+TEST(test_left_repeat_new_press_replaces_an_open_key_whose_release_was_lost) {
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  held.linkUp = true;
+  SplitHidEvent run = {};
+  SplitRepeatEnd old;
+  // Rechts hält die Wiederholung, das Loslassen geht verloren, ein neues Drücken kommt
+  assert(splitRepeatLeftKey(held, keyEv(true, 1), s, run, old, 100) == SPLIT_REPEAT_STEP_LOCAL_PRESS);
+  held.repeatReqAction = 'q';
+  assert(splitRepeatLeftKey(held, keyEv(true, 2), s, run, old, 200) == SPLIT_REPEAT_STEP_LOCAL_PRESS);
+  assert(old.rightAction == 'q' && !old.sendRun);             // die alte Wiederholung wird gelöst
+  // Links hält die Wiederholung: die alte REPEAT_RUN-Taste bekommt ihr Loslassen
+  held.repeatLastLeft = true;
+  splitRepeatLeftKey(held, keyEv(false, 2), s, run, old, 300);
+  assert(splitRepeatLeftKey(held, keyEv(true, 3), s, run, old, 400) == SPLIT_REPEAT_STEP_SEND);
+  uint8_t firstSeq = (uint8_t)run.arg;
+  assert(splitRepeatLeftKey(held, keyEv(true, 4), s, run, old, 500) == SPLIT_REPEAT_STEP_SEND);
+  assert(old.sendRun && old.run.code == 0 && old.run.arg == (int8_t)firstSeq);
+  assert(run.code == 1 && (uint8_t)run.arg != firstSeq);
+}
+
+TEST(test_left_repeat_cancel_ends_both_kinds_of_repeat_once) {
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  held.linkUp = true;
+  SplitHidEvent run = {};
+  SplitRepeatEnd old;
+  splitRepeatLeftKey(held, keyEv(true, 1), s, run, old, 100);
+  held.repeatReqAction = 'q';
+  SplitRepeatEnd e = splitRepeatLeftCancel(held, s);
+  assert(e.rightAction == 'q' && !e.sendRun);
+  e = splitRepeatLeftCancel(held, s);
+  assert(e.rightAction == 0 && !e.sendRun);                    // genau einmal
+  assert(splitRepeatLeftKey(held, keyEv(false, 1), s, run, old, 100) == SPLIT_REPEAT_STEP_NONE);
+  // Links wiederholt: das Beenden sendet das Loslassen mit der Nummer des Drückens
+  held.repeatLastLeft = true;
+  splitRepeatLeftKey(held, keyEv(true, 5), s, run, old, 200);
+  uint8_t seq = (uint8_t)run.arg;
+  e = splitRepeatLeftCancel(held, s);
+  assert(!e.rightAction && e.sendRun && e.run.code == 0 && (uint8_t)e.run.arg == seq);
+  assert(!s.open);
+}
+
+TEST(test_repeat_sender_copies_each_packet_twice_and_refreshes_an_open_press) {
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  SplitHidEvent ev = makeSplitRepeatRun(false, 9), out;
+  splitRepeatSchedule(s, ev, 1000);
+  assert(!splitRepeatDue(s, 1000 + SPLIT_REPEAT_COPY_MS - 1, out));
+  assert(splitRepeatDue(s, 1000 + SPLIT_REPEAT_COPY_MS, out));
+  assert(out.op == SPLIT_OP_REPEAT_RUN && out.arg == 9 && out.code == 0);
+  assert(!splitRepeatDue(s, 1000 + SPLIT_REPEAT_COPY2_MS - 1, out));
+  assert(splitRepeatDue(s, 1000 + SPLIT_REPEAT_COPY2_MS, out));
+  assert(!splitRepeatDue(s, 5000, out));                       // genau zwei Kopien
+  // Ein überlaufender Speicher verwirft neue Pakete, ohne ältere zu zerstören
+  for (int i = 0; i < SPLIT_REPEAT_PENDING; i++) splitRepeatSchedule(s, makeSplitRepeatRun(true, 1 + i), 2000);
+  assert(s.count == SPLIT_REPEAT_PENDING);
+  assert(splitRepeatDue(s, 3000, out) && out.arg == 1);
+  // Offenes Drücken: Auffrischung mit derselben Nummer, alle SPLIT_REPEAT_REFRESH_MS
+  SplitRepeatSender t;
+  splitRepeatSenderReset(t, 0);
+  splitRepeatOpen(t, 6, 10000);
+  assert(!splitRepeatRefresh(t, 10000 + SPLIT_REPEAT_REFRESH_MS - 1, out));
+  assert(splitRepeatRefresh(t, 10000 + SPLIT_REPEAT_REFRESH_MS, out) && out.code == 1 && out.arg == 6);
+  assert(!splitRepeatRefresh(t, 10000 + SPLIT_REPEAT_REFRESH_MS + 1, out));
+  splitRepeatClose(t, 5);                                      // fremde Nummer schließt nichts
+  assert(t.open);
+  splitRepeatClose(t, 6);
+  assert(!splitRepeatRefresh(t, 99999, out));
+}
+
+TEST(test_left_run_ignores_duplicates_and_stale_releases) {
+  SplitRepeatRun r = {};
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 4), 100) == SPLIT_REPEAT_RUN_PRESS);
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 4), 130) == SPLIT_REPEAT_RUN_NONE);      // Kopie
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(false, 3), 140) == SPLIT_REPEAT_RUN_NONE);     // fremde Nummer
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(false, 4), 150) == SPLIT_REPEAT_RUN_RELEASE);
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(false, 4), 160) == SPLIT_REPEAT_RUN_NONE);     // Duplikat
+  // Eine späte Kopie des alten Drückens startet nichts mehr
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 4), 200) == SPLIT_REPEAT_RUN_NONE);
+  // Ein neues Drücken ersetzt einen Lauf, dessen Loslassen verloren ging
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 5), 300) == SPLIT_REPEAT_RUN_PRESS);
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 6), 310) == SPLIT_REPEAT_RUN_PRESS);
+  assert(splitRepeatRunStep(r, makeSplitHidEvent(SPLIT_OP_HEARTBEAT), 320) == SPLIT_REPEAT_RUN_NONE);
+}
+
+struct FakeRepeatEnv {
+  uint16_t last = 'a';
+  std::vector<std::string> log;
+  uint16_t lastAction() { return last; }
+  void press(uint16_t a) { log.push_back("P" + std::to_string(a)); }
+  void release(uint16_t a) { log.push_back("R" + std::to_string(a)); }
+  void localPress(uint16_t a) { press(a); }
+  void localRelease(uint16_t a) { release(a); }
+  std::vector<SplitHidEvent> sent;
+  void sendRun(const SplitHidEvent &e) { sent.push_back(e); }
+};
+
+TEST(test_left_run_timeout_releases_a_held_repeat_without_refresh) {
+  SplitRepeatRun r = {};
+  FakeRepeatEnv env;
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(true, 4), 1000, env);
+  assert((env.log == std::vector<std::string>{"P97"}));
+  // Die Auffrischung des Masters hält den Lauf am Leben
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(true, 4), 1000 + SPLIT_REPEAT_RUN_TIMEOUT_MS - 1, env);
+  splitRepeatLeftRunTick(r, 1000 + SPLIT_REPEAT_RUN_TIMEOUT_MS + 5, env);
+  assert(env.log.size() == 1 && r.active);
+  // Ohne Auffrischung endet er: die Taste bleibt nicht dauerhaft gehalten
+  splitRepeatLeftRunTick(r, 1000 + 2 * SPLIT_REPEAT_RUN_TIMEOUT_MS, env);
+  assert((env.log == std::vector<std::string>{"P97", "R97"}) && !r.active);
+  splitRepeatLeftRunTick(r, 99999, env);
+  assert(env.log.size() == 2);                                 // genau einmal
+}
+
+TEST(test_left_run_new_press_releases_the_old_action_first) {
+  SplitRepeatRun r = {};
+  FakeRepeatEnv env;
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(true, 4), 100, env);
+  env.last = 'b';
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(true, 5), 200, env);
+  assert((env.log == std::vector<std::string>{"P97", "R97", "P98"}));
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(false, 5), 300, env);
+  assert(env.log.back() == "R98");
+  // Ohne aufgezeichnete Aktion drückt und löst ein Lauf nichts
+  env.log.clear();
+  env.last = 0;
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(true, 6), 400, env);
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(false, 6), 410, env);
+  assert(env.log.empty());
+}
+
+TEST(test_master_event_runs_the_right_action_and_releases_it_with_the_key) {
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  held.linkUp = true;
+  FakeRepeatEnv env;
+  splitRepeatMasterEvent(held, s, keyEv(true, 3), 100, env);
+  splitRepeatMasterEvent(held, s, keyEv(true, 3), 110, env);   // Retry-Duplikat
+  assert((env.log == std::vector<std::string>{"P97"}));
+  splitRepeatMasterEvent(held, s, keyEv(false, 3), 120, env);
+  assert((env.log == std::vector<std::string>{"P97", "R97"}));
+  // RELEASE_ALL beendet eine offene Taste genau einmal
+  env.log.clear();
+  splitRepeatMasterEvent(held, s, keyEv(true, 4), 200, env);
+  splitRepeatMasterEvent(held, s, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL), 210, env);
+  splitRepeatMasterEvent(held, s, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL), 220, env);
+  assert((env.log == std::vector<std::string>{"P97", "R97"}));
+  // Links war zuletzt: das Drücken geht als REPEAT_RUN zurück, das Loslassen ebenso
+  env.log.clear();
+  held.repeatLastLeft = true;
+  splitRepeatMasterEvent(held, s, keyEv(true, 5), 300, env);
+  splitRepeatMasterEvent(held, s, keyEv(false, 5), 310, env);
+  assert(env.log.empty() && env.sent.size() == 2);
+  assert(env.sent[0].code == 1 && env.sent[1].code == 0 && env.sent[0].arg == env.sent[1].arg);
+}
+
+TEST(test_deferred_repeat_end_survives_a_busy_mutex) {
+  SplitRepeatDeferred d = {};
+  splitRepeatDefer(d, keyEv(true, 1));                         // ein Drücken wird nie vorgemerkt
+  assert(!d.valid);
+  splitRepeatDefer(d, keyEv(false, 1));
+  assert(d.valid && d.ev.code == 0);
+  splitRepeatDefer(d, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
+  assert(d.ev.op == SPLIT_OP_RELEASE_ALL);                     // RELEASE_ALL gilt mehr als ein einzelnes Loslassen
+  splitRepeatDefer(d, keyEv(false, 2));
+  assert(d.ev.op == SPLIT_OP_RELEASE_ALL);
+}
+
+static int repeatCalls = 0;
+static std::vector<uint16_t> repeatCodes;
+static void recordRepeat(const SplitHidEvent &ev) { repeatCalls++; repeatCodes.push_back(ev.op * 10 + ev.code); }
+
+TEST(test_process_rx_hands_repeat_to_the_master_callback) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  appliedCodes.clear();
+  repeatCalls = 0;
+  repeatCodes.clear();
+  splitRxPush(rxq, keyEv(true, 1));
+  splitRxPush(rxq, keyEv(false, 1));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, recordApplied, nullptr, nullptr,
+                                     nullptr, recordRepeat);
+  assert(repeatCalls == 2 && rep.applied == 2);
+  assert((repeatCodes == std::vector<uint16_t>{SPLIT_OP_REPEAT * 10 + 1, SPLIT_OP_REPEAT * 10}));
+  assert(k.log.empty());                                       // REPEAT hat selbst keine HID-Wirkung
+}
+
+TEST(test_process_rx_note_needs_no_host_and_is_not_an_action) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  repeatCalls = 0;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_REPEAT, 2));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 100, nullptr, nullptr, nullptr,
+                                     nullptr, recordRepeat);
+  assert(k.splitLeft.repeatLastLeft && k.splitLeft.linkUp);
+  assert(repeatCalls == 0 && rep.applied == 0);                // eine Notiz ist keine Ausführung und kein Callback
+}
+
+TEST(test_process_rx_repeat_press_flushes_waiting_taps_first) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  static int order;
+  static int beforeAt, repeatAt;
+  order = beforeAt = repeatAt = 0;
+  splitRxPush(rxq, keyEv(true, 1));
+  splitRxPush(rxq, keyEv(false, 1));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, nullptr,
+                 [](const SplitHidEvent &) { beforeAt = ++order; }, [](const SplitHidEvent &ev) {
+                   if (ev.code == 1) repeatAt = ++order;
+                 });
+  assert(beforeAt == 1 && repeatAt == 2);                      // nur vor dem Drücken, nicht vor dem Loslassen
+}
+
+TEST(test_process_rx_without_host_ignores_repeat_keys) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  repeatCalls = 0;
+  splitRxPush(rxq, keyEv(true, 1));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 100, nullptr, nullptr, nullptr,
+                                     nullptr, recordRepeat);
+  assert(repeatCalls == 0 && rep.applied == 0);
+  assert(k.splitLeft.linkUp);                                  // der Link lebt trotzdem
+}
+
+TEST(test_process_rx_release_all_ends_an_open_repeat) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  repeatCodes.clear();
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, nullptr, nullptr, recordRepeat);
+  assert((repeatCodes == std::vector<uint16_t>{SPLIT_OP_RELEASE_ALL * 10}));
+}
+
+TEST(test_left_reboot_note_clears_the_flag_without_a_link_timeout) {
+  // Die linke Hälfte startet schneller neu als SPLIT_LINK_TIMEOUT_MS: ihre Notiz code 3 setzt das Merkmal zurück
+  held.linkUp = true;
+  held.lastRxMs = 1000;
+  held.repeatLastLeft = true;
+  splitNoteLeftRx(held, makeSplitHidEvent(SPLIT_OP_REPEAT, 3), 1500);
+  assert(!held.repeatLastLeft);
+  // Ein Link-Ausfall allein ändert nichts: die linke Hälfte behält ihre Aktion
+  held.repeatLastLeft = true;
+  assert(splitCheckLinkTimeout(held, 1500 + SPLIT_LINK_TIMEOUT_MS, sink));
+  assert(held.repeatLastLeft);
+  // Das Zurücksetzen des Masters löscht alles
+  held.repeatReq = SPLIT_REPEAT_REQ_RIGHT;
+  splitHeldReset(held);
+  assert(held.repeatReq == SPLIT_REPEAT_REQ_NONE && !held.repeatLastLeft);
+}
+
+TEST(test_left_run_ignores_a_late_copy_of_an_older_press) {
+  SplitRepeatRun r = {};
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 4), 100) == SPLIT_REPEAT_RUN_PRESS);
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(false, 4), 110) == SPLIT_REPEAT_RUN_RELEASE);
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 5), 120) == SPLIT_REPEAT_RUN_PRESS);
+  // Die Kopie des Drückens 4 trifft 30 ms später ein, während Lauf 5 offen ist: sie schneidet ihn nicht ab
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 4), 130) == SPLIT_REPEAT_RUN_NONE);
+  assert(r.active && r.seq == 5);
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(false, 5), 140) == SPLIT_REPEAT_RUN_RELEASE);
+  // Auch nach dem Loslassen von 5 startet die späte Kopie von 4 nichts
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 4), 150) == SPLIT_REPEAT_RUN_NONE);
+}
+
+TEST(test_repeat_sequence_order_wraps_at_127) {
+  assert(splitRepeatSeqNewer(2, 1) && !splitRepeatSeqNewer(1, 2));
+  assert(splitRepeatSeqNewer(1, 127));              // Umlauf: 1 folgt auf 127
+  assert(!splitRepeatSeqNewer(127, 1));
+  assert(!splitRepeatSeqNewer(5, 5));
+  SplitRepeatRun r = {};
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 127), 100) == SPLIT_REPEAT_RUN_PRESS);
+  splitRepeatRunStep(r, makeSplitRepeatRun(false, 127), 110);
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 1), 120) == SPLIT_REPEAT_RUN_PRESS);
+}
+
+TEST(test_left_run_accepts_any_number_after_a_quiet_period) {
+  // Der Master startet neu: seine Nummern beginnen zufällig, auch "älter" als die letzte bekannte Nummer
+  SplitRepeatRun r = {};
+  splitRepeatRunStep(r, makeSplitRepeatRun(true, 100), 100);
+  splitRepeatRunStep(r, makeSplitRepeatRun(false, 100), 110);
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 90), 120) == SPLIT_REPEAT_RUN_NONE);   // älter, Ruhe zu kurz
+  assert(splitRepeatRunStep(r, makeSplitRepeatRun(true, 90), 100 + SPLIT_REPEAT_STALE_MS) == SPLIT_REPEAT_RUN_PRESS);
+}
+
+TEST(test_master_takes_a_pair_held_for_a_left_repeat_key_once) {
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  held.linkUp = true;
+  FakeRepeatEnv env;
+  env.last = 0x140;                                        // ein Tastenpaar
+  splitRepeatMasterEvent(held, s, keyEv(true, 3), 100, env);
+  auto isPair = [](uint16_t a) { return a >= 0x140 && a < 0x150; };
+  assert(splitRepeatTakeHeldPair(held, isPair) == 0x140);  // CLEAR_PAIRS löst es vor der Änderung der Tabelle
+  assert(splitRepeatTakeHeldPair(held, isPair) == 0);
+  // Das spätere Loslassen löst dann nichts mehr doppelt
+  env.log.clear();
+  splitRepeatMasterEvent(held, s, keyEv(false, 3), 120, env);
+  assert(env.log.empty());
+  // Eine andere Aktion ist kein Paar
+  env.last = 'a';
+  splitRepeatMasterEvent(held, s, keyEv(true, 4), 200, env);
+  assert(splitRepeatTakeHeldPair(held, isPair) == 0);
+}
+
+
+TEST(test_second_deferred_release_of_another_key_ends_everything) {
+  SplitRepeatDeferred d = {};
+  splitRepeatDefer(d, keyEv(false, 5));
+  splitRepeatDefer(d, keyEv(false, 5));                    // dasselbe Loslassen (Retry): bleibt
+  assert(d.valid && d.ev.op == SPLIT_OP_REPEAT && d.ev.arg == 5);
+  splitRepeatDefer(d, keyEv(false, 6));                    // anderes Loslassen: nichts darf verloren gehen
+  assert(d.valid && d.ev.op == SPLIT_OP_RELEASE_ALL);
+}
+
+TEST(test_deliver_runs_the_pending_end_first_and_defers_when_busy) {
+  SplitRepeatDeferred d = {};
+  std::vector<std::string> order;
+  bool busy = true;
+  auto apply = [&](const SplitHidEvent &ev) {
+    if (busy) return false;
+    order.push_back(ev.op == SPLIT_OP_RELEASE_ALL ? "ALL" : (ev.code ? "P" : "R") + std::to_string(ev.arg));
+    return true;
+  };
+  assert(!splitRepeatDeliver(d, keyEv(false, 5), apply));  // Mutex belegt: vorgemerkt
+  assert(d.valid && order.empty());
+  assert(!splitRepeatDeliver(d, keyEv(true, 6), apply));   // ein Drücken geht dann verloren, nicht das Loslassen
+  assert(d.valid && d.ev.arg == 5);
+  busy = false;
+  assert(splitRepeatDeliver(d, keyEv(true, 7), apply));    // frei: das ältere Ende zuerst, dann das neue Ereignis
+  assert((order == std::vector<std::string>{"R5", "P7"}));
+  assert(!d.valid);
+}
+
+TEST(test_process_rx_cancels_an_open_repeat_on_link_loss_overflow_and_host_loss) {
+  // Link-Ausfall
+  {
+    Kbd k;
+    uint32_t droppedSeen = 0;
+    bool hostWas = true;
+    k.splitLeft.linkUp = true;
+    k.splitLeft.lastRxMs = 1000;
+    repeatCodes.clear();
+    splitProcessRx(k, rxq, droppedSeen, hostWas, true, 1000 + SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, nullptr,
+                   nullptr, recordRepeat);
+    assert((repeatCodes == std::vector<uint16_t>{SPLIT_OP_RELEASE_ALL * 10}));
+  }
+  // Mac getrennt
+  {
+    Kbd k;
+    uint32_t droppedSeen = 0;
+    bool hostWas = true;
+    repeatCodes.clear();
+    splitProcessRx(k, rxq, droppedSeen, hostWas, false, 100, nullptr, nullptr, nullptr, nullptr, recordRepeat);
+    assert((repeatCodes == std::vector<uint16_t>{SPLIT_OP_RELEASE_ALL * 10}));
+  }
+  // Voller Empfangsring
+  {
+    Kbd k;
+    uint32_t droppedSeen = 0;
+    bool hostWas = true;
+    repeatCodes.clear();
+    rxq.dropped = 1;
+    splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, nullptr, nullptr, recordRepeat);
+    assert((repeatCodes == std::vector<uint16_t>{SPLIT_OP_RELEASE_ALL * 10}));
+  }
+  // Ohne Ausnahme: nichts zu beenden
+  splitRxReset(rxq);
+  {
+    Kbd k;
+    uint32_t droppedSeen = 0;
+    bool hostWas = true;
+    repeatCodes.clear();
+    splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, nullptr, nullptr, recordRepeat);
+    assert(repeatCodes.empty());
+  }
+}
+
 
 int main() {
   std::cout << "==================================================" << std::endl;

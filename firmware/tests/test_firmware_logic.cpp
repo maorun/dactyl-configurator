@@ -86,6 +86,7 @@ static KeyCombo userCombos[MAX_COMBOS];
 #define ACT_OSM_LSHIFT       0x161
 #define NUM_ONE_SHOT_ACTIONS 8
 #define ACT_CAPS_WORD        0x168
+#define ACT_REPEAT           0x169
 #define MAX_KEY_PAIRS 16
 struct KeyPair {
   uint8_t first;
@@ -128,6 +129,23 @@ static long testLeftFw = 0;
 static const char *testLeftLink = "{\"up\":1,\"ms\":1234,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4}";
 #define DEVICE_INFO_LEFT_LINK(buf, size) snprintf(buf, size, "%s", testLeftLink)
 
+// Repeat über beide Hälften: die Hooks rufen den Test ein, damit der Pfad zur anderen Hälfte prüfbar ist
+static bool testRemoteTakesRepeat = false;
+static std::vector<std::string> testRemoteCalls;
+static int testRecorded = 0;
+static int testPairReleases = 0;
+static bool testRemotePress(uint8_t r, uint8_t c) {
+  if (!testRemoteTakesRepeat) return false;
+  testRemoteCalls.push_back("press" + std::to_string(r) + std::to_string(c));
+  return true;
+}
+static void testRemoteRelease(uint8_t r, uint8_t c) {
+  testRemoteCalls.push_back("release" + std::to_string(r) + std::to_string(c));
+}
+#define REPEAT_REMOTE_PRESS(r, c) testRemotePress(r, c)
+#define REPEAT_REMOTE_RELEASE(r, c) testRemoteRelease(r, c)
+#define REPEAT_RECORDED() (testRecorded++)
+#define REPEAT_RELEASE_HELD_PAIRS() (testPairReleases++)
 #include "../dactyl_right/DactylLogic.h"
 
 // =============================================================================
@@ -178,6 +196,13 @@ void resetState() {
   numMacros = 0;
   for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
   macroRun = {};
+  lastRepeatAction = 0;
+  testRemoteTakesRepeat = false;
+  testRemoteCalls.clear();
+  testRecorded = 0;
+  testPairReleases = 0;
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++) { repeatResolved[r][c] = 0; repeatRemote[r][c] = false; }
   // Globale Settings und NVS-Mock zurücksetzen, damit Tests unabhängig von ihrer Reihenfolge sind
   comboTimeoutMs = 40;
   tappingTermMs = 200;
@@ -2978,6 +3003,401 @@ TEST(test_umlaut_while_one_shot_key_held_sends_plain_sequence) {
   assert(bleKeyboard.keyEvents == expected);
   assert((bleKeyboard.oneShotEvents == std::vector<int>{2}));
 }
+
+// -----------------------------------------------------------------------------
+// Repeat (ACT_REPEAT): die zuletzt ausgeführte Aktion noch einmal
+// -----------------------------------------------------------------------------
+static void pressKey(uint8_t r, uint8_t c) { keyState[r][c] = true; onMatrixKeyChange(r, c, true); }
+static void releaseKey(uint8_t r, uint8_t c) { keyState[r][c] = false; onMatrixKeyChange(r, c, false); }
+
+TEST(test_repeat_after_macro_plays_the_same_macro) {
+  resetState();
+  addCopyPasteMacro();
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  KEYMAP[0][2][2] = ACT_REPEAT;
+
+  setMillis(1000);
+  pressKey(2, 1);
+  releaseKey(2, 1);
+  runTicks(1200);
+  std::vector<int> once = { 131, 'c', -'c', -131, 'v', -'v' };
+  assert(bleKeyboard.keyEvents == once);
+
+  bleKeyboard.keyEvents.clear();
+  pressKey(2, 2);
+  releaseKey(2, 2);
+  runTicks(1400);
+  assert(bleKeyboard.keyEvents == once);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_repeat_before_any_action_sends_nothing) {
+  resetState();
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  pressKey(2, 2);
+  releaseKey(2, 2);
+  assert(bleKeyboard.keyEvents.empty());
+}
+
+TEST(test_held_repeat_holds_the_last_key_until_release) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  pressKey(2, 1);
+  releaseKey(2, 1);
+  bleKeyboard.keyEvents.clear();
+
+  pressKey(2, 2);
+  std::vector<int> expected = { 'a' };
+  assert(bleKeyboard.keyEvents == expected);
+  assert(bleKeyboard.pressedKeys.size() == 1);
+  // Eine Taste dazwischen ändert nichts am Loslassen von Repeat
+  KEYMAP[0][2][3] = 'b';
+  pressKey(2, 3);
+  releaseKey(2, 3);
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(bleKeyboard.keyEvents.back() == -'a');
+}
+
+TEST(test_repeat_repeats_the_newest_action_not_itself) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[0][2][3] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  tapKeyAt(2, 3, 1100, 1120);  // wiederholt 'a'
+  tapKeyAt(2, 3, 1200, 1220);  // wiederholt wieder 'a', nicht Repeat
+  tapKeyAt(2, 2, 1300, 1320);
+  tapKeyAt(2, 3, 1400, 1420);  // wiederholt 'b'
+  assert(countPresses('a') == 3);
+  assert(countPresses('b') == 2);
+}
+
+TEST(test_repeat_ignores_layer_actions_and_lone_modifiers) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  KEYMAP[0][2][3] = ACT_TG_1;
+  KEYMAP[0][2][4] = ACT_MO_1;
+  KEYMAP[0][2][5] = KEY_LEFT_SHIFT;
+  tapKeyAt(2, 1, 1000, 1020);
+  tapKeyAt(2, 3, 1100, 1120);
+  tapKeyAt(2, 4, 1200, 1220);
+  tapKeyAt(2, 5, 1300, 1320);
+  toggleLayers[1] = false;
+  bleKeyboard.keyEvents.clear();
+  tapKeyAt(2, 2, 1400, 1420);
+  assert(countPresses('a') == 2);
+  assert(countPresses(KEY_LEFT_SHIFT) == 1); // nur der eigene Tipp, keine Wiederholung
+}
+
+TEST(test_repeat_repeats_key_pair_umlaut_media_and_mouse) {
+  resetState();
+  numKeyPairs = 1;
+  userKeyPairs[0].first = KEY_LEFT_ALT;
+  userKeyPairs[0].second = '*';
+  KEYMAP[0][2][1] = ACT_KEY_PAIR_BASE;
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  bleKeyboard.keyEvents.clear();
+  pressKey(2, 2);
+  std::vector<int> pairDown = { KEY_LEFT_ALT, '*' };
+  assert(bleKeyboard.keyEvents == pairDown);
+  releaseKey(2, 2);
+  std::vector<int> pairAll = { KEY_LEFT_ALT, '*', -'*', -KEY_LEFT_ALT };
+  assert(bleKeyboard.keyEvents == pairAll);
+
+  resetState();
+  KEYMAP[0][2][1] = ACT_UMLAUT_AE;
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  std::vector<int> first = bleKeyboard.keyEvents;
+  assert(!first.empty());
+  bleKeyboard.keyEvents.clear();
+  tapKeyAt(2, 2, 1100, 1120);
+  assert(bleKeyboard.keyEvents == first);
+
+  resetState();
+  KEYMAP[0][2][1] = 0x122; // Vol+
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  assert(bleKeyboard.writtenMediaKeys.size() == 1);
+  tapKeyAt(2, 2, 1100, 1120);
+  assert(bleKeyboard.writtenMediaKeys.size() == 2);
+  assert(bleKeyboard.writtenMediaKeys[0] == bleKeyboard.writtenMediaKeys[1]);
+
+  resetState();
+  KEYMAP[0][2][1] = 0x131; // Rechtsklick
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  bleKeyboard.clickedMouseButtons.clear();
+  pressKey(2, 2);
+  assert(bleKeyboard.mouseButtons == MOUSE_BUTTON_RIGHT);
+  releaseKey(2, 2);
+  assert(bleKeyboard.mouseButtons == 0);
+}
+
+TEST(test_repeat_repeats_one_shot_and_caps_word) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_OSM_LSHIFT;
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  bleKeyboard.oneShotEvents.clear();
+  pressKey(2, 2);
+  releaseKey(2, 2);
+  std::vector<int> expected = { 2, -2 };
+  assert(bleKeyboard.oneShotEvents == expected);
+
+  resetState();
+  KEYMAP[0][2][1] = ACT_CAPS_WORD;
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  bleKeyboard.oneShotEvents.clear();
+  tapKeyAt(2, 2, 1100, 1120);
+  assert(bleKeyboard.oneShotEvents == std::vector<int>{0});
+}
+
+TEST(test_repeat_as_hold_and_double_tap_action_releases_the_resolved_action) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'x';
+  HOLDMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  bleKeyboard.keyEvents.clear();
+
+  setMillis(2000);
+  pressKey(2, 2);
+  runTicks(2000 + TAPPING_TERM_MS + 10);
+  assert(countPresses('a') == 2);       // Halten wiederholt 'a'
+  assert(countPresses('x') == 0);
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'x';
+  DTAPMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  setMillis(2000);
+  pressKey(2, 2);
+  releaseKey(2, 2);
+  setMillis(2050);
+  pressKey(2, 2);                        // zweiter Tipp: Doppel-Tipp-Aktion wiederholt 'a'
+  assert(countPresses('a') == 2);
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_repeat_repeats_a_combo_action) {
+  resetState();
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 122", false); // KEY_PRESS 'z'
+  assert(numCombos == 1);
+  setMillis(1000);
+  pressKey(2, 0);
+  pressKey(2, 1);
+  checkUserCombos();
+  releaseKey(2, 0);
+  releaseKey(2, 1);
+  setMillis(2000);
+  bleKeyboard.keyEvents.clear();
+  bleKeyboard.writtenKeys.clear();
+  tapKeyAt(2, 2, 2000, 2020);
+  assert(bleKeyboard.keyEvents.size() == 2 && bleKeyboard.keyEvents[0] == 'z');
+}
+
+TEST(test_add_combo_accepts_repeat_only_as_key_press) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 361", false);
+  assert(numCombos == 1);
+  handleConfigCommand("ADD_COMBO 2 0 2 1 1 361", false);   // MODIFIER_HOLD
+  assert(numCombos == 1);
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+}
+
+TEST(test_repeat_without_host_sends_nothing_and_keeps_the_record) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  bleKeyboard.connected = false;
+  bleKeyboard.keyEvents.clear();
+  tapKeyAt(2, 2, 1100, 1120);
+  assert(bleKeyboard.keyEvents.empty());
+  bleKeyboard.connected = true;
+  assert(lastRepeatAction == 'a');
+}
+
+TEST(test_repeat_remote_hook_hands_the_repeat_to_the_other_half) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  bleKeyboard.keyEvents.clear();
+  testRemoteTakesRepeat = true;
+  pressKey(2, 2);
+  assert(bleKeyboard.keyEvents.empty());                       // die andere Hälfte führt aus, diese sendet nichts
+  assert((testRemoteCalls == std::vector<std::string>{"press22"}));
+  releaseKey(2, 2);
+  assert((testRemoteCalls == std::vector<std::string>{"press22", "release22"}));
+  assert(bleKeyboard.keyEvents.empty());
+}
+
+TEST(test_remote_repeat_is_released_even_without_host_or_after_a_combo) {
+  resetState();
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  KEYMAP[0][2][1] = 'a';
+  tapKeyAt(2, 1, 1030, 1050);
+  testRemoteTakesRepeat = true;
+  pressKey(2, 2);
+  assert((testRemoteCalls == std::vector<std::string>{"press22"}));
+  // Mac weg, bevor die Taste losgelassen wird: die andere Hälfte muss trotzdem ihr Loslassen bekommen
+  bleKeyboard.setDisconnected();
+  releaseKey(2, 2);
+  assert((testRemoteCalls == std::vector<std::string>{"press22", "release22"}));
+  bleKeyboard.connected = true;
+  // Eine Combo verbraucht die Taste mitten im Halten: cancelTapHoldForCombo löst die Wiederholung
+  testRemoteCalls.clear();
+  HOLDMAP[0][2][3] = ACT_REPEAT;
+  KEYMAP[0][2][3] = 'x';
+  handleConfigCommand("ADD_COMBO 2 3 2 4 0 122", false);
+  setMillis(3000);
+  pressKey(2, 3);
+  runTicks(3000 + TAPPING_TERM_MS + 10);                       // Halten gilt: REPEAT läuft
+  assert((testRemoteCalls == std::vector<std::string>{"press23"}));
+  // Eine Combo verbraucht die Taste (checkUserCombos ruft diesen Abbruch auf): die Wiederholung endet
+  cancelTapHoldForCombo(2, 3);
+  assert(testRemoteCalls.size() == 2 && testRemoteCalls[1] == "release23");
+  assert(!repeatRemote[2][3]);
+}
+
+TEST(test_combo_member_keys_are_not_recorded_as_the_last_action) {
+  resetState();
+  KEYMAP[0][2][0] = 'a';           // Mitglied der Combo, wird nie einzeln gesendet
+  KEYMAP[0][2][1] = 'b';           // Mitglied der Combo
+  KEYMAP[0][2][2] = 'c';           // normale Taste davor
+  KEYMAP[0][2][3] = ACT_REPEAT;
+  tapKeyAt(2, 2, 1000, 1020);      // letzte echte Aktion: 'c'
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 361", false);   // Combo: KEY_PRESS REPEAT
+  assert(numCombos == 1);
+  bleKeyboard.keyEvents.clear();
+  setMillis(2000);
+  pressKey(2, 0);
+  pressKey(2, 1);
+  checkUserCombos();
+  // Die Combo wiederholt 'c', nicht ihre eigene Mitgliedstaste 'a' oder 'b'
+  assert(countPresses('c') == 2);
+  assert(countPresses('a') == 0 && countPresses('b') == 0);
+  assert(lastRepeatAction == 'c');
+  releaseKey(2, 0);
+  releaseKey(2, 1);
+}
+
+TEST(test_layer_toggle_combo_leaves_the_last_action_unchanged) {
+  resetState();
+  KEYMAP[0][2][0] = 'a';
+  KEYMAP[0][2][1] = 'b';
+  KEYMAP[0][2][2] = 'c';
+  tapKeyAt(2, 2, 1000, 1020);
+  int before = testRecorded;
+  handleConfigCommand("ADD_COMBO 2 0 2 1 2 1", false);     // LAYER_TOGGLE auf Ebene 1
+  setMillis(2000);
+  pressKey(2, 0);
+  pressKey(2, 1);
+  checkUserCombos();
+  assert(lastRepeatAction == 'c');
+  assert(testRecorded == before);                          // weder die Combo noch ihre Mitglieder zählen
+  releaseKey(2, 0);
+  releaseKey(2, 1);
+}
+
+TEST(test_buffered_combo_candidate_records_when_it_is_sent) {
+  resetState();
+  KEYMAP[0][2][0] = 'a';
+  KEYMAP[0][2][1] = 'b';
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 122", false);
+  setMillis(1000);
+  pressKey(2, 0);                                          // Kandidat: noch nichts gesendet, nichts aufgezeichnet
+  assert(lastRepeatAction == 0);
+  runTicks(1000 + comboTimeoutMs + 5);                     // Combo-Fenster abgelaufen: 'a' geht raus
+  assert(lastRepeatAction == 'a');
+  releaseKey(2, 0);
+  // Ein schneller Tipp (Release im Fenster) sendet beim Loslassen und zählt dann
+  resetState();
+  KEYMAP[0][2][0] = 'a';
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 122", false);
+  tapKeyAt(2, 0, 5000, 5010);
+  assert(lastRepeatAction == 'a');
+}
+
+TEST(test_actions_without_host_are_not_recorded) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  bleKeyboard.setDisconnected();
+  tapKeyAt(2, 1, 1000, 1020);
+  assert(lastRepeatAction == 0 && testRecorded == 0);
+  bleKeyboard.connected = true;
+  tapKeyAt(2, 1, 1100, 1120);
+  assert(lastRepeatAction == 'a' && testRecorded >= 1);
+}
+
+TEST(test_clear_pairs_during_held_repeat_releases_the_pair) {
+  resetState();
+  numKeyPairs = 1;
+  userKeyPairs[0].first = KEY_LEFT_ALT;
+  userKeyPairs[0].second = '*';
+  KEYMAP[0][2][1] = ACT_KEY_PAIR_BASE;
+  KEYMAP[0][2][2] = ACT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  pressKey(2, 2);
+  assert(bleKeyboard.pressedKeys.size() == 2);
+  handleConfigCommand("CLEAR_PAIRS", false);
+  assert(bleKeyboard.pressedKeys.empty());                 // das Paar ist gelöst, bevor die Tabelle sich ändert
+  assert(testPairReleases >= 1);
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_config_combo_keys_are_not_recorded) {
+  resetState();
+  KEYMAP[0][0][0] = 'x';                                   // erste Config-Combo-Taste (rechts R0C0)
+  KEYMAP[0][4][5] = 'y';                                   // zweite (R4C5)
+  KEYMAP[0][2][1] = 'a';
+  tapKeyAt(2, 1, 1000, 1020);
+  setMillis(2000);
+  pressKey(0, 0);                                          // wird aufgezeichnet: die andere Taste fehlt noch
+  assert(lastRepeatAction == 'x');
+  lastRepeatAction = 'a';
+  pressKey(4, 5);                                          // beide gehalten: diese Taste geht nicht an den Host
+  assert(isConfigComboSuppressed(4, 5));
+  assert(lastRepeatAction == 'a');
+  releaseKey(4, 5);
+  releaseKey(0, 0);
+}
+
+
+TEST(test_one_shot_candidate_is_recorded_unless_a_combo_consumed_it) {
+  resetState();
+  KEYMAP[0][2][0] = ACT_OSM_LSHIFT;
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 122", false);   // die One-Shot-Taste ist ein Combo-Kandidat
+  tapKeyAt(2, 0, 1000, 1020);
+  assert(lastRepeatAction == ACT_OSM_LSHIFT);
+  // Löst die Combo aus, verbraucht sie die Taste: nichts wird aufgezeichnet
+  resetState();
+  KEYMAP[0][2][0] = ACT_OSM_LSHIFT;
+  KEYMAP[0][2][1] = 'b';
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 122", false);
+  setMillis(2000);
+  pressKey(2, 0);
+  pressKey(2, 1);
+  checkUserCombos();
+  releaseKey(2, 0);
+  releaseKey(2, 1);
+  assert(lastRepeatAction == 'z');                         // nur die Aktion der Combo zählt
+}
+
 
 int main() {
   std::cout << "==================================================" << std::endl;

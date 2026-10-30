@@ -17,15 +17,7 @@ Rules for this file:
 
 ## Priority 1: Faults that disturb daily typing
 
-### Mod-Tap decision across both halves
-
-- **Rank:** Feature model. Total 25/40 (typing 8, configuration 3, harmony 9, safety 5). Effort L. Estimate.
-- **Area:** Firmware (both halves).
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (`resolvePendingTapHoldsAsHold`), `firmware/dactyl_right/DactylSplitHid.h` (`SplitLocalDefer`), `firmware/dactyl_left/DactylLeftLogic.h`.
-- **Problem:** A key press of the other half does not decide an open Mod-Tap key as hold. Example: the right `R5C0` holds `MO_1` and a left key follows within the tapping term. The right half then sends its tap action (`Delete`) and the left key acts on layer 0.
-- **Goal:** Let a key press of one half decide an open Mod-Tap key of the other half as hold, before the press acts. Use the pattern of "Double-tap across both halves": append new split ops, hold the press for a short time, and apply it after the layer change.
-- **Goal:** Keep the old behavior when one half has an older firmware. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A test with both halves shows that a held `MO_1` on one half and a key press on the other half gives the layer 1 action and no tap action.
+No open entry.
 
 ## Priority 2
 

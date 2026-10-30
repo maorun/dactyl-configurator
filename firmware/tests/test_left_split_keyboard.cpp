@@ -581,6 +581,274 @@ TEST(test_left_repeat_note_is_resent_while_an_action_is_recorded) {
 }
 
 
+// -----------------------------------------------------------------------------
+// Mod-Tap über beide Hälften, linke Seite (HOLD_PENDING melden, HOLD_RESOLVE beantworten, Tasten zurückhalten)
+// -----------------------------------------------------------------------------
+static void queueLayerState() {
+  // Wie queueSplitLayerStateIfDue in dactyl_left.ino: ein geänderter Layer-Zustand geht in die Warteschlange
+  static SplitLayerSync sync;
+  static bool init = false;
+  if (!init) { splitLayerReset(sync, 1); init = true; }
+  splitLayerSendIfDue(sync, localMomentaryLayerMask(), toggleLayerMask(), false, millis(), true,
+                      [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); });
+}
+
+TEST(test_left_reports_open_mod_tap_key_and_zero_after_decision) {
+  KEYMAP[0][5][1] = KEY_DELETE;
+  HOLDMAP[0][5][1] = ACT_MO_1;
+  SplitHoldReporter rep = {};
+  auto send = [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); };
+  // Nichts offen: kein Paket
+  splitHoldReportIfChanged(rep, true, anyTapHoldPending(), send);
+  assert(drain().empty());
+  // Taste gedrückt, noch unentschieden: HOLD_PENDING 1, genau einmal
+  keyState[5][1] = true;
+  onMatrixKeyChange(5, 1, true);
+  assert(anyTapHoldPending());
+  splitHoldReportIfChanged(rep, true, anyTapHoldPending(), send);
+  splitHoldReportIfChanged(rep, true, anyTapHoldPending(), send);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && is(ev[0], SPLIT_OP_HOLD_PENDING, 1));
+  // Tapping-Term abgelaufen: entschieden als Halten, HOLD_PENDING 0
+  advanceMillis(TAPPING_TERM_MS + 5);
+  processDeferredKeys(millis());
+  assert(!anyTapHoldPending());
+  splitHoldReportIfChanged(rep, true, anyTapHoldPending(), send);
+  ev = drain();
+  assert(ev.size() == 1 && is(ev[0], SPLIT_OP_HOLD_PENDING, 0));
+}
+
+TEST(test_left_hold_resolve_decides_open_key_as_hold_and_reports_layer_before_zero) {
+  // Wie in der Schleife von dactyl_left.ino: HOLD_RESOLVE entscheiden, dann Layer-Zustand, dann HOLD_PENDING
+  KEYMAP[0][5][1] = KEY_DELETE;
+  HOLDMAP[0][5][1] = ACT_MO_1;
+  KEYMAP[1][2][2] = KEY_F2;
+  SplitHoldReporter rep = {};
+  auto send = [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); };
+  keyState[5][1] = true;
+  onMatrixKeyChange(5, 1, true);
+  splitHoldReportIfChanged(rep, true, anyTapHoldPending(), send);
+  queueLayerState();              // Ausgangszustand (Ebene 0) wird einmal gemeldet
+  drain();
+  assert(getActiveLayer() == 0);
+  // Der Master hält X zurück und sendet HOLD_RESOLVE; links entscheidet sofort, ohne den Tapping-Term abzuwarten
+  advanceMillis(10);
+  resolveAllPendingTapHoldsAsHold();
+  assert(!anyTapHoldPending() && getActiveLayer() == 1 && momentaryLayers[1]);
+  queueLayerState();
+  splitHoldReportIfChanged(rep, true, anyTapHoldPending(), send);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 2);
+  assert(ev[0].op == SPLIT_OP_LAYER_STATE && splitLayerMomentary(ev[0]) == 0x02);   // MO_1 gehalten
+  assert(is(ev[1], SPLIT_OP_HOLD_PENDING, 0));                                        // erst danach "entschieden"
+  // Die Taste hat die Halte-Aktion gewählt und nichts an den Host gesendet (eine Layer-Taste sendet keinen Code)
+  assert(pressedAction[5][1] == ACT_MO_1);
+  // Ein späterer linker Druck sieht die Ebene 1
+  tap(2, 2);
+  ev = drain();
+  assert(ev.size() == 2 && is(ev[0], SPLIT_OP_KEY_PRESS, KEY_F2) && is(ev[1], SPLIT_OP_KEY_RELEASE, KEY_F2));
+}
+
+TEST(test_left_hold_resolve_without_open_key_changes_nothing) {
+  KEYMAP[0][2][1] = 'a';
+  resolveAllPendingTapHoldsAsHold();
+  assert(!anyTapHoldPending() && drain().empty() && getActiveLayer() == 0);
+  // Eine Taste ohne Halte-Aktion ist nie unentschieden
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  assert(!anyTapHoldPending());
+}
+
+TEST(test_left_open_mod_tap_key_resolved_as_tap_when_released_in_time) {
+  // Ohne Druck der anderen Hälfte bleibt ein schneller Tipp ein Tipp (kein Verhalten ändert sich ohne HOLD_RESOLVE)
+  KEYMAP[0][5][1] = KEY_DELETE;
+  HOLDMAP[0][5][1] = ACT_MO_1;
+  tap(5, 1);
+  assert(!anyTapHoldPending());
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 2 && is(ev[0], SPLIT_OP_KEY_PRESS, KEY_DELETE) && is(ev[1], SPLIT_OP_KEY_RELEASE, KEY_DELETE));
+}
+
+TEST(test_left_combo_consumes_open_key_and_clears_pending) {
+  // Eine Combo verbraucht beide Tasten: die Mod-Tap-Entscheidung entfällt, HOLD_PENDING 0 folgt
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'k';
+  cancelTapHoldForCombo(2, 1);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  assert(anyTapHoldPending());
+  cancelTapHoldForCombo(2, 1);
+  assert(!anyTapHoldPending());
+}
+
+// Zurückhalten links: der Master meldet eine offene Mod-Tap-Taste, eine eigene Änderung wartet auf seine Entscheidung
+static std::vector<std::string> leftDeferLog;
+static void leftDeferApply(uint8_t r, uint8_t c, bool pressed, unsigned long) {
+  leftDeferLog.push_back(std::string(pressed ? "d" : "u") + std::to_string(r) + std::to_string(c));
+}
+
+TEST(test_left_key_is_held_back_while_master_hold_is_pending_and_requests_resolve_once) {
+  MasterHoldState m = {};
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  leftDeferLog.clear();
+  unsigned long now = millis();
+  // Ohne Meldung des Masters: sofort ausführen
+  splitDeferApplyOrHold(d, 1, 1, true, masterHoldPending(m, now), now, leftDeferApply);
+  assert((leftDeferLog == std::vector<std::string>{"d11"}) && d.count == 0);
+  // Der Master meldet eine offene Taste: die nächste Änderung wartet
+  masterHoldNote(m, true, now);
+  splitDeferApplyOrHold(d, 2, 2, true, masterHoldPending(m, now), now, leftDeferApply);
+  splitDeferApplyOrHold(d, 2, 2, false, masterHoldPending(m, now), now + 5, leftDeferApply);   // hinter der älteren
+  assert(leftDeferLog.size() == 1 && d.count == 2);
+  assert(splitDeferTakeResolveRequest(d) && !splitDeferTakeResolveRequest(d));                // HOLD_RESOLVE einmal
+  assert(!splitDeferReplayDue(d, masterHoldPending(m, now + 10), now + 10));
+  // Der Master meldet 0: beide Änderungen laufen in ihrer Reihenfolge
+  masterHoldNote(m, false, now + 20);
+  assert(splitDeferReplayDue(d, masterHoldPending(m, now + 20), now + 20));
+  splitDeferReplay(d, leftDeferApply);
+  assert((leftDeferLog == std::vector<std::string>{"d11", "d22", "u22"}) && d.count == 0);
+}
+
+TEST(test_left_held_back_key_runs_after_the_time_limit_without_a_zero) {
+  MasterHoldState m = {};
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  leftDeferLog.clear();
+  unsigned long now = millis();
+  masterHoldNote(m, true, now);
+  splitDeferApplyOrHold(d, 3, 3, true, masterHoldPending(m, now), now, leftDeferApply);
+  assert(!splitDeferReplayDue(d, masterHoldPending(m, now + SPLIT_TAP_FLUSH_TIMEOUT_MS - 1), now + SPLIT_TAP_FLUSH_TIMEOUT_MS - 1));
+  assert(splitDeferReplayDue(d, masterHoldPending(m, now + SPLIT_TAP_FLUSH_TIMEOUT_MS), now + SPLIT_TAP_FLUSH_TIMEOUT_MS));
+}
+
+TEST(test_master_hold_note_expires_and_reset_clears_it) {
+  MasterHoldState m = {};
+  masterHoldNote(m, true, 1000);
+  assert(masterHoldPending(m, 1000 + SPLIT_HOLD_PENDING_MAX_MS - 1));
+  assert(!masterHoldPending(m, 1000 + SPLIT_HOLD_PENDING_MAX_MS));       // eine verlorene 0 bremst nicht dauerhaft
+  masterHoldNote(m, true, 0xFFFFFF00UL);
+  assert(masterHoldPending(m, 0xFFFFFF00UL + 300));                       // Überlauf von millis()
+  masterHoldReset(m);
+  assert(!masterHoldPending(m, 0xFFFFFF00UL + 300));
+  masterHoldNote(m, false, 5000);
+  assert(!masterHoldPending(m, 5000));
+}
+
+TEST(test_hold_reporter_without_link_reports_again_after_link_returns) {
+  SplitHoldReporter rep = {};
+  auto send = [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); };
+  KEYMAP[0][5][1] = KEY_DELETE;
+  HOLDMAP[0][5][1] = ACT_MO_1;
+  keyState[5][1] = true;
+  onMatrixKeyChange(5, 1, true);
+  splitHoldReportIfChanged(rep, true, anyTapHoldPending(), send);
+  assert(drain().size() == 1);
+  // Link weg: nichts gilt als gemeldet, nichts wird gesendet
+  splitHoldReportIfChanged(rep, false, anyTapHoldPending(), send);
+  assert(drain().empty() && !rep.reported);
+  // Link zurück, Taste noch offen: neu melden
+  splitHoldReportIfChanged(rep, true, anyTapHoldPending(), send);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && is(ev[0], SPLIT_OP_HOLD_PENDING, 1));
+}
+
+TEST(test_hold_reporter_retries_when_the_queue_is_full) {
+  SplitHoldReporter rep = {};
+  auto send = [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); };
+  for (int i = 0; i < SPLIT_QUEUE_SIZE; i++) assert(queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HEARTBEAT)));
+  assert(!splitHoldReportIfChanged(rep, true, true, send) && !rep.reported);   // voll: nicht gemeldet
+  queueReset(sendQueue);
+  assert(splitHoldReportIfChanged(rep, true, true, send) && rep.reported);      // nächster Durchlauf
+  assert(drain().size() == 1);
+}
+
+// -----------------------------------------------------------------------------
+// Linke Schleife: zurückgehaltene Taste läuft erst nach der Ebene des Masters (leftReplayHeld, HIGH-Befund)
+// -----------------------------------------------------------------------------
+TEST(test_left_replay_takes_the_master_layer_before_running_the_held_key) {
+  KEYMAP[0][2][2] = 'q';
+  KEYMAP[1][2][2] = KEY_F2;
+  MasterHoldState m = {};
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  unsigned long now = millis();
+  // Der Master meldet eine offene Mod-Tap-Taste; die linke Taste (R2C2) wird zurückgehalten
+  masterHoldNote(m, true, now);
+  splitDeferApplyOrHold(d, 2, 2, true, masterHoldPending(m, now), now, [](uint8_t, uint8_t, bool, unsigned long) {});
+  assert(d.count == 1);
+  // Der Master entscheidet: erst die Ebene (Briefkasten), dann HOLD_PENDING 0. Der Briefkasten ist noch nicht gelesen.
+  static bool layerTaken;
+  layerTaken = false;
+  masterHoldNote(m, false, now + 5);
+  leftReplayHeld(d, now + 6, [&] { return masterHoldPending(m, now + 6); },
+                 [&] { layerTaken = true; momentaryLayers[1] = true; },
+                 [](uint8_t r, uint8_t c, bool pressed, unsigned long atMs) {
+                   keyState[r][c] = pressed;
+                   onMatrixKeyChange(r, c, pressed, atMs);
+                 });
+  assert(layerTaken && d.count == 0);
+  // Die Taste lief auf Ebene 1: F2, nicht 'q'
+  std::vector<SplitHidEvent> ev = drain();
+  assert(!ev.empty() && is(ev[0], SPLIT_OP_KEY_PRESS, KEY_F2));
+  keyState[2][2] = false;
+  onMatrixKeyChange(2, 2, false);
+  momentaryLayers[1] = false;
+}
+
+TEST(test_left_replay_does_not_run_while_the_master_still_waits_but_takes_the_layer) {
+  MasterHoldState m = {};
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  unsigned long now = millis();
+  masterHoldNote(m, true, now);
+  splitDeferApplyOrHold(d, 2, 2, true, masterHoldPending(m, now), now, [](uint8_t, uint8_t, bool, unsigned long) {});
+  static int layerCalls, applied;
+  layerCalls = applied = 0;
+  // Vor der Zeitgrenze und ohne 0: die Ebene wird übernommen (der Briefkasten leert sich), die Taste wartet
+  leftReplayHeld(d, now + 10, [&] { return masterHoldPending(m, now + 10); }, [&] { layerCalls++; },
+                 [](uint8_t, uint8_t, bool, unsigned long) { applied++; });
+  assert(layerCalls == 1 && applied == 0 && d.count == 1);
+  // Nach der Zeitgrenze läuft sie auch ohne 0
+  leftReplayHeld(d, now + SPLIT_TAP_FLUSH_TIMEOUT_MS, [&] { return masterHoldPending(m, now + SPLIT_TAP_FLUSH_TIMEOUT_MS); },
+                 [&] { layerCalls++; }, [](uint8_t, uint8_t, bool, unsigned long) { applied++; });
+  assert(layerCalls == 2 && applied == 1 && d.count == 0);
+  // Ohne zurückgehaltene Änderung passiert nichts außer dem Übernehmen der Ebene
+  leftReplayHeld(d, now + 100, [&] { return false; }, [&] { layerCalls++; }, [](uint8_t, uint8_t, bool, unsigned long) { applied++; });
+  assert(layerCalls == 3 && applied == 1);
+}
+
+TEST(test_left_resolve_request_only_for_a_held_press) {
+  SplitLocalDefer d;
+  splitDeferReset(d);
+  // Wie in dactyl_left.ino: HOLD_RESOLVE nur, wenn eine zurückgehaltene Änderung ein Drücken ist
+  assert(splitDeferPush(d, 1, 1, false, 100));          // Loslassen zuerst (Überlappen)
+  assert(!splitDeferTakeResolveRequest(d));
+  assert(splitDeferPush(d, 2, 2, true, 110));
+  assert(splitDeferTakeResolveRequest(d));
+  // Eine volle Warteschlange: der Aufrufer fordert erneut an, die nächste Runde sendet es
+  splitDeferRequestResolveAgain(d);
+  for (int i = 0; i < SPLIT_QUEUE_SIZE; i++) assert(queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HEARTBEAT)));
+  assert(splitDeferTakeResolveRequest(d));
+  assert(!queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE)));
+  splitDeferRequestResolveAgain(d);
+  queueReset(sendQueue);
+  assert(splitDeferTakeResolveRequest(d) && queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE)));
+}
+
+TEST(test_master_hold_note_state_is_read_before_the_time) {
+  // Der Empfangs-Callback schreibt die Zeit vor dem Stand; loop() liest den Stand vor der Zeit: nie ein neuer Stand mit
+  // alter Zeit. Nach 0 und danach 1 mit neuer Zeit gilt die neue Meldung.
+  MasterHoldState m = {};
+  masterHoldNote(m, true, 1000);
+  assert(masterHoldPending(m, 1100));
+  masterHoldNote(m, false, 1200);
+  assert(!masterHoldPending(m, 1210));
+  masterHoldNote(m, true, 5000);
+  assert(masterHoldPending(m, 5100) && !masterHoldPending(m, 5000 + SPLIT_HOLD_PENDING_MAX_MS));
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Split-Keyboard Proxy Test Suite" << std::endl;

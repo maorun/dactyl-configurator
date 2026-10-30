@@ -464,6 +464,7 @@ function showSyncDiffDialog(profile, diff) {
   for (const n of diff.names) addRow(`Name Ebene ${n.l}:`, n.device, n.local);
   for (const k of diff.keys) addRow(`Ebene ${k.l} R${k.r}C${k.c}:`, describeKeyActions(k.device), describeKeyActions(k.local));
   list.style.display = total === 0 ? "none" : "";
+  renderSyncDiffLint();
 
   modal.style.display = "flex";
   return new Promise(resolve => {

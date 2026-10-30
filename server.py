@@ -334,7 +334,7 @@ STATIC_ALLOWLIST = {
 }
 # Module der Web-App (Reihenfolge in index.html)
 APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
-               "live-monitor", "heatmap", "matrix-test", "keyboard-hooks", "config-sync")
+               "live-monitor", "heatmap", "matrix-test", "layout-lint-ui", "keyboard-hooks", "config-sync")
 STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 
 # Wertebereiche identisch zur Firmware (handleConfigCommand)

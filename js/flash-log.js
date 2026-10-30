@@ -89,7 +89,8 @@ function openFlashLogDialog(profile) {
   return {
     onEvent(event) {
       if (event.type !== "log") return;
-      stageEl.textContent = `Phase: ${flashStageLabel(event.stage)}`;
+      // Eine Zeile ohne Phase (Layout-Prüfung vor dem Start) lässt die Phasenanzeige stehen
+      if (event.stage) stageEl.textContent = `Phase: ${flashStageLabel(event.stage)}`;
       appendFlashLogLine(lines, String(event.line));
       // Nur am Ende mitscrollen, wenn der Nutzer nicht nach oben gescrollt hat
       const atBottom = output.scrollTop + output.clientHeight >= output.scrollHeight - 4;

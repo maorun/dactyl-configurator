@@ -131,6 +131,12 @@
         </div>
       </div>
 
+      <!-- Layout-Prüfung: Befunde über beide Hälften, blockiert nichts -->
+      <details class="layout-lint" id="layoutLintPanel" style="display: none;">
+        <summary id="layoutLintSummary"></summary>
+        <ul class="layout-lint-list" id="layoutLintList"></ul>
+      </details>
+
       <!-- Wireless Bluetooth Config Mode & Auto-Sync Banner -->
       <div class="config-mode-guide-card" id="configModeGuideCard">
         <div class="config-guide-icon" id="configGuideIcon">⚡</div>
@@ -557,6 +563,10 @@
           <p id="syncDiffSummary"></p>
           <p class="sync-diff-hint">Links steht die Belegung auf dem Gerät, rechts die neue Belegung. Combos und Tastenpaare werden ohne Vergleich übertragen.</p>
           <ul id="syncDiffList" class="sync-diff-list"></ul>
+          <div id="syncDiffLintSection" style="display: none;">
+            <p class="sync-diff-hint"><strong>Layout-Prüfung (beide Hälften):</strong> Diese Warnungen blockieren die Übertragung nicht.</p>
+            <ul id="syncDiffLint" class="layout-lint-list"></ul>
+          </div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" id="btnCancelSyncDiff">Abbrechen</button>
@@ -626,6 +636,7 @@
   <script src="js/live-monitor.js?v=2"></script>
   <script src="js/heatmap.js?v=1"></script>
   <script src="js/matrix-test.js?v=1"></script>
+  <script src="js/layout-lint-ui.js?v=1"></script>
   <script src="js/keyboard-hooks.js?v=3"></script>
   <script src="js/config-sync.js?v=4"></script>
   <script src="app.js?v=41"></script>

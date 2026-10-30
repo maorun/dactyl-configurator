@@ -1727,6 +1727,35 @@ body {
   margin-top: 0.4rem;
 }
 
+/* Layout-Prüfung (Matrix-Tab und Layout-Diff) */
+.layout-lint {
+  margin-bottom: 1rem;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+
+.layout-lint summary {
+  cursor: pointer;
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.layout-lint-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+  list-style: none;
+}
+
+.layout-lint-list li {
+  margin-bottom: 0.3rem;
+}
+
+.layout-lint-info {
+  color: var(--text-muted);
+}
+
 /* Tastenpaare (1 Taste = 2 Tasten) */
 .key-pairs-header {
   margin-top: 1.5rem;

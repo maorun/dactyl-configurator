@@ -544,6 +544,7 @@ function renderMatrix() {
     container.appendChild(createHalfMatrix(layerOf(editSide), editSide));
   }
   if (heatmapEnabled) applyHeatmap();
+  renderLayoutLint();
 }
 
 function createHalfMatrix(matrixData, side) {

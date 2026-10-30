@@ -23,14 +23,64 @@ function layoutLintText(finding) {
   return `${where}: ${finding.message}`;
 }
 
-function fillLayoutLintList(list, findings) {
+// withActions: Befunde mit einer Korrektur bekommen einen Knopf (nur im Matrix-Tab; im Diff-Dialog bleibt die
+// Konfiguration während der Übertragung unverändert)
+function fillLayoutLintList(list, findings, withActions = false) {
   list.replaceChildren();
   for (const f of findings) {
     const li = document.createElement("li");
     li.className = f.level === "warn" ? "layout-lint-warn" : "layout-lint-info";
-    li.textContent = `${f.level === "warn" ? "⚠️" : "ℹ️"} ${layoutLintText(f)}`;
+    const text = document.createElement("span");
+    text.textContent = `${f.level === "warn" ? "⚠️" : "ℹ️"} ${layoutLintText(f)}`;
+    li.appendChild(text);
+    if (withActions && f.code === "absent-key-action") {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn btn-outline btn-sm layout-lint-fix";
+      btn.textContent = "Entfernen";
+      btn.title = `Löscht die Aktionen von R${f.r}C${f.c} auf ${f.layers.length === 1 ? "Ebene" : "den Ebenen"} ${f.layers.join(", ")}. Rückgängig machbar.`;
+      btn.addEventListener("click", () => removeAbsentKeyActions(f));
+      li.appendChild(btn);
+    }
     list.appendChild(li);
   }
+}
+
+// Knopf "Entfernen" am Befund "Taste gibt es nicht": löscht die toten Aktionen als vorgemerkte, rückgängig
+// machbare Änderung (wie eine Tastenänderung im Inspektor). Die Matrix zeigt die Position nicht, sie wird also
+// nur hier bereinigt.
+function removeAbsentKeyActions(finding) {
+  const side = finding.side;
+  if (!side || !SIDE_PROFILES[side]) return;
+  // Wie ein Klick auf eine Taste der anderen Hälfte: zuerst die bearbeitete Hälfte wechseln
+  if (side !== editSide) switchEditSide(side);
+  const cfg = configFor(side);
+  const result = clearAbsentKeyActions(cfg, SIDE_PROFILES[side], finding.r, finding.c, finding.layers);
+  if (!result) {
+    showToast(`R${finding.r}C${finding.c}: nichts zu entfernen (schon entfernt oder die Belegung hat sich geändert).`);
+    renderLayoutLint();
+    return;
+  }
+  const { r, c } = finding;
+  for (const { l } of result.old) cfg.layers[l][r][c] = result.layers[l][r][c];
+  const layerList = result.old.map(o => o.l);
+  renderMatrix();
+  markPendingSync({
+    type: "key",
+    title: `Taste [R${r}, C${c}] entfernt`,
+    description: `${result.old.length} Aktion${result.old.length === 1 ? "" : "en"} auf einer Taste, die es nicht gibt (${layerList.length === 1 ? "Ebene" : "Ebenen"} ${layerList.join(", ")})`,
+    revert: () => {
+      // Die Konfiguration zum Zeitpunkt des Rückgängig: ein Lesen vom Gerät oder ein Profil ersetzt das Objekt
+      const live = configFor(side);
+      if (!live || !Array.isArray(live.layers)) return;
+      for (const { l, cell } of result.old) {
+        if (live.layers[l] && live.layers[l][r]) live.layers[l][r][c] = cell;
+      }
+      renderMatrix();
+      saveConfigToServer(side);
+    }
+  }, side);
+  saveConfigToServer(side);
 }
 
 // Kurztext der Anzahl, z. B. "2 Warnungen, 1 Hinweis"
@@ -54,7 +104,7 @@ function renderLayoutLint() {
   if (!findings.length) return;
   const hasWarning = findings.some(f => f.level === "warn");
   summary.textContent = `${hasWarning ? "⚠️" : "ℹ️"} Layout-Prüfung: ${layoutLintCounts(findings)}`;
-  fillLayoutLintList(list, findings);
+  fillLayoutLintList(list, findings, true);
 }
 
 // Warnungen (ohne Hinweise) für den Layout-Diff-Dialog; leer blendet den Abschnitt aus

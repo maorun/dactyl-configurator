@@ -34,7 +34,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
-             recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts,
+             recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, clearAbsentKeyActions,
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
@@ -2936,6 +2936,11 @@ test("Layout-Prüfung: das gespeicherte Layout des Nutzers hat die Aktionen auf 
 // -----------------------------------------------------------------------------
 // js/layout-lint-ui.js: Liste im Matrix-Tab, Diff-Dialog und Flash-Protokoll (DOM-Stub)
 // -----------------------------------------------------------------------------
+// Text eines Listeneintrags: der Stub setzt textContent nicht aus Kindern zusammen
+function lintItemText(el) {
+  return (el.textContent || "") + (el.children || []).map(lintItemText).join("");
+}
+
 function lintUiHarness(rightCfg, leftCfg) {
   const dom = fakeDom();
   const w = { console: { log() {}, warn() {}, error() {} }, document: dom.document };
@@ -2968,9 +2973,9 @@ test("Layout-Prüfung (Anzeige): Panel zeigt Zähler und Befunde, der Diff nur W
   assert.strictEqual(dom.document.getElementById("layoutLintSummary").textContent, "⚠️ Layout-Prüfung: 1 Warnung, 1 Hinweis");
   const items = dom.document.getElementById("layoutLintList").children;
   assert.strictEqual(items.length, 2);
-  assert.ok(items[0].textContent.startsWith("⚠️ Rechte Hand: Taste R5C5"), items[0].textContent);
+  assert.ok(lintItemText(items[0]).startsWith("⚠️ Rechte Hand: Taste R5C5"), lintItemText(items[0]));
   assert.strictEqual(items[0].className, "layout-lint-warn");
-  assert.ok(items[1].textContent.startsWith("ℹ️ Rechte Hand: Tastenpaar 0"), items[1].textContent);
+  assert.ok(lintItemText(items[1]).startsWith("ℹ️ Rechte Hand: Tastenpaar 0"), lintItemText(items[1]));
   assert.strictEqual(items[1].className, "layout-lint-info");
   // Diff-Dialog: nur die Warnung
   w.renderSyncDiffLint();
@@ -2993,7 +2998,7 @@ test("Layout-Prüfung (Anzeige): Befund über beide Hälften nennt keine einzeln
   lintSet(right, 2, 1, 1, "KEY_A");
   const { w, dom } = lintUiHarness(right, lintCfg());
   w.renderLayoutLint();
-  const text = dom.document.getElementById("layoutLintList").children[0].textContent;
+  const text = lintItemText(dom.document.getElementById("layoutLintList").children[0]);
   assert.ok(text.startsWith("⚠️ Beide Hälften: Ebene 2 hat eigene Belegung"), text);
 });
 
@@ -3167,6 +3172,188 @@ test("Layout-Prüfung: renderMatrix, Diff-Dialog und Flashen rufen die Anzeige a
   for (const id of ["layoutLintPanel", "layoutLintSummary", "layoutLintList", "syncDiffLintSection", "syncDiffLint"]) {
     assert.ok(html.includes(`id="${id}"`), `index.html ohne ${id}`);
   }
+});
+
+// -----------------------------------------------------------------------------
+// Tote Tasten entfernen (clearAbsentKeyActions, Knopf "Entfernen" in der Layout-Prüfung)
+// -----------------------------------------------------------------------------
+test("Tote Tasten: Befund trägt Position und Ebenen für den Knopf", () => {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 5, 5, "KEY_BACKSPACE");
+  lintSet(cfg, 3, 5, 5, "KEY_BACKSPACE");
+  lintSet(cfg, 1, 2, 6, "KEY_DELETE");
+  const found = lintCodes(lintBoth(cfg), "absent-key-action");
+  assert.strictEqual(found.length, 2);
+  const byPos = {};
+  for (const f of found) byPos[`R${f.r}C${f.c}`] = [...f.layers];
+  assert.deepStrictEqual(byPos, { R2C6: [1], R5C5: [0, 3] });
+});
+
+test("Tote Tasten: clearAbsentKeyActions leert nur die genannten Ebenen und liefert die alten Zellen", () => {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 5, 5, "KEY_BACKSPACE", "KEY_A");
+  lintSet(cfg, 2, 5, 5, "KEY_BACKSPACE");
+  lintSet(cfg, 4, 5, 5, "KEY_BACKSPACE");
+  const before = JSON.stringify(cfg);
+  const res = api.clearAbsentKeyActions(cfg, api.SIDE_PROFILES.R, 5, 5, [0, 2]);
+  assert.strictEqual(JSON.stringify(cfg), before, "ändert die Konfiguration nicht");
+  assert.deepStrictEqual([...res.old].map(o => o.l), [0, 2]);
+  assert.strictEqual(res.old[0].cell.hold, "KEY_A");
+  assert.strictEqual(res.layers[0][5][5].tap, "NONE");
+  assert.strictEqual(res.layers[0][5][5].hold, "NONE");
+  assert.strictEqual(res.layers[2][5][5].tap, "NONE");
+  assert.strictEqual(res.layers[4][5][5].tap, "KEY_BACKSPACE", "nicht genannte Ebene bleibt");
+  // Nach dem Entfernen meldet die Prüfung nur noch Ebene 4
+  const next = { ...cfg, layers: res.layers };
+  assert.deepStrictEqual([...lintCodes(lintBoth(next), "absent-key-action")[0].layers], [4]);
+});
+
+test("Tote Tasten: clearAbsentKeyActions löscht nie eine echte Taste und prüft die Eingaben", () => {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 2, 1, "KEY_J");
+  lintSet(cfg, 0, 5, 5, "KEY_A");
+  // R2C1 gibt es rechts: nichts löschen
+  assert.strictEqual(api.clearAbsentKeyActions(cfg, api.SIDE_PROFILES.R, 2, 1, [0]), null);
+  // R5C5 gibt es links (dort echte Taste), rechts nicht
+  assert.strictEqual(api.clearAbsentKeyActions(cfg, api.SIDE_PROFILES.L, 5, 5, [0]), null);
+  assert.notStrictEqual(api.clearAbsentKeyActions(cfg, api.SIDE_PROFILES.R, 5, 5, [0]), null);
+  // Ungültige Position, Ebene, Liste, Konfiguration
+  assert.strictEqual(api.clearAbsentKeyActions(cfg, api.SIDE_PROFILES.R, 6, 5, [0]), null);
+  assert.strictEqual(api.clearAbsentKeyActions(cfg, api.SIDE_PROFILES.R, 5, "5", [0]), null);
+  assert.strictEqual(api.clearAbsentKeyActions(cfg, api.SIDE_PROFILES.R, 5, 5, [9, -1, "0"]), null);
+  assert.strictEqual(api.clearAbsentKeyActions(cfg, api.SIDE_PROFILES.R, 5, 5, "0"), null);
+  assert.strictEqual(api.clearAbsentKeyActions(null, api.SIDE_PROFILES.R, 5, 5, [0]), null);
+  assert.strictEqual(api.clearAbsentKeyActions({ layers: "x" }, api.SIDE_PROFILES.R, 5, 5, [0]), null);
+  // Ebene ohne Aktion auf der Position: nichts zu entfernen
+  assert.strictEqual(api.clearAbsentKeyActions(cfg, api.SIDE_PROFILES.R, 5, 5, [3]), null);
+});
+
+// Knopf in der Layout-Prüfung: vormerken, rückgängig machen, Hälfte wechseln
+function removeButtonHarness(rightCfg, leftCfg, editSide = "R") {
+  const dom = fakeDom();
+  const log = { pending: [], toasts: [], saved: [], switched: [], matrix: 0 };
+  const w = { console: { log() {}, warn() {}, error() {} }, document: dom.document };
+  vm.createContext(w);
+  vm.runInContext(`${code}
+var configsBySide = {}, editSide = ${JSON.stringify(editSide)};
+function configFor(side) { return configsBySide[side]; }
+function keycodeLabel(c) { return c; }
+function showToast(t) { log.toasts.push(t); }
+function renderMatrix() { log.matrix++; }
+function saveConfigToServer(side) { log.saved.push(side); }
+function switchEditSide(side) { log.switched.push(side); editSide = side; }
+function markPendingSync(change, side) { change.side = side; log.pending.push(change); }
+${read("js/layout-lint-ui.js")}`, w);
+  w.log = log;
+  w.configsBySide = { R: rightCfg, L: leftCfg };
+  return { w, dom, log };
+}
+
+function findRemoveButton(dom) {
+  const out = [];
+  const walk = n => { (n.children || []).forEach(c => { if (c.tagName === "BUTTON") out.push(c); walk(c); }); };
+  walk(dom.document.getElementById("layoutLintList"));
+  return out;
+}
+
+test("Tote Tasten (Anzeige): Knopf steht nur am Befund und nicht im Diff-Dialog", () => {
+  const right = lintCfg();
+  lintSet(right, 0, 5, 5, "KEY_BACKSPACE");
+  right.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  const { w, dom } = removeButtonHarness(right, lintCfg());
+  w.renderLayoutLint();
+  const buttons = findRemoveButton(dom);
+  assert.strictEqual(buttons.length, 1, "genau ein Knopf: nur der Befund 'Taste gibt es nicht'");
+  assert.strictEqual(buttons[0].textContent, "Entfernen");
+  assert.ok(buttons[0].title.includes("R5C5") && buttons[0].title.includes("Ebene 0"), buttons[0].title);
+  // Im Diff-Dialog bleibt die Konfiguration während der Übertragung unverändert: kein Knopf
+  w.renderSyncDiffLint();
+  const diffButtons = [];
+  const walk = n => { (n.children || []).forEach(c => { if (c.tagName === "BUTTON") diffButtons.push(c); walk(c); }); };
+  walk(dom.document.getElementById("syncDiffLint"));
+  assert.strictEqual(diffButtons.length, 0);
+});
+
+test("Tote Tasten (Anzeige): Entfernen leert die Aktionen, merkt vor und macht sich rückgängig", async () => {
+  const right = lintCfg();
+  for (const l of [0, 1, 4]) lintSet(right, l, 5, 5, "KEY_BACKSPACE");
+  lintSet(right, 0, 2, 1, "KEY_J");
+  const { w, dom, log } = removeButtonHarness(right, lintCfg());
+  w.renderLayoutLint();
+  await findRemoveButton(dom)[0].click();
+  for (const l of [0, 1, 4]) assert.strictEqual(right.layers[l][5][5].tap, "NONE", `Ebene ${l}`);
+  assert.strictEqual(right.layers[0][2][1].tap, "KEY_J", "echte Taste bleibt");
+  assert.strictEqual(log.pending.length, 1);
+  assert.strictEqual(log.pending[0].type, "key");
+  assert.strictEqual(log.pending[0].side, "R");
+  assert.strictEqual(log.pending[0].title, "Taste [R5, C5] entfernt");   // Stil der Tastenänderungen im Inspektor
+  assert.ok(log.pending[0].description.includes("Ebenen 0, 1, 4"), log.pending[0].description);
+  assert.deepStrictEqual(log.saved, ["R"]);
+  assert.ok(log.matrix >= 1);
+  // Die Prüfung meldet nichts mehr
+  assert.deepStrictEqual(lintCodes(lintBoth(right), "absent-key-action"), []);
+  // Rückgängig stellt die alten Zellen wieder her und speichert
+  log.pending[0].revert();
+  for (const l of [0, 1, 4]) assert.strictEqual(right.layers[l][5][5].tap, "KEY_BACKSPACE", `Ebene ${l}`);
+  assert.deepStrictEqual(log.saved, ["R", "R"]);
+});
+
+test("Tote Tasten (Anzeige): Befund der anderen Hälfte wechselt zuerst die bearbeitete Hälfte", async () => {
+  const left = lintCfg();
+  lintSet(left, 2, 5, 0, "KEY_A");                  // R5C0 gibt es links nicht
+  const { w, dom, log } = removeButtonHarness(lintCfg(), left, "R");
+  w.renderLayoutLint();
+  await findRemoveButton(dom)[0].click();
+  assert.deepStrictEqual(log.switched, ["L"]);
+  assert.strictEqual(left.layers[2][5][0].tap, "NONE");
+  assert.strictEqual(log.pending[0].side, "L");
+  assert.deepStrictEqual(log.saved, ["L"]);
+});
+
+test("Tote Tasten (Anzeige): geänderte Belegung seit der Anzeige meldet nichts zu entfernen", async () => {
+  const right = lintCfg();
+  lintSet(right, 0, 5, 5, "KEY_BACKSPACE");
+  const { w, dom, log } = removeButtonHarness(right, lintCfg());
+  w.renderLayoutLint();
+  const button = findRemoveButton(dom)[0];
+  // Die Aktion verschwindet, bevor der Knopf gedrückt wird (z. B. durch Rückgängig oder ein Profil)
+  right.layers[0][5][5] = { label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" };
+  await button.click();
+  assert.strictEqual(log.pending.length, 0);
+  assert.deepStrictEqual(log.saved, []);
+  assert.ok(log.toasts.at(-1).includes("nichts zu entfernen"), log.toasts.at(-1));
+});
+
+test("Tote Tasten (Anzeige): Rückgängig schreibt in die aktuelle Konfiguration, nicht in ein ersetztes Objekt", async () => {
+  const right = lintCfg();
+  lintSet(right, 0, 5, 5, "KEY_BACKSPACE");
+  const { w, dom, log } = removeButtonHarness(right, lintCfg());
+  w.renderLayoutLint();
+  await findRemoveButton(dom)[0].click();
+  // Ein Lesen vom Gerät oder ein Profil ersetzt das Konfigurationsobjekt der Hälfte
+  const replaced = lintCfg();
+  w.configsBySide.R = replaced;
+  log.pending[0].revert();
+  assert.strictEqual(replaced.layers[0][5][5].tap, "KEY_BACKSPACE", "die aktuelle Konfiguration bekommt die Zelle zurück");
+  assert.strictEqual(right.layers[0][5][5].tap, "NONE", "das alte Objekt bleibt unberührt");
+  assert.deepStrictEqual(log.saved, ["R", "R"]);
+  // Ohne Konfiguration der Hälfte bricht das Rückgängig nicht ab und speichert nichts
+  w.configsBySide.R = undefined;
+  assert.doesNotThrow(() => log.pending[0].revert());
+  assert.deepStrictEqual(log.saved, ["R", "R"]);
+});
+
+test("Tote Tasten (Anzeige): ein zweiter Klick auf denselben Knopf entfernt nichts doppelt", async () => {
+  const right = lintCfg();
+  lintSet(right, 0, 5, 5, "KEY_BACKSPACE");
+  const { w, dom, log } = removeButtonHarness(right, lintCfg());
+  w.renderLayoutLint();
+  const button = findRemoveButton(dom)[0];
+  await button.click();
+  await button.click();
+  assert.strictEqual(log.pending.length, 1);
+  assert.deepStrictEqual(log.saved, ["R"]);
+  assert.ok(log.toasts.at(-1).includes("schon entfernt"), log.toasts.at(-1));
 });
 
 // Body mit getReader() aus Byte-Stücken

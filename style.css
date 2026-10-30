@@ -1756,6 +1756,10 @@ body {
   color: var(--text-muted);
 }
 
+.layout-lint-fix {
+  margin-left: 0.4rem;
+}
+
 /* Tastenpaare (1 Taste = 2 Tasten) */
 .key-pairs-header {
   margin-top: 1.5rem;

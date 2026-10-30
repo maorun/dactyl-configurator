@@ -686,13 +686,32 @@ function lintLayerHasOwnContent(cfg, profile, layer) {
   return false;
 }
 
+// Entfernt die Aktionen einer Taste, die es an der Hälfte nicht gibt, auf den genannten Ebenen (Knopf "Entfernen"
+// in der Layout-Prüfung). Ändert cfg nicht. Rückgabe { layers: neue Ebenen, old: [{ l, cell }] mit den alten Zellen
+// für das Rückgängig } oder null, wenn die Position doch existiert oder ungültig ist (kein Löschen einer echten Taste).
+function clearAbsentKeyActions(cfg, profile, r, c, layerList) {
+  if (!cfg || !Array.isArray(cfg.layers) || !isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS)) return null;
+  if (isWiredSwitch(r, c, profile) || !Array.isArray(layerList)) return null;
+  const layers = JSON.parse(JSON.stringify(cfg.layers));
+  const old = [];
+  for (const l of layerList) {
+    if (!isValidIndex(l, layers.length) || !Array.isArray(layers[l]) || !Array.isArray(layers[l][r])) continue;
+    const cell = layers[l][r][c];
+    if (!lintHasAction(lintCellActions(cell))) continue;
+    old.push({ l, cell: JSON.parse(JSON.stringify(cell)) });
+    layers[l][r][c] = { label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" };
+  }
+  return old.length ? { layers, old } : null;
+}
+
 // Prüft die Konfigurationen beider Hälften gemeinsam, weil sie die aktive Ebene teilen (Layer-Abgleich).
 // configs: { [side]: config }, profiles: SIDE_PROFILES, labelFor: Anzeigename eines Tastencodes (für Tastenpaare).
 // Rückgabe: Liste { level: "warn" | "info", side: Hälfte oder null (beide), code, message }, Warnungen zuerst.
 // Die Prüfung ändert nichts und blockiert nichts.
 function lintLayouts(configs, profiles, labelFor = code => code) {
   const out = [];
-  const add = (level, side, code, message) => out.push({ level, side, code, message });
+  // extra: Zusatzfelder des Befunds (z. B. Position und Ebenen für den Knopf "Entfernen")
+  const add = (level, side, code, message, extra) => out.push({ level, side, code, message, ...extra });
   const sides = Object.keys(configs || {}).filter(s => configs[s] && profiles && profiles[s]);
 
   // 1. Aktion auf einer Taste, die es an der Hälfte nicht gibt (auch außerhalb der Matrix, z. B. R2C6)
@@ -703,14 +722,16 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
         for (let c = 0; c < NUM_COLS; c++) {
           if (isWiredSwitch(r, c, profiles[side]) || !lintHasAction(lintCellAt(configs[side], l, r, c))) continue;
           const id = `R${r}C${c}`;
-          if (!found.has(id)) found.set(id, []);
-          found.get(id).push(l);
+          if (!found.has(id)) found.set(id, { r, c, layers: [] });
+          found.get(id).layers.push(l);
         }
       }
     }
-    for (const [id, layers] of found) {
+    for (const [id, { r, c, layers }] of found) {
+      // r, c und layers gehören zum Knopf "Entfernen" (clearAbsentKeyActions)
       add("warn", side, "absent-key-action",
-        `Taste ${id} hat ${lintOnLayers(layers)} eine Aktion, aber diese Taste gibt es nicht. Die Aktion hat keine Wirkung.`);
+        `Taste ${id} hat ${lintOnLayers(layers)} eine Aktion, aber diese Taste gibt es nicht. Die Aktion hat keine Wirkung.`,
+        { r, c, layers });
     }
   }
 

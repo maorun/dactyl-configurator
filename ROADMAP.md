@@ -74,15 +74,6 @@ No open entry.
 - **Goal:** Let the arrow keys change the selected key in the matrix.
 - **Acceptance test:** A test shows that the arrow keys move the selection and stop at the edge of the matrix.
 
-### Heatmap export
-
-- **Rank:** Feature model. Total 17/40 (typing 0, configuration 3, harmony 6, safety 8). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/heatmap.js`.
-- **Dependency:** "Heatmap per layer". The export is useful only with or after it.
-- **Goal:** Export the counters as CSV or JSON, for example for layout optimization.
-- **Acceptance test:** A test shows that the exported file contains the counter of each key and layer.
-
 ### Layer overview
 
 - **Rank:** Feature model. Total 17/40 (typing 0, configuration 5, harmony 5, safety 7). Effort M. Estimate.

@@ -36,6 +36,24 @@ No open entry.
 - **Acceptance test:** A firmware test shows that `GET_CONFIG` returns all combos, key pairs and macros.
 - **Acceptance test:** `diffKeymap` reports a changed macro.
 
+### Trackball support
+
+- **Rank:** Feature model. Total 22/40 (typing 8, configuration 2, harmony 5, safety 7). Effort L. Estimate.
+- **Area:** Firmware.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino`, `firmware/dactyl_left/dactyl_left.ino`.
+- **Problem:** The user must move the hand from the keyboard to a mouse to control the pointer.
+- **Goal:** Read a PMW3360 optical sensor through SPI. Send the mouse movement over the split radio link and to the computer.
+- **Acceptance test:** A manual test shows that a roll of the trackball moves the pointer on the screen.
+
+### Rotary encoder support
+
+- **Rank:** Feature model. Total 21/40 (typing 6, configuration 4, harmony 6, safety 5). Effort M. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino`, `js/editor.js`.
+- **Problem:** The user has no physical dial to change the volume or to scroll a page.
+- **Goal:** Read the rotation of a rotary encoder. Let the user configure the actions for both directions in the web app.
+- **Acceptance test:** A manual test shows that a turn of the encoder changes the volume.
+
 ## Priority 4
 
 ### Mouse movement (mouse keys)
@@ -81,6 +99,15 @@ No open entry.
 - **Code:** `js/editor.js`, `style.css`.
 - **Goal:** Show all 8 layers in small size side by side, so transparent keys and conflicts are visible.
 - **Acceptance test:** A test shows that the overview marks a key that is transparent on a layer.
+
+### OLED display support
+
+- **Rank:** Feature model. Total 16/40 (typing 1, configuration 6, harmony 5, safety 4). Effort L. Estimate.
+- **Area:** Firmware.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino`, `firmware/dactyl_left/dactyl_left.ino`.
+- **Problem:** The user does not know the active layer or the battery level without the web app.
+- **Goal:** Send data to an SSD1306 OLED display through I2C. Show the active layer and the battery level.
+- **Acceptance test:** A manual test shows that a layer change updates the text on the display.
 
 ## Priority 5
 

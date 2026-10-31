@@ -25,16 +25,7 @@ No open entry.
 
 ## Priority 3
 
-### `GET_CONFIG` with combos, key pairs and macros
-
-- **Rank:** Feature model. Total 23/40 (typing 2, configuration 7, harmony 8, safety 6). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (`GET_CONFIG`), `js/config-sync.js` (`captureDeviceSnapshotLine`), `js/config-model.js` (`diffKeymap`).
-- **Problem:** The layout diff and "Vom ESP32 laden" skip combos, key pairs and macros. The diff can show "no change" while the macros on the device differ.
-- **Goal:** Send combos, key pairs and macros in `GET_CONFIG`. Compare them in the layout diff.
-- **Goal:** Make a backup that is read directly from the device complete. The automatic backup of the app already covers the main case.
-- **Acceptance test:** A firmware test shows that `GET_CONFIG` returns all combos, key pairs and macros.
-- **Acceptance test:** `diffKeymap` reports a changed macro.
+No open entry.
 
 ## Priority 4
 

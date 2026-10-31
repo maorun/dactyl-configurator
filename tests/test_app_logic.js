@@ -2043,6 +2043,85 @@ test("Suchfeld: Hinweis sperrt ohne Treffer und nennt eine ausgeblendete Auswahl
   assert.ok(!/select\.value\s*=/.test(filterSrc));
 });
 
+test("Suche: Tastenpaare und Makro-Schritt haben ein Suchfeld", () => {
+  const html = read("index.html");
+  ["keyPairFirstSelect", "keyPairSecondSelect", "macroStepCode"].forEach(id => {
+    assert.ok(html.includes(`data-filter-for="${id}"`), `Suchfeld fehlt für ${id}`);
+  });
+  const table = section("js/editor.js", "const FILTER_BLOCKS_BUTTON", "};");
+  assert.ok(/keyPairFirstSelect:\s*"btnAddKeyPair"/.test(table));
+  assert.ok(/keyPairSecondSelect:\s*"btnAddKeyPair"/.test(table));
+  assert.ok(/macroStepCode:\s*"btnAddMacroStep"/.test(table));
+  assert.ok(/Object\.keys\(FILTER_BLOCKS_BUTTON\)/.test(section("js/editor.js", "function populateKeycodeSelects", "function filterOptionNodes")));
+  // Jeder Aufruf steht im Körper seiner eigenen Funktion (nicht im Körper der anderen)
+  const stepInputs = section("js/macros-ui.js", "function updateMacroStepInputs", "function addMacroStepFromUI");
+  const openEditor = section("js/macros-ui.js", "function openMacroEditor", "function closeMacroEditor");
+  assert.ok(stepInputs.includes('clearSelectFilter("macroStepCode")'));
+  assert.ok(openEditor.includes('clearSelectFilter("macroStepCode")'));
+});
+
+test("Suche: Tastenpaar- und Makro-Auswahl sperren ihren Knopf ohne Treffer, die Auswahl bleibt", () => {
+  const els = {};
+  const mkSelect = (id, texts) => {
+    const hintHolder = { el: null };
+    const opts = texts.map(t => ({ textContent: t, hidden: false, value: t }));
+    const group = { tagName: "OPTGROUP", label: "Buchstaben", hidden: false, children: opts };
+    opts.forEach(o => { o.parentElement = group; });
+    const select = {
+      id, children: [group], options: opts, selectedIndex: 0, dataset: {},
+      get value() { return opts[this.selectedIndex].value; },
+      parentElement: { querySelector: () => hintHolder.el },
+      insertAdjacentElement(_pos, el) { hintHolder.el = el; }
+    };
+    group.parentElement = select;
+    els[id] = select;
+    els[`filter:${id}`] = { value: "" };
+    return select;
+  };
+  mkSelect("keyPairFirstSelect", ["Shift (KEY_LEFT_SHIFT)", "A (KEY_A)"]);
+  mkSelect("keyPairSecondSelect", ["Punkt (KEY_PERIOD)", "B (KEY_B)"]);
+  mkSelect("macroStepCode", ["A (KEY_A)", "B (KEY_B)"]);
+  ["btnAddKeyPair", "btnAddMacroStep"].forEach(id => { els[id] = { disabled: false, title: "" }; });
+  const ctx = {
+    document: {
+      getElementById: id => els[id] || null,
+      querySelector: sel => { const m = /data-filter-for="([^"]+)"/.exec(sel); return m ? els[`filter:${m[1]}`] || null : null; },
+      createElement: () => ({ style: {}, dataset: {}, className: "", textContent: "" })
+    }
+  };
+  vm.createContext(ctx);
+  vm.runInContext(`${section("js/keycodes.js", "function keycodeOptionMatches", "\n}\n")}
+}
+const OPTIONAL_ACTION_PREFIX = {};
+${section("js/editor.js", "function filterOptionNodes", "function switchEditSide")}`, ctx);
+  const run = src => vm.runInContext(src, ctx);
+  const query = (id, text) => { els[`filter:${id}`].value = text; run(`applySelectFilter("${id}")`); };
+
+  query("macroStepCode", "zzzz");
+  assert.strictEqual(els.btnAddMacroStep.disabled, true);
+  assert.strictEqual(els.macroStepCode.selectedIndex, 0);
+  assert.ok(els.macroStepCode.dataset.filterBlocked === "true");
+  // Ein Treffer gibt den Knopf frei, eine Pause leert die Suche
+  query("macroStepCode", "zzzz");
+  run('clearSelectFilter("macroStepCode")');
+  assert.strictEqual(els.btnAddMacroStep.disabled, false);
+  assert.strictEqual(els.macroStepCode.options.every(o => !o.hidden), true);
+
+  // Zwei Auswahlen teilen einen Knopf: er bleibt gesperrt, bis beide Suchen Treffer haben
+  query("keyPairFirstSelect", "zzzz");
+  query("keyPairSecondSelect", "zzzz");
+  assert.strictEqual(els.btnAddKeyPair.disabled, true);
+  run('clearSelectFilter("keyPairFirstSelect")');
+  assert.strictEqual(els.btnAddKeyPair.disabled, true);
+  run('clearSelectFilter("keyPairSecondSelect")');
+  assert.strictEqual(els.btnAddKeyPair.disabled, false);
+  // Eine Suche mit Treffer blendet nur Nicht-Treffer aus und ändert die Auswahl nicht
+  query("keyPairSecondSelect", "punkt");
+  assert.deepStrictEqual(els.keyPairSecondSelect.options.map(o => o.hidden), [false, true]);
+  assert.strictEqual(els.keyPairSecondSelect.selectedIndex, 0);
+  assert.strictEqual(els.btnAddKeyPair.disabled, false);
+});
+
 test("Live-Monitor: US-Beschriftungen und Umlaut-Zuordnung", () => {
   const m = R.scancodeMap;
   assert.deepStrictEqual([m.Minus.label, m.BracketLeft.label, m.Semicolon.label, m.Quote.label, m.Slash.label], ["-", "[", ";", "'", "/"]);
@@ -2346,7 +2425,7 @@ function pendingFor(side) { return pendingBySide[side]; }
 function showToast(t) { log.toasts.push(t); }
 function saveConfigToServer() { log.saved++; }
 function renderMatrix() {} function renderLayerButtons() {} function renderCombosTable() {} function renderKeyPairs() {}
-function updateInspector() {} function applySettingsToInputs() {} function applySelectFilter() {}
+function updateInspector() {} function applySettingsToInputs() {} function applySelectFilter() {} function clearSelectFilter() {}
 function clearKeySelection() {} function isEditableTarget() { return false; }
 async function sendDeviceCommand(cmd, side) { log.sent.push(cmd); return true; }
 ${section("js/key-pairs-ui.js", "function keycodeLabel", "\n}\n")}
@@ -2411,7 +2490,7 @@ test("Makro-UI: Löschen und Rückgängig behalten spätere Tastenänderungen", 
 function applyKeyHarness() {
   const h = uiHarness(`var pendingChanges = [];
 function togglePendingChangesDrawer() {} function discardAllPendingChanges() {} function populateComboKeyDropdowns() {}
-function clearSelectFilter() {} function renderPendingSyncUI() {} function setPendingFor() {}
+function renderPendingSyncUI() {} function setPendingFor() {}
 function writeConfigWithDiff() {} function saveAndFlashToDactyl() {} function readConfigFromESP32() {}
 ${read("js/editor-events.js")}`);
   const { w, dom } = h;

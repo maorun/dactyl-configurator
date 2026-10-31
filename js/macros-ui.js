@@ -118,6 +118,8 @@ function updateMacroStepInputs() {
   const isPause = document.getElementById("macroStepType").value === "pause";
   document.getElementById("macroStepCodeWrap").style.display = isPause ? "none" : "";
   document.getElementById("macroStepMsWrap").style.display = isPause ? "" : "none";
+  // Eine Suche ohne Treffer sperrt "+ Schritt" nicht für eine Pause
+  if (isPause) clearSelectFilter("macroStepCode");
 }
 
 function addMacroStepFromUI() {
@@ -149,6 +151,7 @@ function openMacroEditor(idx) {
   document.getElementById("macroNameInput").value = macro ? macro.name : `Makro ${currentConfig.macros.length}`;
   document.getElementById("macroEditorTitle").textContent = macro ? `Makro ${idx} bearbeiten` : "Neues Makro";
   document.getElementById("macroEditor").style.display = "";
+  clearSelectFilter("macroStepCode");
   renderMacroDraftSteps();
 }
 

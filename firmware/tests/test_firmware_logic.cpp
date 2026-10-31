@@ -1050,6 +1050,86 @@ TEST(test_mod_tap_tap_and_hold) {
 }
 
 // -----------------------------------------------------------------------------
+// GET_CONFIG liefert Combos, Tastenpaare und Makros
+// -----------------------------------------------------------------------------
+TEST(test_get_config_sends_combos_pairs_macros) {
+  resetState();
+  loadKeymapFromNVS();
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  handleConfigCommand("CLEAR_PAIRS", false);
+  handleConfigCommand("ADD_PAIR 130 46", false);
+  handleConfigCommand("CLEAR_MACROS", false);
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  handleConfigCommand("ADD_MACRO_STEP 4 0 250", false);
+  handleConfigCommand("ADD_MACRO", false);
+
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool cc = false, combo = false, pc = false, pair = false, count = false, macro0 = false, macro1 = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n == "COMBO_COUNT:1") cc = true;
+    if (n == "COMBO_DATA:{\"o\":0,\"e\":[[2,1,2,2,0,177]]}") combo = true;
+    if (n == "PAIR_COUNT:1") pc = true;
+    if (n == "PAIR_DATA:{\"o\":0,\"e\":[[130,46]]}") pair = true;
+    if (n == "MACRO_COUNT:2") count = true;
+    if (n == "MACRO_DATA:{\"i\":0,\"n\":2,\"o\":0,\"s\":[[1,97,0],[4,0,250]]}") macro0 = true;
+    if (n == "MACRO_DATA:{\"i\":1,\"n\":0,\"o\":0,\"s\":[]}") macro1 = true;
+  }
+  assert(cc && combo && pc && pair && count && macro0 && macro1);
+  assert(mockChar.notifications.back() == "CONFIG_SYNC_DONE");
+
+  // Leere Listen: nur die Zähler
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("CLEAR_PAIRS", false);
+  handleConfigCommand("CLEAR_MACROS", false);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool empty = false, noData = true;
+  for (const auto& n : mockChar.notifications) {
+    if (n == "COMBO_COUNT:0") empty = true;
+    if (n.rfind("COMBO_DATA", 0) == 0 || n.rfind("PAIR_DATA", 0) == 0 || n.rfind("MACRO_DATA", 0) == 0) noData = false;
+  }
+  assert(empty && noData);
+}
+
+// Größter Fall: 16 Combos, 16 Tastenpaare, 16 Makros zu 32 Schritten. Jede Zeile bleibt kurz, nichts geht verloren.
+TEST(test_get_config_lines_stay_short_at_maximum) {
+  resetState();
+  loadKeymapFromNVS();
+  handleConfigCommand("CLEAR_COMBOS", false);
+  for (int i = 0; i < 16; i++) handleConfigCommand("ADD_COMBO 5 6 4 5 2 65535", false);
+  handleConfigCommand("CLEAR_PAIRS", false);
+  for (int i = 0; i < 16; i++) handleConfigCommand("ADD_PAIR 255 255", false);
+  handleConfigCommand("CLEAR_MACROS", false);
+  for (int i = 0; i < 16; i++) {
+    handleConfigCommand("ADD_MACRO", false);
+    for (int j = 0; j < 32; j++) handleConfigCommand("ADD_MACRO_STEP 4 0 5000", false);
+  }
+  assert(numCombos == 16 && numKeyPairs == 16 && numMacros == 16);
+
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  size_t longest = 0;
+  int comboEntries = 0, pairEntries = 0, steps = 0;
+  auto countOf = [](const std::string& n, const std::string& needle) {
+    int c = 0;
+    for (size_t p = n.find(needle); p != std::string::npos; p = n.find(needle, p + 1)) c++;
+    return c;
+  };
+  for (const auto& n : mockChar.notifications) {
+    if (n.rfind("LAYER_DATA", 0) == 0 || n.rfind("HOLD_DATA", 0) == 0 || n.rfind("DTAP_DATA", 0) == 0) continue;
+    if (n.size() > longest) longest = n.size();
+    if (n.rfind("COMBO_DATA", 0) == 0) comboEntries += countOf(n, "],[") + 1;
+    if (n.rfind("PAIR_DATA", 0) == 0) pairEntries += countOf(n, "],[") + 1;
+    if (n.rfind("MACRO_DATA", 0) == 0) steps += countOf(n, "],[") + 1;
+  }
+  assert(longest > 0 && longest <= 160);
+  assert(comboEntries == 16 && pairEntries == 16 && steps == 16 * 32);
+}
+
+// -----------------------------------------------------------------------------
 // Test 12b: Media-Keys & Mac Globe (Consumer-Report-Bits aus DactylKeycodes.h)
 // -----------------------------------------------------------------------------
 TEST(test_media_and_globe_keys) {

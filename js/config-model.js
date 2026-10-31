@@ -496,10 +496,113 @@ function maxKeyCount(stats) {
 // =============================================================================
 // Layout-Diff vor dem Sync (lokale Belegung gegen GET_CONFIG des Geräts)
 // =============================================================================
-// GET_CONFIG liefert Ebenen-Namen und Tasten (Tap, Halten, Doppel-Tipp), keine Combos und Tastenpaare.
+// GET_CONFIG liefert Ebenen-Namen, Tasten (Tap, Halten, Doppel-Tipp), Combos, Tastenpaare und Makros.
+// Firmware vor Stand 5 sendet die drei Listen nicht (Zustand "absent"); fehlt oder bricht eine Zeile (Zustand
+// "incomplete"), vergleicht der Diff sie ebenfalls nicht. Die Listen kommen in kurzen Blöcken mit Offset.
 
 function createDeviceSnapshot() {
-  return { names: null, tap: [], hold: [], dtap: [] };
+  return {
+    names: null, tap: [], hold: [], dtap: [],
+    counts: { combos: null, pairs: null, macros: null }, combos: [], pairs: [], macros: [], macroLens: [], listsBroken: false
+  };
+}
+
+const COMBO_BEHAVIOR_CODES = { KEY_PRESS: 0, MODIFIER_HOLD: 1, LAYER_TOGGLE: 2 };
+
+const LIST_COUNT_MAX = { "COMBO_COUNT:": MAX_COMBOS, "PAIR_COUNT:": MAX_KEY_PAIRS, "MACRO_COUNT:": MAX_MACROS };
+const LIST_DATA_PREFIXES = ["COMBO_DATA:", "PAIR_DATA:", "MACRO_DATA:"];
+
+// Übernimmt eine Zeile ..._COUNT: oder ..._DATA: in den Snapshot. Gibt true zurück, wenn die Zeile eine dieser
+// Arten ist (auch bei ungültigem Inhalt: verbraucht, der Snapshot gilt dann als unvollständig).
+function captureListLine(snapshot, line) {
+  const prefix = line.substring(0, line.indexOf(":") + 1);
+  if (!LIST_COUNT_MAX[prefix] && !LIST_DATA_PREFIXES.includes(prefix)) return false;
+  const body = line.substring(prefix.length);
+  const nums = (a, n, ok) => Array.isArray(a) && a.length === n && a.every(v => Number.isInteger(v) && v >= 0 && v <= 0xFFFF) && (!ok || ok(a));
+  const fail = () => { snapshot.listsBroken = true; return true; };
+  try {
+    if (LIST_COUNT_MAX[prefix] !== undefined) {
+      const n = /^\d{1,3}$/.test(body) ? Number(body) : -1;
+      if (n < 0 || n > LIST_COUNT_MAX[prefix]) return fail();
+      const kind = { "COMBO_COUNT:": "combos", "PAIR_COUNT:": "pairs", "MACRO_COUNT:": "macros" }[prefix];
+      snapshot.counts[kind] = n;
+      snapshot[kind] = [];
+      if (kind === "macros") snapshot.macroLens = [];
+      return true;
+    }
+    const data = JSON.parse(body);
+    if (!data || typeof data !== "object") return fail();
+    if (prefix === "MACRO_DATA:") {
+      const count = snapshot.counts.macros;
+      if (count === null || !isValidIndex(data.i, count) || !Number.isInteger(data.n) || data.n < 0 || data.n > MAX_MACRO_STEPS ||
+          !Array.isArray(data.s) || !data.s.every(e => nums(e, 3, t => t[0] >= 1 && t[0] <= 4))) return fail();
+      if (snapshot.macroLens[data.i] === undefined) { snapshot.macroLens[data.i] = data.n; snapshot.macros[data.i] = []; }
+      const steps = snapshot.macros[data.i];
+      if (snapshot.macroLens[data.i] !== data.n || data.o !== steps.length || steps.length + data.s.length > data.n) return fail();
+      steps.push(...data.s);
+      return true;
+    }
+    const isCombo = prefix === "COMBO_DATA:";
+    const kind = isCombo ? "combos" : "pairs";
+    const count = snapshot.counts[kind];
+    const list = snapshot[kind];
+    if (count === null || data.o !== list.length || !Array.isArray(data.e) || list.length + data.e.length > count ||
+        !data.e.every(e => isCombo ? nums(e, 6, t => t[4] <= 2) : nums(e, 2))) return fail();
+    list.push(...data.e);
+  } catch (_) { return fail(); }
+  return true;
+}
+
+// "absent": das Gerät sendet keine Listen (Firmware vor Stand 5). "complete": alle Listen vollständig gelesen.
+// "incomplete": Listen begonnen, aber eine Zeile fehlt oder war ungültig.
+function snapshotListsState(snapshot) {
+  if (!snapshot) return "absent";
+  const c = snapshot.counts;
+  const none = c.combos === null && c.pairs === null && c.macros === null;
+  if (none && !snapshot.listsBroken) return "absent";
+  if (snapshot.listsBroken || c.combos === null || c.pairs === null || c.macros === null) return "incomplete";
+  if (snapshot.combos.length !== c.combos || snapshot.pairs.length !== c.pairs) return "incomplete";
+  for (let i = 0; i < c.macros; i++) {
+    if (snapshot.macroLens[i] === undefined || snapshot.macros[i].length !== snapshot.macroLens[i]) return "incomplete";
+  }
+  return "complete";
+}
+
+function snapshotListsKnown(snapshot) {
+  return snapshotListsState(snapshot) === "complete";
+}
+
+// Lokale Listen als Zahlen-Tupel, so wie die Firmware sie sendet
+function localComboTuples(cfg) {
+  return (cfg.combos || []).slice(0, MAX_COMBOS).map(cb => [cb.key1.r, cb.key1.c, cb.key2.r, cb.key2.c,
+    COMBO_BEHAVIOR_CODES[cb.behavior] ?? 0, actionCodeToNumeric(cb.action)]);
+}
+
+function localPairTuples(cfg) {
+  return (cfg.keyPairs || []).slice(0, MAX_KEY_PAIRS).map(p => [actionCodeToNumeric(p.first), actionCodeToNumeric(p.second)]);
+}
+
+function localMacroSteps(cfg) {
+  return (cfg.macros || []).slice(0, MAX_MACROS).map(m => m.steps.map(st => st.type === "pause"
+    ? [MACRO_STEP_TYPES.pause, 0, st.ms]
+    : [MACRO_STEP_TYPES[st.type], actionCodeToNumeric(st.code), 0]));
+}
+
+const MACRO_STEP_NAMES = { 1: "Tippen", 2: "Drücken", 3: "Loslassen", 4: "Pause" };
+
+function describeComboTuple(t) {
+  const behavior = ["", " (Modifier halten)", " (Ebene umschalten)"][t[4]] || "";
+  return `R${t[0]}C${t[1]} + R${t[2]}C${t[3]} → ${findDefinitionByCode(t[5]).label}${behavior}`;
+}
+
+function describePairTuple(t) {
+  return `${findDefinitionByCode(t[0]).label} + ${findDefinitionByCode(t[1]).label}`;
+}
+
+function describeMacroSteps(steps) {
+  if (!steps) return "—";
+  if (steps.length === 0) return "leer";
+  return steps.map(st => st[0] === 4 ? `Pause ${st[2]} ms` : `${MACRO_STEP_NAMES[st[0]] || "?"} ${findDefinitionByCode(st[1]).label}`).join(", ");
 }
 
 // Speichert eine Matrix aus GET_CONFIG als Zahlencodes. Gibt true zurück, wenn übernommen.
@@ -553,7 +656,29 @@ function diffKeymap(cfg, snapshot, profile) {
     const deviceName = sanitizeCommandText(snapshot.names[l], DEFAULT_LAYER_NAMES[l]);
     if (localName !== deviceName) names.push({ l, device: deviceName, local: localName });
   }
-  return { keys, names };
+  return { keys, names, lists: diffLists(cfg, snapshot) };
+}
+
+// Unterschiede bei Combos, Tastenpaaren und Makros, jeweils je Index in der Reihenfolge der Liste (die Firmware
+// prüft Combos in dieser Reihenfolge). Zeilen { where, device, local }. state = "absent" oder "incomplete":
+// nichts wird verglichen.
+function diffLists(cfg, snapshot) {
+  const state = snapshotListsState(snapshot);
+  const out = { known: state === "complete", state, combos: [], pairs: [], macros: [] };
+  if (!out.known) return out;
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const compare = (target, label, device, local, describe) => {
+    for (let i = 0; i < Math.max(device.length, local.length); i++) {
+      if (!same(device[i], local[i])) {
+        target.push({ where: `${label} ${i}`, device: device[i] ? describe(device[i]) : "—", local: local[i] ? describe(local[i]) : "—" });
+      }
+    }
+  };
+  compare(out.combos, "Combo", snapshot.combos, localComboTuples(cfg), describeComboTuple);
+  compare(out.pairs, "Paar", snapshot.pairs, localPairTuples(cfg), describePairTuple);
+  const deviceMacros = Array.from({ length: snapshot.counts.macros }, (_, i) => snapshot.macros[i]);
+  compare(out.macros, "Makro", deviceMacros, localMacroSteps(cfg), describeMacroSteps);
+  return out;
 }
 
 // Kurztext einer Tastenbelegung, z. B. "A · Halten: LEFT_CTRL · 2×: B"

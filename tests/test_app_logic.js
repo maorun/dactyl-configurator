@@ -39,7 +39,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell,
-             createDeviceSnapshot, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
+             createDeviceSnapshot, captureListLine, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
              removeKeyPairAt, KEYCODES, UMLAUT_LABELS, ONE_SHOT_LABELS, holdSublabel,
@@ -614,6 +614,120 @@ test("Layout-Diff: geänderte Taste und Ebenen-Name erscheinen mit Geräte- und 
   assert.strictEqual(api.describeKeyActions({ tapCode: 0, holdCode: 0, dtapCode: 0 }), "—");
 });
 
+// Zeilen wie die Firmware ab Stand 5 sie sendet (kurze Blöcke mit Offset)
+function listLines(cfg) {
+  const lines = [];
+  const combos = (cfg.combos || []).map(cb => [cb.key1.r, cb.key1.c, cb.key2.r, cb.key2.c,
+    { KEY_PRESS: 0, MODIFIER_HOLD: 1, LAYER_TOGGLE: 2 }[cb.behavior], api.actionCodeToNumeric(cb.action)]);
+  lines.push("COMBO_COUNT:" + combos.length);
+  for (let o = 0; o < combos.length; o += 4) lines.push("COMBO_DATA:" + JSON.stringify({ o, e: combos.slice(o, o + 4) }));
+  const pairs = (cfg.keyPairs || []).map(p => [api.actionCodeToNumeric(p.first), api.actionCodeToNumeric(p.second)]);
+  lines.push("PAIR_COUNT:" + pairs.length);
+  for (let o = 0; o < pairs.length; o += 8) lines.push("PAIR_DATA:" + JSON.stringify({ o, e: pairs.slice(o, o + 8) }));
+  const macros = cfg.macros || [];
+  lines.push("MACRO_COUNT:" + macros.length);
+  macros.forEach((m, i) => {
+    const steps = m.steps.map(st => st.type === "pause" ? [4, 0, st.ms] : [api.MACRO_STEP_TYPES[st.type], api.actionCodeToNumeric(st.code), 0]);
+    for (let o = 0; o === 0 || o < steps.length; o += 8) lines.push("MACRO_DATA:" + JSON.stringify({ i, n: steps.length, o, s: steps.slice(o, o + 8) }));
+  });
+  return lines;
+}
+
+function snapshotWithLists(cfg) {
+  const snap = snapshotOf(cfg);
+  for (const line of listLines(cfg)) assert.ok(api.captureListLine(snap, line), line);
+  return snap;
+}
+
+test("Layout-Diff: gleiche Combos, Tastenpaare und Makros ergeben keinen Unterschied", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.keyPairs = [{ first: "KEY_LEFT_ALT", second: "KEY_A" }];
+  // 20 Schritte: das Gerät sendet sie in drei Blöcken
+  cfg.macros = [{ name: "M", steps: Array.from({ length: 20 }, (_, i) => i % 2 ? { type: "pause", ms: 100 } : { type: "tap", code: "KEY_A" }) }, { name: "E", steps: [] }];
+  const snap = snapshotWithLists(cfg);
+  assert.strictEqual(api.snapshotListsState(snap), "complete");
+  const d = api.diffKeymap(cfg, snap, R).lists;
+  assert.strictEqual(d.known, true);
+  assert.strictEqual(d.combos.length + d.pairs.length + d.macros.length, 0);
+});
+
+test("Layout-Diff: geändertes Makro, Tastenpaar und Combo erscheinen", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.keyPairs = [{ first: "KEY_LEFT_ALT", second: "KEY_A" }];
+  cfg.macros = [{ name: "M", steps: [{ type: "tap", code: "KEY_A" }] }];
+  const snap = snapshotWithLists(cfg);
+  cfg.macros[0].steps.push({ type: "tap", code: "KEY_B" });
+  cfg.keyPairs[0].second = "KEY_B";
+  cfg.combos = cfg.combos.slice(1);
+  const d = api.diffKeymap(cfg, snap, R).lists;
+  assert.strictEqual(d.macros.length, 1);
+  assert.strictEqual(d.macros[0].where, "Makro 0");
+  assert.strictEqual(d.pairs.length, 1);
+  assert.ok(d.combos.length >= 1);
+});
+
+test("Layout-Diff: Combos mit anderer Reihenfolge oder doppelt zeigen einen Unterschied", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  assert.ok(cfg.combos.length >= 2);
+  const snap = snapshotWithLists(cfg);
+  [cfg.combos[0], cfg.combos[1]] = [cfg.combos[1], cfg.combos[0]];
+  assert.ok(api.diffKeymap(cfg, snap, R).lists.combos.length > 0);
+  const dup = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap2 = snapshotWithLists(dup);
+  dup.combos.push(JSON.parse(JSON.stringify(dup.combos[0])));
+  assert.strictEqual(api.diffKeymap(dup, snap2, R).lists.combos.length, 1);
+});
+
+test("Layout-Diff: ein zusätzliches Makro auf dem Gerät erscheint", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.macros = [];
+  const snap = snapshotOf(cfg);
+  for (const line of listLines(cfg).filter(l => !l.startsWith("MACRO"))) api.captureListLine(snap, line);
+  api.captureListLine(snap, "MACRO_COUNT:1");
+  api.captureListLine(snap, 'MACRO_DATA:{"i":0,"n":1,"o":0,"s":[[1,97,0]]}');
+  const d = api.diffKeymap(cfg, snap, R).lists;
+  assert.strictEqual(d.macros.length, 1);
+  assert.strictEqual(d.macros[0].local, "—");
+});
+
+test("Layout-Diff: ältere Firmware (keine Listen) ist 'absent', fehlende oder ungültige Zeilen sind 'incomplete'", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const old = snapshotOf(cfg);
+  assert.strictEqual(api.snapshotListsState(old), "absent");
+  const dOld = api.diffKeymap(cfg, old, R).lists;
+  assert.strictEqual(dOld.known, false);
+  assert.strictEqual(dOld.state, "absent");
+
+  // Eine verlorene Zeile: unvollständig, nicht "ältere Firmware"
+  cfg.macros = [{ name: "M", steps: [{ type: "tap", code: "KEY_A" }] }];
+  const lost = snapshotOf(cfg);
+  for (const line of listLines(cfg).filter(l => !l.startsWith("MACRO_DATA"))) api.captureListLine(lost, line);
+  assert.strictEqual(api.snapshotListsState(lost), "incomplete");
+  assert.strictEqual(api.diffKeymap(cfg, lost, R).lists.state, "incomplete");
+
+  // Ungültige Zeilen werden verbraucht, verfälschen nichts und machen den Snapshot unvollständig
+  for (const bad of ["MACRO_COUNT:", "MACRO_COUNT:0x5", "MACRO_COUNT:99", "COMBO_COUNT:17", "COMBO_DATA:nonsense"]) {
+    const snap = snapshotOf(cfg);
+    assert.strictEqual(api.captureListLine(snap, bad), true, bad);
+    assert.strictEqual(api.snapshotListsState(snap), "incomplete", bad);
+  }
+  const range = snapshotOf(cfg);
+  api.captureListLine(range, "COMBO_COUNT:1");
+  api.captureListLine(range, 'COMBO_DATA:{"o":0,"e":[[0,0,0,1,3,4]]}');   // Verhalten 3 gibt es nicht
+  assert.strictEqual(range.combos.length, 0);
+  assert.strictEqual(api.snapshotListsState(range), "incomplete");
+  const step = snapshotOf(cfg);
+  api.captureListLine(step, "MACRO_COUNT:1");
+  api.captureListLine(step, 'MACRO_DATA:{"i":0,"n":1,"o":0,"s":[[9,1,0]]}'); // Schritt-Typ 9 gibt es nicht
+  assert.strictEqual(api.snapshotListsState(step), "incomplete");
+  // Falscher Offset (doppelter oder übersprungener Block)
+  const off = snapshotOf(cfg);
+  api.captureListLine(off, "PAIR_COUNT:2");
+  api.captureListLine(off, 'PAIR_DATA:{"o":1,"e":[[1,2]]}');
+  assert.strictEqual(api.snapshotListsState(off), "incomplete");
+  assert.strictEqual(api.captureListLine(snapshotOf(cfg), "LAYER_DATA:{}"), false);
+});
+
 test("Layout-Diff: Beschriftung für Tastenpaare und unbekannte Codes", () => {
   const pair = api.ACT_KEY_PAIR_BASE + 3;
   assert.strictEqual(api.describeKeyActions({ tapCode: pair, holdCode: 0, dtapCode: 0 }), "Paar 3");
@@ -809,7 +923,7 @@ function diffFlowHarness() {
   const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
   const h = {
     NUM_LAYERS: 8, MATRIX_DATA_FIELDS: api.MATRIX_DATA_FIELDS, captureMatrixData: api.captureMatrixData,
-    isDeviceSnapshotComplete: api.isDeviceSnapshotComplete, createDeviceSnapshot: api.createDeviceSnapshot,
+    isDeviceSnapshotComplete: api.isDeviceSnapshotComplete, createDeviceSnapshot: api.createDeviceSnapshot, captureListLine: api.captureListLine,
     diffKeymap: api.diffKeymap, SIDE_PROFILES: api.SIDE_PROFILES, isAutoSyncing: false,
     side: "R", via: "usb", alsoBle: false, sendOk: true, confirmAnswer: false, dialogAnswer: null,
     Dactyl: { routeCommand: (side, conn) => conn.bleUp && conn.bleSide === side ? "ble"
@@ -856,10 +970,37 @@ function diffFlowHarness() {
       }
       for (const [p, f] of Object.entries(api.MATRIX_DATA_FIELDS)) h.capture(`${p}${JSON.stringify({ l, k: m[f] })}`, side);
     }
+    for (const line of listLines(c)) h.capture(line, side);
     return h.capture("CONFIG_SYNC_DONE", side);
   };
   return { h, calls, cfg, fire, flush, sendDevice };
 }
+
+asyncTests.push(["Layout-Diff: Listenzeilen gehen in den Snapshot; späte Listenzeilen nach dem Timeout werden verworfen", async () => {
+  const { h, calls, cfg, flush, sendDevice } = diffFlowHarness();
+  cfg.macros = [{ name: "M", steps: [{ type: "tap", code: "KEY_A" }] }];
+  const run = h.write();
+  await flush();
+  assert.strictEqual(sendDevice("R", cfg), true);
+  await flush();
+  assert.strictEqual(calls.dialogs.length, 1);
+  assert.strictEqual(calls.dialogs[0].lists.state, "complete");
+  h.dialogAnswer(false);
+  await run;
+
+  // Zweiter Ablauf: Timeout, dann kommen Listenzeilen verspätet. Sie werden verbraucht und ändern nichts.
+  const second = diffFlowHarness();
+  const run2 = second.h.write();
+  await second.flush();
+  second.fire(8000);
+  await second.flush();
+  assert.strictEqual(second.h.capture("COMBO_COUNT:1", "R"), true);
+  assert.strictEqual(second.h.capture('COMBO_DATA:{"o":0,"e":[[0,0,0,1,0,4]]}', "R"), true);
+  assert.strictEqual(second.h.capture("MACRO_DATA:{}", "R"), true);
+  assert.strictEqual(second.h.capture("CONFIG_SYNC_DONE", "R"), true);
+  await run2;
+  assert.strictEqual(second.calls.writes, 0);
+}]);
 
 asyncTests.push(["Layout-Diff: Bestätigen überträgt, Abbrechen nicht; Zeilen der anderen Hälfte zählen nicht", async () => {
   const { h, calls, cfg, flush, sendDevice } = diffFlowHarness();

@@ -1582,6 +1582,44 @@ void sendMatrixData(const char* prefix, uint16_t (*matrix)[NUM_ROWS][NUM_COLS], 
   sendConfigNotification(out, true);
 }
 
+// GET_CONFIG: Combos, Tastenpaare und Makros in kurzen Blöcken (je Zeile höchstens ~150 Zeichen, damit sie in eine
+// BLE-Benachrichtigung bei kleiner MTU passt). Jede Liste beginnt mit ..._COUNT:<n>; ..._DATA trägt den Offset "o".
+// Ein Makro sendet "n" (Schrittzahl) in jedem Block; ein leeres Makro sendet einen Block ohne Schritte.
+#define GET_CONFIG_COMBOS_PER_LINE 4
+#define GET_CONFIG_PAIRS_PER_LINE  8
+#define GET_CONFIG_STEPS_PER_LINE  8
+void sendCombosPairsMacros() {
+  sendConfigNotification("COMBO_COUNT:" + String(numCombos), true);
+  for (int o = 0; o < numCombos; o += GET_CONFIG_COMBOS_PER_LINE) {
+    String out = "COMBO_DATA:{\"o\":" + String(o) + ",\"e\":[";
+    for (int i = o; i < numCombos && i < o + GET_CONFIG_COMBOS_PER_LINE; i++) {
+      const KeyCombo &cb = userCombos[i];
+      out += String(i > o ? "," : "") + "[" + cb.r1 + "," + cb.c1 + "," + cb.r2 + "," + cb.c2 + "," + cb.behavior + "," + cb.action + "]";
+    }
+    sendConfigNotification(out + "]}", true);
+  }
+  sendConfigNotification("PAIR_COUNT:" + String(numKeyPairs), true);
+  for (int o = 0; o < numKeyPairs; o += GET_CONFIG_PAIRS_PER_LINE) {
+    String out = "PAIR_DATA:{\"o\":" + String(o) + ",\"e\":[";
+    for (int i = o; i < numKeyPairs && i < o + GET_CONFIG_PAIRS_PER_LINE; i++) {
+      out += String(i > o ? "," : "") + "[" + userKeyPairs[i].first + "," + userKeyPairs[i].second + "]";
+    }
+    sendConfigNotification(out + "]}", true);
+  }
+  sendConfigNotification("MACRO_COUNT:" + String(numMacros), true);
+  for (int i = 0; i < numMacros; i++) {
+    int n = macroLengths[i];
+    for (int o = 0; o == 0 || o < n; o += GET_CONFIG_STEPS_PER_LINE) {
+      String out = "MACRO_DATA:{\"i\":" + String(i) + ",\"n\":" + String(n) + ",\"o\":" + String(o) + ",\"s\":[";
+      for (int j = o; j < n && j < o + GET_CONFIG_STEPS_PER_LINE; j++) {
+        const MacroStep &st = userMacros[i][j];
+        out += String(j > o ? "," : "") + "[" + st.type + "," + st.code + "," + st.ms + "]";
+      }
+      sendConfigNotification(out + "]}", true);
+    }
+  }
+}
+
 // Parst "<CMD> l r c tap [hold [dtap]]". Fehlende Werte werden auf 0 gesetzt, überzählige abgelehnt.
 // fmt endet mit " %c", damit ein siebter Wert erkannt wird.
 bool parseKeyCommand(const String &cmd, const char *fmt, int &l, int &r, int &c, int &tap, int &hold, int &dtap) {
@@ -1790,6 +1828,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         sendMatrixData("HOLD_DATA:", HOLDMAP, l);
         sendMatrixData("DTAP_DATA:", DTAPMAP, l);
       }
+      sendCombosPairsMacros();
       sendConfigNotification("CONFIG_SYNC_DONE", true);
     }
   } else if (cmd == "GET_INFO") {

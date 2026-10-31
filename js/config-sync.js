@@ -367,8 +367,9 @@ function captureDeviceSnapshotLine(line, side) {
   const isDone = line.startsWith("CONFIG_SYNC_DONE");
   if (read.stale) {
     if (isDone) read.finish(null);
-    return isDone || prefix === "LAYER_NAMES:" || !!MATRIX_DATA_FIELDS[prefix];
+    return isDone || prefix === "LAYER_NAMES:" || !!MATRIX_DATA_FIELDS[prefix] || captureListLine(createDeviceSnapshot(), line);
   }
+  if (captureListLine(read.snapshot, line)) return true;
   if (prefix === "LAYER_NAMES:") {
     try {
       const names = JSON.parse(line.substring(12));
@@ -443,10 +444,18 @@ function showSyncDiffDialog(profile, diff) {
   const btnClose = document.getElementById("btnCloseSyncDiff");
   if (!modal || !summary || !list || !btnConfirm || !btnCancel || !btnClose) return Promise.resolve(true);
 
-  const total = diff.keys.length + diff.names.length;
+  const lists = diff.lists || { known: false, combos: [], pairs: [], macros: [] };
+  const listCount = lists.combos.length + lists.pairs.length + lists.macros.length;
+  const total = diff.keys.length + diff.names.length + listCount;
+  const listsHint = lists.known ? ""
+    : lists.state === "incomplete" ? " Combos, Tastenpaare und Makros kamen unvollständig an und sind nicht verglichen."
+    : " Combos, Tastenpaare und Makros vergleicht die Firmware dieses Geräts nicht: Hälfte flashen.";
+  const what = lists.known ? "Tasten, Ebenen-Namen, Combos, Tastenpaare und Makros" : "Tasten und Ebenen-Namen";
   summary.textContent = total === 0
-    ? `Tasten und Ebenen-Namen der ${profile.label} sind auf dem Gerät gleich.`
-    : `${diff.keys.length} Taste(n) und ${diff.names.length} Ebenen-Name(n) der ${profile.label} ändern sich.`;
+    ? `${what} der ${profile.label} sind auf dem Gerät gleich.${listsHint}`
+    : `${diff.keys.length} Taste(n), ${diff.names.length} Ebenen-Name(n)` +
+      (lists.known ? `, ${lists.combos.length} Combo(s), ${lists.pairs.length} Tastenpaar(e) und ${lists.macros.length} Makro(s)` : "") +
+      ` der ${profile.label} ändern sich.` + listsHint;
   list.replaceChildren();
   const addRow = (where, before, after) => {
     const li = document.createElement("li");
@@ -462,6 +471,7 @@ function showSyncDiffDialog(profile, diff) {
     list.appendChild(li);
   };
   for (const n of diff.names) addRow(`Name Ebene ${n.l}:`, n.device, n.local);
+  for (const row of [...lists.combos, ...lists.pairs, ...lists.macros]) addRow(`${row.where}:`, row.device, row.local);
   for (const k of diff.keys) addRow(`Ebene ${k.l} R${k.r}C${k.c}:`, describeKeyActions(k.device), describeKeyActions(k.local));
   list.style.display = total === 0 ? "none" : "";
   renderSyncDiffLint();

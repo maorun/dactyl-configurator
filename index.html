@@ -303,9 +303,9 @@
         </div>
         <div class="combos-list-card" id="keyPairsCard">
           <div class="key-pair-form">
-            <select id="keyPairFirstSelect" class="form-control" title="Erste Taste (wird zuerst gedrückt, z. B. Umschalt)"></select>
+            <span class="filtered-select"><input type="search" class="form-control keycode-filter" data-filter-for="keyPairFirstSelect" placeholder="Taste suchen, z. B. : oder Doppelpunkt" aria-label="Taste suchen"><select id="keyPairFirstSelect" class="form-control" title="Erste Taste (wird zuerst gedrückt, z. B. Umschalt)"></select></span>
             <strong>+</strong>
-            <select id="keyPairSecondSelect" class="form-control" title="Zweite Taste"></select>
+            <span class="filtered-select"><input type="search" class="form-control keycode-filter" data-filter-for="keyPairSecondSelect" placeholder="Taste suchen, z. B. : oder Doppelpunkt" aria-label="Taste suchen"><select id="keyPairSecondSelect" class="form-control" title="Zweite Taste"></select></span>
             <button id="btnAddKeyPair" class="btn btn-primary btn-sm" type="button">+ Tastenpaar hinzufügen</button>
           </div>
           <table class="combos-table">
@@ -341,7 +341,7 @@
                 <option value="up">Loslassen</option>
                 <option value="pause">Pause</option>
               </select>
-              <span id="macroStepCodeWrap"><select id="macroStepCode" class="form-control" title="Taste"></select></span>
+              <span id="macroStepCodeWrap" class="filtered-select"><input type="search" class="form-control keycode-filter" data-filter-for="macroStepCode" placeholder="Taste suchen, z. B. : oder Doppelpunkt" aria-label="Taste suchen"><select id="macroStepCode" class="form-control" title="Taste"></select></span>
               <span id="macroStepMsWrap"><input id="macroStepMs" class="form-control" type="number" min="1" value="100" title="Pause in ms"> ms</span>
               <button id="btnAddMacroStep" class="btn btn-secondary btn-sm" type="button">+ Schritt</button>
               <span id="macroStepCount" class="subtitle"></span>

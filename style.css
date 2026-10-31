@@ -1893,6 +1893,11 @@ body {
   margin-bottom: 1rem;
 }
 
+.filtered-select {
+  display: inline-flex;
+  flex-direction: column;
+}
+
 .key-pair-form select {
   width: auto;
   max-width: 100%;

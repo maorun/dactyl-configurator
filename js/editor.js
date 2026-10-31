@@ -373,7 +373,7 @@ function populateKeycodeSelects() {
   fillKeycodeSelect(document.getElementById("comboActionSelect"));
   fillKeycodeSelect(document.getElementById("holdActionSelect"), { holdMode: true, charPairs: true });
   fillKeycodeSelect(document.getElementById("dtapActionSelect"), { holdMode: true, prefix: OPTIONAL_ACTION_PREFIX.dtapActionSelect, charPairs: true });
-  ["primaryActionSelect", "holdActionSelect", "dtapActionSelect", "comboActionSelect"].forEach(id => {
+  Object.keys(FILTER_BLOCKS_BUTTON).forEach(id => {
     const input = document.querySelector(`[data-filter-for="${id}"]`);
     if (input) input.addEventListener("input", () => applySelectFilter(id));
   });
@@ -412,7 +412,8 @@ function selectFilterHint(query, matches, selectedHidden, selectedText) {
 // Auswahl-IDs, deren Suche den Übernehmen- bzw. Speichern-Knopf sperrt
 const FILTER_BLOCKS_BUTTON = {
   primaryActionSelect: "btnApplyKey", holdActionSelect: "btnApplyKey", dtapActionSelect: "btnApplyKey",
-  comboActionSelect: "btnSaveCombo"
+  comboActionSelect: "btnSaveCombo",
+  keyPairFirstSelect: "btnAddKeyPair", keyPairSecondSelect: "btnAddKeyPair", macroStepCode: "btnAddMacroStep"
 };
 
 // Suchfeld über einer Aktions-Auswahl: blendet nicht passende Optionen und leere Gruppen aus.

@@ -468,20 +468,22 @@ class TestServerAndCodegen(unittest.TestCase):
             calls.append(cmd)
             return 0, ""
 
-        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli)
+        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli, server.dump_nvs)
         server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
         server.find_serial_port = lambda side="R": "/dev/cu.usbserial-test"
         server.query_device_side = lambda port: "R"
         server.run_cli = fake_run
+        server.dump_nvs = lambda port, side="R", on_line=None: "nvs-000001-20270101-000000-000.bin"
         try:
             server.flash_firmware()
         finally:
-            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli = old
+            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli, server.dump_nvs = old
         self.assertEqual([c[1] for c in calls], ["compile", "upload"])
         for cmd in calls:
             self.assertEqual(cmd[cmd.index("--fqbn") + 1], "esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs")
 
-    def run_flash(self, side, port_for, side_before_upload=None, cli_lines=None, cli_code=0, on_output=None):
+    def run_flash(self, side, port_for, side_before_upload=None, cli_lines=None, cli_code=0, on_output=None,
+                  dump_nvs=None):
         """Führt flash_firmware(side) mit gefälschtem arduino-cli aus; port_for(side) ersetzt die Port-Erkennung.
         side_before_upload: Antwort der Nachprüfung vor dem Upload (Standard: die angefragte Hälfte).
         cli_lines(cmd): Ausgabezeilen des gefälschten Aufrufs; cli_code: sein Exit-Code."""
@@ -500,16 +502,26 @@ class TestServerAndCodegen(unittest.TestCase):
             probes.append((port, len(calls)))
             return side if side_before_upload is None else side_before_upload
 
-        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli)
+        dumps = []
+
+        def fake_dump(port, side="R", on_line=None):
+            dumps.append((port, side, len(calls)))
+            if dump_nvs:
+                return dump_nvs(port, side, on_line)
+            return "nvs-000001-20270101-000000-000.bin"
+
+        old = (server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli, server.dump_nvs)
         server.find_arduino_cli = lambda: "/opt/homebrew/bin/arduino-cli"
         server.find_serial_port = port_for
         server.query_device_side = fake_query
         server.run_cli = fake_run
+        server.dump_nvs = fake_dump
         try:
             result = server.flash_firmware(side, on_output=on_output)
         finally:
-            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli = old
+            server.find_arduino_cli, server.find_serial_port, server.query_device_side, server.run_cli, server.dump_nvs = old
         self.last_probes = probes
+        self.last_dumps = dumps
         return result, calls
 
     def test_flash_rechecks_port_side_before_upload(self):
@@ -532,8 +544,36 @@ class TestServerAndCodegen(unittest.TestCase):
         cli_events = [e for e in events if e[1].startswith(("compile ", "upload "))]
         self.assertEqual(cli_events, [("compile", "compile 1"), ("compile", "compile 2"),
                                       ("upload", "upload 1"), ("upload", "upload 2")])
-        # Statuszeilen vor jeder Phase: Port-Suche, Kompilieren, Port-Prüfung, Upload
-        self.assertEqual([e[0] for e in events if e not in cli_events], ["port", "compile", "port", "upload"])
+        # Statuszeilen vor jeder Phase: Port-Suche, Kompilieren, Port-Prüfung, NVS-Sicherung (Start, Ergebnis), Upload
+        self.assertEqual([e[0] for e in events if e not in cli_events], ["port", "compile", "port", "nvs", "nvs", "upload"])
+
+    def test_flash_dumps_nvs_after_port_check_and_before_upload(self):
+        result, calls = self.run_flash("L", lambda s: "/dev/cu.usbserial-a")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["nvsBackup"], "nvs-000001-20270101-000000-000.bin")
+        # Nach dem Kompilieren (1 Aufruf) und der Port-Prüfung, vor dem Upload, am geprüften Port, für diese Hälfte
+        self.assertEqual(self.last_dumps, [("/dev/cu.usbserial-a", "L", 1)])
+        self.assertEqual(self.last_probes, [("/dev/cu.usbserial-a", 1)])
+        self.assertEqual([c[1] for c in calls], ["compile", "upload"])
+
+    def test_flash_continues_when_nvs_dump_fails(self):
+        def failing(port, side, on_line):
+            raise RuntimeError("esptool wurde nicht gefunden.")
+        events = []
+        result, calls = self.run_flash("R", lambda s: "/dev/cu.usbserial-a", dump_nvs=failing,
+                                       on_output=lambda stage, line: events.append((stage, line)))
+        self.assertTrue(result["success"])
+        self.assertIsNone(result["nvsBackup"])
+        self.assertEqual([c[1] for c in calls], ["compile", "upload"])
+        self.assertTrue(any(stage == "nvs" and "fehlgeschlagen" in line for stage, line in events))
+
+    def test_flash_skips_nvs_dump_when_port_changed(self):
+        self.run_flash("L", lambda s: "/dev/cu.usbserial-a", side_before_upload="R")
+        self.assertEqual(self.last_dumps, [])
+
+    def test_flash_skips_nvs_dump_when_compile_fails(self):
+        self.run_flash("R", lambda s: "/dev/cu.usbserial-a", cli_code=1)
+        self.assertEqual(self.last_dumps, [])
 
     def test_flash_error_keeps_only_the_tail_of_the_output(self):
         long_lines = [f"zeile {i:05d}" for i in range(2000)]
@@ -1321,6 +1361,205 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(root, "default_config_left.json")))
 
 
+class TestNvsBackup(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old = (server.BACKUP_DIR, server.LEFT_BACKUP_DIR, server.find_esptool, server.find_serial_port, server.run_cli,
+                    server.query_device_side)
+        server.BACKUP_DIR = os.path.join(self.tmp.name, "right")
+        server.LEFT_BACKUP_DIR = os.path.join(self.tmp.name, "left")
+        server.find_esptool = lambda: "/opt/esptool"
+        server.find_serial_port = lambda side="R": "/dev/cu.usbserial-" + side
+        server.query_device_side = lambda port: port[-1]
+        self.calls = []
+        self.written = []
+
+    def tearDown(self):
+        (server.BACKUP_DIR, server.LEFT_BACKUP_DIR, server.find_esptool, server.find_serial_port, server.run_cli,
+         server.query_device_side) = self.old
+        self.tmp.cleanup()
+
+    def fake_esptool(self, data=None, code=0):
+        """Ersetzt run_cli; read-flash schreibt data in die Zieldatei, wie esptool es tut."""
+        def fake_run(cmd, timeout_s, on_line=None):
+            self.calls.append(cmd)
+            if "read-flash" in cmd and data is not None:
+                with open(cmd[-1], "wb") as f:
+                    f.write(data)
+            if "write-flash" in cmd:
+                with open(cmd[-1], "rb") as f:
+                    self.written.append(f.read())
+            if on_line:
+                on_line("esptool line")
+            return code, "esptool output"
+        server.run_cli = fake_run
+
+    def test_nvs_layout_matches_min_spiffs_partition_table(self):
+        self.assertEqual(server.NVS_OFFSET, 0x9000)
+        self.assertEqual(server.NVS_SIZE, 20 * 1024)
+        self.assertIn("PartitionScheme=min_spiffs", server.FIRMWARE_FQBN)
+
+    def test_dump_reads_nvs_partition_and_saves_it_next_to_config_backups(self):
+        image = bytes(range(256)) * (server.NVS_SIZE // 256)
+        self.fake_esptool(image)
+        lines = []
+        name = server.dump_nvs("/dev/cu.usbserial-x", "L", lines.append)
+        cmd = self.calls[0]
+        self.assertEqual(cmd[0], "/opt/esptool")
+        self.assertEqual(cmd[cmd.index("--port") + 1], "/dev/cu.usbserial-x")
+        self.assertEqual(cmd[cmd.index("--baud") + 1], "115200")
+        i = cmd.index("read-flash")
+        self.assertEqual(cmd[i + 1:i + 3], ["0x9000", "0x5000"])
+        self.assertEqual(lines, ["esptool line"])
+        self.assertRegex(name, r"^nvs-000001-\d{8}-\d{6}-\d{3}\.bin$")
+        with open(os.path.join(server.LEFT_BACKUP_DIR, name), "rb") as f:
+            self.assertEqual(f.read(), image)
+        # Die Temp-Datei von esptool bleibt nicht liegen
+        self.assertFalse(os.path.exists(cmd[-1]))
+        self.assertEqual(server.load_nvs_backups("L")["backups"][0]["id"], name[:-4])
+        self.assertEqual(server.load_nvs_backups("R")["backups"], [])
+
+    def test_dump_rejects_short_image_and_failed_read(self):
+        self.fake_esptool(b"\xff" * 100)
+        with self.assertRaises(RuntimeError):
+            server.dump_nvs("/dev/cu.usbserial-x", "R")
+        self.fake_esptool(b"\xff" * server.NVS_SIZE, code=2)
+        with self.assertRaises(RuntimeError):
+            server.dump_nvs("/dev/cu.usbserial-x", "R")
+        self.assertEqual(server.nvs_backup_names(server.BACKUP_DIR), [])
+
+    def test_dump_rejects_erased_partition(self):
+        self.fake_esptool(b"\xff" * server.NVS_SIZE)
+        with self.assertRaises(server.NvsEmptyError):
+            server.dump_nvs("/dev/cu.usbserial-x", "R")
+        self.assertEqual(server.nvs_backup_names(server.BACKUP_DIR), [])
+
+    def test_backup_folder_is_private(self):
+        server.save_nvs_image(b"\x00" * server.NVS_SIZE, "R")
+        self.assertEqual(os.stat(server.BACKUP_DIR).st_mode & 0o777, 0o700)
+        name = server.nvs_backup_names(server.BACKUP_DIR)[0]
+        self.assertEqual(os.stat(os.path.join(server.BACKUP_DIR, name)).st_mode & 0o777, 0o600)
+
+    def test_dump_without_esptool_raises(self):
+        server.find_esptool = lambda: None
+        with self.assertRaises(RuntimeError):
+            server.dump_nvs("/dev/cu.usbserial-x", "R")
+
+    def test_nvs_backups_keep_the_newest_and_count_up(self):
+        image = b"\x00" * server.NVS_SIZE
+        names = [server.save_nvs_image(image, "R", now=1_800_000_000 + i) for i in range(server.MAX_NVS_BACKUPS + 2)]
+        kept = server.nvs_backup_names(server.BACKUP_DIR)
+        self.assertEqual(len(kept), server.MAX_NVS_BACKUPS)
+        self.assertEqual(kept[0], names[-1])
+        self.assertNotIn(names[0], kept)
+        # Eine zurückgestellte Uhr ändert die Reihenfolge nicht
+        newest = server.save_nvs_image(image, "R", now=1)
+        self.assertEqual(server.nvs_backup_names(server.BACKUP_DIR)[0], newest)
+
+    def test_restore_writes_backup_to_nvs_offset_on_matching_port(self):
+        image = b"\xab" * server.NVS_SIZE
+        name = server.save_nvs_image(image, "L")
+        current = b"\xcd" * server.NVS_SIZE
+        self.fake_esptool(current)
+        result = server.restore_nvs("L", name[:-4])
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["port"], "/dev/cu.usbserial-L")
+        # Zuerst den aktuellen Stand lesen und sichern, dann schreiben
+        self.assertEqual([c[c.index("--after") + 2] for c in self.calls], ["read-flash", "write-flash"])
+        cmd = self.calls[1]
+        self.assertEqual(cmd[cmd.index("--port") + 1], "/dev/cu.usbserial-L")
+        i = cmd.index("write-flash")
+        self.assertEqual(cmd[i + 1], "0x9000")
+        self.assertEqual(self.written, [image])
+        # Die Temp-Kopie des Abbilds bleibt nicht liegen
+        self.assertFalse(os.path.exists(cmd[i + 2]))
+        with open(os.path.join(server.LEFT_BACKUP_DIR, result["previousBackup"]), "rb") as f:
+            self.assertEqual(f.read(), current)
+
+    def test_restore_of_oldest_image_survives_pruning(self):
+        oldest = b"\x11" * server.NVS_SIZE
+        names = [server.save_nvs_image(oldest if i == 0 else b"\x22" * server.NVS_SIZE, "R", now=1_800_000_000 + i)
+                 for i in range(server.MAX_NVS_BACKUPS)]
+        self.fake_esptool(b"\x33" * server.NVS_SIZE)
+        result = server.restore_nvs("R", names[0][:-4])
+        self.assertTrue(result["success"], result)
+        # Die Sicherung des aktuellen Stands hat das älteste Abbild aufgeräumt; geschrieben wird trotzdem sein Inhalt
+        self.assertNotIn(names[0], server.nvs_backup_names(server.BACKUP_DIR))
+        self.assertEqual(self.written, [oldest])
+
+    def test_restore_rechecks_port_side_after_the_dump(self):
+        name = server.save_nvs_image(b"\xab" * server.NVS_SIZE, "L")
+        self.fake_esptool(b"\x01" * server.NVS_SIZE)
+        server.query_device_side = lambda port: "R"
+        result = server.restore_nvs("L", name[:-4])
+        self.assertFalse(result["success"])
+        self.assertEqual(result["stage"], "port")
+        self.assertEqual([c[c.index("--after") + 2] for c in self.calls], ["read-flash"])
+
+    def test_restore_stops_when_backup_of_current_state_fails(self):
+        name = server.save_nvs_image(b"\xab" * server.NVS_SIZE, "R")
+        self.fake_esptool(b"\x00" * 10)
+        result = server.restore_nvs("R", name[:-4])
+        self.assertFalse(result["success"])
+        self.assertEqual(result["stage"], "nvs")
+        self.assertNotIn("write-flash", [arg for c in self.calls for arg in c])
+
+    def test_restore_onto_erased_partition_needs_no_previous_backup(self):
+        name = server.save_nvs_image(b"\xab" * server.NVS_SIZE, "R")
+        self.fake_esptool(b"\xff" * server.NVS_SIZE)
+        result = server.restore_nvs("R", name[:-4])
+        self.assertTrue(result["success"], result)
+        self.assertIsNone(result["previousBackup"])
+        self.assertIn("write-flash", self.calls[-1])
+
+    def test_restore_rejects_invalid_ids_before_touching_a_port(self):
+        server.save_nvs_image(b"\x00" * server.NVS_SIZE, "R")
+        self.fake_esptool()
+        probed = []
+        server.find_serial_port = lambda side="R": probed.append(side) or "/dev/cu.usbserial-R"
+        for bad in (None, 5, "", "../right/nvs-000001-20270101-000000-000", "nvs-1-x", "nvs-000099-20270101-000000-000"):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.restore_nvs("R", bad)
+        # Eine Sicherung der rechten Hälfte ist links unbekannt
+        with self.assertRaises(ValueError):
+            server.restore_nvs("L", server.nvs_backup_names(server.BACKUP_DIR)[0][:-4])
+        self.assertEqual(probed, [])
+        self.assertEqual(self.calls, [])
+
+    def test_restore_rejects_image_with_wrong_size(self):
+        os.makedirs(server.BACKUP_DIR)
+        with open(os.path.join(server.BACKUP_DIR, "nvs-000001-20270101-000000-000.bin"), "wb") as f:
+            f.write(b"\x00" * 10)
+        with self.assertRaises(ValueError):
+            server.restore_nvs("R", "nvs-000001-20270101-000000-000")
+        self.assertEqual(server.load_nvs_backups("R")["backups"], [])
+
+    def test_restore_without_matching_port_writes_nothing(self):
+        name = server.save_nvs_image(b"\x00" * server.NVS_SIZE, "R")
+        server.find_serial_port = lambda side="R": None
+        self.fake_esptool()
+        result = server.restore_nvs("R", name[:-4])
+        self.assertFalse(result["success"])
+        self.assertEqual(result["stage"], "port")
+        self.assertEqual(self.calls, [])
+
+    def test_restore_reports_esptool_failure(self):
+        name = server.save_nvs_image(b"\x00" * server.NVS_SIZE, "R")
+        self.fake_esptool(b"\x01" * server.NVS_SIZE)
+        fake_read = server.run_cli
+
+        def failing_write(cmd, timeout_s, on_line=None):
+            if "write-flash" in cmd:
+                self.calls.append(cmd)
+                return 1, "write failed"
+            return fake_read(cmd, timeout_s, on_line)
+        server.run_cli = failing_write
+        result = server.restore_nvs("R", name[:-4])
+        self.assertFalse(result["success"])
+        self.assertEqual(result["stage"], "nvs")
+        self.assertIn("write-flash", self.calls[-1])
+
+
 class TestServerHttp(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1771,6 +2010,58 @@ class TestServerHttp(unittest.TestCase):
             self.assertEqual(self.request("POST", "/api/backups?side=R", body=json.dumps(cfg),
                                           headers={"Origin": "http://evil.example"})[0], 403)
         finally:
+            restore()
+
+    def test_nvs_backups_and_restore_http(self):
+        restore = self.with_backup_dirs()
+        origin = {"Origin": "http://localhost:8088"}
+        old = server.restore_nvs
+        seen = []
+
+        def fake_restore(side, backup_id, on_output=None):
+            server.nvs_backup_path(side, backup_id)
+            seen.append((side, backup_id))
+            return {"success": True, "port": "/dev/cu.usbserial-a", "side": side, "id": backup_id}
+        server.restore_nvs = fake_restore
+        try:
+            self.assertEqual(json.loads(self.request("GET", "/api/nvs_backups?side=L")[1]), {"backups": []})
+            name = server.save_nvs_image(b"\x00" * server.NVS_SIZE, "L")[:-4]
+            backups = json.loads(self.request("GET", "/api/nvs_backups?side=L")[1])["backups"]
+            self.assertEqual([b["id"] for b in backups], [name])
+            self.assertEqual(json.loads(self.request("GET", "/api/nvs_backups?side=R")[1]), {"backups": []})
+            self.assertEqual(self.request("GET", "/api/nvs_backups?side=X")[0], 400)
+            status, body = self.request("POST", "/api/nvs_restore?side=L", body=json.dumps({"id": name}), headers=origin)
+            self.assertEqual(status, 200)
+            self.assertTrue(json.loads(body)["success"])
+            self.assertEqual(seen, [("L", name)])
+            # Falsche Hälfte, fremder Pfad, kein Objekt: HTTP 400, nichts geschrieben
+            for side, body in (("R", {"id": name}), ("L", {"id": "../" + name}), ("L", [name])):
+                self.assertEqual(self.request("POST", f"/api/nvs_restore?side={side}", body=json.dumps(body),
+                                              headers=origin)[0], 400)
+            self.assertEqual(self.request("POST", "/api/nvs_restore?side=X", body=json.dumps({"id": name}), headers=origin)[0], 400)
+            self.assertEqual(self.request("POST", "/api/nvs_restore?side=L", body=json.dumps({"id": name}),
+                                          headers={"Origin": "http://evil.example"})[0], 403)
+            self.assertEqual(seen, [("L", name)])
+        finally:
+            server.restore_nvs = old
+            restore()
+
+    def test_nvs_restore_http_reports_missing_port_as_500(self):
+        restore = self.with_backup_dirs()
+        old = (server.find_esptool, server.find_serial_port, server.run_cli)
+        calls = []
+        server.find_esptool = lambda: "/opt/esptool"
+        server.find_serial_port = lambda side="R": None
+        server.run_cli = lambda cmd, timeout_s, on_line=None: calls.append(cmd) or (0, "")
+        try:
+            name = server.save_nvs_image(b"\x00" * server.NVS_SIZE, "R")[:-4]
+            status, body = self.request("POST", "/api/nvs_restore?side=R", body=json.dumps({"id": name}),
+                                        headers={"Origin": "http://localhost:8088"})
+            self.assertEqual(status, 500)
+            self.assertEqual(json.loads(body)["stage"], "port")
+            self.assertEqual(calls, [])
+        finally:
+            server.find_esptool, server.find_serial_port, server.run_cli = old
             restore()
 
     def test_save_and_flash_creates_a_backup_before_flashing(self):

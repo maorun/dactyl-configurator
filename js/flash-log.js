@@ -5,7 +5,7 @@
 // Höchstzahl der angezeigten Zeilen; ältere fallen weg (der Server meldet Fehler zusätzlich im Ergebnis)
 const FLASH_LOG_MAX_LINES = 400;
 
-const FLASH_STAGE_LABELS = { port: "USB-Port", compile: "Kompilieren", upload: "Upload" };
+const FLASH_STAGE_LABELS = { port: "USB-Port", compile: "Kompilieren", nvs: "NVS-Sicherung", upload: "Upload" };
 
 function flashStageLabel(stage) {
   return FLASH_STAGE_LABELS[stage] || "Flashen";

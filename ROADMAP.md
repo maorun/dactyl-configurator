@@ -29,16 +29,6 @@ No open entry.
 
 ## Priority 4
 
-### Key overrides
-
-- **Rank:** Feature model. Total 20/40 (typing 6, configuration 4, harmony 5, safety 5). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (`heldModifierMask`), `firmware/dactyl_right/DactylOneShot.h` (`SplitArbitratedKeyboard`).
-- **Problem:** A modifier with a key always sends both. The user needs a key pair or a layer for each replacement.
-- **Goal:** Let a modifier plus a key give another action, for example `Shift` + `Backspace` = `Delete`. This saves key pairs and layers.
-- **Note:** The design must respect `heldModifierMask` and the state in `SplitArbitratedKeyboard`.
-- **Acceptance test:** A firmware test shows that `Shift` + `Backspace` sends `Delete` without `Shift`, and that `Backspace` alone is unchanged.
-
 ### Heatmap per layer
 
 - **Rank:** Feature model. Total 19/40 (typing 1, configuration 4, harmony 6, safety 8). Effort S. Estimate.

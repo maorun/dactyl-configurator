@@ -104,7 +104,8 @@ async function writeConfigToESP32(options = {}) {
     const totalLayers = Math.min(cfg.layers.length, NUM_LAYERS);
     const combos = cfg.combos.slice(0, MAX_COMBOS);
     const macros = (cfg.macros || []).slice(0, MAX_MACROS);
-    const totalSteps = countSyncSteps(settingCommands.length, totalLayers, combos.length, macros.length);
+    const overrides = profile.master ? (cfg.keyOverrides || []).slice(0, MAX_KEY_OVERRIDES) : [];
+    const totalSteps = countSyncSteps(settingCommands.length, totalLayers, combos.length, macros.length, profile.master ? overrides.length : -1);
     const showProgressLabel = () => {
       if (progressLabel) progressLabel.textContent = syncProgressLabel(profile.label, completedSteps, totalSteps);
     };
@@ -169,6 +170,22 @@ async function writeConfigToESP32(options = {}) {
     }
     await sendConfirmed("SAVE_PAIRS", "SAVE_PAIRS", 5000);
     updateProgress();
+
+    // Tasten-Überschreibungen synchronisieren (nur der Master; Firmware vor Stand 7 antwortet "ERR UNKNOWN":
+    // Hinweis zeigen und die Phase überspringen). Die linke Hälfte hat keine Liste.
+    if (profile.master) {
+      const overrideKnown = await sendConfirmed("CLEAR_OVERRIDES", "CLEAR_OVERRIDES", 3000, true);
+      if (overrideKnown !== "unknown") {
+        for (const o of overrides) {
+          await sendConfirmed(`ADD_OVERRIDE ${keyOverrideModsValue(o.mods)} ${actionCodeToNumeric(o.key)} ${actionCodeToNumeric(o.replacement)}`, "ADD_OVERRIDE");
+          updateProgress();
+        }
+        await sendConfirmed("SAVE_OVERRIDES", "SAVE_OVERRIDES", 5000);
+      } else {
+        overrides.forEach(() => updateProgress());
+      }
+      updateProgress();
+    }
 
     // Makros synchronisieren (Index = Position in der Liste, MACRO_<n> verweist darauf).
     // Firmware ohne Makros antwortet "ERR UNKNOWN CLEAR_MACROS": Hinweis zeigen und die Phase überspringen.
@@ -283,8 +300,10 @@ function syncProgressLabel(sideLabel, done, total) {
 // Fortschrittsschritte des vollen Syncs: Einstellungen, Ebenen-Namen, Tasten (SET_K), SAVE_NVS,
 // Combos, SAVE_COMBOS, die Tastenpaar-Phase, je Makro ein Schritt und SAVE_MACROS.
 // Muss zu den updateProgress()-Aufrufen passen.
-function countSyncSteps(settingCount, layerCount, comboCount, macroCount = 0) {
-  return settingCount + NUM_LAYERS + layerCount * NUM_ROWS * NUM_COLS + 1 + comboCount + 1 + 1 + macroCount + 1;
+// overrideCount: Zahl der Tasten-Überschreibungen des Masters; -1 = diese Hälfte hat keine Überschreibungen
+function countSyncSteps(settingCount, layerCount, comboCount, macroCount = 0, overrideCount = -1) {
+  const overrideSteps = overrideCount < 0 ? 0 : overrideCount + 1;
+  return settingCount + NUM_LAYERS + layerCount * NUM_ROWS * NUM_COLS + 1 + comboCount + 1 + 1 + overrideSteps + macroCount + 1;
 }
 
 // Live-Sync: jede vorgemerkte Änderung einer verbundenen Hälfte überträgt die vollständige Konfiguration
@@ -444,8 +463,8 @@ function showSyncDiffDialog(profile, diff) {
   const btnClose = document.getElementById("btnCloseSyncDiff");
   if (!modal || !summary || !list || !btnConfirm || !btnCancel || !btnClose) return Promise.resolve(true);
 
-  const lists = diff.lists || { known: false, combos: [], pairs: [], macros: [] };
-  const listCount = lists.combos.length + lists.pairs.length + lists.macros.length;
+  const lists = diff.lists || { known: false, combos: [], pairs: [], overrides: [], macros: [] };
+  const listCount = lists.combos.length + lists.pairs.length + lists.overrides.length + lists.macros.length;
   const total = diff.keys.length + diff.names.length + listCount;
   const listsHint = lists.known ? ""
     : lists.state === "incomplete" ? " Combos, Tastenpaare und Makros kamen unvollständig an und sind nicht verglichen."
@@ -454,7 +473,7 @@ function showSyncDiffDialog(profile, diff) {
   summary.textContent = total === 0
     ? `${what} der ${profile.label} sind auf dem Gerät gleich.${listsHint}`
     : `${diff.keys.length} Taste(n), ${diff.names.length} Ebenen-Name(n)` +
-      (lists.known ? `, ${lists.combos.length} Combo(s), ${lists.pairs.length} Tastenpaar(e) und ${lists.macros.length} Makro(s)` : "") +
+      (lists.known ? `, ${lists.combos.length} Combo(s), ${lists.pairs.length} Tastenpaar(e), ${lists.overrides.length} Überschreibung(en) und ${lists.macros.length} Makro(s)` : "") +
       ` der ${profile.label} ändern sich.` + listsHint;
   list.replaceChildren();
   const addRow = (where, before, after) => {
@@ -471,7 +490,7 @@ function showSyncDiffDialog(profile, diff) {
     list.appendChild(li);
   };
   for (const n of diff.names) addRow(`Name Ebene ${n.l}:`, n.device, n.local);
-  for (const row of [...lists.combos, ...lists.pairs, ...lists.macros]) addRow(`${row.where}:`, row.device, row.local);
+  for (const row of [...lists.combos, ...lists.pairs, ...lists.overrides, ...lists.macros]) addRow(`${row.where}:`, row.device, row.local);
   for (const k of diff.keys) addRow(`Ebene ${k.l} R${k.r}C${k.c}:`, describeKeyActions(k.device), describeKeyActions(k.local));
   list.style.display = total === 0 ? "none" : "";
   renderSyncDiffLint();

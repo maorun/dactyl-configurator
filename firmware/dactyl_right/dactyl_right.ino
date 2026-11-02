@@ -130,6 +130,15 @@ KeyPair userKeyPairs[MAX_KEY_PAIRS] = {
 };
 // [[[END_KEY_PAIRS]]]
 
+// Tasten-Überschreibungen (nur der Master): Modifier + Taste ergibt eine andere Taste
+#define DACTYL_KEY_OVERRIDES
+// [[[START_KEY_OVERRIDES]]]
+uint8_t numKeyOverrides = 0;
+KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES] = {
+  { 0, 0, 0 }
+};
+// [[[END_KEY_OVERRIDES]]]
+
 // [[[START_MACROS]]]
 uint8_t numMacros = 0;
 uint8_t macroLengths[MAX_MACROS] = { 0 };
@@ -748,6 +757,7 @@ void sendSplitLayerStateIfDue() {
 }
 
 void setup() {
+  bleKeyboard.setKeyOverrides(userKeyOverrides, &numKeyOverrides);
   // RX-Puffer auf 4KB vergrößern für zuverlässige USB-Batch-Synchronisierung (SET_K x 336)
   Serial.setRxBufferSize(4096);
   Serial.begin(115200);

@@ -319,6 +319,38 @@
           </div>
         </div>
 
+        <!-- Tasten-Überschreibungen: Modifier + Taste ergibt eine andere Taste (nur Master) -->
+        <div id="keyOverridesSection">
+          <div class="combos-header key-pairs-header">
+            <div>
+              <h3>Tasten-Überschreibungen (Modifier + Taste = andere Taste)</h3>
+              <p class="subtitle">Eine Überschreibung ersetzt eine Taste, solange ein Modifier gehalten wird, z. B. <code>Umschalt + Rücktaste</code> sendet <code>Entf</code> ohne Umschalt. Die Taste allein bleibt unverändert. Links und rechts gehaltene Modifier zählen gleich, auch über beide Hälften. Sie gelten nur auf der rechten Hälfte (Master) und brauchen die Firmware ab Stand 7.</p>
+            </div>
+          </div>
+          <div class="combos-list-card" id="keyOverridesCard">
+            <div class="key-pair-form">
+              <label><input type="checkbox" id="keyOverrideMod_ctrl"> Ctrl</label>
+              <label><input type="checkbox" id="keyOverrideMod_shift"> Umschalt</label>
+              <label><input type="checkbox" id="keyOverrideMod_alt"> Alt</label>
+              <label><input type="checkbox" id="keyOverrideMod_gui"> Cmd</label>
+              <strong>+</strong>
+              <select id="keyOverrideKeySelect" class="form-control" title="Taste, die ersetzt wird"></select>
+              <strong>→</strong>
+              <select id="keyOverrideReplacementSelect" class="form-control" title="Gesendete Taste (ohne die gehaltenen Modifier)"></select>
+              <button id="btnAddKeyOverride" class="btn btn-primary btn-sm" type="button">+ Überschreibung hinzufügen</button>
+            </div>
+            <table class="combos-table">
+              <thead>
+                <tr><th>Nr.</th><th>Überschreibung</th><th>Aktionen</th></tr>
+              </thead>
+              <tbody id="keyOverridesTableBody"></tbody>
+            </table>
+            <div class="empty-state" id="emptyKeyOverridesState" style="display: none;">
+              <p>Noch keine Überschreibungen definiert.</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Makros: eine Taste spielt eine Tastenfolge ab -->
         <div class="combos-header key-pairs-header">
           <div>
@@ -700,6 +732,7 @@
   <script src="js/config-model.js?v=5"></script>
   <script src="js/editor.js?v=6"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
+  <script src="js/key-overrides-ui.js?v=1"></script>
   <script src="js/macros-ui.js?v=1"></script>
   <script src="js/layout-profiles-ui.js?v=2"></script>
   <script src="js/flash-log.js?v=1"></script>

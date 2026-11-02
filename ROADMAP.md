@@ -25,7 +25,15 @@ No open entry.
 
 ## Priority 3
 
-No open entry.
+### NVS partition backup and restore during flash
+
+- **Rank:** Maintenance model. Total 23/40 (reach 5, safety 8, speed 6, unblocks 4). Effort S. Estimate.
+- **Area:** Server, Tooling.
+- **Code:** `server.py` (`save_and_flash`), `js/flash-log.js`.
+- **Problem:** A flash operation or a full chip erase deletes the ESP32 NVS partition at `0x9000`. The board loses the stored BLE bonding keys (`bt_config.conf`). macOS then rejects the reconnect until the user forgets and pairs the device again.
+- **Goal:** Read the 20 KB NVS partition at offset `0x9000` with `esptool.py` before each flash. Save the binary image next to the JSON configuration backup.
+- **Goal:** Add a restore step in `server.py` to write the saved NVS image back to `0x9000` when needed.
+- **Acceptance test:** A test verifies that `server.py` dumps the NVS partition before flashing and can restore the binary dump to offset `0x9000`.
 
 ## Priority 4
 

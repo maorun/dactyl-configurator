@@ -46,7 +46,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              planKeyPairDeletion,
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
              isValidMacroStep, isValidMacro, normalizeMacroStep, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode,
+             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -1799,6 +1799,30 @@ test("One-Shot-Modifier und Caps Word: Aktionscodes wie DactylCommon.h, Labels u
   assert.strictEqual(fw("CAPS_WORD"), 0x168);
   // Repeat liegt direkt hinter Caps Word, in keinem anderen Bereich (Makros 0x170, Umlaute 0x150)
   assert.strictEqual(fw("REPEAT"), 0x169);
+});
+
+test("Mausbewegung: Aktionscodes wie DactylCommon.h, Auswahl, Rückweg und kein Combo-Ziel", () => {
+  const common = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylCommon.h"), "utf8");
+  const fw = name => Number(new RegExp(`#define ACT_${name}\\s+(0x[0-9A-F]+)`).exec(common)[1]);
+  const all = api.KEYCODES.flatMap(g => g.keys);
+  const names = { MOUSE_UP: "MOUSE_UP", MOUSE_DOWN: "MOUSE_DOWN", MOUSE_LEFT_MOVE: "MOUSE_LEFT_MOVE", MOUSE_RIGHT_MOVE: "MOUSE_RIGHT_MOVE" };
+  for (const code of Object.keys(names)) {
+    const n = api.actionCodeToNumeric(code);
+    assert.strictEqual(n, fw(code), code);
+    assert.strictEqual(api.actionCodeToNumeric(`ACT_${code}`), n, code);
+    assert.strictEqual(api.findDefinitionByCode(n).tap, code);
+    assert.ok(all.some(k => k.code === code), `${code} in der Auswahl`);
+    assert.ok(api.isMouseMoveCode(code) && api.isMouseMoveCode(`ACT_${code}`), code);
+  }
+  assert.ok(!api.isMouseMoveCode("MOUSE_LEFT") && !api.isMouseMoveCode("MOUSE_WHEEL_UP") && !api.isMouseMoveCode(""));
+  // Vier Codes direkt hinter dem Mausrad, vor den Tastenpaaren
+  assert.deepStrictEqual(["MOUSE_UP", "MOUSE_DOWN", "MOUSE_LEFT_MOVE", "MOUSE_RIGHT_MOVE"].map(c => api.actionCodeToNumeric(c)), [0x135, 0x136, 0x137, 0x138]);
+  assert.ok(api.ACT_KEY_PAIR_BASE > 0x138);
+  // Import: ein Combo mit Mausbewegung ist ungültig, ein Combo mit Mausrad bleibt gültig
+  const combo = action => ({ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior: "KEY_PRESS", action });
+  const layers = [[[{ tap: "KEY_A" }]]];
+  assert.throws(() => api.validateConfigShape({ layers, combos: [combo("MOUSE_UP")] }), /Mausbewegung/);
+  assert.throws(() => api.validateConfigShape({ layers, combos: [combo("ACT_MOUSE_RIGHT_MOVE")] }), /Mausbewegung/);
 });
 
 test("Preset Deutsch QWERTZ: Umlaut-Aktionen und US-Codes, keine deutschen Beschriftungen auf US-Tasten", () => {

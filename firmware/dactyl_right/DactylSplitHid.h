@@ -47,7 +47,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_REPEAT_RUN = 22,   // nur Master -> links: Repeat links ausführen, code 1/0 wie REPEAT, arg = Nummer 1..127
   SPLIT_OP_HOLD_PENDING = 23, // beide Richtungen: code 1 = eine Mod-Tap-Taste des Absenders ist noch unentschieden, 0 = keine
   SPLIT_OP_HOLD_RESOLVE = 24, // beide Richtungen: offene Mod-Tap-Tasten des Empfängers jetzt als Halten entscheiden, ohne Werte
-  SPLIT_OP_COUNT = 25
+  SPLIT_OP_MOUSE_MOVE = 25,   // arg = X-Schritt (int8), code = Y-Schritt (int8 in Bits 0..7); -128 und (0, 0) sind ungültig
+  SPLIT_OP_COUNT = 26
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -110,6 +111,8 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
       return ev.code >= 1 && ev.code <= 0x07 && ev.arg == 0;
     case SPLIT_OP_MOUSE_SCROLL:
       return ev.code == 0 && ev.arg != 0;
+    case SPLIT_OP_MOUSE_MOVE:
+      return ev.code <= 0xFF && ev.arg != -128 && (int8_t)ev.code != -128 && (ev.arg != 0 || ev.code != 0);
     case SPLIT_OP_ONE_SHOT_PRESS:
     case SPLIT_OP_ONE_SHOT_RELEASE:
       return ev.code >= 1 && ev.code <= 0xFF && ev.arg == 0;
@@ -215,9 +218,11 @@ inline void splitNoteLocalKeyChange(SplitActivityThrottle &t, unsigned long nowM
 // Scrollen hat keinen Zustand: ein doppelt zugestelltes Retry-Paket scrollte doppelt. Ein verlorener
 // Scrollschritt ist harmloser, deshalb wiederholt die linke Hälfte MOUSE_SCROLL nicht. Ein doppeltes
 // KEY_EVENT zählte in Heatmap und Statistik doppelt; ein verlorenes kostet nur eine Anzeige.
+// MOUSE_MOVE bewegt den Zeiger bei jedem Paket: ein Duplikat sprang doppelt, ein verlorener Schritt fällt nicht auf.
 // CAPS_WORD_TOGGLE schaltet um: ein Duplikat nähme das Umschalten zurück, ein verlorenes Paket tippt man neu.
 inline bool splitEventRetryable(const SplitHidEvent &ev) {
-  return ev.op != SPLIT_OP_MOUSE_SCROLL && ev.op != SPLIT_OP_KEY_EVENT && ev.op != SPLIT_OP_CAPS_WORD_TOGGLE;
+  return ev.op != SPLIT_OP_MOUSE_SCROLL && ev.op != SPLIT_OP_MOUSE_MOVE && ev.op != SPLIT_OP_KEY_EVENT &&
+         ev.op != SPLIT_OP_CAPS_WORD_TOGGLE;
 }
 
 // -----------------------------------------------------------------------------
@@ -937,6 +942,7 @@ struct SplitHidSink {
   virtual void leftMouseRelease(uint8_t buttons) = 0;
   virtual void leftMouseClick(uint8_t buttons) = 0;
   virtual void leftMouseScroll(int8_t steps) = 0;
+  virtual void leftMouseMove(int8_t x, int8_t y) = 0;
   // arm = false: Loslassen durch RELEASE_ALL oder Link-Ausfall merkt nichts vor
   virtual void leftOneShotPress(uint8_t mask) = 0;
   virtual void leftOneShotRelease(uint8_t mask, bool arm) = 0;
@@ -1071,6 +1077,9 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
       return true;
     case SPLIT_OP_MOUSE_SCROLL:
       sink.leftMouseScroll(ev.arg);
+      return true;
+    case SPLIT_OP_MOUSE_MOVE:
+      sink.leftMouseMove(ev.arg, (int8_t)code8);
       return true;
     case SPLIT_OP_ONE_SHOT_PRESS: {
       uint8_t add = (uint8_t)(code8 & ~s.oneShot);
@@ -1532,6 +1541,7 @@ public:
     endMods(added);
   }
   void leftMouseScroll(int8_t steps) override { Hid::mouseScroll(steps); }
+  void leftMouseMove(int8_t x, int8_t y) override { Hid::mouseMove(x, y); }
   void leftOneShotPress(uint8_t mask) override { oneShotKeyDown(oneShot, mask); }
   void leftOneShotRelease(uint8_t mask, bool arm) override { oneShotKeyUp(oneShot, mask, arm); }
   void leftCapsWordToggle() override { oneShot.capsWord = !oneShot.capsWord; }

@@ -286,6 +286,8 @@ public:
   void mouseRelease(uint8_t btn) { mouseButtons &= ~btn; }
   void mouseClick(uint8_t btn) { clickedMouseButtons.push_back(btn); }
   void mouseScroll(int8_t wheel) { mouseScrolls.push_back(wheel); }
+  std::vector<std::pair<int8_t, int8_t>> mouseMoves;
+  void mouseMove(int8_t x, int8_t y) { mouseMoves.push_back({x, y}); }
 
   void releaseAll() {
     pressedKeys.clear();
@@ -294,6 +296,7 @@ public:
     mouseButtons = 0;
     clickedMouseButtons.clear();
     mouseScrolls.clear();
+    mouseMoves.clear();
   }
   void setDisconnected() { connected = false; }
 

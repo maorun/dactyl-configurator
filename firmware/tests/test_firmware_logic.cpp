@@ -20,6 +20,10 @@
 #define ACT_MOUSE_MIDDLE     0x132
 #define ACT_MOUSE_WHEEL_UP   0x133
 #define ACT_MOUSE_WHEEL_DOWN 0x134
+#define ACT_MOUSE_UP         0x135
+#define ACT_MOUSE_DOWN       0x136
+#define ACT_MOUSE_LEFT_MOVE  0x137
+#define ACT_MOUSE_RIGHT_MOVE 0x138
 
 #define MAX_COMBOS 16
 #define CONFIG_MODE_MAGIC 0xDAC7CF60UL
@@ -188,6 +192,7 @@ void resetState() {
     for (int r = 0; r < NUM_ROWS; r++)
       for (int c = 0; c < NUM_COLS; c++) { HOLDMAP[l][r][c] = 0; DTAPMAP[l][r][c] = 0; }
   resetTapHold();
+  resetMouseMove();
   resetDoubleTap();
   for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) capsWordBuffered[r][c] = false;
   numCombos = 0;
@@ -3580,6 +3585,148 @@ TEST(test_cross_half_combo_clears_pending_state) {
   assert(anyTapHoldPending());
   cancelTapHoldForCombo(2, 1);
   assert(!anyTapHoldPending());
+}
+
+// -----------------------------------------------------------------------------
+// Mausbewegung: gehaltene Taste bewegt den Zeiger mit wachsender Geschwindigkeit
+// -----------------------------------------------------------------------------
+TEST(test_mouse_move_accelerates_while_held_and_stops_at_release) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_RIGHT_MOVE;
+  KEYMAP[0][2][2] = ACT_MOUSE_UP;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  assert(bleKeyboard.mouseMoves.empty());
+  processDeferredKeys(1010);
+  processDeferredKeys(1100);
+  processDeferredKeys(1500);
+  processDeferredKeys(2500);
+  assert(bleKeyboard.mouseMoves.size() == 4);
+  assert(bleKeyboard.mouseMoves[0].first == 1 && bleKeyboard.mouseMoves[0].second == 0);
+  // wächst mit der Haltezeit und endet bei MOUSE_MOVE_MAX_STEP
+  assert(bleKeyboard.mouseMoves[1].first > bleKeyboard.mouseMoves[0].first);
+  assert(bleKeyboard.mouseMoves[2].first > bleKeyboard.mouseMoves[1].first);
+  assert(bleKeyboard.mouseMoves[3].first == MOUSE_MOVE_MAX_STEP);
+  // Loslassen stoppt sofort
+  applyMatrixKeyChange(2, 1, false, 2600);
+  size_t n = bleKeyboard.mouseMoves.size();
+  processDeferredKeys(2700);
+  processDeferredKeys(3000);
+  assert(bleKeyboard.mouseMoves.size() == n);
+  // Neue Bewegung startet wieder bei Schritt 1; zwei Tasten summieren sich
+  setMillis(3000);
+  applyMatrixKeyChange(2, 1, true, 3000);
+  applyMatrixKeyChange(2, 2, true, 3000);
+  processDeferredKeys(3010);
+  assert(bleKeyboard.mouseMoves.back().first == 1 && bleKeyboard.mouseMoves.back().second == -1);
+}
+
+TEST(test_mouse_move_sends_nothing_without_host_and_keeps_no_state_in_standing_keys) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_DOWN;
+  bleKeyboard.mouseMoves.clear();
+  bleKeyboard.connected = false;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  processDeferredKeys(1100);
+  assert(bleKeyboard.mouseMoves.empty());
+  applyMatrixKeyChange(2, 1, false, 1200);
+  bleKeyboard.connected = true;
+  processDeferredKeys(1300);
+  assert(bleKeyboard.mouseMoves.empty());
+}
+
+TEST(test_mouse_move_key_in_combo_does_not_move) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_LEFT_MOVE;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 97", false);
+  bleKeyboard.mouseMoves.clear();
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  applyMatrixKeyChange(2, 2, true, 1010);
+  checkUserCombos();
+  processDeferredKeys(1100);
+  processDeferredKeys(1500);
+  assert(bleKeyboard.mouseMoves.empty());
+}
+
+TEST(test_mouse_move_is_not_repeatable) {
+  assert(!isRepeatableAction(ACT_MOUSE_UP));
+}
+
+TEST(test_add_combo_rejects_mouse_move) {
+  resetState();
+  for (int act = ACT_MOUSE_UP; act <= ACT_MOUSE_RIGHT_MOVE; act++) {
+    handleConfigCommand("ADD_COMBO 2 1 2 2 0 " + String(act), false);
+    assert(numCombos == 0);
+  }
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 " + String(ACT_MOUSE_WHEEL_UP), false);
+  assert(numCombos == 1);
+}
+
+// Mod-Tap: Halten löst die Bewegung aus, Loslassen beendet sie; ein Tipp bewegt nichts
+TEST(test_mouse_move_as_hold_action_moves_and_stops) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = ACT_MOUSE_DOWN;
+  bleKeyboard.mouseMoves.clear();
+  setMillis(1000);
+  keyState[2][1] = true;
+  applyMatrixKeyChange(2, 1, true, 1000);
+  processDeferredKeys(1100);
+  assert(bleKeyboard.mouseMoves.empty());          // noch im Tapping-Term
+  setMillis(1300);
+  processDeferredKeys(1300);                       // Tapping-Term abgelaufen: Halten gilt
+  processDeferredKeys(1400);
+  assert(!bleKeyboard.mouseMoves.empty());
+  assert(bleKeyboard.mouseMoves.back().first == 0 && bleKeyboard.mouseMoves.back().second > 0);
+  keyState[2][1] = false;
+  applyMatrixKeyChange(2, 1, false, 1450);
+  size_t n = bleKeyboard.mouseMoves.size();
+  processDeferredKeys(1600);
+  assert(bleKeyboard.mouseMoves.size() == n);
+}
+
+// Ein Layer-Wechsel zwischen Drücken und Loslassen lässt die Bewegung nicht hängen (Release folgt pressedAction)
+TEST(test_mouse_move_release_after_layer_change_stops_movement) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_LEFT_MOVE;
+  KEYMAP[1][2][1] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true;
+  applyMatrixKeyChange(2, 1, true, 1000);
+  processDeferredKeys(1010);
+  assert(bleKeyboard.mouseMoves.size() == 1);
+  toggleLayers[1] = true;
+  keyState[2][1] = false;
+  applyMatrixKeyChange(2, 1, false, 1100);
+  size_t n = bleKeyboard.mouseMoves.size();
+  processDeferredKeys(1200);
+  assert(bleKeyboard.mouseMoves.size() == n);
+  assert(!mouseMoveActive[2][1]);
+}
+
+// Host-Verlust mitten im Halten: nichts wird gesendet, nach dem Wiederverbinden beginnt die Beschleunigung neu
+TEST(test_mouse_move_host_loss_restarts_acceleration) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_RIGHT_MOVE;
+  setMillis(1000);
+  keyState[2][1] = true;
+  applyMatrixKeyChange(2, 1, true, 1000);
+  processDeferredKeys(2500);
+  assert(bleKeyboard.mouseMoves.back().first == MOUSE_MOVE_MAX_STEP);
+  bleKeyboard.mouseMoves.clear();
+  bleKeyboard.connected = false;
+  processDeferredKeys(3000);
+  processDeferredKeys(4000);
+  assert(bleKeyboard.mouseMoves.empty());
+  bleKeyboard.connected = true;
+  processDeferredKeys(4010);
+  processDeferredKeys(4020);
+  assert(!bleKeyboard.mouseMoves.empty());
+  assert(bleKeyboard.mouseMoves.front().first == 1);
+  keyState[2][1] = false;
+  applyMatrixKeyChange(2, 1, false, 4100);
 }
 
 int main() {

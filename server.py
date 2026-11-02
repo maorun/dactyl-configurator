@@ -275,6 +275,14 @@ KEY_TO_CPP = {
     "ACT_MOUSE_MIDDLE": "ACT_MOUSE_MIDDLE",
     "ACT_MOUSE_WHEEL_UP": "ACT_MOUSE_WHEEL_UP",
     "ACT_MOUSE_WHEEL_DOWN": "ACT_MOUSE_WHEEL_DOWN",
+    "MOUSE_UP": "ACT_MOUSE_UP",
+    "MOUSE_DOWN": "ACT_MOUSE_DOWN",
+    "MOUSE_LEFT_MOVE": "ACT_MOUSE_LEFT_MOVE",
+    "MOUSE_RIGHT_MOVE": "ACT_MOUSE_RIGHT_MOVE",
+    "ACT_MOUSE_UP": "ACT_MOUSE_UP",
+    "ACT_MOUSE_DOWN": "ACT_MOUSE_DOWN",
+    "ACT_MOUSE_LEFT_MOVE": "ACT_MOUSE_LEFT_MOVE",
+    "ACT_MOUSE_RIGHT_MOVE": "ACT_MOUSE_RIGHT_MOVE",
     "NONE": "0",
     "": "0",
     "0": "0"
@@ -461,6 +469,9 @@ def validate_combo_key(key, field):
 # One-Shot-, Caps-Word- und Repeat-Aktionen (Codes > 0xFF): als Combo nur mit KEY_PRESS
 ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD", "ACT_REPEAT"}
 
+# Mausbewegung braucht eine gehaltene Taste mit Beschleunigung; eine Combo führt sie nicht aus
+MOUSE_MOVE_CPP = {"ACT_MOUSE_UP", "ACT_MOUSE_DOWN", "ACT_MOUSE_LEFT_MOVE", "ACT_MOUSE_RIGHT_MOVE"}
+
 def generate_combos_cpp(combos):
     if combos is None:
         combos = []
@@ -480,6 +491,8 @@ def generate_combos_cpp(combos):
         act = code_to_cpp(action if isinstance(action, str) else "0")
         if act.startswith("(ACT_MACRO_BASE"):
             raise ValueError("Combos unterstützen keine Makros.")
+        if act in MOUSE_MOVE_CPP:
+            raise ValueError("Combos unterstützen keine Mausbewegung.")
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts
         if beh == 1 and act in ONE_SHOT_CPP:
             raise ValueError("Modifier Hold unterstützt keine One-Shot-, Caps-Word- oder Repeat-Aktion.")

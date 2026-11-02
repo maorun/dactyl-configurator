@@ -144,6 +144,8 @@ Der Server startet unter `http://localhost:8088`.
   - Flashe nach einem neuen Schlüssel beide Hälften. Danach `npm run build:app`, damit die App den Schlüssel beim Flashen kennt.
 - **Flashen per USB:**
   - Mit einem Klick auf **„💾 Auf Dactyl flashen“** kompiliert der lokale Server die C++-Keymap und flasht die Firmware per `arduino-cli` direkt auf den ESP32.
+  - Ohne App: `npm run flash -- L` oder `npm run flash -- R` flasht die Firmware aus dem Repository. Die Keymap im NVS bleibt erhalten.
+  - Beide Wege sichern vor dem Upload die NVS-Partition (Keymap und macOS-Kopplung) im Datenordner der App.
 - **Nach einer Änderung des HID-Report-Descriptors erneut koppeln:**
   - macOS speichert die Report-Map beim ersten Koppeln und liest sie bei Reconnects nicht neu.
   - Die Firmware mit Mod-Tap erweitert den Keyboard-Report um F13–F24 (Usages `0x68`–`0x73`).

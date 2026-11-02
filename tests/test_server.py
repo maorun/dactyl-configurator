@@ -16,6 +16,14 @@ from unittest import mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import server
 
+# Eigene USB-Sperre für die Tests: eine laufende App oder ein npm run flash hält sonst die echte Sperre
+TEST_USB_LOCK_DIR = tempfile.mkdtemp(prefix="dactyl-test-usb-lock-")
+server.USB_LOCK_FILE = os.path.join(TEST_USB_LOCK_DIR, "usb.lock")
+
+
+def tearDownModule():
+    shutil.rmtree(TEST_USB_LOCK_DIR, ignore_errors=True)
+
 class TestServerAndCodegen(unittest.TestCase):
 
     def test_code_to_cpp(self):
@@ -1394,6 +1402,52 @@ class TestNvsBackup(unittest.TestCase):
             return code, "esptool output"
         server.run_cli = fake_run
 
+    def test_flash_and_restore_refuse_while_another_process_holds_the_usb_lock(self):
+        lock_file = os.path.join(self.tmp.name, "usb.lock")
+        name = server.save_nvs_image(b"\x00" * server.NVS_SIZE, "R")
+        self.fake_esptool()
+        holder = subprocess.Popen([sys.executable, "-c",
+                                   "import fcntl, sys, time; f = open(sys.argv[1], 'a'); fcntl.flock(f, fcntl.LOCK_EX); "
+                                   "print('locked', flush=True); time.sleep(30)", lock_file],
+                                  stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(holder.stdout.readline().strip(), "locked")
+            with mock.patch.object(server, "USB_LOCK_FILE", lock_file):
+                for result in (server.flash_firmware("R"), server.restore_nvs("R", name[:-4])):
+                    self.assertFalse(result["success"])
+                    self.assertIn("läuft bereits", result["error"])
+            self.assertEqual(self.calls, [])
+        finally:
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
+        # Nach dem Ende des anderen Prozesses ist die Sperre frei
+        self.fake_esptool(b"\x01" * server.NVS_SIZE)
+        with mock.patch.object(server, "USB_LOCK_FILE", lock_file):
+            self.assertTrue(server.restore_nvs("R", name[:-4])["success"])
+
+    def test_usb_lock_refuses_symlink_and_unusable_path(self):
+        target = os.path.join(self.tmp.name, "target")
+        link = os.path.join(self.tmp.name, "link.lock")
+        os.symlink(target, link)
+        self.fake_esptool()
+        with mock.patch.object(server, "USB_LOCK_FILE", link):
+            result = server.flash_firmware("R")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["stage"], "port")
+        self.assertIn("USB-Sperre", result["error"])
+        self.assertFalse(os.path.exists(target))
+        with mock.patch.object(server, "USB_LOCK_FILE", os.path.join(self.tmp.name, "missing", "usb.lock")):
+            self.assertIn("USB-Sperre", server.flash_firmware("R")["error"])
+        self.assertEqual(self.calls, [])
+
+    def test_usb_lock_file_is_private(self):
+        lock = os.path.join(self.tmp.name, "new.lock")
+        with mock.patch.object(server, "USB_LOCK_FILE", lock), \
+                mock.patch.object(server, "find_arduino_cli", lambda: None):
+            server.flash_firmware("R")
+        self.assertEqual(os.stat(lock).st_mode & 0o777, 0o600)
+
     def test_nvs_layout_matches_min_spiffs_partition_table(self):
         self.assertEqual(server.NVS_OFFSET, 0x9000)
         self.assertEqual(server.NVS_SIZE, 20 * 1024)
@@ -1558,6 +1612,146 @@ class TestNvsBackup(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["stage"], "nvs")
         self.assertIn("write-flash", self.calls[-1])
+
+
+class TestFlashScript(unittest.TestCase):
+    """scripts/flash.py (npm run flash): Flash aus dem Repository mit NVS-Sicherung im Datenordner der App."""
+
+    @classmethod
+    def setUpClass(cls):
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+        sys.path.insert(0, os.path.join(root, "scripts"))
+        try:
+            import flash
+        finally:
+            sys.path.pop(0)
+        cls.flash = flash
+        cls.root = os.path.abspath(root)
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.old = (server.BACKUP_DIR, server.LEFT_BACKUP_DIR, server.flash_firmware, server.SKETCH_DIR,
+                    server.LEFT_SKETCH_DIR)
+        self.env = {"DACTYL_DATA_DIR": self.tmp.name}
+        self.seen = []
+
+    def tearDown(self):
+        (server.BACKUP_DIR, server.LEFT_BACKUP_DIR, server.flash_firmware, server.SKETCH_DIR,
+         server.LEFT_SKETCH_DIR) = self.old
+        self.tmp.cleanup()
+
+    def fake_flash(self, result):
+        def fake(side="R", on_output=None):
+            self.seen.append((side, server.side_paths(side)["sketch"], server.side_paths(side)["backups"]))
+            on_output("nvs", "esptool line")
+            return dict(result, side=side)
+        server.flash_firmware = fake
+
+    def run_main(self, argv):
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch("sys.stderr", err):
+            code = self.flash.main(argv, environ=self.env, out=out)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_package_json_runs_flash_script_after_key_check(self):
+        with open(os.path.join(self.root, "package.json"), encoding="utf-8") as f:
+            scripts = json.load(f)["scripts"]
+        self.assertEqual(scripts["flash"],
+                         "bash scripts/generate-split-key.sh --if-missing && python3 scripts/flash.py")
+
+    def test_flash_uses_repository_sketch_and_app_backup_dir(self):
+        # Ein vorher gesetzter Datenordner-Sketch (wie in der App) darf nicht gelten
+        server.SKETCH_DIR = server.LEFT_SKETCH_DIR = os.path.join(self.tmp.name, "firmware", "copy")
+        self.fake_flash({"success": True, "port": "/dev/cu.usbserial-a", "nvsBackup": "nvs-000001-x.bin",
+                         "message": "ok"})
+        code, out, _ = self.run_main(["l"])
+        self.assertEqual(code, 0)
+        side, sketch, backups = self.seen[0]
+        self.assertEqual(side, "L")
+        # Repository-Sketch, keine Kopie im Datenordner: kein Layout gerendert, die NVS-Keymap bleibt
+        self.assertEqual(os.path.abspath(sketch), os.path.join(self.root, "firmware", "dactyl_left"))
+        self.assertEqual(backups, os.path.join(self.tmp.name, "config_backups", "left"))
+        self.assertIn("[nvs] esptool line", out)
+        self.assertIn(os.path.join(backups, "nvs-000001-x.bin"), out)
+
+    def test_flash_right_side(self):
+        self.fake_flash({"success": True, "port": "/dev/cu.usbserial-a", "nvsBackup": None, "message": "ok"})
+        code, out, err = self.run_main(["R"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.seen[0][1:], (os.path.join(self.root, "firmware", "dactyl_right"),
+                                            os.path.join(self.tmp.name, "config_backups", "right")))
+        self.assertNotIn("keine NVS-Sicherung", out)
+        self.assertIn("keine NVS-Sicherung", err)
+
+    def test_default_backup_dir_is_the_app_data_dir(self):
+        self.assertEqual(self.flash.app_data_dir({}),
+                         os.path.expanduser("~/Library/Application Support/dactyl-configurator/data"))
+        with open(os.path.join(self.root, "scripts", "build-app.sh"), encoding="utf-8") as f:
+            self.assertIn('$HOME/Library/Application Support/dactyl-configurator/data', f.read())
+
+    def test_npm_flash_backs_up_nvs_before_the_upload(self):
+        # Echtes flash_firmware: nur arduino-cli, esptool und die Port-Erkennung sind ersetzt
+        calls = []
+        image = b"\x5a" * server.NVS_SIZE
+
+        def fake_run(cmd, timeout_s, on_line=None):
+            calls.append("read-flash" if "read-flash" in cmd else cmd[1])
+            if "read-flash" in cmd:
+                with open(cmd[-1], "wb") as f:
+                    f.write(image)
+            return 0, ""
+
+        with mock.patch.object(server, "find_arduino_cli", lambda: "/opt/arduino-cli"), \
+                mock.patch.object(server, "find_esptool", lambda: "/opt/esptool"), \
+                mock.patch.object(server, "find_serial_port", lambda side="R": "/dev/cu.usbserial-a"), \
+                mock.patch.object(server, "query_device_side", lambda port: "L"), \
+                mock.patch.object(server, "run_cli", fake_run):
+            code, out, _ = self.run_main(["L"])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["compile", "read-flash", "upload"])
+        folder = os.path.join(self.tmp.name, "config_backups", "left")
+        names = server.nvs_backup_names(folder)
+        self.assertEqual(len(names), 1)
+        with open(os.path.join(folder, names[0]), "rb") as f:
+            self.assertEqual(f.read(), image)
+        self.assertIn(os.path.join(folder, names[0]), out)
+
+    def test_flash_refuses_rendered_ino_with_nonzero_defaults_id(self):
+        self.fake_flash({"success": True, "port": "/dev/cu.usbserial-a", "nvsBackup": None, "message": "ok"})
+        with mock.patch.object(self.flash, "defaults_id", lambda side: "123UL"):
+            code, _, err = self.run_main(["L"])
+        self.assertEqual(code, 1)
+        self.assertIn("git restore firmware/dactyl_left", err)
+        self.assertEqual(self.seen, [])
+
+    def test_repository_sketches_keep_defaults_id_zero(self):
+        self.assertEqual(self.flash.defaults_id("R"), "0UL")
+        self.assertEqual(self.flash.defaults_id("L"), "0UL")
+
+    def test_flash_script_in_subprocess_uses_repository_sketch_with_app_data_dir(self):
+        # Eigener Prozess: kein schon importiertes server-Modul verdeckt die Pfadwahl unter DACTYL_DATA_DIR
+        code = ("import sys; sys.path.insert(0, 'scripts'); import flash; s = flash.load_server(); "
+                "print(s.side_paths('L')['sketch']); print(s.side_paths('R')['backups'])")
+        env = {**os.environ, "DACTYL_DATA_DIR": self.tmp.name}
+        out = subprocess.run([sys.executable, "-c", code], cwd=self.root, env=env, capture_output=True, text=True,
+                             check=True).stdout.splitlines()
+        self.assertEqual(out, [os.path.join(self.root, "firmware", "dactyl_left"),
+                               os.path.join(self.tmp.name, "config_backups", "right")])
+
+    def test_flash_failure_returns_1(self):
+        self.fake_flash({"success": False, "stage": "port", "error": "Keine linke Hälfte"})
+        code, _, err = self.run_main(["L"])
+        self.assertEqual(code, 1)
+        self.assertIn("Phase port", err)
+
+    def test_invalid_arguments_return_2_without_flash(self):
+        self.fake_flash({"success": True})
+        for argv in ([], ["X"], ["L", "R"]):
+            code, _, err = self.run_main(argv)
+            self.assertEqual(code, 2, argv)
+            self.assertIn("npm run flash -- L|R", err)
+        self.assertEqual(self.seen, [])
 
 
 class TestServerHttp(unittest.TestCase):

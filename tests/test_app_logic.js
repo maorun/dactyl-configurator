@@ -45,6 +45,8 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              removeKeyPairAt, KEYCODES, UMLAUT_LABELS, ONE_SHOT_LABELS, holdSublabel,
              planKeyPairDeletion,
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
+             MAX_KEY_OVERRIDES, KEY_OVERRIDE_MODS, isValidKeyOverride, isKeyOverrideMember, keyOverrideModsValue,
+             normalizeKeyOverride, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
              isValidMacroStep, isValidMacro, normalizeMacroStep, macroCommands, isMacroUsed, removeMacroAt,
              macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
@@ -624,6 +626,11 @@ function listLines(cfg) {
   const pairs = (cfg.keyPairs || []).map(p => [api.actionCodeToNumeric(p.first), api.actionCodeToNumeric(p.second)]);
   lines.push("PAIR_COUNT:" + pairs.length);
   for (let o = 0; o < pairs.length; o += 8) lines.push("PAIR_DATA:" + JSON.stringify({ o, e: pairs.slice(o, o + 8) }));
+  if (cfg.keyOverrides) {
+    const overrides = cfg.keyOverrides.map(o => [api.keyOverrideModsValue(o.mods), api.actionCodeToNumeric(o.key), api.actionCodeToNumeric(o.replacement)]);
+    lines.push("OVERRIDE_COUNT:" + overrides.length);
+    for (let o = 0; o < overrides.length; o += 6) lines.push("OVERRIDE_DATA:" + JSON.stringify({ o, e: overrides.slice(o, o + 6) }));
+  }
   const macros = cfg.macros || [];
   lines.push("MACRO_COUNT:" + macros.length);
   macros.forEach((m, i) => {
@@ -676,6 +683,81 @@ test("Layout-Diff: Combos mit anderer Reihenfolge oder doppelt zeigen einen Unte
   const snap2 = snapshotWithLists(dup);
   dup.combos.push(JSON.parse(JSON.stringify(dup.combos[0])));
   assert.strictEqual(api.diffKeymap(dup, snap2, R).lists.combos.length, 1);
+});
+
+test("Tasten-Überschreibungen: Prüfung, Normalisierung und Anzeige", () => {
+  const ok = { mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" };
+  assert.ok(api.isValidKeyOverride(ok));
+  assert.ok(api.isValidKeyOverride({ mods: ["gui", "ctrl"], key: "a", replacement: "KEY_B" }));
+  const bad = [
+    { ...ok, mods: [] }, { ...ok, mods: ["foo"] }, { ...ok, mods: ["shift", "shift"] }, { ...ok, mods: "shift" },
+    { ...ok, key: "KEY_LEFT_SHIFT" }, { ...ok, replacement: "KEY_RIGHT_GUI" },
+    { ...ok, key: "MO_1" }, { ...ok, key: "PAIR_0" }, { ...ok, replacement: "MACRO_0" }, { ...ok, key: "NONE" },
+    { ...ok, key: undefined }, null, "x"
+  ];
+  for (const b of bad) assert.ok(!api.isValidKeyOverride(b), JSON.stringify(b));
+  // Feste Reihenfolge der Modifier und Bitmaske wie KEY_OVERRIDE_MOD_* in der Firmware
+  const n = api.normalizeKeyOverride({ mods: ["gui", "shift", "ctrl"], key: "KEY_A", replacement: "KEY_B" });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(n.mods)), ["ctrl", "shift", "gui"]);
+  assert.strictEqual(api.keyOverrideModsValue(["ctrl", "shift", "gui"]), 11);
+  assert.strictEqual(api.keyOverrideModsValue(["shift"]), 2);
+  assert.strictEqual(api.keyOverrideLabel(n, c => c), "Ctrl + Shift + Cmd + KEY_A → KEY_B");
+  assert.strictEqual(api.MAX_KEY_OVERRIDES, 16);
+});
+
+test("Tasten-Überschreibungen: nur der Master trägt sie (normalizeConfig und Validierung)", () => {
+  const ov = [{ mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" }];
+  const copy = o => JSON.parse(JSON.stringify(o));
+  const right = api.normalizeConfig({ ...copy(R.defaultConfig), keyOverrides: ov }, R);
+  assert.strictEqual(right.keyOverrides.length, 1);
+  const left = api.normalizeConfig({ ...copy(L.defaultConfig), keyOverrides: ov }, L);
+  assert.strictEqual(left.keyOverrides.length, 0);
+  // Ungültige Einträge fallen beim Normalisieren weg, die Obergrenze gilt
+  const many = Array.from({ length: 20 }, () => ov[0]).concat([{ mods: [], key: "KEY_A", replacement: "KEY_B" }]);
+  assert.strictEqual(api.normalizeConfig({ ...copy(R.defaultConfig), keyOverrides: many }, R).keyOverrides.length, 16);
+  // Import: Master akzeptiert, ungültig und andere Hälfte lehnen ab
+  api.validateConfigShape({ ...copy(R.defaultConfig), keyOverrides: ov }, R);
+  assert.throws(() => api.validateConfigShape({ ...copy(R.defaultConfig), keyOverrides: [{ mods: [], key: "KEY_A", replacement: "KEY_B" }] }, R), /Überschreibung 0/);
+  assert.throws(() => api.validateConfigShape({ ...copy(L.defaultConfig), keyOverrides: ov }, L), /nur für die/);
+  assert.throws(() => api.validateConfigShape({ ...copy(R.defaultConfig), keyOverrides: "x" }, R), /keyOverrides/);
+  api.validateConfigShape({ ...copy(L.defaultConfig), keyOverrides: [] }, L);
+});
+
+test("Layout-Diff: Überschreibungen des Masters werden verglichen, ohne Zähler nicht", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.keyOverrides = [{ mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" }];
+  const snap = snapshotWithLists(cfg);
+  assert.strictEqual(api.snapshotListsState(snap), "complete");
+  assert.strictEqual(api.diffKeymap(cfg, snap, R).lists.overrides.length, 0);
+  // Lokal geändert und ein zusätzlicher Eintrag
+  cfg.keyOverrides[0].replacement = "KEY_TAB";
+  cfg.keyOverrides.push({ mods: ["alt"], key: "KEY_A", replacement: "KEY_B" });
+  const d = api.diffKeymap(cfg, snap, R).lists;
+  assert.strictEqual(d.overrides.length, 2);
+  assert.strictEqual(d.overrides[0].where, "Überschreibung 0");
+  assert.strictEqual(d.overrides[1].device, "—");
+  assert.ok(d.overrides[0].device.includes("Shift"));
+  // Firmware ohne Überschreibungen (linke Hälfte oder Stand 5/6): kein Zähler, nichts zu vergleichen
+  const noOv = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  delete noOv.keyOverrides;
+  const snapOld = snapshotWithLists(noOv);
+  assert.strictEqual(api.snapshotListsState(snapOld), "complete");
+  assert.strictEqual(api.diffKeymap(cfg, snapOld, R).lists.overrides.length, 0);
+  // Begonnener Block ohne alle Daten: unvollständig
+  const lost = snapshotOf(noOv);
+  for (const line of listLines(noOv)) api.captureListLine(lost, line);
+  api.captureListLine(lost, "OVERRIDE_COUNT:2");
+  api.captureListLine(lost, 'OVERRIDE_DATA:{"o":0,"e":[[2,178,212]]}');
+  assert.strictEqual(api.snapshotListsState(lost), "incomplete");
+  // Ungültige Zeilen: Klasse 0, Klasse 16, falsche Länge
+  for (const bad of ['OVERRIDE_DATA:{"o":0,"e":[[0,178,212]]}', 'OVERRIDE_DATA:{"o":0,"e":[[16,178,212]]}', 'OVERRIDE_DATA:{"o":0,"e":[[2,178]]}']) {
+    const s2 = snapshotOf(noOv);
+    api.captureListLine(s2, "OVERRIDE_COUNT:1");
+    assert.ok(api.captureListLine(s2, bad));
+    assert.strictEqual(api.snapshotListsState(s2), "incomplete", bad);
+  }
+  api.captureListLine(snapOld, "OVERRIDE_COUNT:17");
+  assert.strictEqual(api.snapshotListsState(snapOld), "incomplete");
 });
 
 test("Layout-Diff: ein zusätzliches Makro auf dem Gerät erscheint", () => {
@@ -1473,6 +1555,10 @@ function fullSyncHarness(reply, holdMs = null) {
   const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
   cfg.combos = [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior: "KEY_PRESS", action: "KEY_ESC" }];
   cfg.keyPairs = [{ first: "KEY_LEFT_ALT", second: "*" }];
+  cfg.keyOverrides = [
+    { mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" },
+    { mods: ["ctrl", "alt"], key: "KEY_A", replacement: "KEY_B" }
+  ];
   cfg.macros = [
     { name: "Copy", steps: [{ type: "down", code: "KEY_LEFT_GUI" }, { type: "tap", code: "KEY_C" }, { type: "up", code: "KEY_LEFT_GUI" }] },
     { name: "Warten", steps: [{ type: "pause", ms: 250 }, { type: "tap", code: "a" }] }
@@ -1605,9 +1691,12 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
   const macros = sent.filter(c => c === "ADD_MACRO").length;
+  const overrides = sent.filter(c => c.startsWith("ADD_OVERRIDE ")).length;
   assert.strictEqual(macros, 2);
-  // SAVE_NVS, SAVE_COMBOS, die Tastenpaar-Phase, je Makro ein Schritt und SAVE_MACROS
-  assert.strictEqual(steps.length, settings + names + keys + 1 + combos + 1 + 1 + macros + 1);
+  assert.strictEqual(overrides, 2);
+  // SAVE_NVS, SAVE_COMBOS, die Tastenpaar-Phase, je Überschreibung ein Schritt und SAVE_OVERRIDES,
+  // je Makro ein Schritt und SAVE_MACROS
+  assert.strictEqual(steps.length, settings + names + keys + 1 + combos + 1 + 1 + overrides + 1 + macros + 1);
   assert.strictEqual(steps.at(-1), 100);
   assert.ok(steps.every(p => p <= 100), `Fortschritt über 100 %: ${Math.max(...steps)}`);
 }]);
@@ -1622,6 +1711,9 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 3) - ctx.count(6, 8, 2), 1);
   assert.strictEqual(ctx.count(6, 8, 0), 6 + 8 + 8 * 6 * 7 + 4);
   assert.strictEqual(ctx.count(6, 8, 0, 3) - ctx.count(6, 8, 0), 3);
+  // Überschreibungen des Masters: je Eintrag ein Schritt plus die Phase (CLEAR/SAVE); die andere Hälfte hat keine
+  assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
+  assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
   assert.strictEqual(cmds.length, 6);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM"]);
@@ -1716,6 +1808,35 @@ asyncTests.push(["Sync: Firmware ohne Makros überspringt die Makro-Phase mit Hi
   const bad = fullSyncHarness(cmd => cmd.startsWith("ADD_MACRO_STEP 4") ? `ERR ARGS ${cmd}` : okReply(cmd));
   await bad.w.write();
   assert.ok(!bad.sent.includes("SAVE_MACROS"));
+  assert.ok(bad.toasts.some(t => t.includes("Fehler beim Übertragen")));
+}]);
+
+asyncTests.push(["Sync: Überschreibungen gehen als CLEAR_OVERRIDES, ADD_OVERRIDE und SAVE_OVERRIDES", async () => {
+  const { w, sent } = fullSyncHarness(okReply);
+  await w.write();
+  const clear = sent.indexOf("CLEAR_OVERRIDES");
+  const save = sent.indexOf("SAVE_OVERRIDES");
+  assert.ok(clear > sent.indexOf("SAVE_PAIRS") && save > clear, "nach den Tastenpaaren, vor den Makros");
+  assert.ok(save < sent.indexOf("CLEAR_MACROS"));
+  assert.deepStrictEqual(sent.filter(c => c.startsWith("ADD_OVERRIDE ")), [
+    "ADD_OVERRIDE 2 178 212",  // Shift + Backspace -> Delete
+    "ADD_OVERRIDE 5 97 98"     // Ctrl + Alt + a -> b
+  ]);
+}]);
+
+asyncTests.push(["Sync: Firmware ohne Überschreibungen überspringt die Phase mit Hinweis", async () => {
+  const { w, toasts, sent, progress } = fullSyncHarness(cmd => cmd === "CLEAR_OVERRIDES" ? `ERR UNKNOWN ${cmd}` : okReply(cmd));
+  await w.write();
+  // Auch mit übersprungener Phase endet der Balken bei 100 %
+  assert.strictEqual(progress.at(-2), 100);
+  assert.ok(sent.includes("CLEAR_OVERRIDES"));
+  assert.ok(!sent.some(c => c.startsWith("ADD_OVERRIDE") || c === "SAVE_OVERRIDES"));
+  assert.ok(sent.includes("SAVE_MACROS"), "die übrigen Phasen laufen weiter");
+  assert.ok(toasts.some(t => t.includes("CLEAR_OVERRIDES") && t.includes("flashen")));
+  // Ein abgelehnter Eintrag bricht den Sync ab (kein stilles Abschneiden)
+  const bad = fullSyncHarness(cmd => cmd.startsWith("ADD_OVERRIDE 5") ? `ERR ARGS ${cmd}` : okReply(cmd));
+  await bad.w.write();
+  assert.ok(!bad.sent.includes("SAVE_OVERRIDES"));
   assert.ok(bad.toasts.some(t => t.includes("Fehler beim Übertragen")));
 }]);
 

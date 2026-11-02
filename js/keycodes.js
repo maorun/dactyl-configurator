@@ -305,6 +305,12 @@ function isOneShotOrCapsWordCode(code) {
 const ACT_KEY_PAIR_BASE = 0x140;
 const MAX_KEY_PAIRS = 16;
 
+// Tasten-Überschreibung (nur der Master): Modifier + Taste ergibt eine andere Taste (Index in currentConfig.keyOverrides)
+const MAX_KEY_OVERRIDES = 16;
+// Modifier-Klassen wie KEY_OVERRIDE_MOD_* in DactylKeyOverride.h (Bit pro Klasse, links und rechts zählen gleich)
+const KEY_OVERRIDE_MODS = { ctrl: 1, shift: 2, alt: 4, gui: 8 };
+const KEY_OVERRIDE_MOD_LABELS = { ctrl: "Ctrl", shift: "Shift", alt: "Alt", gui: "Cmd" };
+
 // Makro MACRO_<n>: Folge aus Tippen, Drücken, Loslassen und Pausen (Index in currentConfig.macros)
 const ACT_MACRO_BASE = 0x170;
 const MAX_MACROS = 16;

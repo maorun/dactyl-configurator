@@ -789,8 +789,9 @@ function setOptionalActionSelect(select, code) {
 }
 
 function renderCombosTable() {
-  // Tastenpaare und Makros liegen im selben Tab und ändern sich bei Laden, Import und Undo zusammen mit den Combos
+  // Tastenpaare, Überschreibungen und Makros liegen im selben Tab und ändern sich bei Laden, Import und Undo zusammen mit den Combos
   renderKeyPairs();
+  renderKeyOverrides();
   renderMacros();
   const tbody = document.getElementById("combosTableBody");
   const emptyState = document.getElementById("emptyCombosState");

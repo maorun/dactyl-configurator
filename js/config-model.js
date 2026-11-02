@@ -162,6 +162,43 @@ function isKeyPairMember(code) {
   return n >= 1 && n <= 0xFF;
 }
 
+// Eine Überschreibung braucht mindestens einen Modifier (ctrl, shift, alt, gui) ohne Wiederholung sowie eine Taste und
+// einen Ersatz, die weder Modifier noch Layer-, Paar- oder Makro-Codes sind (wie server.py und die Firmware)
+function isModifierKeyCode(code) {
+  const n = actionCodeToNumeric(code);
+  return n >= 0x80 && n <= 0x87;
+}
+
+function isKeyOverrideMember(code) {
+  return isKeyPairMember(code) && !isModifierKeyCode(code);
+}
+
+function isValidKeyOverride(o) {
+  return !!o && typeof o === "object" && Array.isArray(o.mods) && o.mods.length > 0 &&
+    o.mods.every(m => typeof m === "string" && Object.prototype.hasOwnProperty.call(KEY_OVERRIDE_MODS, m)) &&
+    new Set(o.mods).size === o.mods.length && isKeyOverrideMember(o.key) && isKeyOverrideMember(o.replacement);
+}
+
+// Modifier einer Überschreibung als Bitmaske (1..15) und in fester Reihenfolge
+function keyOverrideModsValue(mods) {
+  return (mods || []).reduce((v, m) => v | (KEY_OVERRIDE_MODS[m] || 0), 0);
+}
+
+function normalizeKeyOverride(o) {
+  const value = keyOverrideModsValue(o.mods);
+  return {
+    mods: Object.keys(KEY_OVERRIDE_MODS).filter(m => value & KEY_OVERRIDE_MODS[m]),
+    key: o.key,
+    replacement: o.replacement
+  };
+}
+
+// Anzeigename, z. B. "Shift + Bksp → Entf"
+function keyOverrideLabel(o, labelFor) {
+  if (!o) return "?";
+  return `${o.mods.map(m => KEY_OVERRIDE_MOD_LABELS[m]).join(" + ")} + ${labelFor(o.key)} → ${labelFor(o.replacement)}`;
+}
+
 // true, wenn eine Taste einer Ebene PAIR_<idx> als Tap, Halten oder Doppel-Tipp nutzt.
 // Alte Zellen im String-Format ("PAIR_2") zählen als Tap-Aktion.
 function isKeyPairUsed(layers, idx) {
@@ -351,6 +388,19 @@ function validateConfigShape(cfg, profile) {
       }
     });
   }
+  if (cfg.keyOverrides !== undefined) {
+    if (!Array.isArray(cfg.keyOverrides) || cfg.keyOverrides.length > MAX_KEY_OVERRIDES) {
+      throw new Error(`'keyOverrides' muss eine Liste mit maximal ${MAX_KEY_OVERRIDES} Einträgen sein.`);
+    }
+    if (cfg.keyOverrides.length > 0 && profile && !profile.master) {
+      throw new Error(`Tasten-Überschreibungen gelten nur für die ${Dactyl.SIDE_PROFILES[Dactyl.getMasterSide()].label} (Master).`);
+    }
+    cfg.keyOverrides.forEach((o, i) => {
+      if (!isValidKeyOverride(o)) {
+        throw new Error(`Tasten-Überschreibung ${i} braucht Modifier (ctrl, shift, alt, gui) und zwei normale Tasten (key, replacement).`);
+      }
+    });
+  }
   if (cfg.macros !== undefined) {
     if (!Array.isArray(cfg.macros) || cfg.macros.length > MAX_MACROS) {
       throw new Error(`'macros' muss eine Liste mit maximal ${MAX_MACROS} Einträgen sein.`);
@@ -418,6 +468,10 @@ function normalizeConfig(cfg, profile) {
   cfg.keyPairs = Array.isArray(cfg.keyPairs)
     ? cfg.keyPairs.filter(p => p && isKeyPairMember(p.first) && isKeyPairMember(p.second))
         .slice(0, MAX_KEY_PAIRS).map(p => ({ first: p.first, second: p.second }))
+    : [];
+  // Nur der Master trägt Überschreibungen; die Liste der anderen Hälfte bleibt leer
+  cfg.keyOverrides = Array.isArray(cfg.keyOverrides) && profile && profile.master
+    ? cfg.keyOverrides.filter(isValidKeyOverride).slice(0, MAX_KEY_OVERRIDES).map(normalizeKeyOverride)
     : [];
   // Ein ungültiges Makro wird leer, nicht entfernt: MACRO_<n> verweist per Index, die Indizes bleiben gleich
   cfg.macros = Array.isArray(cfg.macros)
@@ -504,14 +558,14 @@ function maxKeyCount(stats) {
 function createDeviceSnapshot() {
   return {
     names: null, tap: [], hold: [], dtap: [],
-    counts: { combos: null, pairs: null, macros: null }, combos: [], pairs: [], macros: [], macroLens: [], listsBroken: false
+    counts: { combos: null, pairs: null, macros: null, overrides: null }, combos: [], pairs: [], macros: [], overrides: [], macroLens: [], listsBroken: false
   };
 }
 
 const COMBO_BEHAVIOR_CODES = { KEY_PRESS: 0, MODIFIER_HOLD: 1, LAYER_TOGGLE: 2 };
 
-const LIST_COUNT_MAX = { "COMBO_COUNT:": MAX_COMBOS, "PAIR_COUNT:": MAX_KEY_PAIRS, "MACRO_COUNT:": MAX_MACROS };
-const LIST_DATA_PREFIXES = ["COMBO_DATA:", "PAIR_DATA:", "MACRO_DATA:"];
+const LIST_COUNT_MAX = { "COMBO_COUNT:": MAX_COMBOS, "PAIR_COUNT:": MAX_KEY_PAIRS, "MACRO_COUNT:": MAX_MACROS, "OVERRIDE_COUNT:": MAX_KEY_OVERRIDES };
+const LIST_DATA_PREFIXES = ["COMBO_DATA:", "PAIR_DATA:", "MACRO_DATA:", "OVERRIDE_DATA:"];
 
 // Übernimmt eine Zeile ..._COUNT: oder ..._DATA: in den Snapshot. Gibt true zurück, wenn die Zeile eine dieser
 // Arten ist (auch bei ungültigem Inhalt: verbraucht, der Snapshot gilt dann als unvollständig).
@@ -525,7 +579,7 @@ function captureListLine(snapshot, line) {
     if (LIST_COUNT_MAX[prefix] !== undefined) {
       const n = /^\d{1,3}$/.test(body) ? Number(body) : -1;
       if (n < 0 || n > LIST_COUNT_MAX[prefix]) return fail();
-      const kind = { "COMBO_COUNT:": "combos", "PAIR_COUNT:": "pairs", "MACRO_COUNT:": "macros" }[prefix];
+      const kind = { "COMBO_COUNT:": "combos", "PAIR_COUNT:": "pairs", "MACRO_COUNT:": "macros", "OVERRIDE_COUNT:": "overrides" }[prefix];
       snapshot.counts[kind] = n;
       snapshot[kind] = [];
       if (kind === "macros") snapshot.macroLens = [];
@@ -544,11 +598,12 @@ function captureListLine(snapshot, line) {
       return true;
     }
     const isCombo = prefix === "COMBO_DATA:";
-    const kind = isCombo ? "combos" : "pairs";
+    const isOverride = prefix === "OVERRIDE_DATA:";
+    const kind = isCombo ? "combos" : isOverride ? "overrides" : "pairs";
     const count = snapshot.counts[kind];
     const list = snapshot[kind];
     if (count === null || data.o !== list.length || !Array.isArray(data.e) || list.length + data.e.length > count ||
-        !data.e.every(e => isCombo ? nums(e, 6, t => t[4] <= 2) : nums(e, 2))) return fail();
+        !data.e.every(e => isCombo ? nums(e, 6, t => t[4] <= 2) : isOverride ? nums(e, 3, t => t[0] >= 1 && t[0] <= 15) : nums(e, 2))) return fail();
     list.push(...data.e);
   } catch (_) { return fail(); }
   return true;
@@ -559,10 +614,13 @@ function captureListLine(snapshot, line) {
 function snapshotListsState(snapshot) {
   if (!snapshot) return "absent";
   const c = snapshot.counts;
-  const none = c.combos === null && c.pairs === null && c.macros === null;
+  const none = c.combos === null && c.pairs === null && c.macros === null && c.overrides === null;
   if (none && !snapshot.listsBroken) return "absent";
   if (snapshot.listsBroken || c.combos === null || c.pairs === null || c.macros === null) return "incomplete";
   if (snapshot.combos.length !== c.combos || snapshot.pairs.length !== c.pairs) return "incomplete";
+  // Die Überschreibungen sendet nur der Master ab Stand 7: ohne Zähler gibt es nichts zu vergleichen,
+  // ein begonnener Block muss vollständig sein
+  if (c.overrides !== null && snapshot.overrides.length !== c.overrides) return "incomplete";
   for (let i = 0; i < c.macros; i++) {
     if (snapshot.macroLens[i] === undefined || snapshot.macros[i].length !== snapshot.macroLens[i]) return "incomplete";
   }
@@ -583,6 +641,10 @@ function localPairTuples(cfg) {
   return (cfg.keyPairs || []).slice(0, MAX_KEY_PAIRS).map(p => [actionCodeToNumeric(p.first), actionCodeToNumeric(p.second)]);
 }
 
+function localOverrideTuples(cfg) {
+  return (cfg.keyOverrides || []).slice(0, MAX_KEY_OVERRIDES).map(o => [keyOverrideModsValue(o.mods), actionCodeToNumeric(o.key), actionCodeToNumeric(o.replacement)]);
+}
+
 function localMacroSteps(cfg) {
   return (cfg.macros || []).slice(0, MAX_MACROS).map(m => m.steps.map(st => st.type === "pause"
     ? [MACRO_STEP_TYPES.pause, 0, st.ms]
@@ -598,6 +660,11 @@ function describeComboTuple(t) {
 
 function describePairTuple(t) {
   return `${findDefinitionByCode(t[0]).label} + ${findDefinitionByCode(t[1]).label}`;
+}
+
+function describeOverrideTuple(t) {
+  const mods = Object.keys(KEY_OVERRIDE_MODS).filter(m => t[0] & KEY_OVERRIDE_MODS[m]).map(m => KEY_OVERRIDE_MOD_LABELS[m]).join(" + ");
+  return `${mods} + ${findDefinitionByCode(t[1]).label} → ${findDefinitionByCode(t[2]).label}`;
 }
 
 function describeMacroSteps(steps) {
@@ -665,7 +732,7 @@ function diffKeymap(cfg, snapshot, profile) {
 // nichts wird verglichen.
 function diffLists(cfg, snapshot) {
   const state = snapshotListsState(snapshot);
-  const out = { known: state === "complete", state, combos: [], pairs: [], macros: [] };
+  const out = { known: state === "complete", state, combos: [], pairs: [], overrides: [], macros: [] };
   if (!out.known) return out;
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const compare = (target, label, device, local, describe) => {
@@ -677,6 +744,8 @@ function diffLists(cfg, snapshot) {
   };
   compare(out.combos, "Combo", snapshot.combos, localComboTuples(cfg), describeComboTuple);
   compare(out.pairs, "Paar", snapshot.pairs, localPairTuples(cfg), describePairTuple);
+  // Nur wenn das Gerät Überschreibungen meldet (Master ab Stand 7); sonst gibt es nichts zu vergleichen
+  if (snapshot.counts.overrides !== null) compare(out.overrides, "Überschreibung", snapshot.overrides, localOverrideTuples(cfg), describeOverrideTuple);
   const deviceMacros = Array.from({ length: snapshot.counts.macros }, (_, i) => snapshot.macros[i]);
   compare(out.macros, "Makro", deviceMacros, localMacroSteps(cfg), describeMacroSteps);
   return out;

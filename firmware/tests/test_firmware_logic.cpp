@@ -99,6 +99,12 @@ struct KeyPair {
 static uint8_t numKeyPairs = 0;
 static KeyPair userKeyPairs[MAX_KEY_PAIRS];
 
+// Tasten-Überschreibungen (nur der Master, wie dactyl_right.ino)
+#define DACTYL_KEY_OVERRIDES
+#include "../dactyl_right/DactylKeyOverride.h"
+static uint8_t numKeyOverrides = 0;
+static KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES];
+
 // Makros (wie DactylCommon.h)
 #define ACT_MACRO_BASE      0x170
 #define MAX_MACROS          16
@@ -198,6 +204,8 @@ void resetState() {
   numCombos = 0;
   numKeyPairs = 0;
   for (int i = 0; i < MAX_KEY_PAIRS; i++) userKeyPairs[i] = { 0, 0 };
+  numKeyOverrides = 0;
+  for (int i = 0; i < MAX_KEY_OVERRIDES; i++) userKeyOverrides[i] = { 0, 0, 0 };
   numMacros = 0;
   for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
   macroRun = {};
@@ -1743,6 +1751,137 @@ TEST(test_key_pairs_persist_in_nvs) {
   userKeyPairs[0] = { 129, 46 };
   loadKeymapFromNVS();
   assert(numKeyPairs == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Tasten-Überschreibungen: Befehle, NVS und GET_CONFIG
+// -----------------------------------------------------------------------------
+TEST(test_key_override_commands_validate_arguments) {
+  resetState();
+  handleConfigCommand("CLEAR_OVERRIDES", false);
+  assert(mockChar.value == "OK CLEAR_OVERRIDES");
+  handleConfigCommand("ADD_OVERRIDE 2 178 212", false);  // Shift + Backspace -> Delete
+  assert(mockChar.value == "OK ADD_OVERRIDE 0");
+  assert(numKeyOverrides == 1 && userKeyOverrides[0].mods == 2 && userKeyOverrides[0].key == 178 && userKeyOverrides[0].replacement == 212);
+  const char* bad[] = {
+    "ADD_OVERRIDE 0 178 212",     // keine Modifier-Klasse
+    "ADD_OVERRIDE 16 178 212",    // Klasse außerhalb
+    "ADD_OVERRIDE 2 0 212",       // Taste 0
+    "ADD_OVERRIDE 2 178 0",       // Ersatz 0
+    "ADD_OVERRIDE 2 256 212",     // zu groß
+    "ADD_OVERRIDE 2 129 212",     // Modifier als Taste
+    "ADD_OVERRIDE 2 178 129",     // Modifier als Ersatz
+    "ADD_OVERRIDE 2 178",         // zu wenig Argumente
+    "ADD_OVERRIDE 2 178 212 1",   // zu viele Argumente
+  };
+  for (const char* cmd : bad) {
+    handleConfigCommand(cmd, false);
+    assert(mockChar.value == std::string("ERR ARGS ") + cmd);
+  }
+  assert(numKeyOverrides == 1);
+  // Obergrenze
+  for (int i = 1; i < MAX_KEY_OVERRIDES; i++) handleConfigCommand("ADD_OVERRIDE 2 178 212", false);
+  assert(numKeyOverrides == MAX_KEY_OVERRIDES);
+  handleConfigCommand("ADD_OVERRIDE 2 178 212", false);
+  assert(mockChar.value == "ERR ARGS ADD_OVERRIDE 2 178 212");
+}
+
+TEST(test_key_overrides_persist_in_nvs) {
+  resetState();
+  handleConfigCommand("ADD_OVERRIDE 2 178 212", false);
+  handleConfigCommand("ADD_OVERRIDE 9 97 98", false);
+  handleConfigCommand("SAVE_OVERRIDES", false);
+  assert(mockChar.value == "OK SAVE_OVERRIDES");
+
+  // Neustart: RAM leer, NVS lädt die Liste
+  numKeyOverrides = 0;
+  userKeyOverrides[0] = { 0, 0, 0 };
+  userKeyOverrides[1] = { 0, 0, 0 };
+  loadKeymapFromNVS();
+  assert(numKeyOverrides == 2);
+  assert(userKeyOverrides[1].mods == 9 && userKeyOverrides[1].key == 97 && userKeyOverrides[1].replacement == 98);
+
+  // Leere Liste gespeichert: die einkompilierte Liste gilt beim nächsten Start nicht mehr
+  handleConfigCommand("CLEAR_OVERRIDES", false);
+  handleConfigCommand("SAVE_OVERRIDES", false);
+  assert(mockChar.value == "OK SAVE_OVERRIDES");
+  numKeyOverrides = 1;
+  userKeyOverrides[0] = { 2, 178, 212 };
+  loadKeymapFromNVS();
+  assert(numKeyOverrides == 0);
+}
+
+TEST(test_key_overrides_in_nvs_with_invalid_entry_are_ignored) {
+  resetState();
+  // Beschädigte NVS-Daten: eine Überschreibung mit Modifier als Taste
+  KeyOverride broken[1] = {{ 2, 129, 212 }};
+  preferences.begin("dactyl", false);
+  preferences.putUChar("num_ovr", 1);
+  preferences.putBytes("ovr_data", broken, sizeof(broken));
+  preferences.end();
+  numKeyOverrides = 0;
+  loadKeymapFromNVS();
+  assert(numKeyOverrides == 0);
+}
+
+TEST(test_key_overrides_failed_data_write_keeps_old_count_and_reports_error) {
+  resetState();
+  handleConfigCommand("ADD_OVERRIDE 2 178 212", false);
+  handleConfigCommand("SAVE_OVERRIDES", false);
+  assert(mockChar.value == "OK SAVE_OVERRIDES");
+  // Die Daten schlagen fehl: die Anzahl darf nicht zu neuen Daten passen, der Fehler wird gemeldet
+  handleConfigCommand("ADD_OVERRIDE 9 97 98", false);
+  Preferences::failBytesKey = "ovr_data";
+  handleConfigCommand("SAVE_OVERRIDES", false);
+  Preferences::failBytesKey = "";
+  assert(mockChar.value == "ERR NVS SAVE_OVERRIDES");
+  numKeyOverrides = 0;
+  loadKeymapFromNVS();
+  assert(numKeyOverrides == 1 && userKeyOverrides[0].key == 178);
+}
+
+TEST(test_get_config_sends_key_overrides) {
+  resetState();
+  loadKeymapFromNVS();
+  handleConfigCommand("CLEAR_OVERRIDES", false);
+  handleConfigCommand("ADD_OVERRIDE 2 178 212", false);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool count = false, data = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n == "OVERRIDE_COUNT:1") count = true;
+    if (n == "OVERRIDE_DATA:{\"o\":0,\"e\":[[2,178,212]]}") data = true;
+  }
+  assert(count && data);
+
+  // Größter Fall: jede Zeile bleibt kurz, nichts geht verloren
+  handleConfigCommand("CLEAR_OVERRIDES", false);
+  for (int i = 0; i < MAX_KEY_OVERRIDES; i++) handleConfigCommand("ADD_OVERRIDE 15 255 255", false);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  size_t longest = 0;
+  int entries = 0;
+  for (const auto& n : mockChar.notifications) {
+    if (n.rfind("OVERRIDE_DATA", 0) != 0) continue;
+    if (n.size() > longest) longest = n.size();
+    for (size_t p = n.find("],["); p != std::string::npos; p = n.find("],[", p + 1)) entries++;
+    entries++;
+  }
+  assert(longest > 0 && longest <= 160);
+  assert(entries == MAX_KEY_OVERRIDES);
+}
+
+TEST(test_new_app_defaults_remove_stored_key_overrides) {
+  resetState();
+  handleConfigCommand("ADD_OVERRIDE 2 178 212", false);
+  handleConfigCommand("SAVE_OVERRIDES", false);
+  handleConfigCommand("SAVE_NVS", false);
+  // Ein Flash aus der App (ID != 0) bringt die Überschreibungen mit: die gespeicherte Liste fällt weg
+  testDefaultsId = 12345;
+  numKeyOverrides = 0;
+  loadKeymapFromNVS();
+  assert(!preferences.isKey("num_ovr") && !preferences.isKey("ovr_data"));
+  testDefaultsId = 0;
 }
 
 // -----------------------------------------------------------------------------

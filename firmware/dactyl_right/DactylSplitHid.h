@@ -12,6 +12,7 @@
 #include <string.h>
 #include "DactylKeycodes.h" // dactylAsciiToHid, KEY_LEFT_SHIFT (implizites Shift großer/gesetzter Zeichen)
 #include "DactylOneShot.h"  // One-Shot-Modifier und Caps Word (Zustand auf dem Master)
+#include "DactylKeyOverride.h" // Tasten-Überschreibungen (Modifier + Taste ergibt eine andere Taste)
 #include "DactylVersion.h"  // DACTYL_FW_VERSION (SPLIT_OP_FW_VERSION)
 
 #define SPLIT_ESPNOW_CHANNEL 1
@@ -1418,13 +1419,25 @@ public:
 
   // --- Rechte Hälfte (DactylLogic.h) ---
   size_t press(uint8_t k) {
-    uint8_t mods = oneShotModsForKey(oneShot, heldOneShot(), k, altInReport());
+    const KeyOverride *o = overrideFor(k);
+    // Ein erneuter Druck ohne Loslassen: die alte Ersatztaste lösen, oder die schon gedrückte Taste selbst,
+    // wenn jetzt eine Überschreibung greift. Sonst bliebe eine von beiden im Report hängen.
+    if (ovrRight[k].repl) overrideRelease(ovrRight, k);
+    else if (o && splitSetHasKey(right, k) && !splitSetHasKey(splitLeft.set, k)) releaseKeepingShift(k, splitLeft.set);
+    // One-Shot und Caps Word gelten für die gesendete Taste (bei einer Überschreibung die Ersatztaste)
+    uint8_t mods = oneShotModsForKey(oneShot, heldOneShot(), o ? o->replacement : k, altInReport());
+    if (o) {
+      overridePress(ovrRight, k, o, mods);
+      splitSetKey(right, k, true);
+      return 1;
+    }
     splitSetKey(right, k, true);
     return pressWithMods(k, mods);
   }
   size_t release(uint8_t k) {
     splitSetKey(right, k, false);
-    if (splitSetHasKey(splitLeft.set, k)) return 1;
+    if (overrideRelease(ovrRight, k)) return 1;
+    if (splitSetHasKey(splitLeft.set, k) || overrideReplacementActive(k)) return 1;
     return releaseKeepingShift(k, splitLeft.set);
   }
   size_t write(uint8_t k) {
@@ -1485,6 +1498,7 @@ public:
     // Eine gehaltene One-Shot-Taste gilt danach als gelöst, ohne etwas vorzumerken (Combo hat sie verbraucht)
     if (right.oneShot) oneShotKeyUp(oneShot, right.oneShot, false);
     splitSetClear(right);
+    overrideClear(ovrRight);
     if (!splitSetAny(splitLeft.set)) {
       Hid::releaseAll();
       return;
@@ -1500,18 +1514,34 @@ public:
   void splitResetForHostLoss() {
     splitSetClear(right);
     splitSetClear(splitLeft.set);
+    overrideClear(ovrRight);
+    overrideClear(ovrLeft);
     oneShotReset(oneShot);
     Hid::releaseAll();
+  }
+
+  // Tabelle der Tasten-Überschreibungen (Master, gilt für beide Hälften). Der Zähler liegt beim Aufrufer,
+  // damit CLEAR_OVERRIDES und ADD_OVERRIDE ihn ohne Umweg ändern.
+  void setKeyOverrides(const KeyOverride *table, const uint8_t *count) {
+    overrideTable = table;
+    overrideCount = count;
   }
 
   const SplitHeldSet &rightHeld() const { return right; }
 
   // --- Linke Hälfte (SplitHidSink, Zustand ist vorher aktualisiert) ---
   void leftKeyPress(uint8_t code) override {
-    pressWithMods(code, oneShotModsForKey(oneShot, heldOneShot(), code, altInReport()));
+    const KeyOverride *o = overrideFor(code);
+    uint8_t mods = oneShotModsForKey(oneShot, heldOneShot(), o ? o->replacement : code, altInReport());
+    if (o) {
+      overridePress(ovrLeft, code, o, mods);
+      return;
+    }
+    pressWithMods(code, mods);
   }
   void leftKeyRelease(uint8_t code) override {
-    if (!splitSetHasKey(right, code)) releaseKeepingShift(code, right);
+    if (overrideRelease(ovrLeft, code)) return;
+    if (!splitSetHasKey(right, code) && !overrideReplacementActive(code)) releaseKeepingShift(code, right);
   }
   void leftMediaPress(uint16_t bits) override {
     uint8_t r[2];
@@ -1548,6 +1578,103 @@ public:
 
 private:
   SplitHeldSet right = {};
+
+  // Aktive Überschreibung je gedrückter Taste und Hälfte: gesendete Ersatztaste und die Modifier, die für sie
+  // aus dem Report genommen wurden (Bit i = Code 0x80 + i). repl 0 = keine Überschreibung aktiv.
+  struct OverrideActive {
+    uint8_t repl;
+    uint8_t suppressed;
+  };
+  OverrideActive ovrRight[256] = {};
+  OverrideActive ovrLeft[256] = {};
+  const KeyOverride *overrideTable = nullptr;
+  const uint8_t *overrideCount = nullptr;
+
+  static void overrideClear(OverrideActive *a) { memset(a, 0, 256 * sizeof(OverrideActive)); }
+
+  // Modifier-Tasten (Bit i = Code 0x80 + i), die eine Hälfte explizit hält. Das implizite Shift gesetzter
+  // Zeichen ('!') zählt nicht: sonst überschriebe sich eine Taste mit ihrem eigenen Shift.
+  uint8_t heldModifierCodes() const {
+    uint8_t m = 0;
+    for (uint8_t i = 0; i < 8; i++) {
+      uint8_t code = (uint8_t)(KEY_LEFT_CTRL + i);
+      if (splitSetHasKey(right, code) || splitSetHasKey(splitLeft.set, code)) m |= (uint8_t)(1u << i);
+    }
+    return m;
+  }
+
+  // Passende Überschreibung für k bei den gehaltenen Modifiern oder nullptr. Ohne Nebenwirkung.
+  const KeyOverride *overrideFor(uint8_t k) const {
+    if (!overrideTable || !overrideCount || *overrideCount == 0) return nullptr;
+    return keyOverrideFind(overrideTable, *overrideCount, keyOverrideClassesOfCodes(heldModifierCodes()), k);
+  }
+
+  // true, wenn eine aktive Überschreibung (beider Hälften) die Ersatztaste code gerade hält
+  bool overrideReplacementActive(uint8_t code) const {
+    for (int i = 1; i < 256; i++) {
+      if (ovrRight[i].repl == code || ovrLeft[i].repl == code) return true;
+    }
+    return false;
+  }
+
+  // Modifier, die eine aktive Überschreibung gerade aus dem Report genommen hat
+  uint8_t overrideSuppressedMask() const {
+    uint8_t m = 0;
+    for (int i = 1; i < 256; i++) {
+      if (ovrRight[i].repl) m |= ovrRight[i].suppressed;
+      if (ovrLeft[i].repl) m |= ovrLeft[i].suppressed;
+    }
+    return m;
+  }
+
+  // Drückt die Ersatztaste o->replacement statt k: die Modifier der geforderten Klassen werden gelöst, mods
+  // (One-Shot, Caps Word) kommen für diesen Druck dazu. Alles geht in einem Report, ein zweiter nimmt mods zurück.
+  void overridePress(OverrideActive *active, uint8_t k, const KeyOverride *o, uint8_t mods) {
+    uint8_t held = heldModifierCodes();
+    uint8_t suppress = (uint8_t)(held & keyOverrideCodesOfClasses(o->mods));
+    uint8_t added = (uint8_t)(mods & ~(held & ~suppress));
+    Hid::beginReportBatch();
+    for (uint8_t i = 0; i < 8; i++) {
+      if (suppress & (1u << i)) Hid::release((uint8_t)(KEY_LEFT_CTRL + i));
+      if (added & (1u << i)) Hid::press((uint8_t)(KEY_LEFT_CTRL + i));
+    }
+    Hid::press(o->replacement);
+    Hid::endReportBatch();
+    if (added) {
+      Hid::beginReportBatch();
+      for (uint8_t i = 0; i < 8; i++) {
+        if (added & (1u << i)) Hid::release((uint8_t)(KEY_LEFT_CTRL + i));
+      }
+      Hid::endReportBatch();
+    }
+    active[k].repl = o->replacement;
+    active[k].suppressed = suppress;
+  }
+
+  // Lässt die Ersatztaste los (außer sie hält noch eine andere Eingabe) und stellt gelöste Modifier wieder her,
+  // die noch gehalten werden und keine andere Überschreibung braucht. Das Loslassen eines gesetzten Zeichens
+  // ('A') löscht im Report das Shift-Bit: ein gehaltenes Shift kommt deshalb ebenfalls zurück. Liefert true,
+  // wenn für k eine Überschreibung aktiv war.
+  bool overrideRelease(OverrideActive *active, uint8_t k) {
+    if (!active[k].repl) return false;
+    uint8_t repl = active[k].repl;
+    uint8_t restore = active[k].suppressed;
+    active[k] = {};
+    bool stillHeld = splitSetHasKey(right, repl) || splitSetHasKey(splitLeft.set, repl) || overrideReplacementActive(repl);
+    if (!stillHeld && impliesShift(repl)) restore |= (uint8_t)(1u << (KEY_LEFT_SHIFT - KEY_LEFT_CTRL));
+    restore = (uint8_t)(restore & heldModifierCodes() & ~overrideSuppressedMask());
+    // Das Loslassen von 'A' löscht das Shift-Bit auch dann, wenn eine Hälfte ein gesetztes Zeichen ('!') hält
+    if (!stillHeld && impliesShift(repl) && (needsShift(right) || needsShift(splitLeft.set))) {
+      restore |= (uint8_t)(1u << (KEY_LEFT_SHIFT - KEY_LEFT_CTRL));
+    }
+    Hid::beginReportBatch();
+    if (!stillHeld) Hid::release(repl);
+    for (uint8_t i = 0; i < 8; i++) {
+      if (restore & (1u << i)) Hid::press((uint8_t)(KEY_LEFT_CTRL + i));
+    }
+    Hid::endReportBatch();
+    return true;
+  }
 
   uint8_t heldOneShot() const { return (uint8_t)(right.oneShot | splitLeft.set.oneShot); }
 
@@ -1620,8 +1747,21 @@ private:
   }
 
   void pressSet(const SplitHeldSet &s) {
+    const bool isLeft = (&s == &splitLeft.set);
     for (int code = 1; code < 256; code++) {
-      if (splitSetHasKey(s, (uint8_t)code)) Hid::press((uint8_t)code);
+      if (!splitSetHasKey(s, (uint8_t)code)) continue;
+      if (isLeft && ovrLeft[code].repl) continue;
+      Hid::press((uint8_t)code);
+    }
+    // Linke Tasten mit aktiver Überschreibung zuletzt: die Ersatztaste halten, ihre Modifier bleiben gelöst
+    if (isLeft) {
+      for (int code = 1; code < 256; code++) {
+        if (!splitSetHasKey(s, (uint8_t)code) || !ovrLeft[code].repl) continue;
+        for (uint8_t i = 0; i < 8; i++) {
+          if (ovrLeft[code].suppressed & (1u << i)) Hid::release((uint8_t)(KEY_LEFT_CTRL + i));
+        }
+        Hid::press(ovrLeft[code].repl);
+      }
     }
     if (s.media) {
       uint8_t r[2];

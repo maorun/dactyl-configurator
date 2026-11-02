@@ -327,6 +327,58 @@ class TestServerAndCodegen(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.validate_config({"layers": [[]], "keyPairs": [{"first": "MO_1", "second": "KEY_A"}]})
 
+    def test_key_overrides_codegen_and_validation(self):
+        cpp = server.generate_key_overrides_cpp([
+            {"mods": ["shift"], "key": "KEY_BACKSPACE", "replacement": "KEY_DELETE"},
+            {"mods": ["shift", "ctrl"], "key": "KEY_A", "replacement": "KEY_B"},
+        ])
+        self.assertIn("uint8_t numKeyOverrides = 2;", cpp)
+        self.assertIn("{ 2, KEY_BACKSPACE, KEY_DELETE }", cpp)
+        self.assertIn("{ 3, 'a', 'b' }", cpp)
+        self.assertIn("{ 0, 0, 0 }", server.generate_key_overrides_cpp([]))
+        self.assertIn("{ 0, 0, 0 }", server.generate_key_overrides_cpp(None))
+        bad_entries = (
+            {"mods": [], "key": "KEY_A", "replacement": "KEY_B"},                    # kein Modifier
+            {"mods": ["foo"], "key": "KEY_A", "replacement": "KEY_B"},               # unbekannter Modifier
+            {"mods": "shift", "key": "KEY_A", "replacement": "KEY_B"},               # keine Liste
+            {"mods": ["shift"], "key": "KEY_LEFT_SHIFT", "replacement": "KEY_B"},    # Modifier als Taste
+            {"mods": ["shift"], "key": "KEY_A", "replacement": "KEY_RIGHT_GUI"},     # Modifier als Ersatz
+            {"mods": ["shift"], "key": "KEY_129", "replacement": "KEY_B"},           # Modifier-Code als Zahl
+            {"mods": ["shift"], "key": "MO_1", "replacement": "KEY_B"},              # Layer-Code
+            {"mods": ["shift"], "key": "PAIR_0", "replacement": "KEY_B"},            # Paar-Code
+            {"mods": ["shift"], "key": "KEY_A", "replacement": "NONE"},              # leer
+            {"mods": ["shift"], "key": "KEY_A"},                                     # Ersatz fehlt
+            "kaputt",
+        )
+        for bad in bad_entries:
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_key_overrides_cpp([bad])
+        with self.assertRaises(ValueError):
+            server.generate_key_overrides_cpp([{"mods": ["shift"], "key": "KEY_A", "replacement": "KEY_B"}] * 17)
+        with self.assertRaises(ValueError):
+            server.generate_key_overrides_cpp("kaputt")
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "keyOverrides": [{"mods": [], "key": "KEY_A", "replacement": "KEY_B"}]})
+
+    def test_key_overrides_render_only_on_the_master(self):
+        with open(server.INO_FILE, encoding="utf-8") as f:
+            content = f.read()
+        with open(server.DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        override = [{"mods": ["shift"], "key": "KEY_BACKSPACE", "replacement": "KEY_DELETE"}]
+        self.assertEqual(content.count("// [[[START_KEY_OVERRIDES]]]"), 1)
+        out = server.render_ino_content(content, dict(cfg, keyOverrides=override))
+        self.assertIn("uint8_t numKeyOverrides = 1;", out)
+        self.assertIn("{ 2, KEY_BACKSPACE, KEY_DELETE }", out)
+        # Ohne Schlüssel bleibt die Liste der Vorlage unverändert
+        self.assertEqual(server.render_ino_content(content, cfg).count("// [[[START_KEY_OVERRIDES]]]"), 1)
+        # Die linke Hälfte hat keine Überschreibungen: die Config wird abgelehnt
+        with open(server.LEFT_DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            left_cfg = json.load(f)
+        with self.assertRaises(ValueError):
+            server.validate_config(dict(left_cfg, keyOverrides=override), "L")
+        server.validate_config(dict(left_cfg, keyOverrides=[]), "L")
+
     def test_pair_action_code_maps_to_firmware_constant(self):
         self.assertEqual(server.code_to_cpp("PAIR_0"), "(ACT_KEY_PAIR_BASE + 0)")
         self.assertEqual(server.code_to_cpp("PAIR_15"), "(ACT_KEY_PAIR_BASE + 15)")
@@ -344,7 +396,7 @@ class TestServerAndCodegen(unittest.TestCase):
             cfg = json.load(f)
         server.validate_config(cfg)
         out = server.render_ino_content(content, cfg)
-        for marker in ("KEYMAP", "HOLDMAP", "DTAPMAP", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "MACROS", "SETTINGS"):
+        for marker in ("KEYMAP", "HOLDMAP", "DTAPMAP", "LAYER_NAMES", "COMBOS", "KEY_PAIRS", "KEY_OVERRIDES", "MACROS", "SETTINGS"):
             self.assertEqual(out.count(f"// [[[START_{marker}]]]"), 1)
         out = server.render_ino_content(content, dict(cfg, keyPairs=[{"first": "KEY_LEFT_SHIFT", "second": "KEY_PERIOD"}]))
         self.assertIn("uint8_t numKeyPairs = 1;", out)

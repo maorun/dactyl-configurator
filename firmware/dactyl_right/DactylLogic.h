@@ -12,6 +12,7 @@
  *   KeyCombo, ComboRuntime, comboRuntime[], userCombos[], numCombos,
  *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], layerNames[],
  *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
+ *   nur Master (DACTYL_KEY_OVERRIDES): KeyOverride, userKeyOverrides[], numKeyOverrides (DactylKeyOverride.h),
  *   MAX_MACROS, MAX_MACRO_STEPS, ACT_MACRO_BASE, MacroStep, userMacros[][], macroLengths[], numMacros,
  *   momentaryLayers[], toggleLayers[], keyState[][], pressedAction[][],
  *   (remoteMomentaryLayers definiert diese Datei: MO-Ebenen der anderen Hälfte)
@@ -1387,6 +1388,11 @@ void loadKeymapFromNVS() {
     if (hasKeymap) {
       preferences.remove("num_pairs");
       preferences.remove("pairs_data");
+#ifdef DACTYL_KEY_OVERRIDES
+      // Überschreibungen kommen mit der App-Belegung mit: die einkompilierte Liste ersetzt die gespeicherte
+      preferences.remove("num_ovr");
+      preferences.remove("ovr_data");
+#endif
       // Makros ebenso: MACRO_n verweist auf die einkompilierten Makros
       preferences.remove("num_macros");
       preferences.remove("macro_lens");
@@ -1455,6 +1461,26 @@ void loadKeymapFromNVS() {
     }
     Serial.printf("NVS: %d Tastenpaare geladen.\n", numKeyPairs);
   }
+#ifdef DACTYL_KEY_OVERRIDES
+  // Tasten-Überschreibungen: gespeicherte Liste (auch leer nach CLEAR_OVERRIDES + SAVE_OVERRIDES) überschreibt die einkompilierte
+  if (preferences.isKey("num_ovr")) {
+    uint8_t n = preferences.getUChar("num_ovr", 0);
+    if (n == 0) {
+      numKeyOverrides = 0;
+    } else if (n <= MAX_KEY_OVERRIDES && preferences.isKey("ovr_data") &&
+               preferences.getBytesLength("ovr_data") == n * sizeof(KeyOverride)) {
+      KeyOverride loaded[MAX_KEY_OVERRIDES];
+      preferences.getBytes("ovr_data", loaded, n * sizeof(KeyOverride));
+      uint8_t valid = 1;
+      for (uint8_t i = 0; i < n; i++) valid &= keyOverrideValid(loaded[i].mods, loaded[i].key, loaded[i].replacement);
+      if (valid) {
+        memcpy(userKeyOverrides, loaded, n * sizeof(KeyOverride));
+        numKeyOverrides = n;
+      }
+    }
+    Serial.printf("NVS: %d Tasten-Überschreibungen geladen.\n", numKeyOverrides);
+  }
+#endif
   // Makros: gespeicherte Liste (auch leer nach CLEAR_MACROS + SAVE_MACROS) überschreibt die einkompilierte.
   // macros_data enthält nur die belegten Schritte hintereinander, macro_lens die Länge jedes Makros.
   if (preferences.isKey("num_macros")) {
@@ -1596,6 +1622,25 @@ bool saveKeyPairsToNVS() {
   return ok;
 }
 
+#ifdef DACTYL_KEY_OVERRIDES
+bool saveKeyOverridesToNVS() {
+  if (!preferences.begin("dactyl", false)) return false;
+  // Daten zuerst, Anzahl zuletzt: ein Fehler beim Schreiben der Daten lässt die alte Anzahl nicht mit neuen Daten stehen
+  bool ok = true;
+  size_t len = numKeyOverrides * sizeof(KeyOverride);
+  // Leere Liste: putBytes mit Länge 0 meldet 0 Bytes, das ist kein Fehler
+  if (len > 0) {
+    ok = preferences.putBytes("ovr_data", userKeyOverrides, len) == len;
+  } else {
+    preferences.remove("ovr_data");
+  }
+  if (ok) ok = preferences.putUChar("num_ovr", numKeyOverrides) > 0;
+  preferences.end();
+  Serial.printf("NVS: %d Tasten-Überschreibungen %s.\n", numKeyOverrides, ok ? "gespeichert" : "FEHLER beim Speichern");
+  return ok;
+}
+#endif
+
 // Nur die belegten Schritte speichern (kompakt), nicht das volle Array: spart NVS-Einträge
 bool saveMacrosToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
@@ -1684,6 +1729,7 @@ void sendMatrixData(const char* prefix, uint16_t (*matrix)[NUM_ROWS][NUM_COLS], 
 // Ein Makro sendet "n" (Schrittzahl) in jedem Block; ein leeres Makro sendet einen Block ohne Schritte.
 #define GET_CONFIG_COMBOS_PER_LINE 4
 #define GET_CONFIG_PAIRS_PER_LINE  8
+#define GET_CONFIG_OVERRIDES_PER_LINE 6
 #define GET_CONFIG_STEPS_PER_LINE  8
 void sendCombosPairsMacros() {
   sendConfigNotification("COMBO_COUNT:" + String(numCombos), true);
@@ -1703,6 +1749,16 @@ void sendCombosPairsMacros() {
     }
     sendConfigNotification(out + "]}", true);
   }
+#ifdef DACTYL_KEY_OVERRIDES
+  sendConfigNotification("OVERRIDE_COUNT:" + String(numKeyOverrides), true);
+  for (int o = 0; o < numKeyOverrides; o += GET_CONFIG_OVERRIDES_PER_LINE) {
+    String out = "OVERRIDE_DATA:{\"o\":" + String(o) + ",\"e\":[";
+    for (int i = o; i < numKeyOverrides && i < o + GET_CONFIG_OVERRIDES_PER_LINE; i++) {
+      out += String(i > o ? "," : "") + "[" + userKeyOverrides[i].mods + "," + userKeyOverrides[i].key + "," + userKeyOverrides[i].replacement + "]";
+    }
+    sendConfigNotification(out + "]}", true);
+  }
+#endif
   sendConfigNotification("MACRO_COUNT:" + String(numMacros), true);
   for (int i = 0; i < numMacros; i++) {
     int n = macroLengths[i];
@@ -1879,6 +1935,27 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
   } else if (cmd == "SAVE_PAIRS") {
     sendConfigNotification(saveKeyPairsToNVS() ? "OK SAVE_PAIRS" : "ERR NVS SAVE_PAIRS");
+#ifdef DACTYL_KEY_OVERRIDES
+  } else if (cmd == "CLEAR_OVERRIDES") {
+    numKeyOverrides = 0;
+    sendConfigNotification("OK CLEAR_OVERRIDES");
+  } else if (cmd.startsWith("ADD_OVERRIDE ")) {
+    // ADD_OVERRIDE <Modifier-Klassen 1..15> <Taste> <Ersatz>: Tasten 1..255, keine Modifier; wird als nächster Index angehängt
+    int mods, key, repl;
+    char extra;
+    if (sscanf(cmd.c_str(), "ADD_OVERRIDE %d %d %d %c", &mods, &key, &repl, &extra) == 3 &&
+        numKeyOverrides < MAX_KEY_OVERRIDES && keyOverrideValid(mods, key, repl)) {
+      userKeyOverrides[numKeyOverrides].mods = (uint8_t)mods;
+      userKeyOverrides[numKeyOverrides].key = (uint8_t)key;
+      userKeyOverrides[numKeyOverrides].replacement = (uint8_t)repl;
+      numKeyOverrides++;
+      sendConfigNotification("OK ADD_OVERRIDE " + String(numKeyOverrides - 1));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd == "SAVE_OVERRIDES") {
+    sendConfigNotification(saveKeyOverridesToNVS() ? "OK SAVE_OVERRIDES" : "ERR NVS SAVE_OVERRIDES");
+#endif
   } else if (cmd == "CLEAR_MACROS") {
     stopMacro(true);
     numMacros = 0;

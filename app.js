@@ -107,6 +107,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initHeatmapUI();
   initMatrixTestUI();
   initKeyPairsUI();
+  initKeyOverridesUI();
   initMacrosUI();
   initLayoutProfilesUI();
 });

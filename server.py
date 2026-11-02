@@ -328,6 +328,7 @@ NUM_ROWS = 6
 NUM_COLS = 7
 MAX_COMBOS = 16
 MAX_KEY_PAIRS = 16
+MAX_KEY_OVERRIDES = 16
 MAX_MACROS = 16
 MAX_MACRO_STEPS = 32
 MACRO_MAX_PAUSE_MS = 5000
@@ -347,7 +348,7 @@ STATIC_ALLOWLIST = {
     "/js/side-right.js": "js/side-right.js", "/js/side-left.js": "js/side-left.js",
 }
 # Module der Web-App (Reihenfolge in index.html)
-APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
+APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "key-overrides-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
                "live-monitor", "heatmap", "matrix-test", "layout-lint-ui", "keyboard-hooks", "config-sync")
 STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 
@@ -526,6 +527,55 @@ def key_pair_member_cpp(code, field):
         raise invalid
     return cpp
 
+# Modifier-Klassen einer Überschreibung (wie KEY_OVERRIDE_MOD_* in DactylKeyOverride.h)
+KEY_OVERRIDE_MODS = {"ctrl": 1, "shift": 2, "alt": 4, "gui": 8}
+# Modifier-Codes 0x80..0x87 dürfen weder Taste noch Ersatz sein
+MODIFIER_CPP_NAMES = {
+    "KEY_LEFT_CTRL", "KEY_LEFT_SHIFT", "KEY_LEFT_ALT", "KEY_LEFT_GUI",
+    "KEY_RIGHT_CTRL", "KEY_RIGHT_SHIFT", "KEY_RIGHT_ALT", "KEY_RIGHT_GUI",
+}
+
+def key_override_mods_value(mods):
+    """Modifier-Klassen als Liste (["shift", "ctrl"]) -> Bitmaske 1..15."""
+    if not isinstance(mods, list) or not mods:
+        raise ValueError("Tasten-Überschreibung: 'mods' braucht mindestens einen Modifier.")
+    value = 0
+    for m in mods:
+        if not isinstance(m, str) or m not in KEY_OVERRIDE_MODS:
+            raise ValueError("Tasten-Überschreibung: Modifier muss ctrl, shift, alt oder gui sein.")
+        value |= KEY_OVERRIDE_MODS[m]
+    return value
+
+def key_override_member_cpp(code, field):
+    """Taste oder Ersatz einer Überschreibung: normale Taste 1..255, kein Modifier."""
+    cpp = key_pair_member_cpp(code, field)
+    if cpp in MODIFIER_CPP_NAMES or (cpp.isdigit() and 0x80 <= int(cpp) <= 0x87):
+        raise ValueError(f"Tasten-Überschreibung: '{field}' darf kein Modifier sein.")
+    return cpp
+
+def generate_key_overrides_cpp(overrides):
+    if overrides is None:
+        overrides = []
+    if not isinstance(overrides, list):
+        raise ValueError("Ungültige Tasten-Überschreibungen: Liste erwartet.")
+    if len(overrides) > MAX_KEY_OVERRIDES:
+        raise ValueError(f"Zu viele Tasten-Überschreibungen: maximal {MAX_KEY_OVERRIDES} erlaubt.")
+    entries = []
+    for o in overrides:
+        if not isinstance(o, dict):
+            raise ValueError("Ungültiger Eintrag einer Tasten-Überschreibung.")
+        entries.append(f"  {{ {key_override_mods_value(o.get('mods'))}, {key_override_member_cpp(o.get('key'), 'key')}, "
+                       f"{key_override_member_cpp(o.get('replacement'), 'replacement')} }}")
+    lines = [
+        "// [[[START_KEY_OVERRIDES]]]",
+        f"uint8_t numKeyOverrides = {len(entries)};",
+        "KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES] = {",
+        ",\n".join(entries) if entries else "  { 0, 0, 0 }",
+        "};",
+        "// [[[END_KEY_OVERRIDES]]]"
+    ]
+    return "\n".join(lines)
+
 def generate_key_pairs_cpp(pairs):
     if pairs is None:
         pairs = []
@@ -643,6 +693,9 @@ def render_ino_content(content, config, defaults_id=None, side="R"):
         content = replace_marked_block(content, "COMBOS", generate_combos_cpp(config.get("combos")))
     if "keyPairs" in config:
         content = replace_marked_block(content, "KEY_PAIRS", generate_key_pairs_cpp(config.get("keyPairs")))
+    # Nur der Master trägt Überschreibungen; der linken Vorlage fehlt der Block
+    if "keyOverrides" in config and side == "R":
+        content = replace_marked_block(content, "KEY_OVERRIDES", generate_key_overrides_cpp(config.get("keyOverrides")))
     if "macros" in config:
         content = replace_marked_block(content, "MACROS", generate_macros_cpp(config.get("macros")))
     if "settings" in config:
@@ -736,6 +789,9 @@ def validate_config(config, side="R"):
     # Codegen prüft Combos und Einstellungen vollständig (Bereiche identisch zur Firmware)
     generate_combos_cpp(config.get("combos"))
     generate_key_pairs_cpp(config.get("keyPairs"))
+    generate_key_overrides_cpp(config.get("keyOverrides"))
+    if side == "L" and config.get("keyOverrides"):
+        raise ValueError("Tasten-Überschreibungen gelten nur für die rechte Hälfte (Master).")
     generate_macros_cpp(config.get("macros"))
     generate_settings_cpp(config.get("settings"), side)
     for cb in config.get("combos") or []:

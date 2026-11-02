@@ -2707,6 +2707,307 @@ TEST(test_mouse_move_reaches_sink_without_state_and_is_not_retried) {
   assert(!splitIsPressOp(SPLIT_OP_MOUSE_MOVE));
 }
 
+// --- Tasten-Überschreibungen (DactylKeyOverride.h): Modifier + Taste ergibt eine andere Taste ---
+static KeyOverride ovrTable[MAX_KEY_OVERRIDES];
+static uint8_t ovrCount = 0;
+
+static void ovrSetup(Kbd &k, std::initializer_list<KeyOverride> entries) {
+  ovrCount = 0;
+  for (const KeyOverride &o : entries) ovrTable[ovrCount++] = o;
+  k.setKeyOverrides(ovrTable, &ovrCount);
+}
+
+TEST(test_override_shift_backspace_sends_delete_without_shift) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  // Shift wird gelöst, Delete gedrückt, alles in einem Report
+  assert((k.log == Log{"BEGIN", "R129", "P" + std::to_string(KEY_DELETE), "END"}));
+  k.log.clear();
+  k.release((uint8_t)KEY_BACKSPACE);
+  // Delete los, das noch gehaltene Shift kommt zurück
+  assert((k.log == Log{"BEGIN", "R" + std::to_string(KEY_DELETE), "P129", "END"}));
+}
+
+TEST(test_override_backspace_alone_is_unchanged) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_BACKSPACE);
+  k.release((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"P" + std::to_string(KEY_BACKSPACE), "R" + std::to_string(KEY_BACKSPACE)}));
+}
+
+TEST(test_override_other_key_with_shift_is_unchanged) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.log.clear();
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"P97"}));
+}
+
+TEST(test_override_right_shift_counts_and_is_restored) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_RIGHT_SHIFT);
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"BEGIN", "R133", "P" + std::to_string(KEY_DELETE), "END"}));
+  k.log.clear();
+  k.release((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"BEGIN", "R" + std::to_string(KEY_DELETE), "P133", "END"}));
+}
+
+TEST(test_override_shift_released_before_key_is_not_restored) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.press((uint8_t)KEY_BACKSPACE);
+  k.release((uint8_t)KEY_LEFT_SHIFT);
+  k.log.clear();
+  k.release((uint8_t)KEY_BACKSPACE);
+  // Shift ist schon los: nur Delete löst, kein hängendes Shift
+  assert((k.log == Log{"BEGIN", "R" + std::to_string(KEY_DELETE), "END"}));
+}
+
+TEST(test_override_ignores_modifier_not_required) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.press((uint8_t)KEY_LEFT_CTRL);
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  // Nur die geforderte Klasse (Shift) wird gelöst, Ctrl bleibt im Report
+  assert((k.log == Log{"BEGIN", "R129", "P" + std::to_string(KEY_DELETE), "END"}));
+}
+
+TEST(test_override_most_specific_entry_wins) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, 'a', 'b'}, {KEY_OVERRIDE_MOD_SHIFT | KEY_OVERRIDE_MOD_CTRL, 'a', 'c'}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.press((uint8_t)KEY_LEFT_CTRL);
+  k.log.clear();
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"BEGIN", "R128", "R129", "P99", "END"}));
+}
+
+TEST(test_override_works_across_halves) {
+  // Shift links, Backspace rechts
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  left(k, SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT);
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"BEGIN", "R129", "P" + std::to_string(KEY_DELETE), "END"}));
+  k.release((uint8_t)KEY_BACKSPACE);
+  assert(k.log.back() == "END");
+  // Shift rechts, Backspace links
+  Kbd k2;
+  ovrSetup(k2, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k2.press((uint8_t)KEY_RIGHT_SHIFT);
+  k2.log.clear();
+  left(k2, SPLIT_OP_KEY_PRESS, KEY_BACKSPACE);
+  assert((k2.log == Log{"BEGIN", "R133", "P" + std::to_string(KEY_DELETE), "END"}));
+  k2.log.clear();
+  left(k2, SPLIT_OP_KEY_RELEASE, KEY_BACKSPACE);
+  assert((k2.log == Log{"BEGIN", "R" + std::to_string(KEY_DELETE), "P133", "END"}));
+}
+
+TEST(test_override_left_key_survives_right_release_all) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_RIGHT_SHIFT);
+  left(k, SPLIT_OP_KEY_PRESS, KEY_BACKSPACE);
+  k.log.clear();
+  k.releaseAll();
+  // Die linke Taste bleibt als Ersatztaste gedrückt, ohne das gelöste Shift
+  assert(k.log.size() >= 3 && k.log.front() == "BEGIN" && k.log.back() == "END");
+  bool pressedDelete = false, pressedBackspace = false;
+  for (const std::string &e : k.log) {
+    if (e == "P" + std::to_string(KEY_DELETE)) pressedDelete = true;
+    if (e == "P" + std::to_string(KEY_BACKSPACE)) pressedBackspace = true;
+  }
+  assert(pressedDelete && !pressedBackspace);
+}
+
+TEST(test_override_host_loss_clears_state) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.press((uint8_t)KEY_BACKSPACE);
+  k.splitResetForHostLoss();
+  k.log.clear();
+  // Nach dem Neustart des Zustands wirkt ein Loslassen nicht mehr als Überschreibung
+  k.release((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"R" + std::to_string(KEY_BACKSPACE)}));
+}
+
+TEST(test_override_without_table_changes_nothing) {
+  Kbd k;
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"P" + std::to_string(KEY_BACKSPACE)}));
+}
+
+TEST(test_override_replacement_held_by_both_halves_releases_last) {
+  // Beide Hälften drücken Backspace mit Shift: beide senden Delete. Das erste Loslassen hält Delete.
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.press((uint8_t)KEY_BACKSPACE);
+  left(k, SPLIT_OP_KEY_PRESS, KEY_BACKSPACE);
+  k.log.clear();
+  left(k, SPLIT_OP_KEY_RELEASE, KEY_BACKSPACE);
+  const std::string del = "R" + std::to_string(KEY_DELETE);
+  for (const std::string &e : k.log) assert(e != del);
+  k.log.clear();
+  k.release((uint8_t)KEY_BACKSPACE);
+  bool released = false;
+  for (const std::string &e : k.log) if (e == del) released = true;
+  assert(released);
+}
+
+TEST(test_override_replacement_also_typed_by_other_half_stays_held) {
+  // Links hält Delete selbst, rechts erzeugt Shift+Backspace dasselbe Delete: das Loslassen rechts löst es nicht
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  left(k, SPLIT_OP_KEY_PRESS, KEY_DELETE);
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.press((uint8_t)KEY_BACKSPACE);
+  k.log.clear();
+  k.release((uint8_t)KEY_BACKSPACE);
+  for (const std::string &e : k.log) assert(e != "R" + std::to_string(KEY_DELETE));
+}
+
+TEST(test_override_shifted_replacement_gives_shift_back) {
+  // Das Loslassen von 'A' löscht im Report das Shift-Bit: das gehaltene Shift kommt zurück
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, 'A'}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.press((uint8_t)KEY_BACKSPACE);
+  k.log.clear();
+  k.release((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"BEGIN", "R65", "P129", "END"}));
+}
+
+TEST(test_override_link_timeout_releases_left_override) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_RIGHT_SHIFT);
+  left(k, SPLIT_OP_KEY_PRESS, KEY_BACKSPACE, 0, 1000);
+  k.log.clear();
+  assert(splitCheckLinkTimeout(k.splitLeft, 1000 + SPLIT_LINK_TIMEOUT_MS, k));
+  bool released = false;
+  for (const std::string &e : k.log) if (e == "R" + std::to_string(KEY_DELETE)) released = true;
+  assert(released);
+  // Danach wirkt kein Zustand mehr nach: dieselbe Taste tippt wieder normal
+  k.log.clear();
+  left(k, SPLIT_OP_HEARTBEAT, 0, 0, 2000 + SPLIT_LINK_TIMEOUT_MS);
+  left(k, SPLIT_OP_KEY_WRITE, 'a', 0, 2000 + SPLIT_LINK_TIMEOUT_MS);
+  bool typedA = false;
+  for (const std::string &e : k.log) if (e == "P97") typedA = true;
+  assert(typedA);
+}
+
+TEST(test_override_applies_one_shot_to_the_replacement) {
+  // Ein vorgemerktes One-Shot-Ctrl gilt für die gesendete Ersatztaste und ist danach verbraucht
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.oneShotPress(OS_CTRL);
+  k.oneShotRelease(OS_CTRL);
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"BEGIN", "P128", "R129", "P" + std::to_string(KEY_DELETE), "END", "BEGIN", "R128", "END"}));
+  // Verbraucht: der nächste Druck bekommt kein Ctrl mehr
+  k.release((uint8_t)KEY_BACKSPACE);
+  k.log.clear();
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"P97"}));
+}
+
+TEST(test_override_shifted_replacement_keeps_shift_for_shifted_char_of_other_half) {
+  // Links hält '!' (implizites Shift). Das Loslassen der Ersatztaste 'A' löscht das Shift-Bit: es kommt zurück.
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_CTRL, KEY_BACKSPACE, 'A'}});
+  left(k, SPLIT_OP_KEY_PRESS, '!');
+  k.press((uint8_t)KEY_LEFT_CTRL);
+  k.press((uint8_t)KEY_BACKSPACE);
+  k.log.clear();
+  k.release((uint8_t)KEY_BACKSPACE);
+  bool shiftBack = false;
+  for (const std::string &e : k.log) if (e == "P129") shiftBack = true;
+  assert(shiftBack);
+}
+
+TEST(test_override_second_press_without_release_leaves_nothing_stuck) {
+  // Doppelter Druck derselben Taste (verlorenes Loslassen): die alte Ersatztaste wird gelöst
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.press((uint8_t)KEY_BACKSPACE);
+  k.press((uint8_t)KEY_BACKSPACE);
+  k.release((uint8_t)KEY_BACKSPACE);
+  int pressed = 0, released = 0;
+  const std::string del = std::to_string(KEY_DELETE);
+  for (const std::string &e : k.log) {
+    if (e == "P" + del) pressed++;
+    if (e == "R" + del) released++;
+  }
+  assert(pressed == 2 && released == 2);
+}
+
+TEST(test_override_plain_key_held_then_override_does_not_stick) {
+  // Backspace läuft ohne Shift, dann folgt Shift und ein erneuter Druck: die schon gedrückte Taste wird gelöst
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_BACKSPACE);
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  bool plainReleased = false;
+  for (const std::string &e : k.log) if (e == "R" + std::to_string(KEY_BACKSPACE)) plainReleased = true;
+  assert(plainReleased);
+}
+
+TEST(test_override_two_overrides_restore_shared_modifier_after_the_last_release) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE}, {KEY_OVERRIDE_MOD_SHIFT, 'a', 'b'}});
+  for (int order = 0; order < 2; order++) {
+    k.press((uint8_t)KEY_LEFT_SHIFT);
+    k.press((uint8_t)KEY_BACKSPACE);
+    k.press((uint8_t)'a');
+    k.log.clear();
+    k.release((uint8_t)(order ? 'a' : KEY_BACKSPACE));
+    for (const std::string &e : k.log) assert(e != "P129");  // noch eine Überschreibung aktiv: Shift bleibt gelöst
+    k.log.clear();
+    k.release((uint8_t)(order ? KEY_BACKSPACE : 'a'));
+    int back = 0;
+    for (const std::string &e : k.log) if (e == "P129") back++;
+    assert(back == 1);                                      // nach der letzten kommt Shift genau einmal zurück
+    k.release((uint8_t)KEY_LEFT_SHIFT);
+    k.log.clear();
+  }
+}
+
+TEST(test_override_validation) {
+  assert(keyOverrideValid(2, KEY_BACKSPACE, KEY_DELETE));
+  assert(!keyOverrideValid(0, 'a', 'b'));
+  assert(!keyOverrideValid(16, 'a', 'b'));
+  assert(!keyOverrideValid(2, 0, 'b'));
+  assert(!keyOverrideValid(2, 'a', 0));
+  assert(!keyOverrideValid(2, 256, 'b'));
+  assert(!keyOverrideValid(2, KEY_LEFT_SHIFT, 'b'));  // Modifier als Taste
+  assert(!keyOverrideValid(2, 'a', KEY_LEFT_CTRL));   // Modifier als Ersatz
+  assert(keyOverrideClassOfCode(KEY_LEFT_SHIFT) == KEY_OVERRIDE_MOD_SHIFT);
+  assert(keyOverrideClassOfCode(KEY_RIGHT_SHIFT) == KEY_OVERRIDE_MOD_SHIFT);
+  assert(keyOverrideClassOfCode(KEY_RIGHT_GUI) == KEY_OVERRIDE_MOD_GUI);
+  assert(keyOverrideClassOfCode('a') == 0);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Split HID Protocol Test Suite" << std::endl;

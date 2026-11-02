@@ -32,6 +32,15 @@ Rules for this file:
 - `CLEAR_PAIRS` first releases every pair that is held at the host; the physical release of that key then sends nothing.
 - Every pair can be deleted in the app. Keys reference pairs by index, so `removeKeyPairAt` renumbers the references in all layers (tap, hold, double-tap) and in combo actions: references to the deleted pair become `NONE`, higher indices move down by one. The deletion is a snapshot pending change; the next full sync sends the renumbered keys (`SET_K`) and the new pair list.
 
+### Mouse movement (`ACT_MOUSE_UP` .. `ACT_MOUSE_RIGHT_MOVE`)
+
+- Codes `0x135` (up), `0x136` (down), `0x137` (left), `0x138` (right) in `DactylCommon.h`; names `MOUSE_UP`, `MOUSE_DOWN`, `MOUSE_LEFT_MOVE`, `MOUSE_RIGHT_MOVE` in `js/keycodes.js` and `server.py`. The picker group "Maus-Aktionen" lists them.
+- A held key moves the pointer. `mouseMoveTick()` runs in `processDeferredKeys()` and sends one step each `MOUSE_MOVE_INTERVAL_MS` (10 ms) through `bleKeyboard.mouseMove(x, y)` (Report ID 3). The step grows with the hold time: `1 + held / MOUSE_MOVE_ACCEL_MS` (80 ms), at most `MOUSE_MOVE_MAX_STEP` (16). The release stops the movement at once; a new press starts again at step 1. Held keys add up (up + right = diagonal); the sum is limited to `-127..127`.
+- Works as tap, hold and double-tap action and as a buffered combo candidate (the movement starts when the combo window ends). A combo that consumes the key stops its movement. Without a Mac connection or in config mode nothing is sent and the acceleration restarts at step 1 (no jump to full speed after the reconnect); the key release still ends the movement. Entering the config mode clears all movement (`resetMouseMove`). The left half queues a step like a diagnostic event (at most half full), so 100 steps per second never take the room of a key release.
+- `ADD_COMBO` with a movement code returns `ERR ARGS`; the app import rejects it too (`validateConfigShape`).
+- Not a combo action (`ADD_COMBO` movement is not executed; `server.py` and the app reject it), and not repeatable (`isRepeatableAction`).
+- The left half sends the movement as `SPLIT_OP_MOUSE_MOVE` (op 25, `arg` = X step, `code` low byte = Y step as int8; `(0, 0)` and `-128` are invalid). The master calls `mouseMove` on its BLE HID connection without any held state. The op is never retried (`splitEventRetryable`): a duplicate would jump twice, a lost step goes unnoticed. `DACTYL_FW_VERSION` is 6: flash both halves.
+
 ### Macros (`userMacros`)
 
 - A macro is a list of at most 32 steps (`MacroStep { type, code, ms }`, 4 bytes): `tap` (press, release in the next step), `down` (press and hold), `up` (release) with a keyboard code `1..255`, and `pause` with `1..5000` ms. Max. 16 macros. Codes in `DactylCommon.h` (`ACT_MACRO_BASE`, `MACRO_STEP_*`), `server.py` (`MACRO_STEP_TYPES`) and `js/keycodes.js` must match; tests compare them.

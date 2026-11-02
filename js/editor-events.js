@@ -155,6 +155,10 @@ function setupEventListeners() {
       alert(`Maximal ${MAX_COMBOS} Combos werden von der Firmware unterstützt.`);
       return;
     }
+    if (isMouseMoveCode(action)) {
+      alert("Combos unterstützen keine Mausbewegung. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
     if (behavior === "MODIFIER_HOLD" && isOneShotOrCapsWordCode(action)) {
       alert("Modifier Hold unterstützt keine One-Shot-, Caps-Word- oder Repeat-Aktion. Bitte \"Einzeltaste senden\" wählen.");
       return;

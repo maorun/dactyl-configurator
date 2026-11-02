@@ -112,6 +112,7 @@ void checkUserCombos();
 void serviceSendQueue();
 void flushSendQueue(unsigned long maxMs);
 void stopMacro(bool releaseKeys);
+void resetMouseMove();
 static void queueSplitLayerRelease();
 
 // Im Gegensatz zur rechten Hälfte gibt es keinen macOS-HID-Bond: Config Mode startet per Soft-Reboot
@@ -122,6 +123,7 @@ void enterConfigMode() {
   enterConfigRequested = false;
 
   stopMacro(false);
+  resetMouseMove();
   bleKeyboard.releaseAll();
   queueSplitLayerRelease();
   Serial.println("\n=============================================");

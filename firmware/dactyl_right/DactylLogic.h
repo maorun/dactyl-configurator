@@ -416,6 +416,79 @@ bool macroRunStep(const MacroStep &st) {
 }
 
 // -----------------------------------------------------------------------------
+// Mausbewegung (ACT_MOUSE_UP .. ACT_MOUSE_RIGHT_MOVE)
+// -----------------------------------------------------------------------------
+// Eine gehaltene Bewegungstaste schickt alle MOUSE_MOVE_INTERVAL_MS einen Schritt. Der Schritt wächst mit der
+// Haltezeit von 1 bis MOUSE_MOVE_MAX_STEP und fällt beim Loslassen sofort auf 0. Mehrere Tasten summieren sich.
+// Bewegung ist keine Repeat-Aktion und kein Combo-Ziel.
+#define MOUSE_MOVE_INTERVAL_MS 10
+#define MOUSE_MOVE_ACCEL_MS    80
+#define MOUSE_MOVE_MAX_STEP    16
+
+bool isMouseMoveAction(uint16_t a) { return a >= ACT_MOUSE_UP && a <= ACT_MOUSE_RIGHT_MOVE; }
+
+bool mouseMoveActive[NUM_ROWS][NUM_COLS] = {};
+uint16_t mouseMoveAction[NUM_ROWS][NUM_COLS] = {};
+unsigned long mouseMoveStartMs[NUM_ROWS][NUM_COLS] = {};
+unsigned long mouseMoveLastMs = 0;
+
+void mouseMoveStart(uint8_t r, uint8_t c, uint16_t action, unsigned long now) {
+  if (mouseMoveActive[r][c]) return;
+  mouseMoveActive[r][c] = true;
+  mouseMoveAction[r][c] = action;
+  mouseMoveStartMs[r][c] = now;
+  mouseMoveLastMs = now;
+}
+
+void mouseMoveStop(uint8_t r, uint8_t c) { mouseMoveActive[r][c] = false; }
+
+void resetMouseMove() {
+  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) mouseMoveActive[r][c] = false;
+}
+
+int8_t mouseMoveStepFor(unsigned long heldMs) {
+  unsigned long step = 1 + heldMs / MOUSE_MOVE_ACCEL_MS;
+  return (int8_t)(step > MOUSE_MOVE_MAX_STEP ? MOUSE_MOVE_MAX_STEP : step);
+}
+
+void mouseMoveTick(unsigned long now) {
+  bool any = false;
+  for (int r = 0; r < NUM_ROWS && !any; r++)
+    for (int c = 0; c < NUM_COLS; c++)
+      if (mouseMoveActive[r][c]) { any = true; break; }
+  if (!any) return;
+  // Ohne Host oder im Config Mode bewegt sich nichts; die Tasten bleiben aktiv bis zum Loslassen. Die
+  // Beschleunigung beginnt danach neu, sonst springt der Zeiger nach dem Wiederverbinden auf den vollen Schritt.
+  if (isConfigMode || !bleKeyboard.isConnected()) {
+    for (int r = 0; r < NUM_ROWS; r++)
+      for (int c = 0; c < NUM_COLS; c++)
+        if (mouseMoveActive[r][c]) mouseMoveStartMs[r][c] = now;
+    mouseMoveLastMs = now;
+    return;
+  }
+  if ((unsigned long)(now - mouseMoveLastMs) < MOUSE_MOVE_INTERVAL_MS) return;
+  mouseMoveLastMs = now;
+  int x = 0, y = 0;
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (!mouseMoveActive[r][c]) continue;
+      int step = mouseMoveStepFor((unsigned long)(now - mouseMoveStartMs[r][c]));
+      switch (mouseMoveAction[r][c]) {
+        case ACT_MOUSE_UP: y -= step; break;
+        case ACT_MOUSE_DOWN: y += step; break;
+        case ACT_MOUSE_LEFT_MOVE: x -= step; break;
+        case ACT_MOUSE_RIGHT_MOVE: x += step; break;
+      }
+    }
+  }
+  if (x > 127) x = 127;
+  if (x < -127) x = -127;
+  if (y > 127) y = 127;
+  if (y < -127) y = -127;
+  if (x != 0 || y != 0) bleKeyboard.mouseMove((int8_t)x, (int8_t)y);
+}
+
+// -----------------------------------------------------------------------------
 // Repeat (ACT_REPEAT): die zuletzt ausgeführte Aktion noch einmal
 // -----------------------------------------------------------------------------
 // Aufgezeichnet wird die aufgelöste Aktion (nicht die Matrix-Position): Zeichen, Medien, Maus, Tastenpaare,
@@ -601,6 +674,19 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         keySentToHost[r][c] = true;
       }
     }
+  } else if (isMouseMoveAction(action)) {
+    static const char* const moveNames[4] = {"Maus Hoch", "Maus Runter", "Maus Links", "Maus Rechts"};
+    const char* moveName = moveNames[action - ACT_MOUSE_UP];
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, moveName, action, currentLayer);
+    sendConfigNotification(String(buf));
+    Serial.printf("Mausbewegung gedrückt: [R%d, C%d] (L%d) -> %s (0x%02X)\n", r, c, currentLayer, moveName, action);
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
+        mouseMoveStart(r, c, action, millis());
+        keySentToHost[r][c] = true;
+      }
+    }
   } else if (isKeyPairAction(action)) {
     uint8_t idx = action - ACT_KEY_PAIR_BASE;
     char buf[128];
@@ -739,6 +825,10 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         else if (action == 0x134) bleKeyboard.mouseScroll(-1);
       }
     }
+  } else if (isMouseMoveAction(action)) {
+    // Die Bewegung endet beim Loslassen, auch nach Host-Verlust; ein nie gesendeter Druck (Combo-Kandidat) tippt nichts
+    mouseMoveStop(r, c);
+    keySentToHost[r][c] = false;
   } else if (action == ACT_REPEAT) {
     if (repeatRemote[r][c] || repeatResolved[r][c]) {
       // Eine laufende Wiederholung endet immer, auch nach Host-Verlust oder einer Combo (die anderen Hälfte
@@ -983,6 +1073,9 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
       else bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
       keySentToHost[r][c] = true;
+    } else if (isMouseMoveAction(act)) {
+      mouseMoveStart(r, c, act, millis());
+      keySentToHost[r][c] = true;
     }
   }
 }
@@ -1202,6 +1295,9 @@ void processDeferredKeys(unsigned long now) {
               else if (act == 0x133) bleKeyboard.mouseScroll(1);
               else if (act == 0x134) bleKeyboard.mouseScroll(-1);
               keySentToHost[r][c] = true;
+            } else if (isMouseMoveAction(act)) {
+              mouseMoveStart(r, c, act, now);
+              keySentToHost[r][c] = true;
             }
           }
         }
@@ -1209,6 +1305,7 @@ void processDeferredKeys(unsigned long now) {
     }
   }
   macroTick(now);
+  mouseMoveTick(now);
 }
 
 // -----------------------------------------------------------------------------
@@ -1746,6 +1843,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) &&
         !(beh != 0 && act == ACT_REPEAT)) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;
@@ -1928,6 +2026,8 @@ void checkUserCombos() {
         // nicht nach Ablauf der 300ms Grace Period versehentlich als Einzeltaste nachfeuern!
         keySentToHost[r1][c1] = true;
         keySentToHost[r2][c2] = true;
+        mouseMoveStop(r1, c1);
+        mouseMoveStop(r2, c2);
 
         // Sofort Einzeltasten auf Mac loslassen, damit der Combo-Chord die Einzeltasten überschreibt.
         // releaseAll() löst auch die Codes eines laufenden Makros; das Makro endet hier.

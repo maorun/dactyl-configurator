@@ -87,6 +87,14 @@ public:
     if (wheel != 0) pushEvent(makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, wheel));
   }
 
+  void mouseMove(int8_t x, int8_t y) {
+    // Wie ein Diagnose-Ereignis: höchstens halbe Warteschlange, damit 100 Schritte/s einem Release nie den Platz
+    // nehmen. Ein verworfener Schritt ist harmlos und zählt nicht als verlorenes Ereignis.
+    if ((x != 0 || y != 0) && x != -128 && y != -128) {
+      queuePushDiagnostic(q, makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, (uint8_t)y, x));
+    }
+  }
+
   // One-Shot-Modifier und Caps Word: den Zustand führt der Master
   void oneShotPress(uint8_t mask) {
     held.oneShot |= mask;

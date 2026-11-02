@@ -146,6 +146,7 @@ void enterConfigMode();
 void toggleConfigMode();
 void checkUserCombos();
 void stopMacro(bool releaseKeys);
+void resetMouseMove();
 void sendSplitLayerRelease();
 
 void enterConfigMode() {
@@ -154,6 +155,7 @@ void enterConfigMode() {
   enterConfigRequested = false;
 
   stopMacro(false);
+  resetMouseMove();
   bleKeyboard.releaseAll();
   sendSplitLayerRelease();
   Serial.println("\n=============================================");

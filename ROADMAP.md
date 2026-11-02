@@ -29,16 +29,6 @@ No open entry.
 
 ## Priority 4
 
-### Mouse movement (mouse keys)
-
-- **Rank:** Feature model. Total 20/40 (typing 5, configuration 4, harmony 6, safety 5). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (`processDeferredKeys()`), `firmware/dactyl_right/DactylSplitHid.h`, `js/keycodes.js`.
-- **Problem:** Report ID 3 has X and Y, but only click and scroll exist (`0x130`..`0x134`).
-- **Goal:** Add the actions `MOUSE_UP`, `MOUSE_DOWN`, `MOUSE_LEFT` and `MOUSE_RIGHT` with acceleration in `processDeferredKeys()`.
-- **Goal:** Add new split ops for the left half. Only append ops; never renumber.
-- **Acceptance test:** A firmware test shows that a held mouse key moves the pointer with growing speed and stops at the release.
-
 ### Key overrides
 
 - **Rank:** Feature model. Total 20/40 (typing 6, configuration 4, harmony 5, safety 5). Effort M. Estimate.

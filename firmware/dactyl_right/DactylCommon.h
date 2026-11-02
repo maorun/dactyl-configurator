@@ -41,6 +41,11 @@
 #define ACT_MOUSE_MIDDLE         0x132
 #define ACT_MOUSE_WHEEL_UP       0x133
 #define ACT_MOUSE_WHEEL_DOWN     0x134
+// Mausbewegung: solange die Taste gehalten wird, bewegt sich der Zeiger mit wachsender Geschwindigkeit
+#define ACT_MOUSE_UP             0x135
+#define ACT_MOUSE_DOWN           0x136
+#define ACT_MOUSE_LEFT_MOVE      0x137
+#define ACT_MOUSE_RIGHT_MOVE     0x138
 
 // Tastenpaar: eine Taste drückt zwei Tasten gleichzeitig (z. B. Shift + .); Index in userKeyPairs[]
 #define ACT_KEY_PAIR_BASE        0x140

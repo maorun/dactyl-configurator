@@ -220,6 +220,27 @@ TEST(test_media_globe_and_mouse_are_forwarded) {
   assert(ev.size() == 7);
 }
 
+TEST(test_mouse_move_is_forwarded_as_move_event) {
+  bleKeyboard.mouseMove(3, -2);
+  bleKeyboard.mouseMove(0, 0);      // keine Bewegung: nichts senden
+  bleKeyboard.mouseMove(-128, 1);   // ungültiger Wert: nichts senden
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1);
+  assert(isValidSplitHidEvent(ev[0]));
+  assert(ev[0].op == SPLIT_OP_MOUSE_MOVE && ev[0].arg == 3 && (int8_t)ev[0].code == -2);
+}
+
+TEST(test_mouse_move_never_takes_the_reserved_queue_room) {
+  // 100 Schritte pro Sekunde dürfen dem Release einer Taste nie den Platz in der Warteschlange nehmen
+  for (int i = 0; i < SPLIT_QUEUE_SIZE * 2; i++) bleKeyboard.mouseMove(1, 0);
+  assert(sendQueue.count <= SPLIT_DIAG_QUEUE_LIMIT);
+  assert(bleKeyboard.droppedEvents() == 0);
+  bleKeyboard.press((uint8_t)'a');
+  bleKeyboard.release((uint8_t)'a');
+  assert(sendQueue.count <= SPLIT_DIAG_QUEUE_LIMIT + 2);
+  drain();
+}
+
 TEST(test_one_shot_actions_never_use_write_or_click_ops) {
   bleKeyboard.write((uint8_t)'a');
   bleKeyboard.write(KEY_MEDIA_VOLUME_UP);

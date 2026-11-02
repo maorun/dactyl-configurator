@@ -26,6 +26,7 @@ struct RecordingSink : SplitHidSink {
   void leftMouseRelease(uint8_t b) override { log.push_back("br" + std::to_string(b)); }
   void leftMouseClick(uint8_t b) override { log.push_back("bc" + std::to_string(b)); }
   void leftMouseScroll(int8_t s) override { log.push_back("sc" + std::to_string(s)); }
+  void leftMouseMove(int8_t x, int8_t y) override { log.push_back("mm" + std::to_string(x) + "," + std::to_string(y)); }
   void leftOneShotPress(uint8_t m) override { log.push_back("op" + std::to_string(m)); }
   void leftOneShotRelease(uint8_t m, bool arm) override { log.push_back((arm ? "or" : "ox") + std::to_string(m)); }
   void leftCapsWordToggle() override { log.push_back("cw"); }
@@ -97,6 +98,7 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 1),
     makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0),
     makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0xFF, 5),   // x = 5, y = -1
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
   // ACTIVITY, TAP_FLUSH und REPEAT_RUN sind die einzigen Ops nur der Rückrichtung. Jede dieser drei fehlt, vier Ops
@@ -151,6 +153,10 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_REPEAT, 2, 1),            // Notiz mit Nummer
     makeSplitHidEvent(SPLIT_OP_REPEAT, 4),
     makeSplitRepeatRun(true, 1),                         // nur Master -> links
+    makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0, 0),         // keine Bewegung
+    makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0x100, 1),     // y außerhalb int8
+    makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0, -128),      // -128 ist ungültig
+    makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0x80, 1),      // y = -128
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -301,6 +307,7 @@ struct FakeHid {
   void mouseRelease(uint8_t b) { log.push_back("BR" + std::to_string(b)); }
   void mouseClick(uint8_t b) { log.push_back("BC" + std::to_string(b)); }
   void mouseScroll(int8_t s) { log.push_back("SC" + std::to_string(s)); }
+  void mouseMove(int8_t x, int8_t y) { log.push_back("MM" + std::to_string(x) + "," + std::to_string(y)); }
   void releaseAll() { log.push_back("ALL"); }
   void beginReportBatch() { batching = true; log.push_back("BEGIN"); }
   void endReportBatch() { batching = false; log.push_back("END"); }
@@ -1648,7 +1655,7 @@ TEST(test_link_report_sends_changes_at_once_and_throttles_counters) {
 TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
-  assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_COUNT == 25);
+  assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25 && SPLIT_OP_COUNT == 26);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -2689,6 +2696,15 @@ TEST(test_several_held_releases_before_the_first_press_all_run_in_order) {
   assert((deferLog == std::vector<std::string>{"u11", "u12", "resolve"}) && d.count == 2);
   // Die Scan-Zeit jeder ausgeführten Änderung bleibt erhalten
   assert(deferTimes.size() >= 2 && deferTimes[deferTimes.size() - 2] == 100 && deferTimes.back() == 105);
+}
+
+TEST(test_mouse_move_reaches_sink_without_state_and_is_not_retried) {
+  Kbd k;
+  left(k, SPLIT_OP_MOUSE_MOVE, 0xFE, 3);  // x = 3, y = -2
+  assert((k.log == Log{"MM3,-2"}));
+  assert(!splitSetAny(k.splitLeft.set));
+  assert(!splitEventRetryable(makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 1, 1)));
+  assert(!splitIsPressOp(SPLIT_OP_MOUSE_MOVE));
 }
 
 int main() {

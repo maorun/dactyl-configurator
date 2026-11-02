@@ -128,7 +128,11 @@ const KEYCODES = [
     { code: "MOUSE_RIGHT", label: "🖱️ Rechtsklick (Right Click)", char: "" },
     { code: "MOUSE_MIDDLE", label: "🖱️ Mittelklick (Middle Click)", char: "" },
     { code: "MOUSE_WHEEL_UP", label: "🖱️ Mausrad Hoch (Scroll Up)", char: "" },
-    { code: "MOUSE_WHEEL_DOWN", label: "🖱️ Mausrad Runter (Scroll Down)", char: "" }
+    { code: "MOUSE_WHEEL_DOWN", label: "🖱️ Mausrad Runter (Scroll Down)", char: "" },
+    { code: "MOUSE_UP", label: "🖱️ Maus nach oben (halten beschleunigt)", char: "" },
+    { code: "MOUSE_DOWN", label: "🖱️ Maus nach unten (halten beschleunigt)", char: "" },
+    { code: "MOUSE_LEFT_MOVE", label: "🖱️ Maus nach links (halten beschleunigt)", char: "" },
+    { code: "MOUSE_RIGHT_MOVE", label: "🖱️ Maus nach rechts (halten beschleunigt)", char: "" }
   ]},
   { group: "Layer Umschalter", keys: [
     { code: "LAYER_UP", label: "⬆️ Layer +1 Hoch (Nächste Ebene)", char: "" },
@@ -252,7 +256,7 @@ const ACTION_TO_NUMERIC = {
   "CAPS_WORD": 0x168,
   "REPEAT": 0x169,
 
-  // Mouse Actions (0x130..0x134)
+  // Mouse Actions (0x130..0x138)
   "MOUSE_LEFT": 0x130,
   "MOUSE_RIGHT": 0x131,
   "MOUSE_MIDDLE": 0x132,
@@ -262,7 +266,15 @@ const ACTION_TO_NUMERIC = {
   "ACT_MOUSE_RIGHT": 0x131,
   "ACT_MOUSE_MIDDLE": 0x132,
   "ACT_MOUSE_WHEEL_UP": 0x133,
-  "ACT_MOUSE_WHEEL_DOWN": 0x134
+  "ACT_MOUSE_WHEEL_DOWN": 0x134,
+  "MOUSE_UP": 0x135,
+  "MOUSE_DOWN": 0x136,
+  "MOUSE_LEFT_MOVE": 0x137,
+  "MOUSE_RIGHT_MOVE": 0x138,
+  "ACT_MOUSE_UP": 0x135,
+  "ACT_MOUSE_DOWN": 0x136,
+  "ACT_MOUSE_LEFT_MOVE": 0x137,
+  "ACT_MOUSE_RIGHT_MOVE": 0x138
 };
 
 // Beschriftung der Umlaut-Aktionen (Keycap, GET_CONFIG-Rückweg)
@@ -276,6 +288,11 @@ const ONE_SHOT_LABELS = {
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
   CAPS_WORD: "CapsWd", REPEAT: "Repeat"
 };
+
+// true für Mausbewegung (Combos führen sie nicht aus)
+function isMouseMoveCode(code) {
+  return /^(ACT_)?MOUSE_(UP|DOWN|LEFT_MOVE|RIGHT_MOVE)$/.test(String(code || ""));
+}
 
 // true für One-Shot-, Caps-Word- und Repeat-Codes (Combos nur mit KEY_PRESS, nicht mit MODIFIER_HOLD)
 function isOneShotOrCapsWordCode(code) {

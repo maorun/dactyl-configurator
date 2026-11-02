@@ -157,12 +157,13 @@ This repository versions the firmware, web-based configurator, macOS desktop app
 
 ### Build & flash (both halves use `min_spiffs`)
 - BLE + ESP-NOW do not fit into the default 1.25 MB app partition (`text section exceeds available space`). Both halves use `PartitionScheme=min_spiffs` (1.875 MB app, NVS offset `0x9000` unchanged, so keymaps and the macOS bond survive the switch). `server.py` (`FIRMWARE_FQBN`) and CI use the same FQBN.
-- Identify each board by its boot log before flashing; the USB port names change between plug-ins.
-- Generate the ESP-NOW key once before the first compile: `bash scripts/generate-split-key.sh` (see "ESP-NOW encryption").
+- Flash a half from the repository with `npm run flash -- L` or `npm run flash -- R`. Do not call `arduino-cli upload` directly: that path skips the NVS backup.
+- `npm run flash` (`scripts/flash.py`) finds the half through `GET_INFO`, compiles the repository sketch, checks the port again, backs up the NVS partition and uploads at 115200 baud. It renders no layout, so the NVS keymap stays. Details: `FEATURES.md`, section "NVS backup during flash".
+- The ESP-NOW key is generated before the compile when it is missing (`generate-split-key.sh --if-missing`, see "ESP-NOW encryption").
 
 ```bash
-/opt/homebrew/bin/arduino-cli compile --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs firmware/dactyl_left
-/opt/homebrew/bin/arduino-cli upload -p /dev/cu.usbserial-XXXX --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs,UploadSpeed=115200 firmware/dactyl_left
+npm run flash -- L   # left half
+npm run flash -- R   # right half
 ```
 
 ### App support for both halves (`js/side-profiles.js`, `js/side-right.js`, `js/side-left.js`, `js/side-state.js`)
@@ -256,15 +257,15 @@ Keys in the matrix use `uint16_t` action codes:
 - `firmware/dactyl_right/DactylHidDescriptor.h` holds the report IDs and the composite HID report descriptor. It has no BLE stack dependency, so the unit tests check it (`firmware/tests/HIDTypes.h` is the host-build replacement for the core header).
 - `firmware/dactyl_right/DactylKeycodes.h` defines the keycodes, `KeyReport`, `MediaKeyReport` (incl. Mac Globe `{0, 4}`), and the ASCII-to-HID mapping. The firmware builds with only the ESP32 core libraries (`BLE`, `Preferences`); CI pins `esp32:esp32@3.3.12`.
 
-### 1. Compile Firmware
+### 1. Compile Firmware (check only, no upload)
 ```bash
 /opt/homebrew/bin/arduino-cli compile --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs firmware/dactyl_right/dactyl_right.ino
 ```
 
 ### 2. Upload Firmware (USB)
-> **Important:** The CH340 USB-serial bridge on the WEMOS LOLIN32 Lite can fail stub verification at the default `921600` baud on macOS. Always specify `UploadSpeed=115200` (or `--upload-property upload.speed=115200`).
+> **Important:** The CH340 USB-serial bridge on the WEMOS LOLIN32 Lite can fail stub verification at the default `921600` baud on macOS. `npm run flash` always uploads at `115200`.
 ```bash
-/opt/homebrew/bin/arduino-cli upload -p /dev/cu.usbserial-21320 --fqbn esp32:esp32:lolin32-lite:PartitionScheme=min_spiffs,UploadSpeed=115200 firmware/dactyl_right/dactyl_right.ino
+npm run flash -- R   # backs up the NVS partition, then uploads
 ```
 
 ### 3. Tests, Syntax & XML Verification

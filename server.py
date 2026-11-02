@@ -1082,10 +1082,40 @@ def dump_nvs(port, side="R", on_line=None):
     finally:
         remove_quietly(tmp)
 
+# Eine Sperre für den USB-Zugriff aller Prozesse eines Nutzers (App-Server und npm run flash): zwei Schreiber
+# am selben Port würden sich den Upload zerstören. $TMPDIR ist auf macOS je Nutzer gleich, auch für Finder-Apps.
+USB_LOCK_FILE = os.path.join(tempfile.gettempdir(), "dactyl-configurator-usb.lock")
+
+
+def with_usb_lock(func):
+    """Führt func nur aus, wenn kein anderer Flash oder Restore läuft; sonst ein Fehlerergebnis (Phase "port")."""
+    def wrapper(*args, **kwargs):
+        # O_NOFOLLOW: ein fremder Symlink unter /tmp lenkt die Sperre nicht auf eine andere Datei
+        try:
+            fd = os.open(USB_LOCK_FILE, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        except OSError as err:
+            return {"success": False, "stage": "port", "error": f"USB-Sperre nicht verfügbar ({USB_LOCK_FILE}): {err}"}
+        with os.fdopen(fd, "r+") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return {"success": False, "stage": "port",
+                        "error": "Ein anderer Flash oder NVS-Restore läuft bereits (App oder npm run flash). Bitte warten."}
+            return func(*args, **kwargs)
+    wrapper.__name__ = func.__name__
+    wrapper.__doc__ = func.__doc__
+    return wrapper
+
+
 def restore_nvs(side, backup_id, on_output=None):
     """Schreibt eine NVS-Sicherung der Hälfte zurück nach NVS_OFFSET. Nur auf den Port, der sich als diese Hälfte
     meldet. Eine ungültige Sicherung ergibt ValueError, bevor ein Port berührt wird."""
     path = nvs_backup_path(side, backup_id)
+    return restore_nvs_locked(side, path, backup_id, on_output)
+
+
+@with_usb_lock
+def restore_nvs_locked(side, path, backup_id, on_output=None):
     label = "linke" if side == "L" else "rechte"
     esptool = find_esptool()
     if not esptool:
@@ -1289,6 +1319,7 @@ def run_cli(cmd, timeout_s, on_line=None):
     return returncode, "\n".join(output)
 
 
+@with_usb_lock
 def flash_firmware(side="R", on_output=None):
     """on_output(stage, line) erhält jede Zeile von Kompilieren und Upload, sobald arduino-cli sie ausgibt."""
     arduino_cli = find_arduino_cli()

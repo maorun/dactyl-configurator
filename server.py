@@ -66,6 +66,12 @@ MAX_BACKUPS = 20
 # Ein Sync legt höchstens alle 10 Minuten ein Backup an (der Live-Sync läuft nach jeder Änderung); ein Flash immer
 BACKUP_MIN_INTERVAL_S = 600
 BACKUP_REASONS = ("sync", "flash")
+# NVS-Partition (min_spiffs: 0x9000, 20 KB) mit Keymap und BLE-Bond. Vor jedem Upload gelesen und neben den
+# Config-Backups der Hälfte gespeichert (nvs-<laufende Nummer>-<UTC-Zeitstempel>.bin)
+NVS_OFFSET = 0x9000
+NVS_SIZE = 0x5000
+MAX_NVS_BACKUPS = 10
+NVS_TIMEOUT_S = 90
 # Mit eigenem Datenverzeichnis ist die .ino aus dem Paket die Vorlage; gerendert und kompiliert wird eine Kopie.
 # None: die .ino wird an Ort und Stelle gerendert (Repository).
 SEPARATE_FIRMWARE = FIRMWARE_DIR != SOURCE_FIRMWARE_DIR
@@ -631,11 +637,12 @@ def render_ino_content(content, config, defaults_id=None, side="R"):
     return content
 
 def write_temp_file(path, text):
-    """Schreibt text vollständig (fsync) in eine Temp-Datei neben path und gibt deren Namen zurück."""
+    """Schreibt text (str oder bytes) vollständig (fsync) in eine Temp-Datei neben path und gibt deren Namen zurück."""
     dir_name = os.path.dirname(os.path.abspath(path))
-    fd, temp_name = tempfile.mkstemp(dir=dir_name, prefix=".tmp_", text=True)
+    binary = isinstance(text, bytes)
+    fd, temp_name = tempfile.mkstemp(dir=dir_name, prefix=".tmp_", text=not binary)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as tf:
+        with (os.fdopen(fd, "wb") if binary else os.fdopen(fd, "w", encoding="utf-8")) as tf:
             tf.write(text)
             tf.flush()
             os.fsync(tf.fileno())
@@ -959,6 +966,165 @@ def load_backups(side="R"):
         backups.append({"id": name[:-len(".json")], "savedAt": saved_at, "reason": reason, "config": config})
     return {"backups": backups, "skipped": skipped}
 
+class NvsEmptyError(RuntimeError):
+    """Die gelesene NVS-Partition ist gelöscht (nur 0xFF): es gibt nichts zu sichern."""
+
+
+NVS_FILE_RE = re.compile(r"^nvs-(\d{6,})-\d{8}-\d{6}-\d{3}\.bin$")
+
+
+def nvs_backup_names(folder):
+    """NVS-Abbilder eines Ordners, neuestes (höchste Nummer) zuerst."""
+    try:
+        names = os.listdir(folder)
+    except FileNotFoundError:
+        return []
+    matches = [(NVS_FILE_RE.match(n), n) for n in names]
+    return [n for _, n in sorted(((int(m.group(1)), n) for m, n in matches if m), reverse=True)]
+
+def save_nvs_image(data, side="R", now=None):
+    """Speichert ein NVS-Abbild der Hälfte und behält die letzten MAX_NVS_BACKUPS. Gibt den Dateinamen zurück.
+    Ein Abbild mit falscher Größe ergibt ValueError: ein abgebrochenes Lesen darf nie als Sicherung gelten."""
+    if len(data) != NVS_SIZE:
+        raise ValueError(f"NVS-Abbild hat {len(data)} statt {NVS_SIZE} Bytes.")
+    # Eine gelöschte Partition (nur 0xFF) enthält nichts; sie würde sonst gültige Sicherungen verdrängen
+    if data.count(0xFF) == len(data):
+        raise NvsEmptyError("NVS-Abbild ist leer (gelöschte Partition).")
+    now = time.time() if now is None else now
+    folder = side_paths(side)["backups"]
+    os.makedirs(folder, exist_ok=True)
+    # Das Abbild enthält die BLE-Bond-Schlüssel: nur der Nutzer darf den Ordner lesen
+    os.chmod(folder, 0o700)
+    with open(os.path.join(folder, ".lock"), "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        names = nvs_backup_names(folder)
+        sequence = int(NVS_FILE_RE.match(names[0]).group(1)) + 1 if names else 1
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime(now)) + f"-{int(now * 1000) % 1000:03d}"
+        name = f"nvs-{sequence:06d}-{stamp}.bin"
+        path = os.path.join(folder, name)
+        tmp = write_temp_file(path, data)
+        os.replace(tmp, path)
+        for old in nvs_backup_names(folder)[MAX_NVS_BACKUPS:]:
+            remove_quietly(os.path.join(folder, old))
+    return name
+
+def load_nvs_backups(side="R"):
+    """NVS-Abbilder einer Hälfte, neuestes zuerst: { backups: [{ id, savedAt }] }. Nur Dateien mit der richtigen Größe."""
+    folder = side_paths(side)["backups"]
+    backups = []
+    for name in nvs_backup_names(folder):
+        path = os.path.join(folder, name)
+        try:
+            if os.path.getsize(path) != NVS_SIZE:
+                continue
+            saved_at = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime(os.path.getmtime(path)))
+        except OSError:
+            continue
+        backups.append({"id": name[:-len(".bin")], "savedAt": saved_at})
+    return {"backups": backups}
+
+def nvs_backup_path(side, backup_id):
+    """Pfad eines gespeicherten NVS-Abbilds dieser Hälfte. Nur gültige Namen, nie ein Pfad von außen."""
+    if not isinstance(backup_id, str) or not NVS_FILE_RE.match(backup_id + ".bin"):
+        raise ValueError("Ungültige NVS-Sicherung.")
+    path = os.path.join(side_paths(side)["backups"], backup_id + ".bin")
+    try:
+        if os.path.getsize(path) != NVS_SIZE:
+            raise ValueError("NVS-Sicherung hat die falsche Größe.")
+    except FileNotFoundError:
+        raise ValueError("NVS-Sicherung nicht gefunden.") from None
+    return path
+
+def find_esptool():
+    """esptool aus dem ESP32-Core von arduino-cli (neueste Version), sonst aus dem PATH."""
+    root = os.path.expanduser("~/Library/Arduino15/packages/esp32/tools/esptool_py")
+
+    def version_key(path):
+        parts = os.path.basename(os.path.dirname(path)).split(".")
+        return [int(p) if p.isdigit() else -1 for p in parts]
+
+    for c in sorted(glob.glob(os.path.join(root, "*", "esptool")), key=version_key, reverse=True):
+        if os.access(c, os.X_OK):
+            return c
+    for name in ("esptool", "esptool.py"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+def esptool_cmd(esptool, port, *args):
+    # Wie der Upload: 115200 Baud (CH340), Reset in den Bootloader, danach normaler Start
+    return [esptool, "--chip", "esp32", "--port", port, "--baud", "115200",
+            "--before", "default-reset", "--after", "hard-reset", *args]
+
+def dump_nvs(port, side="R", on_line=None):
+    """Liest die NVS-Partition am Port und speichert sie als Sicherung der Hälfte. Gibt den Namen zurück.
+    Ohne esptool, bei einem Fehler oder einer falschen Größe: RuntimeError (nichts gespeichert)."""
+    esptool = find_esptool()
+    if not esptool:
+        raise RuntimeError("esptool wurde nicht gefunden.")
+    fd, tmp = tempfile.mkstemp(prefix="dactyl-nvs-", suffix=".bin")
+    os.close(fd)
+    try:
+        cmd = esptool_cmd(esptool, port, "read-flash", hex(NVS_OFFSET), hex(NVS_SIZE), tmp)
+        try:
+            code, output = run_cli(cmd, NVS_TIMEOUT_S, on_line)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"NVS-Lesen abgebrochen (Timeout nach {NVS_TIMEOUT_S}s).") from None
+        if code != 0:
+            raise RuntimeError(f"esptool read-flash fehlgeschlagen: {output[-FLASH_ERROR_TAIL_CHARS:]}")
+        with open(tmp, "rb") as f:
+            data = f.read()
+        try:
+            return save_nvs_image(data, side)
+        except ValueError as err:
+            raise RuntimeError(str(err)) from None
+    finally:
+        remove_quietly(tmp)
+
+def restore_nvs(side, backup_id, on_output=None):
+    """Schreibt eine NVS-Sicherung der Hälfte zurück nach NVS_OFFSET. Nur auf den Port, der sich als diese Hälfte
+    meldet. Eine ungültige Sicherung ergibt ValueError, bevor ein Port berührt wird."""
+    path = nvs_backup_path(side, backup_id)
+    label = "linke" if side == "L" else "rechte"
+    esptool = find_esptool()
+    if not esptool:
+        return {"success": False, "error": "esptool wurde nicht gefunden. Bitte den ESP32-Core über arduino-cli installieren."}
+    port = find_serial_port(side)
+    if not port:
+        return {"success": False, "stage": "port", "error": f"Keine {label} Hälfte am USB gefunden."}
+    on_line = (lambda line: on_output("nvs", line)) if on_output else None
+    # Das Abbild zuerst kopieren: die Sicherung des aktuellen Stands kann das älteste Abbild aufräumen
+    with open(path, "rb") as f:
+        image = f.read()
+    fd, image_path = tempfile.mkstemp(prefix="dactyl-nvs-restore-", suffix=".bin")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(image)
+        # Den aktuellen Stand sichern: ein abgebrochenes Schreiben oder ein falsches Abbild bleibt umkehrbar.
+        # Eine leere Partition gibt es nicht zu sichern; jeder andere Fehler bricht ab, bevor etwas geschrieben wird.
+        try:
+            previous = dump_nvs(port, side, on_line)
+        except NvsEmptyError:
+            previous = None
+        except (RuntimeError, OSError) as err:
+            return {"success": False, "stage": "nvs", "error": f"Sicherung vor dem Zurückschreiben fehlgeschlagen: {err}"}
+        # Das Lesen startet das Board neu: vor dem Schreiben erneut prüfen, dass der Port noch diese Hälfte ist
+        if query_device_side(port) != side:
+            return {"success": False, "stage": "port", "error": f"Am Port {port} hängt nicht mehr die {label} Hälfte. Nichts geschrieben."}
+        cmd = esptool_cmd(esptool, port, "write-flash", hex(NVS_OFFSET), image_path)
+        try:
+            code, output = run_cli(cmd, NVS_TIMEOUT_S, on_line)
+        except FileNotFoundError:
+            return {"success": False, "error": "esptool wurde nicht gefunden."}
+        except subprocess.TimeoutExpired:
+            return {"success": False, "stage": "nvs", "error": f"NVS-Schreiben abgebrochen (Timeout nach {NVS_TIMEOUT_S}s)."}
+    finally:
+        remove_quietly(image_path)
+    if code != 0:
+        return {"success": False, "stage": "nvs", "error": output[-FLASH_ERROR_TAIL_CHARS:]}
+    return {"success": True, "port": port, "side": side, "id": backup_id, "previousBackup": previous}
+
 def find_arduino_cli():
     cli = shutil.which("arduino-cli")
     if cli:
@@ -1170,6 +1336,15 @@ def flash_firmware(side="R", on_output=None):
     status("port", f"Prüfe den Port {port} vor dem Upload ...")
     if query_device_side(port) != side:
         return {"success": False, "stage": "port", "error": f"Am Port {port} hängt nicht mehr die {label} Hälfte. Nichts geflasht; bitte erneut starten."}
+    # NVS (Keymap, BLE-Bond) direkt vor dem Upload sichern. Ein Fehler hält den Flash nicht auf: der Upload
+    # schreibt die NVS-Partition nicht, und ohne esptool wäre sonst kein Flash möglich.
+    status("nvs", f"Sichere die NVS-Partition ({NVS_SIZE // 1024} KB ab {hex(NVS_OFFSET)}) ...")
+    try:
+        nvs_backup = dump_nvs(port, side, output_for("nvs"))
+        status("nvs", f"NVS gesichert: {nvs_backup}")
+    except (RuntimeError, OSError) as err:
+        nvs_backup = None
+        status("nvs", f"⚠️ NVS-Sicherung fehlgeschlagen, Flash läuft weiter: {err}")
     upload_cmd = [
         arduino_cli, "upload",
         "-p", port,
@@ -1191,7 +1366,8 @@ def flash_firmware(side="R", on_output=None):
             "error": output[-FLASH_ERROR_TAIL_CHARS:]
         }
 
-    return {"success": True, "port": port, "side": side, "message": "Firmware erfolgreich kompiliert und geflasht!"}
+    return {"success": True, "port": port, "side": side, "nvsBackup": nvs_backup,
+            "message": "Firmware erfolgreich kompiliert und geflasht!"}
 
 
 class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
@@ -1327,6 +1503,14 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(200, load_backups(side))
             return
 
+        if path == "/api/nvs_backups":
+            side = parse_side(self.path)
+            if side is None:
+                self.send_json(400, {"success": False, "error": "Ungültiger Parameter 'side' (L oder R)."})
+                return
+            self.send_json(200, load_nvs_backups(side))
+            return
+
         if path in STATIC_ALLOWLIST:
             self.path = "/" + STATIC_ALLOWLIST[path]
             super().do_GET()
@@ -1349,7 +1533,7 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
 
-        if path in ("/api/save_and_flash", "/api/config", "/api/profiles", "/api/backups"):
+        if path in ("/api/save_and_flash", "/api/config", "/api/profiles", "/api/backups", "/api/nvs_restore"):
             side = parse_side(self.path)
             if side is None:
                 self.send_json(400, {"success": False, "error": "Ungültiger Parameter 'side' (L oder R)."})
@@ -1418,6 +1602,18 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json(500, {"success": False, "error": str(e)})
                 return
             self.send_json(200, {"success": True, "created": name is not None})
+            return
+
+        if path == "/api/nvs_restore":
+            data = self.read_json_body()
+            if data is None:
+                return
+            try:
+                result = restore_nvs(side, data.get("id") if isinstance(data, dict) else None)
+            except ValueError as e:
+                self.send_json(400, {"success": False, "error": str(e)})
+                return
+            self.send_json(200 if result.get("success") else 500, result)
             return
 
         if path == "/api/profiles":

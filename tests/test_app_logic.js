@@ -2845,6 +2845,7 @@ test("Flash-Protokoll: Phasen-Namen", () => {
   assert.strictEqual(api.flashStageLabel("compile"), "Kompilieren");
   assert.strictEqual(api.flashStageLabel("upload"), "Upload");
   assert.strictEqual(api.flashStageLabel("port"), "USB-Port");
+  assert.strictEqual(api.flashStageLabel("nvs"), "NVS-Sicherung");
   assert.strictEqual(api.flashStageLabel(undefined), "Flashen");
 });
 

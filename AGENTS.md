@@ -33,6 +33,7 @@ This repository versions the firmware, web-based configurator, macOS desktop app
    - Provides `/api/config?side=L|R` to read and write the config of a half: `current_config.json` / `current_config_left.json` (fallback `default_config.json` / `default_config_left.json`). Without `side` the right half applies; another value returns HTTP 400. On the left half, the missing keys `R4C5` / `R5C0` must not carry an action, and combos must not use them.
    - `/api/backups?side=L|R` keeps automatic backups of a half. Details: `FEATURES.md`, section "Automatic backups".
    - `/api/profiles?side=L|R` keeps named layout profiles of a half. Details: `FEATURES.md`, section "Layout profiles".
+   - Each flash reads the NVS partition (`0x9000`, 20 KB) before the upload and stores it next to the config backups; `/api/nvs_restore?side=L|R` writes it back. Details: `FEATURES.md`, section "NVS backup during flash".
 
 5. **Wiring Diagrams (`docs/lolin32_lite_wiring.svg`, `docs/lolin32_lite_wiring.png`):**
    - The PNG is a manual render of the SVG (1600 x 1020, for example with headless Chrome `--screenshot`, window size 1600,1020). No test compares them, because file times are unreliable in a checkout. After each SVG change, render the PNG again.

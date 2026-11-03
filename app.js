@@ -90,6 +90,7 @@ const activePressedKeys = new Set();
 // Annahme: genau ein App-Fenster (main.js); ein zweites Fenster überschreibt den gespeicherten Stand.
 // Matrix-Test: pro Hälfte, nur für die laufende Sitzung, nicht gespeichert.
 let heatmapEnabled = false;
+let heatmapPerLayer = false;
 let heatmapSaveTimer = null;
 
 // Initialisierung

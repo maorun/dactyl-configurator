@@ -401,7 +401,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
         switchLayerUI(evt.target_layer);
       }
       triggerVisualKeyPress(evt.r, evt.c, typeof evt.key === "string" ? evt.key : "", lineSide, pressedLayer);
-      if (recordKeyPress(typingStatsFor(lineSide), evt.r, evt.c, Date.now())) onTypingStatsChanged(lineSide);
+      if (recordKeyPress(typingStatsFor(lineSide), evt.r, evt.c, Date.now(), pressedLayer)) onTypingStatsChanged(lineSide);
       if (markMatrixKeyTested(matrixTestFor(lineSide), evt.r, evt.c) && isEditSide) renderMatrixTest();
     } catch (e) {
       console.warn("Failed to parse KEY_PRESS:", e, line);
@@ -446,7 +446,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
     }
     splitKeyTracker.press(id);
     triggerVisualKeyPress(evt.r, evt.c, "", evt.side, evt.layer);
-    if (recordKeyPress(typingStatsFor(evt.side), evt.r, evt.c, Date.now())) onTypingStatsChanged(evt.side);
+    if (recordKeyPress(typingStatsFor(evt.side), evt.r, evt.c, Date.now(), evt.layer)) onTypingStatsChanged(evt.side);
     if (markMatrixKeyTested(matrixTestFor(evt.side), evt.r, evt.c) && evt.side === editSide) renderMatrixTest();
   }
 

@@ -18,7 +18,7 @@ function saveHeatmapNow() {
   }
   try {
     for (const side of Dactyl.SIDE_IDS) {
-      localStorage.setItem(SIDE_PROFILES[side].heatmapStorageKey, JSON.stringify(typingStatsFor(side).counts));
+      localStorage.setItem(SIDE_PROFILES[side].heatmapStorageKey, JSON.stringify(serializeTypingStats(typingStatsFor(side))));
     }
   } catch (e) {
     console.warn("Heatmap konnte nicht gespeichert werden:", e);
@@ -30,22 +30,34 @@ function saveHeatmapSoon() {
   heatmapSaveTimer = setTimeout(saveHeatmapNow, 1000);
 }
 
-function applyHeatClass(keyEl, stats, maxCount) {
+// Ebene der Heatmap: null = alle Ebenen, sonst die angezeigte Ebene
+function heatmapLayer() {
+  return heatmapPerLayer ? activeLayerIndex : null;
+}
+
+function applyHeatClass(keyEl, counts, maxCount) {
   for (let i = 1; i <= HEAT_LEVELS; i++) keyEl.classList.remove(`heat-${i}`);
-  const count = stats.counts[`${keyEl.dataset.row}_${keyEl.dataset.col}`] || 0;
+  const count = counts[`${keyEl.dataset.row}_${keyEl.dataset.col}`] || 0;
   const level = heatLevel(count, maxCount);
   if (heatmapEnabled && level) keyEl.classList.add(`heat-${level}`);
   if (heatmapEnabled && count > 0) keyEl.dataset.heatCount = String(count);
   else delete keyEl.dataset.heatCount;
 }
 
-// Jede Hälfte färbt nach ihrer eigenen Statistik
+// Jede Hälfte färbt nach ihrer eigenen Statistik (alle Ebenen oder nur die angezeigte)
 function applyHeatmap() {
+  const layer = heatmapLayer();
   for (const side of Dactyl.SIDE_IDS) {
     const stats = typingStatsFor(side);
-    const maxCount = maxKeyCount(stats);
-    document.querySelectorAll(`.key-cap[data-side="${side}"]:not(.key-cap-spacer)`).forEach(el => applyHeatClass(el, stats, maxCount));
+    const counts = heatmapCounts(stats, layer);
+    const maxCount = maxKeyCount(stats, layer);
+    document.querySelectorAll(`.key-cap[data-side="${side}"]:not(.key-cap-spacer)`).forEach(el => applyHeatClass(el, counts, maxCount));
   }
+}
+
+function updateHeatmapLayerButton(btn) {
+  btn.classList.toggle("active", heatmapPerLayer);
+  btn.textContent = heatmapPerLayer ? "Aktuelle Ebene" : "Alle Ebenen";
 }
 
 // WPM und Anschläge der bearbeiteten Hälfte
@@ -66,6 +78,15 @@ function onTypingStatsChanged(side = editSide) {
 function initHeatmapUI() {
   const toggle = document.getElementById("btnToggleHeatmap");
   const reset = document.getElementById("btnResetHeatmap");
+  const layerBtn = document.getElementById("btnHeatmapLayer");
+  if (layerBtn) {
+    updateHeatmapLayerButton(layerBtn);
+    layerBtn.addEventListener("click", () => {
+      heatmapPerLayer = !heatmapPerLayer;
+      updateHeatmapLayerButton(layerBtn);
+      applyHeatmap();
+    });
+  }
   if (toggle) {
     toggle.addEventListener("click", () => {
       heatmapEnabled = !heatmapEnabled;

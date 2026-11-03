@@ -29,14 +29,6 @@ No open entry.
 
 ## Priority 4
 
-### Heatmap per layer
-
-- **Rank:** Feature model. Total 19/40 (typing 1, configuration 4, harmony 6, safety 8). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/heatmap.js`, `js/side-state.js`.
-- **Goal:** Count the key presses also by `layer` from the `KEY_PRESS` event.
-- **Acceptance test:** A test shows that presses on two layers give two separate counters.
-
 ### Keyboard control in the editor
 
 - **Rank:** Feature model. Total 18/40 (typing 0, configuration 5, harmony 5, safety 8). Effort S. Estimate.

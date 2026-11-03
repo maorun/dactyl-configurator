@@ -417,6 +417,15 @@ bool consumeMasterActivity(volatile bool &received, unsigned long nowMs, unsigne
   return true;
 }
 
+// SPLIT_OP_SLEEP vom Master (Flag aus dem Empfangs-Callback) prüfen und verbrauchen.
+// Der Master sendet das Signal unmittelbar vor seinem eigenen enterDeepSleep(). Im Config Mode und solange
+// lokal eine Taste gedrückt ist, wird die Anforderung verworfen (Tippen hat Vorrang).
+inline bool consumeMasterSleepRequest(volatile bool &sleepRequested, bool configMode, bool anyKeyHeld) {
+  if (!sleepRequested) return false;
+  sleepRequested = false;
+  return !configMode && !anyKeyHeld;
+}
+
 // Fehlgeschlagener ESP-NOW-Start beim Booten: höchstens ESPNOW_BOOT_RETRIES Board-Neustarts in Folge, dann läuft
 // die Hälfte ohne ESP-NOW weiter (Config Mode und USB bleiben erreichbar, keine Neustart-Schleife, die den Akku
 // leert). rtcState liegt in RTC_NOINIT und gilt nur nach einem Software-Reset (sonst Zufallswert).

@@ -342,6 +342,9 @@ static volatile uint32_t callbackSeq = 0;
 
 // Vom Empfangs-Callback (Wi-Fi-Task) gesetzt: Am Master wurde getippt (SPLIT_OP_ACTIVITY)
 static volatile bool masterActivityReceived = false;
+// Vom Empfangs-Callback gesetzt: Der Master geht in den Deep Sleep (SPLIT_OP_SLEEP)
+static volatile bool masterSleepRequested = false;
+static SplitDisconnectedSleep leftDisconnectedSleep = {};
 // Vom Empfangs-Callback gesetzt: Der Master hält eine Taste zurück, bis der wartende Einzel-Tipp gesendet ist
 // (SPLIT_OP_TAP_FLUSH); der Melder schickt danach TAP_PENDING 0
 static volatile bool masterTapFlushRequested = false;
@@ -392,6 +395,7 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
   SplitHidEvent ev;
   if (info == nullptr || !parseSplitMasterPacket(info->src_addr, data, len, ev)) return;
   if (ev.op == SPLIT_OP_ACTIVITY) masterActivityReceived = true;
+  else if (ev.op == SPLIT_OP_SLEEP) masterSleepRequested = true;
   else if (ev.op == SPLIT_OP_TAP_FLUSH) masterTapFlushRequested = true;
   else if (ev.op == SPLIT_OP_HOLD_PENDING) masterHoldNote(masterHold, ev.code != 0, millis());
   else if (ev.op == SPLIT_OP_HOLD_RESOLVE) masterHoldResolveRequested = true;
@@ -467,6 +471,15 @@ static void queueSplitLayerStateIfDue() {
 static void queueSplitLayerRelease() {
   queuePushAfterDrain(sendQueue, splitLayerReleaseEvent(splitLayerSync, toggleLayerMask(), false),
                       [] { flushSendQueue(150); });
+}
+
+static bool anyLeftKeyHeld() {
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (keyState[r][c] || rawKeyState[r][c]) return true;
+    }
+  }
+  return false;
 }
 
 static bool setupEspNow() {
@@ -856,9 +869,15 @@ void loop() {
 
   // ESP-NOW-Neustart: das Gate sperrt Config Mode, fälligen Deep Sleep (beginnt unten in diesem Durchlauf)
   // und fehlendes ESP-NOW. Bewusst außerhalb des Blocks oben, damit das Gate selbst den Config Mode prüft.
-  bool deepSleepDue = !isConfigMode && deepSleepTimeoutMinutes > 0 &&
-    millis() - lastActivityTime > ((unsigned long)deepSleepTimeoutMinutes * 60UL * 1000UL);
-  if (shouldRestartEspNow(restartGuard, millis(), espNowRestartAllowed(isConfigMode, deepSleepDue, espNowReady))) {
+  unsigned long nowSleep = millis();
+  bool keyHeld = anyLeftKeyHeld();
+  bool masterSleepDue = consumeMasterSleepRequest(masterSleepRequested, isConfigMode, keyHeld);
+  bool disconnectedSleepDue = splitDisconnectedDeepSleepDue(leftDisconnectedSleep, isConfigMode,
+    bleKeyboard.isConnected(), keyHeld, deepSleepTimeoutMinutes, lastActivityTime, nowSleep);
+  bool timeoutSleepDue = !isConfigMode && deepSleepTimeoutMinutes > 0 &&
+    (nowSleep - lastActivityTime > ((unsigned long)deepSleepTimeoutMinutes * 60UL * 1000UL));
+  bool deepSleepDue = masterSleepDue || disconnectedSleepDue || timeoutSleepDue;
+  if (shouldRestartEspNow(restartGuard, nowSleep, espNowRestartAllowed(isConfigMode, deepSleepDue, espNowReady))) {
     restartEspNow();
   }
 
@@ -883,10 +902,8 @@ void loop() {
         enterStandby();
       }
     }
-    if (deepSleepTimeoutMinutes > 0) {
-      if (millis() - lastActivityTime > ((unsigned long)deepSleepTimeoutMinutes * 60UL * 1000UL)) {
-        enterDeepSleep();
-      }
+    if (deepSleepDue) {
+      enterDeepSleep();
     }
   }
 

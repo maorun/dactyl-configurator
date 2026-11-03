@@ -209,7 +209,7 @@
     heatmapStorageKey: "dactyl_key_heatmap_v1",
     // Ebenennamen und fehlende Einstellungen ergänzt normalizeConfig
     defaultConfig: {
-      settings: { deviceName: "Dactyl Keyboard", debounceMs: 5, comboTimeoutMs: 40 },
+      settings: { deviceName: "Dactyl Keyboard", debounceMs: 5, comboTimeoutMs: 40, holdTapMode: 0 },
       // Eigene Kopie, damit eine Änderung der Standard-Config das Preset nicht verändert
       layers: JSON.parse(JSON.stringify(presets.de_qwertz.layers)),
       combos: [

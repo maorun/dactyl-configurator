@@ -107,6 +107,13 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("uint16_t tappingTermMs = 200;", server.generate_settings_cpp({}))
         with self.assertRaises(ValueError):
             server.generate_settings_cpp({"tappingTermMs": 99})
+        self.assertIn("uint8_t holdTapMode = 1;", server.generate_settings_cpp({"holdTapMode": 1}))
+        self.assertIn("uint8_t holdTapMode = 2;", server.generate_settings_cpp({"holdTapMode": 2}))
+        self.assertIn("uint8_t holdTapMode = 0;", server.generate_settings_cpp({}))
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"holdTapMode": -1})
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"holdTapMode": 3})
         self.assertIn("uint32_t standbyTimeoutMinutes = 15;", cpp)
         self.assertIn("uint32_t deepSleepTimeoutMinutes = 90;", cpp)
 

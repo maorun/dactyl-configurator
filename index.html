@@ -586,6 +586,16 @@
         </div>
 
         <div class="form-group">
+          <label for="holdTapModeSelect">Mod-Tap-Entscheidung (Verhalten bei zweiter Taste):</label>
+          <select id="holdTapModeSelect" class="form-control">
+            <option value="0" selected>Sofort bei zweiter Taste (Hold on other key press)</option>
+            <option value="1">Permissive Hold (Hold bei verschachteltem Tap)</option>
+            <option value="2">Tap Preferred (Hold nur nach Zeitablauf)</option>
+          </select>
+          <small class="form-hint">Legt fest, wie eine Mod-Tap- oder Layer-Tap-Taste reagiert, wenn eine andere Taste gedrückt wird, bevor der Tapping-Term abläuft.</small>
+        </div>
+
+        <div class="form-group">
           <label for="standbyTimeoutSelect">Stufe 1: Standby-Timeout (Light Sleep, Verbindung bleibt aktiv):</label>
           <select id="standbyTimeoutSelect" class="form-control">
             <option value="1">1 Minute</option>

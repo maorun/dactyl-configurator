@@ -357,6 +357,7 @@ SETTINGS_RANGES = {
     "debounceMs": (1, 50, 5),
     "comboTimeoutMs": (10, 200, 40),
     "tappingTermMs": (100, 500, 200),
+    "holdTapMode": (0, 2, 0),
     "standbyTimeoutMinutes": (0, 120, 5),
     "sleepTimeoutMinutes": (0, 240, 60),
 }
@@ -653,6 +654,7 @@ def generate_settings_cpp(settings, side="R"):
         f'uint8_t debounceMs = {values["debounceMs"]};',
         f'uint16_t comboTimeoutMs = {values["comboTimeoutMs"]};',
         f'uint16_t tappingTermMs = {values["tappingTermMs"]};',
+        f'uint8_t holdTapMode = {values["holdTapMode"]};',
         f'uint32_t standbyTimeoutMinutes = {values["standbyTimeoutMinutes"]};',
         f'uint32_t deepSleepTimeoutMinutes = {values["sleepTimeoutMinutes"]};',
         "// [[[END_SETTINGS]]]"

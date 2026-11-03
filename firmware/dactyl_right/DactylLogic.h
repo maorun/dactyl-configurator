@@ -1,4 +1,5 @@
 #pragma once
+#include "DactylCommon.h"
 
 /*
  * =============================================================================
@@ -907,8 +908,64 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
 }
 
 // -----------------------------------------------------------------------------
-// Tap-Hold (Mod-Tap / Layer-Tap)
+// Tap-Hold (Mod-Tap / Layer-Tap) & Event-Pufferung für Rolled / Permissive Typing
 // -----------------------------------------------------------------------------
+struct DeferredKeyEvent {
+  uint8_t row;
+  uint8_t col;
+  bool pressed;
+  unsigned long time;
+};
+
+#define MAX_DEFERRED_KEYS 8
+
+struct DeferredKeyQueue {
+  DeferredKeyEvent items[MAX_DEFERRED_KEYS];
+  uint8_t head = 0;
+  uint8_t count = 0;
+};
+
+static DeferredKeyQueue deferredQueue;
+static bool isReplayingDeferredQueue = false;
+
+inline void resetDeferredQueue() {
+  deferredQueue.head = 0;
+  deferredQueue.count = 0;
+  isReplayingDeferredQueue = false;
+}
+
+inline bool deferredQueueHasPress(uint8_t r, uint8_t c) {
+  for (uint8_t i = 0; i < deferredQueue.count; i++) {
+    uint8_t idx = (deferredQueue.head + i) % MAX_DEFERRED_KEYS;
+    if (deferredQueue.items[idx].row == r &&
+        deferredQueue.items[idx].col == c &&
+        deferredQueue.items[idx].pressed) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool deferredQueuePush(uint8_t r, uint8_t c, bool pressed, unsigned long time) {
+  if (deferredQueue.count >= MAX_DEFERRED_KEYS) return false;
+  uint8_t idx = (deferredQueue.head + deferredQueue.count) % MAX_DEFERRED_KEYS;
+  deferredQueue.items[idx] = { r, c, pressed, time };
+  deferredQueue.count++;
+  return true;
+}
+
+inline bool deferredQueuePop(DeferredKeyEvent &out) {
+  if (deferredQueue.count == 0) return false;
+  out = deferredQueue.items[deferredQueue.head];
+  deferredQueue.head = (deferredQueue.head + 1) % MAX_DEFERRED_KEYS;
+  deferredQueue.count--;
+  return true;
+}
+
+void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long now);
+void replayDeferredQueue();
+bool anyTapHoldPending();
+
 struct TapHoldKey {
   bool pending;      // Gedrückt, Tap oder Hold noch nicht entschieden
   bool holdActive;   // Halte-Aktion ist aktiv
@@ -925,6 +982,7 @@ void resetTapHold() {
       tapHold[r][c] = { false, false, 0, 0, 0, 0 };
     }
   }
+  resetDeferredQueue();
 }
 
 void tapHoldOnPress(uint8_t r, uint8_t c, uint16_t tapAct, uint16_t holdAct, uint8_t layer, unsigned long now) {
@@ -1125,6 +1183,9 @@ void cancelTapHoldForCombo(uint8_t r, uint8_t c) {
     keySentToHost[r][c] = false;
     dispatchRelease(r, c, d.dtapAction);
   }
+  if (!anyTapHoldPending() && deferredQueue.count > 0) {
+    replayDeferredQueue();
+  }
 }
 
 // Eine andere Taste wurde gedrückt, während Mod-Tap-Tasten noch unentschieden sind:
@@ -1154,6 +1215,18 @@ void resolveAllPendingTapHoldsAsHold() {
   resolvePendingTapHoldsAsHold(NUM_ROWS, NUM_COLS);
 }
 
+// Während einer wartenden Mod-Tap-Taste gepufferte Tastenereignisse abspielen
+void replayDeferredQueue() {
+  if (isReplayingDeferredQueue) return;
+  isReplayingDeferredQueue = true;
+  while (deferredQueue.count > 0 && !anyTapHoldPending()) {
+    DeferredKeyEvent ev;
+    if (!deferredQueuePop(ev)) break;
+    applyMatrixKeyChange(ev.row, ev.col, ev.pressed, ev.time);
+  }
+  isReplayingDeferredQueue = false;
+}
+
 // Gibt true zurück, wenn die Taste vom Tap-Hold-Automaten behandelt wurde.
 // dtapAct != 0: ein Tipp wird nicht sofort gesendet, sondern wartet auf einen möglichen zweiten Tipp.
 bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct = 0) {
@@ -1167,15 +1240,18 @@ bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct 
     k.pending = false;
     if (dtapAct != 0) {
       doubleTap[r][c] = { true, false, k.tapAction, dtapAct, k.layer, k.pressTime, now };
+      if (!anyTapHoldPending() && deferredQueue.count > 0) replayDeferredQueue();
       return true;
     }
     dispatchPress(r, c, k.tapAction, k.layer);
     dispatchRelease(r, c, k.tapAction);
+    if (!anyTapHoldPending() && deferredQueue.count > 0) replayDeferredQueue();
     return true;
   }
   if (k.holdActive) {
     k.holdActive = false;
     dispatchRelease(r, c, k.holdAction);
+    if (!anyTapHoldPending() && deferredQueue.count > 0) replayDeferredQueue();
     return true;
   }
   return false;
@@ -1189,6 +1265,9 @@ void tapHoldTick(unsigned long now) {
       }
     }
   }
+  if (!anyTapHoldPending() && deferredQueue.count > 0) {
+    replayDeferredQueue();
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -1198,6 +1277,14 @@ void tapHoldTick(unsigned long now) {
 // gibt ihre Scan-Zeit mit, damit Tapping-Term und Combo-Fenster die echten Abstände sehen.
 void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long now) {
   if (isPressed) {
+    // In permissiveHold oder tapPreferred nachfolgende Tastendrücke puffern, solange eine Mod-Tap-Taste wartet
+    if (holdTapMode != HOLD_MODE_OTHER_KEY_PRESS && !isReplayingDeferredQueue && anyTapHoldPending()) {
+      if (deferredQueuePush(r, c, true, now)) {
+        return;
+      }
+      resolveAllPendingTapHoldsAsHold();
+      replayDeferredQueue();
+    }
     // Wartende Einzel-Tipps anderer Tasten zuerst senden, damit die Reihenfolge der Zeichen stimmt
     flushDoubleTapsExcept(r, c);
     DoubleTapKey &d = doubleTap[r][c];
@@ -1207,8 +1294,10 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     keyPressTime[r][c] = now;
     keySentToHost[r][c] = false;
     capsWordBuffered[r][c] = false;
-    // Ein weiterer Tastendruck entscheidet offene Mod-Tap-Tasten sofort als Hold
-    resolvePendingTapHoldsAsHold(r, c);
+    // Modus 0 (holdOnOtherKeyPress): Ein weiterer Tastendruck entscheidet offene Mod-Tap-Tasten sofort als Hold
+    if (holdTapMode == HOLD_MODE_OTHER_KEY_PRESS) {
+      resolvePendingTapHoldsAsHold(r, c);
+    }
     uint8_t layer = getActiveLayer();
     if (isSecondTap) {
       d.waiting = false;
@@ -1225,6 +1314,25 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
       dispatchPress(r, c, tapAct, layer);
     }
   } else {
+    // Wenn eine andere Taste losgelassen wird, während eine Mod-Tap-Taste wartet:
+    if (holdTapMode != HOLD_MODE_OTHER_KEY_PRESS && !isReplayingDeferredQueue && anyTapHoldPending() && !tapHold[r][c].pending) {
+      if (deferredQueueHasPress(r, c)) {
+        if (holdTapMode == HOLD_MODE_PERMISSIVE) {
+          // Permissive Hold: verschachteltes Press-Release-Paar innerhalb des Fensters -> Mod-Tap sofort Hold
+          resolveAllPendingTapHoldsAsHold();
+          deferredQueuePush(r, c, false, now);
+          replayDeferredQueue();
+          return;
+        } else if (holdTapMode == HOLD_MODE_TAP_PREFERRED) {
+          // Tap Preferred: Loslassen vor Ablauf des Tapping-Terms löst keinen Hold aus -> Release puffern
+          if (deferredQueuePush(r, c, false, now)) {
+            return;
+          }
+          resolveAllPendingTapHoldsAsHold();
+          replayDeferredQueue();
+        }
+      }
+    }
     DoubleTapKey &d = doubleTap[r][c];
     if (d.active) {
       d.active = false;
@@ -1449,6 +1557,10 @@ void loadKeymapFromNVS() {
     uint16_t tt = preferences.getUShort("tap_term", TAPPING_TERM_MS);
     if (tt >= TAPPING_TERM_MIN_MS && tt <= TAPPING_TERM_MAX_MS) tappingTermMs = tt;
   }
+  if (preferences.isKey("hold_mode")) {
+    uint8_t hm = preferences.getUChar("hold_mode", 0);
+    if (hm <= HOLD_MODE_TAP_PREFERRED) holdTapMode = hm;
+  }
   // Tastenpaare: gespeicherte Liste (auch leer nach CLEAR_PAIRS + SAVE_PAIRS) überschreibt die einkompilierte
   if (preferences.isKey("num_pairs")) {
     uint8_t n = preferences.getUChar("num_pairs", 0);
@@ -1533,8 +1645,8 @@ void loadKeymapFromNVS() {
       }
     }
   }
-  Serial.printf("NVS: Timeouts & Settings geladen: Standby=%u Min, DeepSleep=%u Min, Debounce=%u ms, ComboTO=%u ms, TappingTerm=%u ms, Name='%s'\n",
-    standbyTimeoutMinutes, deepSleepTimeoutMinutes, debounceMs, comboTimeoutMs, tappingTermMs, deviceName.c_str());
+  Serial.printf("NVS: Timeouts & Settings geladen: Standby=%u Min, DeepSleep=%u Min, Debounce=%u ms, ComboTO=%u ms, TappingTerm=%u ms, HoldMode=%u, Name='%s'\n",
+    standbyTimeoutMinutes, deepSleepTimeoutMinutes, debounceMs, comboTimeoutMs, tappingTermMs, holdTapMode, deviceName.c_str());
   preferences.end();
 }
 
@@ -1589,6 +1701,15 @@ bool saveTappingTermToNVS(uint16_t ms) {
   preferences.end();
   if (ok) tappingTermMs = ms;
   Serial.printf("NVS: Tapping-Term %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
+  return ok;
+}
+
+bool saveHoldTapModeToNVS(uint8_t mode) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("hold_mode", mode) > 0;
+  preferences.end();
+  if (ok) holdTapMode = mode;
+  Serial.printf("NVS: Mod-Tap-Modus %s: %u\n", ok ? "gespeichert" : "FEHLER", mode);
   return ok;
 }
 
@@ -1890,6 +2011,13 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_HOLD_MODE ")) {
+    int hm = cmd.substring(14).toInt();
+    if (hm >= 0 && hm <= 2) {
+      sendConfigNotification(saveHoldTapModeToNVS((uint8_t)hm) ? "OK SET_HOLD_MODE " + String(hm) : String("ERR NVS SET_HOLD_MODE"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd == "CLEAR_COMBOS") {
     numCombos = 0;
     sendConfigNotification("OK CLEAR_COMBOS");
@@ -2009,12 +2137,13 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd == "GET_INFO") {
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
-    char buf[448];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"config_mode\":%s",
+    char buf[512];
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
+      (unsigned)holdTapMode,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

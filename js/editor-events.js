@@ -288,6 +288,7 @@ function setupEventListeners() {
       const debounce = clampSetting("debounceMs", parseInt(document.getElementById("debounceInput")?.value, 10));
       const comboTimeout = clampSetting("comboTimeoutMs", parseInt(document.getElementById("comboTimeoutInput")?.value, 10));
       const tappingTerm = clampSetting("tappingTermMs", parseInt(document.getElementById("tappingTermInput")?.value, 10));
+      const holdTapMode = clampSetting("holdTapMode", parseInt(document.getElementById("holdTapModeSelect")?.value, 10));
       const standbyMinutes = clampSetting("standbyTimeoutMinutes", parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10));
       const sleepMinutes = clampSetting("sleepTimeoutMinutes", parseInt(document.getElementById("sleepTimeoutSelect")?.value, 10));
       const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = String(v); };
@@ -295,6 +296,7 @@ function setupEventListeners() {
       setVal("debounceInput", debounce);
       setVal("comboTimeoutInput", comboTimeout);
       setVal("tappingTermInput", tappingTerm);
+      setVal("holdTapModeSelect", holdTapMode);
 
       const oldSettings = JSON.parse(JSON.stringify(currentConfig.settings || {}));
 
@@ -303,6 +305,7 @@ function setupEventListeners() {
         debounceMs: debounce,
         comboTimeoutMs: comboTimeout,
         tappingTermMs: tappingTerm,
+        holdTapMode: holdTapMode,
         standbyTimeoutMinutes: standbyMinutes,
         sleepTimeoutMinutes: sleepMinutes
       };

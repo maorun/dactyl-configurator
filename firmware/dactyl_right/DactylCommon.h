@@ -125,3 +125,11 @@ struct MacroStep {
   uint8_t code;
   uint16_t ms;
 };
+
+// Mod-Tap-Entscheidungsmodi bei überlappendem Tippen (Home-Row Mods)
+enum HoldTapMode : uint8_t {
+  HOLD_MODE_OTHER_KEY_PRESS = 0, // Sofort Hold bei zweiter Taste
+  HOLD_MODE_PERMISSIVE = 1,      // Hold nur bei verschachteltem Press+Release vor Tapping-Term
+  HOLD_MODE_TAP_PREFERRED = 2    // Hold nur nach Ablauf des Tapping-Terms
+};
+#define DEFAULT_HOLD_TAP_MODE HOLD_MODE_OTHER_KEY_PRESS

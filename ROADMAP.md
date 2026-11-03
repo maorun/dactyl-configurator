@@ -29,14 +29,7 @@ No open entry.
 
 ## Priority 4
 
-### Permissive hold and tap-preferred Mod-Tap
-
-- **Rank:** Feature model. Total 17/40 (typing 7, configuration 3, harmony 4, safety 3). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `server.py`, `js/config-model.js`, `index.html`.
-- **Problem:** A Mod-Tap key resolves as hold as soon as any other key is pressed before `tappingTermMs`. Fast rolled typing on home-row modifiers can trigger a modifier instead of two characters.
-- **Goal:** Add a hold-tap mode setting (`holdOnOtherKeyPress`, `permissiveHold`, `tapPreferred`) so a rolled key press resolves as hold only when the second key is both pressed and released within `tappingTermMs` (`permissiveHold`), or only after `tappingTermMs` (`tapPreferred`).
-- **Acceptance test:** Unit tests in `firmware/tests/test_firmware_logic.cpp` verify all three modes for rolled key presses and nested press-release pairs.
+No open entry.
 
 ## Priority 5
 

@@ -13,6 +13,7 @@
 #include "DactylKeycodes.h" // dactylAsciiToHid, KEY_LEFT_SHIFT (implizites Shift großer/gesetzter Zeichen)
 #include "DactylOneShot.h"  // One-Shot-Modifier und Caps Word (Zustand auf dem Master)
 #include "DactylKeyOverride.h" // Tasten-Überschreibungen (Modifier + Taste ergibt eine andere Taste)
+#include "DactylCommon.h"      // HoldTapMode, Aktionscodes, KeyCombo, KeyPair
 #include "DactylVersion.h"  // DACTYL_FW_VERSION (SPLIT_OP_FW_VERSION)
 
 #define SPLIT_ESPNOW_CHANNEL 1
@@ -1355,10 +1356,32 @@ inline bool splitDeferHasPress(const SplitLocalDefer &d) {
   return false;
 }
 
-// Wie splitDeferTakeFlushRequest, aber für HOLD_RESOLVE: nur wenn eine zurückgehaltene Änderung ein Drücken ist. Eine
-// Runde mit reinem Loslassen verbraucht keine Anforderung: ein später folgendes Drücken fordert sie noch an.
-inline bool splitDeferTakeResolveRequest(SplitLocalDefer &d) {
-  if (d.count == 0 || d.resolveSent || !splitDeferHasPress(d)) return false;
+// true, wenn in den zurückgehaltenen Änderungen mindestens eine Taste sowohl gedrückt als auch wieder losgelassen wurde
+inline bool splitDeferHasPressReleasePair(const SplitLocalDefer &d) {
+  for (uint8_t i = 0; i < d.count; i++) {
+    const SplitDeferredKey &k1 = d.items[(d.head + i) % SPLIT_DEFER_SIZE];
+    if (k1.pressed) {
+      for (uint8_t j = i + 1; j < d.count; j++) {
+        const SplitDeferredKey &k2 = d.items[(d.head + j) % SPLIT_DEFER_SIZE];
+        if (!k2.pressed && k2.r == k1.r && k2.c == k1.c) return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Wie splitDeferTakeFlushRequest, aber für HOLD_RESOLVE:
+// In HOLD_MODE_TAP_PREFERRED fordert keine andere Taste HOLD_RESOLVE an.
+// In HOLD_MODE_PERMISSIVE fordert HOLD_RESOLVE erst ein vollständiges Press+Release-Paar an.
+// In HOLD_MODE_OTHER_KEY_PRESS fordert jedes Drücken HOLD_RESOLVE an.
+inline bool splitDeferTakeResolveRequest(SplitLocalDefer &d, uint8_t mode = HOLD_MODE_OTHER_KEY_PRESS) {
+  if (d.count == 0 || d.resolveSent) return false;
+  if (mode == HOLD_MODE_TAP_PREFERRED) return false;
+  if (mode == HOLD_MODE_PERMISSIVE) {
+    if (!splitDeferHasPressReleasePair(d)) return false;
+  } else {
+    if (!splitDeferHasPress(d)) return false;
+  }
   d.resolveSent = true;
   return true;
 }

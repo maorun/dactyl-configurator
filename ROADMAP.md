@@ -35,15 +35,6 @@ No open entry.
 
 These entries need a decision of the maintainer before the work starts.
 
-### Shared matrix constants
-
-- **Rank:** Maintenance model. Total 14/40 (reach 4, safety 5, speed 3, unblocks 2). Effort M. Estimate.
-- **Area:** Tooling.
-- **Code:** `tests/test_side_profiles.js`, `js/side-right.js`, `js/side-left.js`, `server.py`, `firmware/dactyl_right/dactyl_right.ino`.
-- **Decision needed:** `tests/test_side_profiles.js` already checks the profiles against the firmware sources, so the remaining benefit is small.
-- **Goal:** Define pins, sizes and absent keys once. Check them in the web app, in `server.py` and in the firmware.
-- **Acceptance test:** A test fails when one source changes a pin without the shared definition.
-
 ### OTA update over BLE in config mode
 
 - **Rank:** Feature model. Total 12/40 (typing 1, configuration 5, harmony 4, safety 2). Effort L. Estimate.

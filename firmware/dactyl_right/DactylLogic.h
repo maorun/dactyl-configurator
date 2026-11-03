@@ -25,12 +25,14 @@
  *   void sendConfigNotification(String, bool = false);
  */
 
+#include "DactylMatrixConstants.h"
+
 // Physische Config-Mode-Combo (500 ms halten). Rechts: R0C0 + R4C5; links gespiegelt: R0C5 + R4C0
 #ifndef CONFIG_COMBO_R1
-#define CONFIG_COMBO_R1 0
-#define CONFIG_COMBO_C1 0
-#define CONFIG_COMBO_R2 4
-#define CONFIG_COMBO_C2 5
+#define CONFIG_COMBO_R1 RIGHT_CONFIG_COMBO_R1
+#define CONFIG_COMBO_C1 RIGHT_CONFIG_COMBO_C1
+#define CONFIG_COMBO_R2 RIGHT_CONFIG_COMBO_R2
+#define CONFIG_COMBO_C2 RIGHT_CONFIG_COMBO_C2
 #endif
 
 // Gerätename ohne NVS-Eintrag und BLE-Name im Config Mode

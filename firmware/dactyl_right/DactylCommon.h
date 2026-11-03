@@ -4,6 +4,7 @@
  * Vor den Keymaps und vor DactylLogic.h einbinden.
  */
 #include <stdint.h>
+#include "DactylMatrixConstants.h"
 
 // Einschwingzeit des Matrix-Treibers in Mikrosekunden (Row/Col auf LOW treiben, Pegel stabilisieren)
 #define MATRIX_SETTLE_US 10

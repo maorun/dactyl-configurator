@@ -34,11 +34,13 @@
 #define CONFIG_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define CONFIG_MODE_MAGIC          0xDAC7CF60UL
 
-// Gespiegelte Config-Combo: innen oben (R0C5) + außen unten (R4C0)
-#define CONFIG_COMBO_R1 0
-#define CONFIG_COMBO_C1 5
-#define CONFIG_COMBO_R2 4
-#define CONFIG_COMBO_C2 0
+#include "../dactyl_right/DactylMatrixConstants.h"
+
+// Gespiegelte Config-Combo: innen oben (R0C5) + außen unten (R4C0) aus DactylMatrixConstants.h
+#define CONFIG_COMBO_R1 LEFT_CONFIG_COMBO_R1
+#define CONFIG_COMBO_C1 LEFT_CONFIG_COMBO_C1
+#define CONFIG_COMBO_R2 LEFT_CONFIG_COMBO_R2
+#define CONFIG_COMBO_C2 LEFT_CONFIG_COMBO_C2
 #define DEFAULT_DEVICE_NAME "Dactyl Links"
 #define CONFIG_BLE_NAME "Dactyl Config L"
 #define DEVICE_SIDE "L"
@@ -66,9 +68,6 @@ volatile bool enterConfigRequested = false;
 // Sendewarteschlange zum Master und HID-Proxy mit der Schnittstelle von DactylBleComposite
 static SplitSendQueue sendQueue;
 DactylSplitKeyboard bleKeyboard(sendQueue);
-
-const int NUM_ROWS = LEFT_NUM_ROWS;
-const int NUM_COLS = LEFT_NUM_COLS;
 
 // [[[START_SETTINGS]]]
 String deviceName = DEFAULT_DEVICE_NAME;

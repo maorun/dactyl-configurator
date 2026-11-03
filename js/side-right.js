@@ -165,6 +165,17 @@
     "NumpadEnter": { r: 5, c: 2, label: "Enter (2U)" }
   };
 
+  const MC = root.DACTYL_MATRIX_CONSTANTS || (root.Dactyl && root.Dactyl.DACTYL_MATRIX_CONSTANTS);
+  const R_CONST = MC ? MC.RIGHT : {
+    rowPins: [13, 14, 27, 26, 33, 32],
+    colPins: [23, 19, 18, 17, 16, 4, 25],
+    absentKeys: ["4_0", "5_5"],
+    configCombo: [{ r: 0, c: 0 }, { r: 4, c: 5 }],
+    comboLabel: "R4C5 + R0C0"
+  };
+  const rowColors = ["Gelb", "Orange", "Grün", "Braun", "Blau", "Lila"];
+  const colColors = ["Gelb", "Orange", "Grün", "Braun", "Blau", "Lila", "Rot"];
+
   root.Dactyl.registerSideProfile({
     id: "R",
     // Master: hält die BLE-HID-Verbindung zum Mac; Firmware ohne DEVICE_INFO.side ist immer der Master
@@ -172,9 +183,9 @@
     label: "Rechte Hand",
     bleName: "Dactyl Config",
     deviceName: "Dactyl Keyboard",
-    configCombo: [{ r: 0, c: 0 }, { r: 4, c: 5 }],
-    comboLabel: "R4C5 + R0C0",
-    absentKeys: ["4_0", "5_5"],
+    configCombo: R_CONST.configCombo,
+    comboLabel: R_CONST.comboLabel,
+    absentKeys: R_CONST.absentKeys,
     // Die rechte Vorlage hat auf R5C5 historisch eine Aktion; sie bleibt ohne Wirkung (wie server.py)
     strictAbsentKeys: false,
     presets,
@@ -194,15 +205,8 @@
       { r: 5, c: 3, col: "2", row: "2 / span 2", isTall: true, defaultLabel: "Space (2U)" },
       { r: 5, c: 2, col: "3", row: "2 / span 2", isTall: true, defaultLabel: "Enter (2U)" }
     ],
-    rowWires: [
-      { gpio: 13, color: "Gelb" }, { gpio: 14, color: "Orange" }, { gpio: 27, color: "Grün" },
-      { gpio: 26, color: "Braun" }, { gpio: 33, color: "Blau" }, { gpio: 32, color: "Lila" }
-    ],
-    colWires: [
-      { gpio: 23, color: "Gelb" }, { gpio: 19, color: "Orange" }, { gpio: 18, color: "Grün" },
-      { gpio: 17, color: "Braun" }, { gpio: 16, color: "Blau" }, { gpio: 4, color: "Lila" },
-      { gpio: 25, color: "Rot" }
-    ],
+    rowWires: R_CONST.rowPins.map((gpio, idx) => ({ gpio, color: rowColors[idx] || "" })),
+    colWires: R_CONST.colPins.map((gpio, idx) => ({ gpio, color: colColors[idx] || "" })),
     diodeHint: "Dioden: Kathode zur Zeile",
     // Hinweis zum Standby-Timeout (README "Power Management": Schätzung nach ESP32-Datenblatt)
     standbyHint: "Drosselt die CPU auf 80 MHz und verlangsamt den Matrix-Scan. Spart laut Datenblatt (CPU ohne Funk) ca. 10–37 mA (Schätzung, nicht gemessen); der Funk bleibt an, die Tastatur tippt bei Berührung sofort weiter.",

@@ -7,10 +7,11 @@
 (function (root) {
   "use strict";
 
-  const NUM_ROWS = 6;
-  const NUM_COLS = 7;
-  const FINGER_ROWS = 5;
-  const FINGER_COLS = 6;
+  const MC = root.DACTYL_MATRIX_CONSTANTS;
+  const NUM_ROWS = (MC && MC.NUM_ROWS) || 6;
+  const NUM_COLS = (MC && MC.NUM_COLS) || 7;
+  const FINGER_ROWS = (MC && MC.FINGER_ROWS) || 5;
+  const FINGER_COLS = (MC && MC.FINGER_COLS) || 6;
 
   // Die Profile registrieren sich selbst (js/side-right.js, js/side-left.js; Reihenfolge in index.html)
   const SIDE_PROFILES = {};

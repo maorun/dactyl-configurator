@@ -28,15 +28,26 @@
     return [base, nav, emptyLayer(), emptyLayer(), emptyLayer(), emptyLayer(), emptyLayer(), emptyLayer()];
   }
 
+  const MC = root.DACTYL_MATRIX_CONSTANTS || (root.Dactyl && root.Dactyl.DACTYL_MATRIX_CONSTANTS);
+  const L_CONST = MC ? MC.LEFT : {
+    rowPins: [23, 19, 18, 17, 16, 4],
+    colPins: [13, 14, 27, 26, 33, 32, 25],
+    absentKeys: ["4_5", "5_0"],
+    configCombo: [{ r: 0, c: 5 }, { r: 4, c: 0 }],
+    comboLabel: "R0C5 + R4C0"
+  };
+  const leftRowColors = ["Gelb", "Orange", "Grün", "Braun", "Blau", "Lila"];
+  const leftColColors = ["Lila", "Braun", "Grün", "Orange", "Gelb", "Rot", "Blau"];
+
   root.Dactyl.registerSideProfile({
     id: "L",
     label: "Linke Hand",
     bleName: "Dactyl Config L",
     deviceName: "Dactyl Links",
     // Gespiegelt: innen oben + außen unten (CONFIG_COMBO_* in dactyl_left.ino)
-    configCombo: [{ r: 0, c: 5 }, { r: 4, c: 0 }],
-    comboLabel: "R0C5 + R4C0",
-    absentKeys: ["4_5", "5_0"],
+    configCombo: L_CONST.configCombo,
+    comboLabel: L_CONST.comboLabel,
+    absentKeys: L_CONST.absentKeys,
     // Fehlende Tasten dürfen keine Aktion tragen (server.py lehnt sie für links mit HTTP 400 ab)
     strictAbsentKeys: true,
     // Layout-Presets sind Belegungen der rechten Hand; links belegten sie fehlende Tasten (R5C0)
@@ -56,15 +67,8 @@
       { r: 5, c: 2, col: "2", row: "2 / span 2", isTall: true, defaultLabel: "Del (2U)" },
       { r: 5, c: 3, col: "1", row: "2 / span 2", isTall: true, defaultLabel: "Ctrl (2U)" }
     ],
-    rowWires: [
-      { gpio: 23, color: "Gelb" }, { gpio: 19, color: "Orange" }, { gpio: 18, color: "Grün" },
-      { gpio: 17, color: "Braun" }, { gpio: 16, color: "Blau" }, { gpio: 4, color: "Lila" }
-    ],
-    colWires: [
-      { gpio: 13, color: "Lila" }, { gpio: 14, color: "Braun" }, { gpio: 27, color: "Grün" },
-      { gpio: 26, color: "Orange" }, { gpio: 33, color: "Gelb" }, { gpio: 32, color: "Rot" },
-      { gpio: 25, color: "Blau" }
-    ],
+    rowWires: L_CONST.rowPins.map((gpio, idx) => ({ gpio, color: leftRowColors[idx] || "" })),
+    colWires: L_CONST.colPins.map((gpio, idx) => ({ gpio, color: leftColColors[idx] || "" })),
     diodeHint: "Dioden: Kathode zur Spalte",
     // Links bleibt die CPU im Standby auf 240 MHz: ein Taktwechsel bei laufendem Wi-Fi stört ESP-NOW
     standbyHint: "Verlangsamt nur den Matrix-Scan; die CPU bleibt auf 240 MHz (ein Taktwechsel stört ESP-NOW). Die Ersparnis ist gering; der Funk bleibt an.",

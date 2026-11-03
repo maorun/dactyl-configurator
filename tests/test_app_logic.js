@@ -176,6 +176,11 @@ test("Config-Normalisierung: Namen, Einstellungen und Zellen werden bereinigt", 
   assert.strictEqual(n.layerNames[1], "Nav & Pfeile");
   assert.strictEqual(n.settings.debounceMs, 1);
   assert.strictEqual(n.settings.tappingTermMs, 200);
+  assert.strictEqual(n.settings.holdTapMode, 0);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 1 } }, R).settings.holdTapMode, 1);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 2 } }, R).settings.holdTapMode, 2);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 99 } }, R).settings.holdTapMode, 2);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: -1 } }, R).settings.holdTapMode, 0);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { tappingTermMs: 900 } }, R).settings.tappingTermMs, 500);
   assert.strictEqual(n.settings.deviceName, "Dactyl");
   assert.strictEqual(n.layers[0][0][0].label, "");
@@ -1788,8 +1793,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 6);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM"]);
+  assert.strictEqual(cmds.length, 7);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE"]);
 });
 
 asyncTests.push(["Sync: Text über dem Balken zählt die übertragenen Schritte", async () => {
@@ -1853,6 +1858,16 @@ asyncTests.push(["Sync: Firmware ohne SET_TAPPING_TERM bricht den Sync nicht ab"
   await strict.w.write();
   assert.ok(!strict.sent.some(c => c.startsWith("SET_K ")));
   assert.ok(strict.toasts.some(t => t.includes("Fehler beim Übertragen")));
+}]);
+
+asyncTests.push(["Sync: Firmware ohne SET_HOLD_MODE bricht den Sync nicht ab", async () => {
+  const { w, toasts, sent } = fullSyncHarness(cmd =>
+    cmd.startsWith("SET_HOLD_MODE") ? `ERR UNKNOWN ${cmd}` : okReply(cmd));
+  await w.write();
+  assert.ok(sent.some(c => c.startsWith("SET_K ")));
+  assert.ok(sent.includes("SAVE_PAIRS"));
+  assert.ok(toasts.some(t => t.includes("SET_HOLD_MODE") && t.includes("flashen")));
+  assert.ok(toasts.some(t => t.includes("Vollständige Konfiguration")));
 }]);
 
 asyncTests.push(["Sync: Makros gehen als CLEAR_MACROS, ADD_MACRO, ADD_MACRO_STEP und SAVE_MACROS", async () => {

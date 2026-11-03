@@ -9,10 +9,12 @@ const NUM_ROWS = 6;
 const NUM_COLS = 7;
 const MAX_COMBOS = 16;
 const MAX_NAME_LENGTH = 31;
+const DEFAULT_HOLD_TAP_MODE = 0;
 const SETTINGS_RANGES = {
   debounceMs: [1, 50, 5],
   comboTimeoutMs: [10, 200, 40],
   tappingTermMs: [100, 500, 200],
+  holdTapMode: [0, 2, 0],
   standbyTimeoutMinutes: [0, 120, 5],
   sleepTimeoutMinutes: [0, 240, 60]
 };
@@ -535,6 +537,7 @@ function normalizeConfig(cfg, profile) {
     debounceMs: clampSetting("debounceMs", s.debounceMs ?? 5),
     comboTimeoutMs: clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40),
     tappingTermMs: clampSetting("tappingTermMs", s.tappingTermMs ?? 200),
+    holdTapMode: clampSetting("holdTapMode", s.holdTapMode ?? 0),
     standbyTimeoutMinutes: clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5),
     sleepTimeoutMinutes: clampSetting("sleepTimeoutMinutes", s.sleepTimeoutMinutes ?? 60)
   };

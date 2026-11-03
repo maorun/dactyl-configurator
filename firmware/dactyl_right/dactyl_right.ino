@@ -110,6 +110,7 @@ String deviceName = "Dactyl Keyboard";
 uint8_t debounceMs = 5;
 uint16_t comboTimeoutMs = 40;
 uint16_t tappingTermMs = 200;
+uint8_t holdTapMode = 0;
 uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, gedrosselter Scan, BLE bleibt an)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
 // [[[END_SETTINGS]]]
@@ -941,7 +942,7 @@ void loop() {
     // lassen (kein Retry, nach SPLIT_TAP_FLUSH_TIMEOUT_MS führt der Master die Taste ohnehin aus)
     // HOLD_RESOLVE nur für ein Drücken (wie die gleiche Hälfte): ein Loslassen entscheidet nichts. Die Anforderung für
     // TAP_FLUSH (Zeichenreihenfolge) bleibt für jede zurückgehaltene Änderung.
-    if (splitActivityPeerReady && leftHoldPendingNow() && splitDeferTakeResolveRequest(splitLocalDefer)) {
+    if (splitActivityPeerReady && leftHoldPendingNow() && splitDeferTakeResolveRequest(splitLocalDefer, holdTapMode)) {
       SplitHidEvent resolveEv = makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE);
       esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&resolveEv, sizeof(resolveEv));
     }

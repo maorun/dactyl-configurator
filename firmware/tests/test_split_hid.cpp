@@ -2688,6 +2688,21 @@ TEST(test_resolve_request_only_for_a_held_press) {
   // Ohne zurückgehaltene Änderung gibt es nichts anzufordern
   while (splitDeferPop(d, k)) {}
   assert(!splitDeferTakeResolveRequest(d));
+
+  // Hold-Tap-Modi: HOLD_MODE_TAP_PREFERRED fordert HOLD_RESOLVE nie an
+  splitDeferReset(d);
+  assert(splitDeferPush(d, 2, 2, true, 400));
+  assert(splitDeferPush(d, 2, 2, false, 420));
+  assert(!splitDeferTakeResolveRequest(d, HOLD_MODE_TAP_PREFERRED));
+
+  // HOLD_MODE_PERMISSIVE: nur Drücken reicht noch nicht
+  splitDeferReset(d);
+  assert(splitDeferPush(d, 2, 2, true, 500));
+  assert(!splitDeferTakeResolveRequest(d, HOLD_MODE_PERMISSIVE));
+  // Erst nach dem Loslassen der gleichen Taste liegt ein verschachteltes Paar vor
+  assert(splitDeferPush(d, 2, 2, false, 520));
+  assert(splitDeferTakeResolveRequest(d, HOLD_MODE_PERMISSIVE));
+  assert(!splitDeferTakeResolveRequest(d, HOLD_MODE_PERMISSIVE));
 }
 
 TEST(test_left_hold_pending_does_not_hold_master_keys_behind_a_left_press) {

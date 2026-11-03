@@ -288,7 +288,8 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_DEV_NAME ${sanitizeCommandText(s.deviceName, profile.deviceName)}`, ack: "SET_DEV_NAME" },
     { cmd: `SET_DEBOUNCE ${clampSetting("debounceMs", s.debounceMs ?? 5)}`, ack: "SET_DEBOUNCE" },
     { cmd: `SET_COMBO_TIMEOUT ${clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40)}`, ack: "SET_COMBO_TIMEOUT" },
-    { cmd: `SET_TAPPING_TERM ${clampSetting("tappingTermMs", s.tappingTermMs ?? 200)}`, ack: "SET_TAPPING_TERM", optional: true }
+    { cmd: `SET_TAPPING_TERM ${clampSetting("tappingTermMs", s.tappingTermMs ?? 200)}`, ack: "SET_TAPPING_TERM", optional: true },
+    { cmd: `SET_HOLD_MODE ${clampSetting("holdTapMode", s.holdTapMode ?? 0)}`, ack: "SET_HOLD_MODE", optional: true }
   ];
 }
 

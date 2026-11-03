@@ -70,7 +70,7 @@
     standbyHint: "Verlangsamt nur den Matrix-Scan; die CPU bleibt auf 240 MHz (ein Taktwechsel stört ESP-NOW). Die Ersparnis ist gering; der Funk bleibt an.",
     heatmapStorageKey: "dactyl_key_heatmap_L_v1",
     defaultConfig: {
-      settings: { deviceName: "Dactyl Links", debounceMs: 5, comboTimeoutMs: 40, standbyTimeoutMinutes: 5, sleepTimeoutMinutes: 60 },
+      settings: { deviceName: "Dactyl Links", debounceMs: 5, comboTimeoutMs: 40, holdTapMode: 0, standbyTimeoutMinutes: 5, sleepTimeoutMinutes: 60 },
       layers: leftDefaultLayers(),
       combos: [],
       keyPairs: [],

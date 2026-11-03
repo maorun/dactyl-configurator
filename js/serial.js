@@ -380,6 +380,10 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("tappingTermInput", info.tapping_term_ms);
         if (cfg.settings) cfg.settings.tappingTermMs = info.tapping_term_ms;
       }
+      if (info.hold_tap_mode !== undefined) {
+        setInput("holdTapModeSelect", info.hold_tap_mode);
+        if (cfg.settings) cfg.settings.holdTapMode = info.hold_tap_mode;
+      }
       if (info.name && !info.name.includes("Config")) {
         setInput("deviceNameInput", info.name);
         if (cfg.settings) cfg.settings.deviceName = info.name;

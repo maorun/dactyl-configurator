@@ -75,6 +75,7 @@ String deviceName = DEFAULT_DEVICE_NAME;
 uint8_t debounceMs = 5;
 uint16_t comboTimeoutMs = 40;
 uint16_t tappingTermMs = 200;
+uint8_t holdTapMode = 0;
 uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (gedrosselter Scan, CPU bleibt 240 MHz)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
 // [[[END_SETTINGS]]]
@@ -795,7 +796,7 @@ void loop() {
     // Eine Taste wurde zurückgehalten: dem Master einmal sagen, dass er seine offenen Mod-Tap-Tasten jetzt entscheiden
     // soll (kein Retry, nach SPLIT_TAP_FLUSH_TIMEOUT_MS führt links die Taste ohnehin aus)
     // Nur für ein Drücken: ein Loslassen entscheidet die offene Taste des Masters nicht (wie die gleiche Hälfte)
-    if (splitDeferTakeResolveRequest(leftDefer)) {
+    if (splitDeferTakeResolveRequest(leftDefer, holdTapMode)) {
       if (!queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE))) splitDeferRequestResolveAgain(leftDefer);
     }
 

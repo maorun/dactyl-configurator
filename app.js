@@ -443,6 +443,7 @@ function applySettingsToInputs(settings) {
   setVal("debounceInput", settings.debounceMs);
   setVal("comboTimeoutInput", settings.comboTimeoutMs);
   setVal("tappingTermInput", settings.tappingTermMs);
+  setVal("holdTapModeSelect", settings.holdTapMode ?? 0);
   setVal("standbyTimeoutSelect", settings.standbyTimeoutMinutes);
   setVal("sleepTimeoutSelect", settings.sleepTimeoutMinutes);
 }

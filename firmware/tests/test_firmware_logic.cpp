@@ -8,40 +8,13 @@
 #define NUM_ROWS 6
 #define NUM_COLS 7
 
-#define ACT_MO_0 0x100
-#define ACT_MO_1 0x101
-#define ACT_MO_2 0x102
-#define ACT_TG_0 0x110
-#define ACT_TG_1 0x111
-#define ACT_LAYER_UP 0x118
-#define ACT_LAYER_DOWN 0x119
-#define ACT_MOUSE_LEFT       0x130
-#define ACT_MOUSE_RIGHT      0x131
-#define ACT_MOUSE_MIDDLE     0x132
-#define ACT_MOUSE_WHEEL_UP   0x133
-#define ACT_MOUSE_WHEEL_DOWN 0x134
-#define ACT_MOUSE_UP         0x135
-#define ACT_MOUSE_DOWN       0x136
-#define ACT_MOUSE_LEFT_MOVE  0x137
-#define ACT_MOUSE_RIGHT_MOVE 0x138
+#include "../dactyl_right/DactylCommon.h"
 
-#define MAX_COMBOS 16
 #define CONFIG_MODE_MAGIC 0xDAC7CF60UL
 // Im Test änderbar, um einen Flash aus der App (ID != 0) zu simulieren
 static uint32_t testDefaultsId = 0;
 #define KEYMAP_DEFAULTS_ID testDefaultsId
 
-struct KeyCombo {
-  uint8_t r1, c1;
-  uint8_t r2, c2;
-  uint8_t behavior; // 0 = KEY_PRESS, 1 = MODIFIER_HOLD, 2 = LAYER_TOGGLE
-  uint16_t action;
-};
-
-struct ComboRuntime {
-  bool active;
-  unsigned long lastReleaseTime;
-};
 static ComboRuntime comboRuntime[MAX_COMBOS];
 
 static uint16_t KEYMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
@@ -67,35 +40,18 @@ static String deviceName = "Dactyl Keyboard";
 static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
 static uint16_t tappingTermMs = 200;
+static uint8_t holdTapMode = 0;
 static uint32_t standbyTimeoutMinutes = 5;
 static uint32_t deepSleepTimeoutMinutes = 60;
 
 static uint8_t numCombos = 0;
 static KeyCombo userCombos[MAX_COMBOS];
 
-#define ACT_KEY_PAIR_BASE 0x140
 // Umlaut-Aktion (wie DactylCommon.h)
-#define ACT_UMLAUT_BASE      0x150
-#define ACT_UMLAUT_AE        0x150
-#define ACT_UMLAUT_OE        0x151
-#define ACT_UMLAUT_UE        0x152
-#define ACT_UMLAUT_AE_UPPER  0x153
-#define ACT_UMLAUT_OE_UPPER  0x154
-#define ACT_UMLAUT_UE_UPPER  0x155
-#define ACT_UMLAUT_SZ        0x156
 #define NUM_UMLAUT_ACTIONS   7
 // One-Shot-Modifier und Caps Word (wie DactylCommon.h)
-#define ACT_ONE_SHOT_BASE    0x160
-#define ACT_OSM_LCTRL        0x160
-#define ACT_OSM_LSHIFT       0x161
 #define NUM_ONE_SHOT_ACTIONS 8
-#define ACT_CAPS_WORD        0x168
-#define ACT_REPEAT           0x169
-#define MAX_KEY_PAIRS 16
-struct KeyPair {
-  uint8_t first;
-  uint8_t second;
-};
+
 static uint8_t numKeyPairs = 0;
 static KeyPair userKeyPairs[MAX_KEY_PAIRS];
 
@@ -105,20 +61,6 @@ static KeyPair userKeyPairs[MAX_KEY_PAIRS];
 static uint8_t numKeyOverrides = 0;
 static KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES];
 
-// Makros (wie DactylCommon.h)
-#define ACT_MACRO_BASE      0x170
-#define MAX_MACROS          16
-#define MAX_MACRO_STEPS     32
-#define MACRO_MAX_PAUSE_MS  5000
-#define MACRO_STEP_TAP      1
-#define MACRO_STEP_DOWN     2
-#define MACRO_STEP_UP       3
-#define MACRO_STEP_PAUSE    4
-struct MacroStep {
-  uint8_t type;
-  uint8_t code;
-  uint16_t ms;
-};
 static uint8_t numMacros = 0;
 static uint8_t macroLengths[MAX_MACROS] = {0};
 static MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS];
@@ -219,6 +161,7 @@ void resetState() {
   // Globale Settings und NVS-Mock zurücksetzen, damit Tests unabhängig von ihrer Reihenfolge sind
   comboTimeoutMs = 40;
   tappingTermMs = 200;
+  holdTapMode = 0;
   debounceMs = 5;
   standbyTimeoutMinutes = 5;
   deepSleepTimeoutMinutes = 60;
@@ -4004,6 +3947,156 @@ TEST(test_ble_conn_param_retry_on_failure) {
   // Now that it succeeded, next call is suppressed
   mockKbd.setStandbyMode(true);
   assert(mockKbd.connParamRequests.size() == 2);
+}
+
+TEST(test_hold_tap_mode_hold_on_other_key_press) {
+  resetState();
+  holdTapMode = 0; // HOLD_MODE_OTHER_KEY_PRESS
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+
+  // Rolled typing: A down -> B down -> A up -> B up (all within tapping term)
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000); // Mod-Tap A down
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050); // B down
+  setMillis(1080);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1080); // A up
+  setMillis(1120);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1120); // B up
+
+  // In Mode 0: B down immediately forced A to Hold (Ctrl + B)
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL);
+  assert(bleKeyboard.pressHistory[1] == 'b');
+}
+
+TEST(test_hold_tap_mode_permissive_hold) {
+  resetState();
+  holdTapMode = 1; // HOLD_MODE_PERMISSIVE
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+
+  // Fall 1: Rolled typing: A down -> B down -> A up (< tappingTermMs) -> B up
+  // Weil A vor dem Loslassen von B losgelassen wurde, entscheidet A als Tap ('a')!
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+  setMillis(1080);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1080);
+  setMillis(1120);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1120);
+
+  // Erwartet: Tap 'a', dann Tap 'b' (kein Ctrl!)
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'a');
+  assert(bleKeyboard.pressHistory[1] == 'b');
+
+  // Fall 2: Verschachteltes Press-Release: A down -> B down -> B up (< tappingTermMs) -> A up
+  // Weil B während A vollständig gedrückt und losgelassen wurde, entscheidet A als Hold (Ctrl + B)!
+  resetState();
+  holdTapMode = 1;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+
+  setMillis(2000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 2000);
+  setMillis(2050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 2050);
+  setMillis(2080);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 2080);
+  setMillis(2150);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 2150);
+
+  // Erwartet: Ctrl down, dann 'b' down, dann 'b' up, dann Ctrl up
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL);
+  assert(bleKeyboard.pressHistory[1] == 'b');
+}
+
+TEST(test_hold_tap_mode_tap_preferred) {
+  resetState();
+  holdTapMode = 2; // HOLD_MODE_TAP_PREFERRED
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+
+  // Fall 1: Verschachteltes Press-Release innerhalb des Tapping-Terms:
+  // A down -> B down -> B up -> A up (alles vor tappingTermMs 200ms)
+  // In tap-preferred löst andere Taste vor Term NIE Hold aus -> Tap 'a' und Tap 'b'!
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+  setMillis(1080);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1080);
+  setMillis(1120);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+
+  // Erwartet: 'a' gefolgt von 'b' (kein Ctrl!)
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'a');
+  assert(bleKeyboard.pressHistory[1] == 'b');
+
+  // Fall 2: Halten über Tapping-Term hinaus:
+  // A down bei 2000, B down bei 2050, B up bei 2080.
+  // Zeit läuft ab (2200 >= 2000 + 200). Jetzt entscheidet A als Hold (Ctrl)!
+  resetState();
+  holdTapMode = 2;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+
+  setMillis(2000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 2000);
+  setMillis(2050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 2050);
+  setMillis(2080);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 2080);
+
+  // Vor Ablauf noch nichts gesendet
+  assert(bleKeyboard.pressHistory.empty());
+
+  // Nach Zeitablauf wird A zu Ctrl und die gepufferten B-Events laufen unter Ctrl
+  setMillis(2200);
+  processDeferredKeys(2200);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL);
+  assert(bleKeyboard.pressHistory[1] == 'b');
+
+  setMillis(2300);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 2300);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_hold_tap_mode_commands_and_nvs) {
+  resetState();
+  handleConfigCommand("SET_HOLD_MODE 1", false);
+  assert(mockChar.value == "OK SET_HOLD_MODE 1");
+  assert(holdTapMode == 1);
+
+  handleConfigCommand("SET_HOLD_MODE 2", false);
+  assert(mockChar.value == "OK SET_HOLD_MODE 2");
+  assert(holdTapMode == 2);
+
+  handleConfigCommand("SET_HOLD_MODE 0", false);
+  assert(mockChar.value == "OK SET_HOLD_MODE 0");
+  assert(holdTapMode == 0);
+
+  handleConfigCommand("SET_HOLD_MODE 3", false);
+  assert(mockChar.value == "ERR ARGS SET_HOLD_MODE 3");
+  assert(holdTapMode == 0);
+
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"hold_tap_mode\":0") != std::string::npos);
+
+  Preferences::uintStore["hold_mode"] = 1;
+  loadKeymapFromNVS();
+  assert(holdTapMode == 1);
 }
 
 int main() {

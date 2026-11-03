@@ -35,15 +35,6 @@ No open entry.
 
 These entries need a decision of the maintainer before the work starts.
 
-### On-screen keyboard as picker
-
-- **Rank:** Feature model. Total 14/40 (typing 0, configuration 3, harmony 4, safety 7). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/editor.js` (`applySelectFilter`).
-- **Decision needed:** The search field above each action select already covers most of the need. Decide if a second picker is worth the effort.
-- **Goal:** Offer an on-screen keyboard as an alternative to the `<select>`.
-- **Acceptance test:** A test shows that a click on the on-screen key sets the same action as the select.
-
 ### Shared matrix constants
 
 - **Rank:** Maintenance model. Total 14/40 (reach 4, safety 5, speed 3, unblocks 2). Effort M. Estimate.

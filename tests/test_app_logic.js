@@ -54,7 +54,10 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
              moveKeySelection, ARROW_KEY_DIRECTIONS,
              createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES,
-             buildLayerOverview };`, ctx);
+             buildLayerOverview,
+             ON_SCREEN_KEYBOARD_ROWS: typeof ON_SCREEN_KEYBOARD_ROWS !== "undefined" ? ON_SCREEN_KEYBOARD_ROWS : undefined,
+             KEYCODE_OPTIONS: typeof KEYCODE_OPTIONS !== "undefined" ? KEYCODE_OPTIONS : undefined,
+             pickActionFromOnScreenKey: typeof pickActionFromOnScreenKey !== "undefined" ? pickActionFromOnScreenKey : undefined };`, ctx);
 const api = ctx.api;
 const R = api.SIDE_PROFILES.R;
 const L = api.SIDE_PROFILES.L;
@@ -4384,6 +4387,138 @@ test("Layer overview: buildLayerOverview wirft keinen Fehler bei null oder undef
   assert.doesNotThrow(() => api.buildLayerOverview(undefined));
   const res = api.buildLayerOverview(null, api.SIDE_PROFILES.R);
   assert.strictEqual(res.length, 8);
+});
+
+test("On-Screen-Keyboard: Alle Action-Codes in ON_SCREEN_KEYBOARD_ROWS existieren in KEYCODE_OPTIONS", () => {
+  assert.ok(Array.isArray(api.ON_SCREEN_KEYBOARD_ROWS), "ON_SCREEN_KEYBOARD_ROWS muss ein Array sein");
+  assert.ok(api.ON_SCREEN_KEYBOARD_ROWS.length > 0, "ON_SCREEN_KEYBOARD_ROWS darf nicht leer sein");
+  assert.ok(Array.isArray(api.KEYCODE_OPTIONS), "KEYCODE_OPTIONS muss ein Array sein");
+  assert.ok(api.KEYCODE_OPTIONS.length > 0, "KEYCODE_OPTIONS darf nicht leer sein");
+
+  const validCodes = new Set(api.KEYCODE_OPTIONS.map(opt => typeof opt === "string" ? opt : opt.value));
+  let totalKeys = 0;
+  for (let r = 0; r < api.ON_SCREEN_KEYBOARD_ROWS.length; r++) {
+    const row = api.ON_SCREEN_KEYBOARD_ROWS[r];
+    assert.ok(Array.isArray(row), `Zeile ${r} in ON_SCREEN_KEYBOARD_ROWS muss ein Array sein`);
+    for (const key of row) {
+      assert.ok(key && typeof key.code === "string", `Ungültiger Tasteneintrag in Zeile ${r}: ${JSON.stringify(key)}`);
+      assert.ok(validCodes.has(key.code), `Aktions-Code "${key.code}" (${key.label}) existiert nicht in KEYCODE_OPTIONS`);
+      totalKeys++;
+    }
+  }
+  assert.ok(totalKeys >= 50, `Mindestens 50 On-Screen-Tasten erwartet, gefunden: ${totalKeys}`);
+});
+
+test("On-Screen-Keyboard: Klick auf Taste setzt denselben Action-Code in primaryActionSelect, holdActionSelect, comboActionSelect, macroStepCode", () => {
+  assert.strictEqual(typeof api.pickActionFromOnScreenKey, "function", "pickActionFromOnScreenKey muss eine Funktion sein");
+
+  const targets = ["primaryActionSelect", "holdActionSelect", "comboActionSelect", "macroStepCode"];
+  for (const targetId of targets) {
+    const select = {
+      id: targetId,
+      value: "NONE",
+      listeners: {},
+      dataset: {},
+      addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+      dispatchEvent(ev) { (this.listeners[ev.type] || []).forEach(fn => fn(ev)); },
+      fire(type, ev = {}) { (this.listeners[type] || []).forEach(fn => fn({ target: this, ...ev })); }
+    };
+
+    let changeFired = false;
+    select.addEventListener("change", () => { changeFired = true; });
+
+    select.dataset.filterBlocked = "true";
+    const filterInput = { value: "filterQuery" };
+    const fakeDoc = {
+      querySelector: sel => sel.includes(targetId) ? filterInput : null,
+      getElementById: id => id === targetId ? select : null
+    };
+
+    api.pickActionFromOnScreenKey(select, "KEY_C", { document: fakeDoc });
+
+    assert.strictEqual(select.value, "KEY_C", `${targetId}: select.value muss KEY_C sein`);
+    assert.strictEqual(changeFired, true, `${targetId}: change-Event muss ausgelöst werden`);
+    assert.strictEqual(filterInput.value, "", `${targetId}: Suchfilter muss zurückgesetzt werden`);
+  }
+
+  // Dynamisches Makro-Schritt-Select (.macro-step-code ohne feste ID)
+  const dynamicSelect = {
+    className: "form-control macro-step-code",
+    value: "NONE",
+    listeners: {},
+    dataset: { filterFor: "macroStepCode" },
+    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+    dispatchEvent(ev) { (this.listeners[ev.type] || []).forEach(fn => fn(ev)); }
+  };
+  let dynamicChangeFired = false;
+  dynamicSelect.addEventListener("change", () => { dynamicChangeFired = true; });
+  api.pickActionFromOnScreenKey(dynamicSelect, "KEY_ENTER");
+  assert.strictEqual(dynamicSelect.value, "KEY_ENTER", "dynamischer macro-step-code muss KEY_ENTER erhalten");
+  assert.strictEqual(dynamicChangeFired, true, "dynamischer macro-step-code muss change auslösen");
+});
+
+test("On-Screen-Keyboard: pickActionFromOnScreenKey ergänzt fehlende Option bei dynamischen Selects", () => {
+  // Simuliere HTMLSelectElement-Verhalten: ohne passende Option bleibt value leer
+  const opts = [{ value: "KEY_A", textContent: "KEY_A" }];
+  const select = {
+    tagName: "SELECT",
+    options: opts,
+    _val: "KEY_A",
+    get value() { return this._val; },
+    set value(v) {
+      const match = this.options.find(o => o.value === v);
+      this._val = match ? match.value : "";
+    },
+    appendChild(opt) { this.options.push(opt); return opt; },
+    listeners: {},
+    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+    dispatchEvent(ev) { (this.listeners[ev.type] || []).forEach(fn => fn(ev)); }
+  };
+
+  // Vor dem Fix würde pickActionFromOnScreenKey die Option nicht anfügen und select.value würde ""
+  api.pickActionFromOnScreenKey(select, "KEY_X");
+  assert.strictEqual(select.value, "KEY_X", "select.value muss KEY_X sein, nicht leer");
+  assert.ok(select.options.some(o => o.value === "KEY_X"), "Option für KEY_X muss vorhanden sein");
+});
+
+test("On-Screen-Keyboard: Suchhinweis wird nach select-picker-row eingefügt", () => {
+  let insertedAfter = null;
+  const pickerRow = {
+    tagName: "DIV",
+    className: "select-picker-row",
+    parentElement: { querySelector: () => null },
+    insertAdjacentElement(pos, el) { insertedAfter = this; }
+  };
+  const select = {
+    id: "primaryActionSelect",
+    closest: sel => (sel === ".select-picker-row" ? pickerRow : null),
+    parentElement: pickerRow,
+    options: [{ value: "KEY_A", textContent: "A", hidden: false }],
+    children: [],
+    dataset: {},
+    selectedIndex: 0,
+    insertAdjacentElement(pos, el) { insertedAfter = this; }
+  };
+  const input = { value: "filterQuery" };
+  const fakeDoc = {
+    querySelector: sel => sel.includes("primaryActionSelect") ? input : null,
+    getElementById: id => (id === "primaryActionSelect" ? select : null),
+    createElement: () => ({ className: "", dataset: {}, style: {} })
+  };
+
+  const fn = section("js/editor.js", "function applySelectFilter", "function updateFilterBlockedButton");
+  const ctx = {
+    document: fakeDoc,
+    selectFilterHint: api.selectFilterHint,
+    filterOptionNodes: api.filterOptionNodes,
+    OPTIONAL_ACTION_PREFIX: api.OPTIONAL_ACTION_PREFIX,
+    FILTER_BLOCKS_BUTTON: { primaryActionSelect: "btnApplyKey" },
+    updateFilterBlockedButton: () => {}
+  };
+  vm.createContext(ctx);
+  vm.runInContext(fn, ctx);
+  ctx.applySelectFilter("primaryActionSelect");
+  assert.strictEqual(insertedAfter, pickerRow, "Hint muss nach pickerRow eingefügt werden");
 });
 
 (async () => {

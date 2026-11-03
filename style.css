@@ -2281,3 +2281,131 @@ body {
   white-space: nowrap;
   padding: 0 1px;
 }
+
+/* =============================================================================
+   On-Screen-Keyboard Action-Picker
+   ============================================================================= */
+
+.select-picker-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.select-picker-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.action-picker-trigger {
+  padding: 0.35rem 0.55rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.osk-modal-dialog {
+  max-width: 960px;
+  width: 95vw;
+}
+
+.osk-tabs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.8rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.6rem;
+}
+
+.osk-tab-btn {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.osk-tab-btn:hover {
+  background: var(--bg-card-hover, rgba(255, 255, 255, 0.05));
+  color: var(--text-main);
+}
+
+.osk-tab-btn.active {
+  background: var(--primary, #38bdf8);
+  border-color: var(--primary, #38bdf8);
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.on-screen-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  background: var(--bg-card, #0f172a);
+  padding: 0.8rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.osk-row {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: center;
+  align-items: stretch;
+}
+
+.osk-key {
+  min-width: 44px;
+  height: 42px;
+  padding: 0.2rem 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: #1e293b;
+  color: #e2e8f0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  transition: all 0.12s ease;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.osk-key:hover {
+  border-color: var(--primary, #38bdf8);
+  background: #334155;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.osk-key.active {
+  border-color: var(--primary, #38bdf8) !important;
+  background: rgba(56, 189, 248, 0.25) !important;
+  color: #38bdf8 !important;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+  font-weight: 700;
+}
+
+/* Key Width Utility Classes (Tastenbreiten) */
+.osk-key.w-1-25 { min-width: 55px; }
+.osk-key.w-1-5  { min-width: 66px; }
+.osk-key.w-1-75 { min-width: 77px; }
+.osk-key.w-2    { min-width: 88px; }
+.osk-key.w-2-25 { min-width: 99px; }
+.osk-key.w-3    { min-width: 132px; }
+.osk-key.w-6-25 { min-width: 275px; flex-grow: 1; }

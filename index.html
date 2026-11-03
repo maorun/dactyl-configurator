@@ -232,26 +232,35 @@
             <div class="form-group">
               <label for="primaryActionSelect">Haupt-Aktion (Normaler Tastendruck):</label>
               <input type="search" class="form-control keycode-filter" data-filter-for="primaryActionSelect" placeholder="Aktion suchen, z. B. : oder Doppelpunkt" aria-label="Aktion suchen">
-              <select id="primaryActionSelect" class="form-control">
-                <!-- Grouped key options -->
-              </select>
+              <div class="select-picker-row">
+                <select id="primaryActionSelect" class="form-control">
+                  <!-- Grouped key options -->
+                </select>
+                <button type="button" class="btn btn-secondary action-picker-trigger" data-target-select="primaryActionSelect" title="On-Screen-Tastatur öffnen">🎹</button>
+              </div>
             </div>
 
             <div class="form-group">
               <label for="holdActionSelect">Halte-Aktion / Mod-Tap (Optional beim Festhalten):</label>
               <input type="search" class="form-control keycode-filter" data-filter-for="holdActionSelect" placeholder="Aktion suchen, z. B. : oder Doppelpunkt" aria-label="Aktion suchen">
-              <select id="holdActionSelect" class="form-control">
-                <!-- Wird von app.js mit allen Aktionen befüllt (Tap A / Halten B) -->
-              </select>
+              <div class="select-picker-row">
+                <select id="holdActionSelect" class="form-control">
+                  <!-- Wird von app.js mit allen Aktionen befüllt (Tap A / Halten B) -->
+                </select>
+                <button type="button" class="btn btn-secondary action-picker-trigger" data-target-select="holdActionSelect" title="On-Screen-Tastatur öffnen">🎹</button>
+              </div>
               <small class="form-hint">Beispiel: Kurzes Tippen = A, Festhalten (&gt; 200 ms) oder gleichzeitiges Drücken einer weiteren Taste = B, Strg oder Layer 1.</small>
             </div>
 
             <div class="form-group">
               <label for="dtapActionSelect">Doppel-Tipp-Aktion / Tap-Dance (Optional):</label>
               <input type="search" class="form-control keycode-filter" data-filter-for="dtapActionSelect" placeholder="Aktion suchen, z. B. : oder Doppelpunkt" aria-label="Aktion suchen">
-              <select id="dtapActionSelect" class="form-control">
-                <!-- Wird von app.js mit allen Aktionen befüllt -->
-              </select>
+              <div class="select-picker-row">
+                <select id="dtapActionSelect" class="form-control">
+                  <!-- Wird von app.js mit allen Aktionen befüllt -->
+                </select>
+                <button type="button" class="btn btn-secondary action-picker-trigger" data-target-select="dtapActionSelect" title="On-Screen-Tastatur öffnen">🎹</button>
+              </div>
               <small class="form-hint">Zwei Tipps innerhalb von 200 ms lösen diese Aktion aus. Ein einzelner Tipp dieser Taste wird dann erst nach 200 ms gesendet. Wirkt nur mit einer Tap-Aktion.</small>
             </div>
 
@@ -321,9 +330,21 @@
         </div>
         <div class="combos-list-card" id="keyPairsCard">
           <div class="key-pair-form">
-            <span class="filtered-select"><input type="search" class="form-control keycode-filter" data-filter-for="keyPairFirstSelect" placeholder="Taste suchen, z. B. : oder Doppelpunkt" aria-label="Taste suchen"><select id="keyPairFirstSelect" class="form-control" title="Erste Taste (wird zuerst gedrückt, z. B. Umschalt)"></select></span>
+            <span class="filtered-select">
+              <input type="search" class="form-control keycode-filter" data-filter-for="keyPairFirstSelect" placeholder="Taste suchen, z. B. : oder Doppelpunkt" aria-label="Taste suchen">
+              <div class="select-picker-row">
+                <select id="keyPairFirstSelect" class="form-control" title="Erste Taste (wird zuerst gedrückt, z. B. Umschalt)"></select>
+                <button type="button" class="btn btn-secondary action-picker-trigger" data-target-select="keyPairFirstSelect" title="On-Screen-Tastatur öffnen">🎹</button>
+              </div>
+            </span>
             <strong>+</strong>
-            <span class="filtered-select"><input type="search" class="form-control keycode-filter" data-filter-for="keyPairSecondSelect" placeholder="Taste suchen, z. B. : oder Doppelpunkt" aria-label="Taste suchen"><select id="keyPairSecondSelect" class="form-control" title="Zweite Taste"></select></span>
+            <span class="filtered-select">
+              <input type="search" class="form-control keycode-filter" data-filter-for="keyPairSecondSelect" placeholder="Taste suchen, z. B. : oder Doppelpunkt" aria-label="Taste suchen">
+              <div class="select-picker-row">
+                <select id="keyPairSecondSelect" class="form-control" title="Zweite Taste"></select>
+                <button type="button" class="btn btn-secondary action-picker-trigger" data-target-select="keyPairSecondSelect" title="On-Screen-Tastatur öffnen">🎹</button>
+              </div>
+            </span>
             <button id="btnAddKeyPair" class="btn btn-primary btn-sm" type="button">+ Tastenpaar hinzufügen</button>
           </div>
           <table class="combos-table">
@@ -391,7 +412,13 @@
                 <option value="up">Loslassen</option>
                 <option value="pause">Pause</option>
               </select>
-              <span id="macroStepCodeWrap" class="filtered-select"><input type="search" class="form-control keycode-filter" data-filter-for="macroStepCode" placeholder="Taste suchen, z. B. : oder Doppelpunkt" aria-label="Taste suchen"><select id="macroStepCode" class="form-control" title="Taste"></select></span>
+              <span id="macroStepCodeWrap" class="filtered-select">
+                <input type="search" class="form-control keycode-filter" data-filter-for="macroStepCode" placeholder="Taste suchen, z. B. : oder Doppelpunkt" aria-label="Taste suchen">
+                <div class="select-picker-row">
+                  <select id="macroStepCode" class="form-control macro-step-code" title="Taste"></select>
+                  <button type="button" class="btn btn-secondary action-picker-trigger" data-target-select="macroStepCode" title="On-Screen-Tastatur öffnen">🎹</button>
+                </div>
+              </span>
               <span id="macroStepMsWrap"><input id="macroStepMs" class="form-control" type="number" min="1" value="100" title="Pause in ms"> ms</span>
               <button id="btnAddMacroStep" class="btn btn-secondary btn-sm" type="button">+ Schritt</button>
               <span id="macroStepCount" class="subtitle"></span>
@@ -676,12 +703,32 @@
           <div class="form-group">
             <label for="comboActionSelect">Aktion / Auslöser:</label>
             <input type="search" class="form-control keycode-filter" data-filter-for="comboActionSelect" placeholder="Aktion suchen, z. B. : oder Doppelpunkt" aria-label="Aktion suchen">
-            <select id="comboActionSelect" class="form-control"></select>
+            <div class="select-picker-row">
+              <select id="comboActionSelect" class="form-control"></select>
+              <button type="button" class="btn btn-secondary action-picker-trigger" data-target-select="comboActionSelect" title="On-Screen-Tastatur öffnen">🎹</button>
+            </div>
           </div>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" id="btnCancelCombo">Abbrechen</button>
           <button class="btn btn-primary" id="btnSaveCombo">Combo speichern</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: On-Screen-Keyboard Action-Picker -->
+    <div class="modal-backdrop" id="onScreenPickerModal" style="display: none;">
+      <div class="modal-dialog osk-modal-dialog">
+        <div class="modal-header">
+          <h4 id="onScreenPickerTitle">Aktion wählen (On-Screen-Tastatur)</h4>
+          <button class="modal-close" id="btnCloseOnScreenPicker">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="osk-tabs" id="oskTabs"></div>
+          <div class="on-screen-picker" id="onScreenKeyboardContainer"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCancelOnScreenPicker">Schließen</button>
         </div>
       </div>
     </div>

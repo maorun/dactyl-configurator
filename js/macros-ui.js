@@ -87,6 +87,36 @@ function renderMacroDraftSteps() {
     const text = document.createElement("span");
     text.textContent = `${i + 1}. ${macroStepLabel(step)}`;
     li.appendChild(text);
+
+    if (step.type !== "pause") {
+      const stepSelect = document.createElement("select");
+      stepSelect.className = "form-control macro-step-code";
+      stepSelect.style.display = "none";
+      stepSelect.dataset.stepIndex = String(i);
+      const opt = document.createElement("option");
+      opt.value = step.code;
+      opt.textContent = step.code;
+      stepSelect.appendChild(opt);
+      stepSelect.value = step.code;
+      stepSelect.addEventListener("change", () => {
+        macroDraftSteps[i].code = stepSelect.value;
+        renderMacroDraftSteps();
+      });
+      li.appendChild(stepSelect);
+
+      const oskBtn = document.createElement("button");
+      oskBtn.type = "button";
+      oskBtn.className = "btn btn-secondary btn-sm action-picker-trigger";
+      oskBtn.textContent = "🎹";
+      oskBtn.title = "Taste per On-Screen-Tastatur ändern";
+      oskBtn.addEventListener("click", () => {
+        if (typeof openOnScreenPickerForSelect === "function") {
+          openOnScreenPickerForSelect(stepSelect);
+        }
+      });
+      li.appendChild(oskBtn);
+    }
+
     const buttons = [
       ["↑", "Nach oben", i > 0, () => moveMacroStep(i, -1)],
       ["↓", "Nach unten", i < macroDraftSteps.length - 1, () => moveMacroStep(i, 1)],

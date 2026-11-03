@@ -367,3 +367,16 @@ Rules for this file:
 - Keys with action conflicts receive `conflict: true` and `.is-conflict` highlighting.
 - Supported conflicts include `trigger-shadowed` (own key obscured by layer-switch trigger on layer 0) and `duplicate-action` (repeated tap action on the same layer).
 - Selecting a key in any mini card updates the inspector and highlights the key in all views.
+
+### On-screen keyboard picker (`openOnScreenPickerForSelect`, `js/editor.js`)
+
+- Action select elements feature a dedicated picker trigger button (`🎹`, `.action-picker-trigger`).
+- Clicking the trigger opens the dialog `#onScreenPickerModal` with the on-screen keyboard.
+- The picker displays five tabs: `Tastatur`, `Navigation & Numpad`, `Umlaute & Modifiers`, `Ebenen`, and `Media & Maus`.
+- Each on-screen key displays its label and key code. Key widths match physical keyboard dimensions (`1.25U`, `1.5U`, `1.75U`, `2U`, `2.25U`, `6.25U`).
+- The picker highlights the active key of the target select with `.active`.
+- Clicking an on-screen key calls `pickActionFromOnScreenKey(selectEl, codeHex)`.
+- The function clears any active search filter on the target select via `clearSelectFilter`.
+- It sets `selectEl.value`, clears filter block flags, and dispatches the `change` event.
+- Existing event handlers process the change immediately.
+- The picker also supports dynamic macro step selects (`.macro-step-code`) in `js/macros-ui.js`.

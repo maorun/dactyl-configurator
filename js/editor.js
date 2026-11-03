@@ -343,6 +343,206 @@ function keycodeOptionTree({ holdMode = false, prefix = "Halten = ", charPairs =
   return tree;
 }
 
+// =============================================================================
+// Visueller On-Screen-Keyboard Action-Picker (Tastatur-Layouts & Aktions-Auswahl)
+// =============================================================================
+
+// Flache Liste aller in Select-Dropdowns wählbaren Optionen
+const KEYCODE_OPTIONS = keycodeOptionTree({ holdMode: true, charPairs: true })
+  .flatMap(node => (node.options ? node.options : [node]));
+
+// Reiter und Tastenanordnung für das visuelle On-Screen-Keyboard (US Mac + Funktionen/Navigation/Modifier)
+const ON_SCREEN_KEYBOARD_TABS = {
+  keyboard: {
+    label: "Tastatur",
+    rows: [
+      [
+        { code: "KEY_ESC", label: "Esc" },
+        { code: "KEY_F1", label: "F1" }, { code: "KEY_F2", label: "F2" }, { code: "KEY_F3", label: "F3" }, { code: "KEY_F4", label: "F4" },
+        { code: "KEY_F5", label: "F5" }, { code: "KEY_F6", label: "F6" }, { code: "KEY_F7", label: "F7" }, { code: "KEY_F8", label: "F8" },
+        { code: "KEY_F9", label: "F9" }, { code: "KEY_F10", label: "F10" }, { code: "KEY_F11", label: "F11" }, { code: "KEY_F12", label: "F12" }
+      ],
+      [
+        { code: "KEY_GRAVE", label: "` ~" },
+        { code: "KEY_1", label: "1 !" }, { code: "KEY_2", label: "2 @" }, { code: "KEY_3", label: "3 #" }, { code: "KEY_4", label: "4 $" },
+        { code: "KEY_5", label: "5 %" }, { code: "KEY_6", label: "6 ^" }, { code: "KEY_7", label: "7 &" }, { code: "KEY_8", label: "8 *" },
+        { code: "KEY_9", label: "9 (" }, { code: "KEY_0", label: "0 )" }, { code: "KEY_MINUS", label: "- _" }, { code: "KEY_EQUAL", label: "= +" },
+        { code: "KEY_BACKSPACE", label: "⌫ Backspace", width: 1.5 }
+      ],
+      [
+        { code: "KEY_TAB", label: "⇥ Tab", width: 1.5 },
+        { code: "KEY_Q", label: "Q" }, { code: "KEY_W", label: "W" }, { code: "KEY_E", label: "E" }, { code: "KEY_R", label: "R" },
+        { code: "KEY_T", label: "T" }, { code: "KEY_Y", label: "Y" }, { code: "KEY_U", label: "U" }, { code: "KEY_I", label: "I" },
+        { code: "KEY_O", label: "O" }, { code: "KEY_P", label: "P" }, { code: "KEY_LEFT_BRACKET", label: "[ {" }, { code: "KEY_RIGHT_BRACKET", label: "] }" },
+        { code: "KEY_BACKSLASH", label: "\\ |", width: 1.5 }
+      ],
+      [
+        { code: "KEY_CAPS_LOCK", label: "⇪ Caps", width: 1.75 },
+        { code: "KEY_A", label: "A" }, { code: "KEY_S", label: "S" }, { code: "KEY_D", label: "D" }, { code: "KEY_F", label: "F" },
+        { code: "KEY_G", label: "G" }, { code: "KEY_H", label: "H" }, { code: "KEY_J", label: "J" }, { code: "KEY_K", label: "K" },
+        { code: "KEY_L", label: "L" }, { code: "KEY_SEMICOLON", label: "; :" }, { code: "KEY_QUOTE", label: "' \"" },
+        { code: "KEY_RETURN", label: "⏎ Enter", width: 2.25 }
+      ],
+      [
+        { code: "KEY_LEFT_SHIFT", label: "⇧ Shift", width: 2 },
+        { code: "KEY_NON_US_BACKSLASH", label: "§ ±" },
+        { code: "KEY_Z", label: "Z" }, { code: "KEY_X", label: "X" }, { code: "KEY_C", label: "C" }, { code: "KEY_V", label: "V" },
+        { code: "KEY_B", label: "B" }, { code: "KEY_N", label: "N" }, { code: "KEY_M", label: "M" }, { code: "KEY_COMMA", label: ", <" },
+        { code: "KEY_PERIOD", label: ". >" }, { code: "KEY_SLASH", label: "/ ?" },
+        { code: "KEY_RIGHT_SHIFT", label: "⇧ Shift", width: 2 }
+      ],
+      [
+        { code: "KEY_LEFT_CTRL", label: "Control", width: 1.25 },
+        { code: "KEY_LEFT_ALT", label: "⌥ Option", width: 1.25 },
+        { code: "KEY_LEFT_GUI", label: "⌘ Command", width: 1.25 },
+        { code: "KEY_SPACE", label: "Space", width: 6.25 },
+        { code: "KEY_RIGHT_GUI", label: "⌘ Command", width: 1.25 },
+        { code: "KEY_RIGHT_ALT", label: "⌥ Option", width: 1.25 },
+        { code: "KEY_RIGHT_CTRL", label: "Control", width: 1.25 }
+      ]
+    ]
+  },
+  navigation: {
+    label: "Navigation & Numpad",
+    rows: [
+      [
+        { code: "KEY_INSERT", label: "Einfügen" }, { code: "KEY_DELETE", label: "Entf ⌦" },
+        { code: "KEY_HOME", label: "Pos 1" }, { code: "KEY_END", label: "Ende" },
+        { code: "KEY_PAGE_UP", label: "Bild ↑" }, { code: "KEY_PAGE_DOWN", label: "Bild ↓" },
+        { code: "KEY_PRTSC", label: "Druck" }
+      ],
+      [
+        { code: "KEY_LEFT_ARROW", label: "← Links" }, { code: "KEY_UP_ARROW", label: "↑ Oben" },
+        { code: "KEY_DOWN_ARROW", label: "↓ Unten" }, { code: "KEY_RIGHT_ARROW", label: "→ Rechts" }
+      ],
+      [
+        { code: "KEY_NUM_SLASH", label: "Num /" }, { code: "KEY_NUM_ASTERISK", label: "Num *" },
+        { code: "KEY_NUM_MINUS", label: "Num -" }, { code: "KEY_NUM_PLUS", label: "Num +" }
+      ],
+      [
+        { code: "KEY_NUM_7", label: "Num 7" }, { code: "KEY_NUM_8", label: "Num 8" }, { code: "KEY_NUM_9", label: "Num 9" },
+        { code: "KEY_NUM_4", label: "Num 4" }, { code: "KEY_NUM_5", label: "Num 5" }, { code: "KEY_NUM_6", label: "Num 6" }
+      ],
+      [
+        { code: "KEY_NUM_1", label: "Num 1" }, { code: "KEY_NUM_2", label: "Num 2" }, { code: "KEY_NUM_3", label: "Num 3" },
+        { code: "KEY_NUM_0", label: "Num 0", width: 2 }, { code: "KEY_NUM_PERIOD", label: "Num ." },
+        { code: "KEY_NUM_ENTER", label: "Num Enter", width: 1.5 }
+      ]
+    ]
+  },
+  special: {
+    label: "Umlaute & Modifiers",
+    rows: [
+      [
+        { code: "UMLAUT_AE", label: "ä" }, { code: "UMLAUT_OE", label: "ö" }, { code: "UMLAUT_UE", label: "ü" }, { code: "UMLAUT_SZ", label: "ß" },
+        { code: "UMLAUT_AE_UPPER", label: "Ä" }, { code: "UMLAUT_OE_UPPER", label: "Ö" }, { code: "UMLAUT_UE_UPPER", label: "Ü" }
+      ],
+      [
+        { code: "OSM_LCTRL", label: "OSM Strg" }, { code: "OSM_LSHIFT", label: "OSM Umschalt" },
+        { code: "OSM_LALT", label: "OSM Alt" }, { code: "OSM_LGUI", label: "OSM Cmd" },
+        { code: "OSM_RCTRL", label: "OSM Strg R" }, { code: "OSM_RSHIFT", label: "OSM Umschalt R" },
+        { code: "OSM_RALT", label: "OSM Alt R" }, { code: "OSM_RGUI", label: "OSM Cmd R" }
+      ],
+      [
+        { code: "CAPS_WORD", label: "Caps Word", width: 2 },
+        { code: "REPEAT", label: "Repeat", width: 2 },
+        { code: "MAC_GLOBE", label: "🌐 Globus / Fn", width: 2 }
+      ]
+    ]
+  },
+  layers: {
+    label: "Ebenen",
+    rows: [
+      [
+        { code: "MO_0", label: "MO 0" }, { code: "MO_1", label: "MO 1" }, { code: "MO_2", label: "MO 2" }, { code: "MO_3", label: "MO 3" },
+        { code: "MO_4", label: "MO 4" }, { code: "MO_5", label: "MO 5" }, { code: "MO_6", label: "MO 6" }, { code: "MO_7", label: "MO 7" }
+      ],
+      [
+        { code: "TG_0", label: "TG 0" }, { code: "TG_1", label: "TG 1" }, { code: "TG_2", label: "TG 2" }, { code: "TG_3", label: "TG 3" },
+        { code: "TG_4", label: "TG 4" }, { code: "TG_5", label: "TG 5" }, { code: "TG_6", label: "TG 6" }, { code: "TG_7", label: "TG 7" }
+      ],
+      [
+        { code: "LAYER_UP", label: "Layer +1 (Aufwärts)", width: 2 },
+        { code: "LAYER_DOWN", label: "Layer -1 (Abwärts)", width: 2 },
+        { code: "NONE", label: "--- Transparent / Keine ---", width: 3 }
+      ]
+    ]
+  },
+  media_mouse: {
+    label: "Media & Maus",
+    rows: [
+      [
+        { code: "MEDIA_PLAY_PAUSE", label: "⏯ Play/Pause" }, { code: "MEDIA_MUTE", label: "🔇 Mute" },
+        { code: "MEDIA_VOLUME_UP", label: "🔊 Vol +" }, { code: "MEDIA_VOLUME_DOWN", label: "🔉 Vol -" },
+        { code: "MEDIA_NEXT_TRACK", label: "⏭ Next" }, { code: "MEDIA_PREVIOUS_TRACK", label: "⏮ Prev" },
+        { code: "MEDIA_STOP", label: "⏹ Stop" }
+      ],
+      [
+        { code: "MOUSE_LEFT", label: "🖱️ Linksklick" }, { code: "MOUSE_MIDDLE", label: "🖱️ Mittelklick" },
+        { code: "MOUSE_RIGHT", label: "🖱️ Rechtsklick" },
+        { code: "MOUSE_WHEEL_UP", label: "🖱️ Rad Hoch" }, { code: "MOUSE_WHEEL_DOWN", label: "🖱️ Rad Runter" }
+      ],
+      [
+        { code: "MOUSE_LEFT_MOVE", label: "Maus ←" }, { code: "MOUSE_UP", label: "Maus ↑" },
+        { code: "MOUSE_DOWN", label: "Maus ↓" }, { code: "MOUSE_RIGHT_MOVE", label: "Maus →" }
+      ]
+    ]
+  }
+};
+
+const ON_SCREEN_KEYBOARD_ROWS = Object.values(ON_SCREEN_KEYBOARD_TABS).flatMap(t => t.rows);
+
+// Übernimmt eine Aktion per Klick auf die On-Screen-Tastatur in das Ziel-Select:
+// Setzt aktiven Filter zurück, setzt select.value, löst das change-Event aus und markiert die Taste.
+function pickActionFromOnScreenKey(selectEl, codeHex, options = {}) {
+  if (!selectEl) return;
+  const doc = options.document || (typeof document !== "undefined" ? document : null);
+  // Option ergänzen falls sie im Select-Element fehlt (verhindert Leeren von value im HTMLSelectElement)
+  if (selectEl.options) {
+    const hasOpt = Array.from(selectEl.options).some(o => o.value === codeHex);
+    if (!hasOpt) {
+      const opt = doc && typeof doc.createElement === "function"
+        ? doc.createElement("option")
+        : (typeof document !== "undefined" ? document.createElement("option") : { value: codeHex, textContent: codeHex });
+      opt.value = codeHex;
+      opt.textContent = codeHex;
+      if (typeof selectEl.appendChild === "function") {
+        selectEl.appendChild(opt);
+      }
+      if (Array.isArray(selectEl.options) && !selectEl.options.includes(opt)) {
+        selectEl.options.push(opt);
+      }
+    }
+  }
+  const selectId = selectEl.id || (selectEl.dataset && selectEl.dataset.filterFor);
+  if (selectId && typeof clearSelectFilter === "function") {
+    clearSelectFilter(selectId);
+  } else if (doc && selectId) {
+    const input = doc.querySelector(`[data-filter-for="${selectId}"]`);
+    if (input) {
+      input.value = "";
+      if (typeof applySelectFilter === "function") applySelectFilter(selectId);
+    }
+  }
+  selectEl.value = codeHex;
+  if (selectEl.dataset && selectEl.dataset.filterBlocked) {
+    selectEl.dataset.filterBlocked = "";
+  }
+  if (typeof updateFilterBlockedButton === "function" && typeof FILTER_BLOCKS_BUTTON !== "undefined" && FILTER_BLOCKS_BUTTON && selectId) {
+    updateFilterBlockedButton(FILTER_BLOCKS_BUTTON[selectId]);
+  }
+  if (typeof Event !== "undefined" && typeof selectEl.dispatchEvent === "function") {
+    selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+  } else if (typeof selectEl.fire === "function") {
+    selectEl.fire("change");
+  } else if (typeof selectEl.dispatchEvent === "function") {
+    selectEl.dispatchEvent({ type: "change" });
+  }
+  if (typeof markActiveOnScreenKey === "function") {
+    markActiveOnScreenKey(codeHex);
+  }
+}
+
 function appendOptionGroup(select, group) {
   const optgroup = document.createElement("optgroup");
   optgroup.label = group.label;
@@ -442,12 +642,14 @@ function applySelectFilter(selectId) {
   const selected = select.options[select.selectedIndex];
   const selectedHidden = !!selected && (selected.hidden || (selected.parentElement && selected.parentElement.hidden));
   const hint = selectFilterHint(query, filtered.matches, selectedHidden, selected ? selected.textContent : "");
-  let hintEl = select.parentElement && select.parentElement.querySelector(`[data-filter-hint-for="${selectId}"]`);
-  if (!hintEl && select.parentElement) {
+  const insertTarget = (select.closest && select.closest(".select-picker-row")) || select;
+  const parent = insertTarget.parentElement || select.parentElement;
+  let hintEl = parent && parent.querySelector(`[data-filter-hint-for="${selectId}"]`);
+  if (!hintEl && parent) {
     hintEl = document.createElement("small");
     hintEl.className = "form-hint filter-hint";
     hintEl.dataset.filterHintFor = selectId;
-    select.insertAdjacentElement("afterend", hintEl);
+    insertTarget.insertAdjacentElement("afterend", hintEl);
   }
   if (hintEl) {
     hintEl.textContent = hint.text;
@@ -1054,4 +1256,116 @@ function renderCombosTable() {
     tr.appendChild(tdDel);
     tbody.appendChild(tr);
   });
+}
+
+// =============================================================================
+// DOM-Steuerung für On-Screen-Keyboard Action-Picker
+// =============================================================================
+
+let activePickerTargetSelect = null;
+let activePickerTab = "keyboard";
+
+function markActiveOnScreenKey(code) {
+  if (typeof document === "undefined") return;
+  const modal = document.getElementById("onScreenPickerModal");
+  if (!modal) return;
+  modal.querySelectorAll(".osk-key").forEach(k => {
+    k.classList.toggle("active", k.dataset.code === code);
+  });
+}
+
+function openOnScreenPickerForSelect(selectEl) {
+  if (!selectEl || typeof document === "undefined") return;
+  activePickerTargetSelect = selectEl;
+  const modal = document.getElementById("onScreenPickerModal");
+  if (!modal) return;
+
+  const currentVal = selectEl.value || "NONE";
+  for (const [tabKey, tab] of Object.entries(ON_SCREEN_KEYBOARD_TABS)) {
+    if (tab.rows.some(r => r.some(k => k.code === currentVal))) {
+      activePickerTab = tabKey;
+      break;
+    }
+  }
+
+  renderOnScreenPicker(currentVal);
+  modal.style.display = "flex";
+}
+
+function closeOnScreenPicker() {
+  const modal = typeof document !== "undefined" && document.getElementById("onScreenPickerModal");
+  if (modal) modal.style.display = "none";
+  activePickerTargetSelect = null;
+}
+
+function renderOnScreenPicker(activeCode) {
+  if (typeof document === "undefined") return;
+  const tabsContainer = document.getElementById("oskTabs");
+  const keyboardContainer = document.getElementById("onScreenKeyboardContainer");
+  if (!tabsContainer || !keyboardContainer) return;
+
+  tabsContainer.innerHTML = "";
+  Object.entries(ON_SCREEN_KEYBOARD_TABS).forEach(([tabKey, tab]) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "osk-tab-btn" + (tabKey === activePickerTab ? " active" : "");
+    btn.textContent = tab.label;
+    btn.addEventListener("click", () => {
+      activePickerTab = tabKey;
+      renderOnScreenPicker(activeCode || (activePickerTargetSelect ? activePickerTargetSelect.value : ""));
+    });
+    tabsContainer.appendChild(btn);
+  });
+
+  keyboardContainer.innerHTML = "";
+  const currentTab = ON_SCREEN_KEYBOARD_TABS[activePickerTab] || ON_SCREEN_KEYBOARD_TABS.keyboard;
+  currentTab.rows.forEach(row => {
+    const rowEl = document.createElement("div");
+    rowEl.className = "osk-row";
+    row.forEach(key => {
+      const keyBtn = document.createElement("button");
+      keyBtn.type = "button";
+      keyBtn.className = "osk-key";
+      if (key.width) {
+        keyBtn.classList.add(`w-${String(key.width).replace(".", "-")}`);
+      }
+      if (activeCode && key.code === activeCode) {
+        keyBtn.classList.add("active");
+      }
+      keyBtn.dataset.code = key.code;
+      keyBtn.textContent = key.label;
+      keyBtn.title = `${key.label} (${key.code})`;
+      keyBtn.addEventListener("click", () => {
+        if (activePickerTargetSelect) {
+          pickActionFromOnScreenKey(activePickerTargetSelect, key.code);
+        }
+        closeOnScreenPicker();
+      });
+      rowEl.appendChild(keyBtn);
+    });
+    keyboardContainer.appendChild(rowEl);
+  });
+}
+
+function initOnScreenKeyboardPicker() {
+  if (typeof document === "undefined") return;
+  document.querySelectorAll(".action-picker-trigger").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.dataset.targetSelect;
+      const target = targetId ? document.getElementById(targetId) : null;
+      if (target) openOnScreenPickerForSelect(target);
+    });
+  });
+
+  const btnClose = document.getElementById("btnCloseOnScreenPicker");
+  const btnCancel = document.getElementById("btnCancelOnScreenPicker");
+  const modal = document.getElementById("onScreenPickerModal");
+
+  if (btnClose) btnClose.addEventListener("click", closeOnScreenPicker);
+  if (btnCancel) btnCancel.addEventListener("click", closeOnScreenPicker);
+  if (modal) {
+    modal.addEventListener("click", ev => {
+      if (ev.target === modal) closeOnScreenPicker();
+    });
+  }
 }

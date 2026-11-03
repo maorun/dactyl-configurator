@@ -29,15 +29,6 @@ No open entry.
 
 ## Priority 4
 
-### BLE connection latency and TX power saving
-
-- **Rank:** Feature model. Total 19/40 (typing 5, configuration 1, harmony 5, safety 8). Effort S. Estimate.
-- **Area:** Firmware.
-- **Code:** `firmware/dactyl_right/DactylBleComposite.h` (`onConnect()`), `firmware/dactyl_right/dactyl_right.ino` (`enterStandby()`, `exitStandby()`, `setupSplitReceiver()`), `firmware/dactyl_left/dactyl_left.ino` (`setupEspNow()`).
-- **Problem:** The master uses the default BLE connection interval (~15 ms, slave latency 0) and default TX power (+3 dBm) even in standby, and ESP-NOW transmits at the maximum Wi-Fi power (+19.5 dBm) across a 20 cm desk distance.
-- **Goal:** Request BLE peripheral slave latency in standby (`esp_ble_gap_update_conn_params`) so the master skips empty BLE connection events while idle, and lower the ESP-NOW and BLE TX power (`esp_wifi_set_max_tx_power`, `esp_ble_tx_power_set`) to a level that keeps 0 packet loss on the desk.
-- **Acceptance test:** A firmware test checks the connection parameter request on standby transitions. A hardware check verifies that `SPLIT_LINK` shows no additional `losses` or `ESPNOW_RETRY` events.
-
 ### ESP-NOW power saving
 
 - **Rank:** Feature model. Total 18/40 (typing 6, configuration 2, harmony 6, safety 4). Effort M. Estimate.

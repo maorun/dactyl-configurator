@@ -788,6 +788,28 @@ test("AGENTS.md: Schutzregeln der verschobenen Abschnitte bleiben stehen", () =>
   assert.match(agents, /generate a new key and flash both halves/);
 });
 
+test("Funk-Sendeleistung und BLE-Latenz: Firmware drosselt BLE und ESP-NOW im Betrieb", () => {
+  // ESP-NOW Sendeleistung (SPLIT_ESPNOW_TX_POWER in DactylSplitHid.h)
+  const splitHid = read("firmware/dactyl_right/DactylSplitHid.h");
+  assert.match(splitHid, /#define\s+SPLIT_ESPNOW_TX_POWER\s+34\b/, "SPLIT_ESPNOW_TX_POWER fehlt in DactylSplitHid.h");
+
+  // Beide Hälften rufen esp_wifi_set_max_tx_power(SPLIT_ESPNOW_TX_POWER) auf
+  assert.match(rightIno, /esp_wifi_set_max_tx_power\(\s*SPLIT_ESPNOW_TX_POWER\s*\)/, "right: esp_wifi_set_max_tx_power fehlt");
+  assert.match(leftIno, /esp_wifi_set_max_tx_power\(\s*SPLIT_ESPNOW_TX_POWER\s*\)/, "left: esp_wifi_set_max_tx_power fehlt");
+
+  // BLE Sendeleistung und Latenz im Master
+  const bleComposite = read("firmware/dactyl_right/DactylBleComposite.h");
+  assert.match(bleComposite, /BLE_HID_TX_POWER\s+ESP_PWR_LVL_N0/, "BLE_HID_TX_POWER ESP_PWR_LVL_N0 fehlt");
+  assert.match(bleComposite, /esp_ble_tx_power_set\(\s*ESP_BLE_PWR_TYPE_DEFAULT\s*,\s*BLE_HID_TX_POWER\s*\)/);
+  assert.match(bleComposite, /esp_ble_gap_update_conn_params/, "esp_ble_gap_update_conn_params fehlt in DactylBleComposite.h");
+
+  // Rechts: enterStandby() und exitStandby() steuern bleKeyboard.setStandbyMode()
+  const rightEnterStandby = rightIno.match(/void enterStandby\(\) \{([\s\S]*?)\n\}/);
+  assert.ok(rightEnterStandby && /bleKeyboard\.setStandbyMode\(true\)/.test(rightEnterStandby[1]), "rechts: enterStandby() ruft nicht bleKeyboard.setStandbyMode(true) auf");
+  const rightExitStandby = rightIno.match(/void exitStandby\(\) \{([\s\S]*?)\n\}/);
+  assert.ok(rightExitStandby && /bleKeyboard\.setStandbyMode\(false\)/.test(rightExitStandby[1]), "rechts: exitStandby() ruft nicht bleKeyboard.setStandbyMode(false) auf");
+});
+
 runAll().catch((err) => {
   console.error(err);
   process.exit(1);

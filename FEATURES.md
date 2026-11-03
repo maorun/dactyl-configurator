@@ -190,6 +190,8 @@ Rules for this file:
 - Config mode: hold **`R0C5 + R4C0`** (mirrored: inner top + outer bottom) for 500 ms, or USB serial `ENTER_CONFIG`. The left half sends `RELEASE_ALL`, reboots into an isolated BLE server `Dactyl Config L` (static random address, no HID, no bonding) and returns via `ESP.restart()` or after 3 min inactivity. In config mode ESP-NOW is off.
 - NVS: same `loadKeymapFromNVS()` / `saveKeymapToNVS()` / `handleConfigCommand()` as the right half, on the left chip. `KEYMAP_DEFAULTS_ID 0` in the repository.
 - `DEVICE_INFO` contains `"side":"L"` (macro `DEVICE_SIDE`, default `"R"` in `DactylLogic.h`). App and server identify the half at a USB port with it; firmware without the field counts as right.
+- BLE connection latency: In active typing, the master uses fast parameters (`7.5..22.5 ms`, `latency = 0`, `timeout = 4000 ms`). In standby, `enterStandby()` requests peripheral slave latency via `esp_ble_gap_update_conn_params` (`15..30 ms`, `latency = 20`, `timeout = 4000 ms`, compliant with Apple Accessory Design Guidelines). The BLE radio skips up to 20 empty connection intervals while idle, but sends new key presses on the next interval and returns to active parameters via `exitStandby()`.
+- TX power saving: The master sets BLE TX power to `ESP_PWR_LVL_N0` (`0 dBm` via `esp_ble_tx_power_set`) for default, advertising, and active connections. Both halves lower ESP-NOW Wi-Fi TX power to `SPLIT_ESPNOW_TX_POWER` (`34` = `8.5 dBm` via `esp_wifi_set_max_tx_power`), maintaining zero packet loss across the ~20 cm desk distance.
 
 ### Firmware version (`DactylVersion.h`)
 

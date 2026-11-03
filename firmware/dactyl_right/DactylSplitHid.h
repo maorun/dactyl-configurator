@@ -17,6 +17,10 @@
 
 #define SPLIT_ESPNOW_CHANNEL 1
 
+// ESP-NOW Sendeleistung (0.25 dBm Einheiten, Bereich 8..84)
+// 34 = 8.5 dBm (~7 mW, 0 Paketverlust bei ~20 cm Schreibtischabstand bei stark reduzierter Sendeleistung)
+#define SPLIT_ESPNOW_TX_POWER 34
+
 // Wi-Fi-STA-MAC (= Basis-MAC) beider Hälften
 static const uint8_t SPLIT_MASTER_MAC[6] = {0x2E, 0xBC, 0xBB, 0x81, 0x61, 0xA6};
 static const uint8_t SPLIT_LEFT_MAC[6] = {0x2E, 0xBC, 0xBB, 0x81, 0x61, 0xB0};

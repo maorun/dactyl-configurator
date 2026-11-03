@@ -489,6 +489,27 @@ TEST(test_master_activity_resets_inactivity_timer) {
   assert(last == 5000);
 }
 
+TEST(test_consume_master_sleep_request_only_when_idle_and_keyboard_mode) {
+  volatile bool sleepReq = false;
+  assert(!consumeMasterSleepRequest(sleepReq, false, false));
+
+  // Normaler Tastaturmodus ohne gehaltene Taste: löst Deep Sleep aus und löscht das Flag
+  sleepReq = true;
+  assert(consumeMasterSleepRequest(sleepReq, false, false));
+  assert(!sleepReq);
+  assert(!consumeMasterSleepRequest(sleepReq, false, false));
+
+  // Im Config Mode wird das Schlafsignal verworfen
+  sleepReq = true;
+  assert(!consumeMasterSleepRequest(sleepReq, true, false));
+  assert(!sleepReq);
+
+  // Bei gehaltener lokaler Taste hat das Tippen Vorrang; das veraltete Signal wird verworfen
+  sleepReq = true;
+  assert(!consumeMasterSleepRequest(sleepReq, false, true));
+  assert(!sleepReq);
+}
+
 TEST(test_key_event_diagnostic_needs_link_and_counts_drops) {
   SplitSendQueue q;
   queueReset(q);

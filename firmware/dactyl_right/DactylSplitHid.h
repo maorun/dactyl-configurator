@@ -49,7 +49,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_HOLD_PENDING = 23, // beide Richtungen: code 1 = eine Mod-Tap-Taste des Absenders ist noch unentschieden, 0 = keine
   SPLIT_OP_HOLD_RESOLVE = 24, // beide Richtungen: offene Mod-Tap-Tasten des Empfängers jetzt als Halten entscheiden, ohne Werte
   SPLIT_OP_MOUSE_MOVE = 25,   // arg = X-Schritt (int8), code = Y-Schritt (int8 in Bits 0..7); -128 und (0, 0) sind ungültig
-  SPLIT_OP_COUNT = 26
+  SPLIT_OP_SLEEP = 26,        // nur Master -> links: Master geht in Deep Sleep, linke Hälfte legt sich ebenfalls schlafen, ohne Werte
+  SPLIT_OP_COUNT = 27
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -159,7 +160,7 @@ inline bool parseSplitHidPacket(const uint8_t *srcMac, const uint8_t *data, int 
 // Paket verschiebt das Einschlafen nur um ein Intervall.
 #define SPLIT_ACTIVITY_INTERVAL_MS 10000
 
-// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY, TAP_FLUSH oder HOLD_RESOLVE ohne Werte, ein
+// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY, TAP_FLUSH, HOLD_RESOLVE oder SLEEP ohne Werte, ein
 // HOLD_PENDING (code 0/1), ein Master-LAYER_STATE (arg < 0, der Master führt die Toggles) oder ein REPEAT_RUN
 // (code 0/1, Nummer 1..127)
 inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, int len, SplitHidEvent &out) {
@@ -168,7 +169,8 @@ inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, i
   if (len != (int)sizeof(SplitHidEvent)) return false;
   SplitHidEvent ev;
   memcpy(&ev, data, sizeof(ev));
-  bool ok = ((ev.op == SPLIT_OP_ACTIVITY || ev.op == SPLIT_OP_TAP_FLUSH || ev.op == SPLIT_OP_HOLD_RESOLVE) &&
+  bool ok = ((ev.op == SPLIT_OP_ACTIVITY || ev.op == SPLIT_OP_TAP_FLUSH || ev.op == SPLIT_OP_HOLD_RESOLVE ||
+              ev.op == SPLIT_OP_SLEEP) &&
              ev.code == 0 && ev.arg == 0) ||
             (ev.op == SPLIT_OP_HOLD_PENDING && ev.code <= 1 && ev.arg == 0) ||
             isValidSplitMasterLayerEvent(ev) ||
@@ -214,6 +216,41 @@ inline void splitActivitySendResult(SplitActivityThrottle &t, bool sent) {
 inline void splitNoteLocalKeyChange(SplitActivityThrottle &t, unsigned long nowMs, unsigned long &lastActivityMs) {
   lastActivityMs = nowMs;
   splitActivityNote(t);
+}
+
+// Schneller Deep Sleep ohne Host-Verbindung (Mac im Ruhezustand oder außer Reichweite, oder auf der linken Hälfte
+// kein erreichbarer Master). Nach SPLIT_DISCONNECTED_DEEP_SLEEP_MS ohne Host und ohne Aktivität geht die Hälfte in
+// den Deep Sleep, statt bis deepSleepTimeoutMinutes (Standard: 60 Min) mit laufendem Funk ~100 mA zu ziehen.
+// Im Config Mode (hat einen eigenen 3-Min-Timeout mit Neustart), bei deaktiviertem Deep Sleep (0) und solange eine
+// lokale Taste gehalten wird, greift der verkürzte Timeout nicht.
+#define SPLIT_DISCONNECTED_DEEP_SLEEP_MS (3UL * 60UL * 1000UL)
+
+struct SplitDisconnectedSleep {
+  bool wasDisconnected;
+  unsigned long disconnectedSinceMs;
+};
+
+inline void splitDisconnectedSleepReset(SplitDisconnectedSleep &s) {
+  s.wasDisconnected = false;
+  s.disconnectedSinceMs = 0;
+}
+
+inline bool splitDisconnectedDeepSleepDue(SplitDisconnectedSleep &s, bool configMode, bool hostConnected,
+                                          bool anyKeyHeld, uint32_t deepSleepTimeoutMinutes,
+                                          unsigned long lastActivityMs, unsigned long nowMs) {
+  if (configMode || hostConnected || deepSleepTimeoutMinutes == 0) {
+    s.wasDisconnected = false;
+    return false;
+  }
+  if (!s.wasDisconnected) {
+    s.wasDisconnected = true;
+    s.disconnectedSinceMs = nowMs;
+    return false;
+  }
+  if (anyKeyHeld) return false;
+  unsigned long configuredMs = (unsigned long)deepSleepTimeoutMinutes * 60UL * 1000UL;
+  unsigned long thresholdMs = configuredMs < SPLIT_DISCONNECTED_DEEP_SLEEP_MS ? configuredMs : SPLIT_DISCONNECTED_DEEP_SLEEP_MS;
+  return (nowMs - lastActivityMs) > thresholdMs && (nowMs - s.disconnectedSinceMs) > thresholdMs;
 }
 
 // Scrollen hat keinen Zustand: ein doppelt zugestelltes Retry-Paket scrollte doppelt. Ein verlorener

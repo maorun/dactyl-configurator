@@ -101,11 +101,11 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0xFF, 5),   // x = 5, y = -1
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
-  // ACTIVITY, TAP_FLUSH und REPEAT_RUN sind die einzigen Ops nur der Rückrichtung. Jede dieser drei fehlt, vier Ops
-  // stehen doppelt: die Anzahl der Einträge ist SPLIT_OP_COUNT - 3 + 4.
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 3 + 4);
+  // ACTIVITY, TAP_FLUSH, REPEAT_RUN und SLEEP sind die einzigen Ops nur der Rückrichtung. Jede dieser vier fehlt,
+  // vier Ops stehen doppelt: die Anzahl der Einträge ist SPLIT_OP_COUNT - 4 + 4.
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 4 + 4);
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
-    if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN) continue;
+    if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP) continue;
     bool seen = false;
     for (const SplitHidEvent &ev : ok) if (ev.op == op) seen = true;
     assert(seen); // jede Op links -> Master kommt vor: ein neuer Op-Wert ohne Eintrag fällt auf
@@ -157,6 +157,9 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0x100, 1),     // y außerhalb int8
     makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0, -128),      // -128 ist ungültig
     makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0x80, 1),      // y = -128
+    makeSplitHidEvent(SPLIT_OP_SLEEP),                    // nur Master -> links
+    makeSplitHidEvent(SPLIT_OP_SLEEP, 1),
+    makeSplitHidEvent(SPLIT_OP_SLEEP, 0, 1),
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -681,6 +684,71 @@ TEST(test_master_packet_accepts_activity_and_master_layer_only) {
   // Der Master nimmt kein Master-Paket an (arg < 0 von links ist ungültig)
   SplitHidEvent tmp;
   assert(!parse(SPLIT_LEFT_MAC, m, tmp));
+}
+
+TEST(test_sleep_packet_accepts_only_master_sleep_without_args) {
+  assert(SPLIT_OP_SLEEP == 26); // append-only: Nummer nie ändern
+  SplitHidEvent out;
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_SLEEP), out) && out.op == SPLIT_OP_SLEEP);
+  assert(!parseMaster(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_SLEEP), out));
+  assert(!parseMaster(nullptr, makeSplitHidEvent(SPLIT_OP_SLEEP), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_SLEEP), out, 3));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_SLEEP), out, 5));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_SLEEP, 1), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_SLEEP, 0, 1), out));
+}
+
+TEST(test_disconnected_deep_sleep_timeout) {
+  SplitDisconnectedSleep s;
+  splitDisconnectedSleepReset(s);
+  const unsigned long t0 = 1000;
+  // Erster Durchlauf ohne Host startet das Trennfenster, löst aber noch keinen Deep Sleep aus
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 60, t0, t0));
+  assert(s.wasDisconnected && s.disconnectedSinceMs == t0);
+  // Kurz vor Ablauf von SPLIT_DISCONNECTED_DEEP_SLEEP_MS (3 Min): noch nicht fällig
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 60, t0, t0 + SPLIT_DISCONNECTED_DEEP_SLEEP_MS));
+  // Nach Ablauf von SPLIT_DISCONNECTED_DEEP_SLEEP_MS ohne Host und außerhalb des Config Mode: fällig
+  assert(splitDisconnectedDeepSleepDue(s, false, false, false, 60, t0, t0 + SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 1));
+
+  // Gehaltene Taste verhindert das Einschlafen, bis sie losgelassen wird und die Inaktivität abgelaufen ist
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, true, 60, t0, t0 + SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 10));
+
+  // Im Config Mode und bei bestehender Host-Verbindung niemals fällig; setzt das Trennfenster zurück
+  assert(!splitDisconnectedDeepSleepDue(s, true, false, false, 60, t0, t0 + SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 10));
+  assert(!s.wasDisconnected);
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 60, t0, t0 + SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 20));
+  assert(s.wasDisconnected && s.disconnectedSinceMs == t0 + SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 20);
+  assert(!splitDisconnectedDeepSleepDue(s, false, true, false, 60, t0, t0 + 2 * SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 30));
+  assert(!s.wasDisconnected);
+
+  // Nach einem Verbindungsabbruch zählt die Trennzeit neu, auch wenn lastActivityMs schon lange zurückliegt
+  const unsigned long disconnectAt = 500000;
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 60, t0, disconnectAt));
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 60, t0, disconnectAt + SPLIT_DISCONNECTED_DEEP_SLEEP_MS));
+  assert(splitDisconnectedDeepSleepDue(s, false, false, false, 60, t0, disconnectAt + SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 1));
+
+  // Lokale Aktivität während getrennter Verbindung verschiebt den Timeout ebenfalls um volle 3 Minuten
+  const unsigned long activityAt = disconnectAt + SPLIT_DISCONNECTED_DEEP_SLEEP_MS - 500;
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 60, activityAt, disconnectAt + SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 10));
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 60, activityAt, activityAt + SPLIT_DISCONNECTED_DEEP_SLEEP_MS));
+  assert(splitDisconnectedDeepSleepDue(s, false, false, false, 60, activityAt, activityAt + SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 1));
+
+  // Ist deepSleepTimeoutMinutes = 0 (Deep Sleep deaktiviert), löst auch der getrennte Timeout nicht aus
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 0, t0, activityAt + 2 * SPLIT_DISCONNECTED_DEEP_SLEEP_MS));
+  assert(!s.wasDisconnected);
+
+  // Ist deepSleepTimeoutMinutes kleiner als 3 Minuten (z. B. 1 Min), gilt die kürzere konfigurierte Schwelle
+  splitDisconnectedSleepReset(s);
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 1, t0, t0));
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 1, t0, t0 + 60000UL));
+  assert(splitDisconnectedDeepSleepDue(s, false, false, false, 1, t0, t0 + 60001UL));
+
+  // Korrekte Auswertung über den millis()-Überlauf hinweg
+  splitDisconnectedSleepReset(s);
+  const unsigned long nearWrap = ~0UL - 1000;
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 60, nearWrap, nearWrap));
+  assert(!splitDisconnectedDeepSleepDue(s, false, false, false, 60, nearWrap, nearWrap + SPLIT_DISCONNECTED_DEEP_SLEEP_MS));
+  assert(splitDisconnectedDeepSleepDue(s, false, false, false, 60, nearWrap, nearWrap + SPLIT_DISCONNECTED_DEEP_SLEEP_MS + 1));
 }
 
 TEST(test_layer_sync_left_sends_changes_and_set_until_echo) {
@@ -1655,7 +1723,8 @@ TEST(test_link_report_sends_changes_at_once_and_throttles_counters) {
 TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
-  assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25 && SPLIT_OP_COUNT == 26);
+  assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25);
+  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_COUNT == 27);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {

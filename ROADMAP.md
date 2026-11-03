@@ -25,15 +25,6 @@ No open entry.
 
 ## Priority 3
 
-### Fast deep sleep without a host connection
-
-- **Rank:** Feature model. Total 22/40 (typing 5, configuration 3, harmony 6, safety 8). Effort S. Estimate.
-- **Area:** Firmware.
-- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`loop()`, `enterDeepSleep()`), `firmware/dactyl_left/dactyl_left.ino` (`loop()`, `enterDeepSleep()`), `firmware/dactyl_right/DactylSplitHid.h`.
-- **Problem:** When the Mac is asleep or out of range (`!bleKeyboard.isConnected()`), both halves stay awake for `deepSleepTimeoutMinutes` (60 min) and draw about 95 to 100 mA each.
-- **Goal:** Enter deep sleep after a short timeout (for example 3 min) while no BLE host is connected outside the config mode, and send a sleep signal to the left half at the same time.
-- **Acceptance test:** A firmware test checks that the disconnected timeout triggers deep sleep only when no host is connected and outside the config mode.
-
 ### Quiet standby on the split link
 
 - **Rank:** Feature model. Total 21/40 (typing 5, configuration 2, harmony 7, safety 7). Effort S. Estimate.
@@ -62,15 +53,6 @@ No open entry.
 - **Problem:** The master uses the default BLE connection interval (~15 ms, slave latency 0) and default TX power (+3 dBm) even in standby, and ESP-NOW transmits at the maximum Wi-Fi power (+19.5 dBm) across a 20 cm desk distance.
 - **Goal:** Request BLE peripheral slave latency in standby (`esp_ble_gap_update_conn_params`) so the master skips empty BLE connection events while idle, and lower the ESP-NOW and BLE TX power (`esp_wifi_set_max_tx_power`, `esp_ble_tx_power_set`) to a level that keeps 0 packet loss on the desk.
 - **Acceptance test:** A firmware test checks the connection parameter request on standby transitions. A hardware check verifies that `SPLIT_LINK` shows no additional `losses` or `ESPNOW_RETRY` events.
-
-### Synchronized deep sleep across both halves
-
-- **Rank:** Feature model. Total 18/40 (typing 4, configuration 1, harmony 7, safety 6). Effort S. Estimate.
-- **Area:** Firmware.
-- **Code:** `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_OP_SLEEP`), `firmware/dactyl_right/dactyl_right.ino` (`enterDeepSleep()`), `firmware/dactyl_left/dactyl_left.ino` (`onEspNowRecv()`, `loop()`).
-- **Problem:** When the master enters deep sleep first, the left half stays awake with its Wi-Fi receiver on (~100 mA) until its own `deepSleepTimeoutMinutes` timer expires.
-- **Goal:** Send `SPLIT_OP_SLEEP` from the master before `enterDeepSleep()` so the left half releases its keys and enters deep sleep at the same time.
-- **Acceptance test:** A unit test in `firmware/tests/test_split_hid.cpp` checks `parseSplitMasterPacket` for `SPLIT_OP_SLEEP` and verifies that the left half requests deep sleep only when no key is pressed locally.
 
 ### ESP-NOW power saving
 

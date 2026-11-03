@@ -157,6 +157,7 @@ void checkUserCombos();
 void stopMacro(bool releaseKeys);
 void resetMouseMove();
 void sendSplitLayerRelease();
+void sendSplitSleep();
 
 void enterConfigMode() {
   if (isConfigMode) return;
@@ -278,6 +279,7 @@ void enterDeepSleep() {
   // Laufendes Makro beenden und seine Codes am Mac loslassen, bevor die Verbindung endet
   stopMacro(true);
   sendSplitLayerRelease();
+  sendSplitSleep();
   delay(30);
 
   // 1. Spalten als OUTPUT HIGH halten (3.3V) - sowoh für RTC als auch normale GPIOs
@@ -472,6 +474,7 @@ int deviceInfoLeftLink(char *buf, size_t size) {
 // Eigenes Tippen an die linke Hälfte melden (synchronisierte Inaktivitäts-Timer, DactylSplitHid.h)
 static bool splitActivityPeerReady = false;
 static SplitActivityThrottle splitActivity;
+static SplitDisconnectedSleep splitDisconnectedSleep = {};
 // Layer-Abgleich mit der linken Hälfte (SPLIT_OP_LAYER_STATE, DactylSplitHid.h)
 static SplitLayerSync splitLayerSync;
 static SplitRemoteLayers splitRemoteLayers;
@@ -746,6 +749,24 @@ void sendSplitLayerRelease() {
   esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
 }
 
+// Vor enterDeepSleep: der linken Hälfte ein Schlafsignal senden, damit sie gleichzeitig in den Deep Sleep geht
+void sendSplitSleep() {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_SLEEP);
+  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+  delay(5);
+  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+}
+
+static bool anyRightKeyHeld() {
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (keyState[r][c] || rawKeyState[r][c]) return true;
+    }
+  }
+  return false;
+}
+
 // Layer-Zustand an die linke Hälfte, immer als SET: bei jeder Änderung (mit Wiederholung) und, solange die
 // linke Hälfte erreichbar ist, jede Sekunde (ohne linke Hälfte kein Funkverkehr ohne Änderung)
 void sendSplitLayerStateIfDue() {
@@ -1018,8 +1039,12 @@ void loop() {
       }
     }
 
+    unsigned long nowSleep = millis();
+    bool disconnectedSleepDue = splitDisconnectedDeepSleepDue(splitDisconnectedSleep, isConfigMode,
+      bleKeyboard.isConnected(), anyRightKeyHeld(), deepSleepTimeoutMinutes, lastActivityTime, nowSleep);
     if (deepSleepTimeoutMinutes > 0) {
-      if (millis() - lastActivityTime > ((unsigned long)deepSleepTimeoutMinutes * 60UL * 1000UL)) {
+      if (disconnectedSleepDue ||
+          (nowSleep - lastActivityTime > ((unsigned long)deepSleepTimeoutMinutes * 60UL * 1000UL))) {
         enterDeepSleep();
       }
     }

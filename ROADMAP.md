@@ -25,9 +25,52 @@ No open entry.
 
 ## Priority 3
 
-No open entry.
+### Fast deep sleep without a host connection
+
+- **Rank:** Feature model. Total 22/40 (typing 5, configuration 3, harmony 6, safety 8). Effort S. Estimate.
+- **Area:** Firmware.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`loop()`, `enterDeepSleep()`), `firmware/dactyl_left/dactyl_left.ino` (`loop()`, `enterDeepSleep()`), `firmware/dactyl_right/DactylSplitHid.h`.
+- **Problem:** When the Mac is asleep or out of range (`!bleKeyboard.isConnected()`), both halves stay awake for `deepSleepTimeoutMinutes` (60 min) and draw about 95 to 100 mA each.
+- **Goal:** Enter deep sleep after a short timeout (for example 3 min) while no BLE host is connected outside the config mode, and send a sleep signal to the left half at the same time.
+- **Acceptance test:** A firmware test checks that the disconnected timeout triggers deep sleep only when no host is connected and outside the config mode.
+
+### Quiet standby on the split link
+
+- **Rank:** Feature model. Total 21/40 (typing 5, configuration 2, harmony 7, safety 7). Effort S. Estimate.
+- **Area:** Firmware.
+- **Code:** `firmware/dactyl_left/dactyl_left.ino` (`sendHeartbeatIfDue()`, `queueSplitLayerStateIfDue()`), `firmware/dactyl_right/dactyl_right.ino` (`sendSplitLayerStateIfDue()`), `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_LAYER_REFRESH_MS`, `SPLIT_LINK_TIMEOUT_MS`), `firmware/dactyl_left/DactylLeftLogic.h`.
+- **Problem:** Both halves send `SPLIT_OP_HEARTBEAT` and `SPLIT_OP_LAYER_STATE` every second (`1000 ms`), also in standby. This causes 120 packets per minute without key presses and wakes the radio during power-saving windows.
+- **Goal:** Increase the heartbeat and layer refresh intervals in standby (for example to 5 s) while no key and no momentary layer (`MO_n`) is held, and adjust the link timeout in standby to match. Switch back to the 1 s interval immediately on the first matrix change.
+- **Acceptance test:** A unit test in `firmware/tests/test_split_hid.cpp` and `firmware/tests/test_left_logic.cpp` checks the standby interval, the link timeout and the immediate return to the active rate on a key press.
+
+### Restore NVS backup in the app
+
+- **Rank:** Feature model. Total 21/40 (typing 0, configuration 7, harmony 7, safety 7). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/layout-profiles-ui.js`, `index.html`, `tests/test_app_logic.js`.
+- **Problem:** `GET /api/nvs_backups` and `POST /api/nvs_restore` exist on the server, but the app has no UI to list or restore an NVS image.
+- **Goal:** Show the NVS backups of the edited half in the "Profile" dialog and restore a selected backup after a confirmation.
+- **Acceptance test:** A test checks that the dialog lists the backups of the active half and calls `/api/nvs_restore?side=L|R`.
 
 ## Priority 4
+
+### BLE connection latency and TX power saving
+
+- **Rank:** Feature model. Total 19/40 (typing 5, configuration 1, harmony 5, safety 8). Effort S. Estimate.
+- **Area:** Firmware.
+- **Code:** `firmware/dactyl_right/DactylBleComposite.h` (`onConnect()`), `firmware/dactyl_right/dactyl_right.ino` (`enterStandby()`, `exitStandby()`, `setupSplitReceiver()`), `firmware/dactyl_left/dactyl_left.ino` (`setupEspNow()`).
+- **Problem:** The master uses the default BLE connection interval (~15 ms, slave latency 0) and default TX power (+3 dBm) even in standby, and ESP-NOW transmits at the maximum Wi-Fi power (+19.5 dBm) across a 20 cm desk distance.
+- **Goal:** Request BLE peripheral slave latency in standby (`esp_ble_gap_update_conn_params`) so the master skips empty BLE connection events while idle, and lower the ESP-NOW and BLE TX power (`esp_wifi_set_max_tx_power`, `esp_ble_tx_power_set`) to a level that keeps 0 packet loss on the desk.
+- **Acceptance test:** A firmware test checks the connection parameter request on standby transitions. A hardware check verifies that `SPLIT_LINK` shows no additional `losses` or `ESPNOW_RETRY` events.
+
+### Synchronized deep sleep across both halves
+
+- **Rank:** Feature model. Total 18/40 (typing 4, configuration 1, harmony 7, safety 6). Effort S. Estimate.
+- **Area:** Firmware.
+- **Code:** `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_OP_SLEEP`), `firmware/dactyl_right/dactyl_right.ino` (`enterDeepSleep()`), `firmware/dactyl_left/dactyl_left.ino` (`onEspNowRecv()`, `loop()`).
+- **Problem:** When the master enters deep sleep first, the left half stays awake with its Wi-Fi receiver on (~100 mA) until its own `deepSleepTimeoutMinutes` timer expires.
+- **Goal:** Send `SPLIT_OP_SLEEP` from the master before `enterDeepSleep()` so the left half releases its keys and enters deep sleep at the same time.
+- **Acceptance test:** A unit test in `firmware/tests/test_split_hid.cpp` checks `parseSplitMasterPacket` for `SPLIT_OP_SLEEP` and verifies that the left half requests deep sleep only when no key is pressed locally.
 
 ### ESP-NOW power saving
 
@@ -40,6 +83,15 @@ No open entry.
 - **Note:** Do not change `setCpuFrequencyMhz()` on the left half (see "Config mode, NVS, power" in `AGENTS.md`).
 - **Acceptance test:** A firmware test checks the selection of the wake window for active state and standby. A current measurement at the JST socket shows a lower standby current for each half.
 
+### Matrix scan settle time and deep-sleep pin power
+
+- **Rank:** Feature model. Total 17/40 (typing 4, configuration 1, harmony 5, safety 7). Effort S. Estimate.
+- **Area:** Firmware.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`loop()`), `firmware/dactyl_left/dactyl_left.ino` (`loop()`, `enterDeepSleep()`).
+- **Problem:** Each matrix scan pass busy-waits `30 us` per row or column (`180` to `210 us` per pass), and the left half holds 6 non-RTC row pins `HIGH` with `gpio_deep_sleep_hold_en()` during deep sleep.
+- **Goal:** Reduce the matrix strobe settle delay to the minimum stable value (for example `5` to `10 us`), and check if internal RTC pull-ups (`ESP_EXT1_WAKEUP_ALL_LOW`) or a single RTC high pin can replace the 6 non-RTC digital pad holds in deep sleep.
+- **Acceptance test:** The matrix test shows 0 false bounces on both halves, and a multimeter measurement at the JST socket confirms the deep-sleep current.
+
 ### Layer overview
 
 - **Rank:** Feature model. Total 17/40 (typing 0, configuration 5, harmony 5, safety 7). Effort M. Estimate.
@@ -47,6 +99,15 @@ No open entry.
 - **Code:** `js/editor.js`, `style.css`.
 - **Goal:** Show all 8 layers in small size side by side, so transparent keys and conflicts are visible.
 - **Acceptance test:** A test shows that the overview marks a key that is transparent on a layer.
+
+### Permissive hold and tap-preferred Mod-Tap
+
+- **Rank:** Feature model. Total 17/40 (typing 7, configuration 3, harmony 4, safety 3). Effort M. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylLogic.h`, `server.py`, `js/config-model.js`, `index.html`.
+- **Problem:** A Mod-Tap key resolves as hold as soon as any other key is pressed before `tappingTermMs`. Fast rolled typing on home-row modifiers can trigger a modifier instead of two characters.
+- **Goal:** Add a hold-tap mode setting (`holdOnOtherKeyPress`, `permissiveHold`, `tapPreferred`) so a rolled key press resolves as hold only when the second key is both pressed and released within `tappingTermMs` (`permissiveHold`), or only after `tappingTermMs` (`tapPreferred`).
+- **Acceptance test:** Unit tests in `firmware/tests/test_firmware_logic.cpp` verify all three modes for rolled key presses and nested press-release pairs.
 
 ## Priority 5
 

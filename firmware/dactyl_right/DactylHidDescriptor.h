@@ -110,3 +110,91 @@ static const uint8_t _compositeReportDescriptor[] = {
   END_COLLECTION(0),                 //   END_COLLECTION (Physical)
   END_COLLECTION(0)                  // END_COLLECTION (Application)
 };
+
+// -----------------------------------------------------------------------------
+// BLE Connection Parameters (Apple Accessory Design Guidelines & Power Saving)
+// Connection interval is in units of 1.25 ms. Supervision timeout is in units of 10 ms.
+// -----------------------------------------------------------------------------
+#define BLE_CONN_ACTIVE_MIN_INT       0x0006  // 7.5 ms (6 * 1.25 ms)
+#define BLE_CONN_ACTIVE_MAX_INT       0x0012  // 22.5 ms (18 * 1.25 ms, min + 15 ms <= max for Apple guidelines)
+#define BLE_CONN_ACTIVE_LATENCY       0       // Immediate transmission on every event
+#define BLE_CONN_STANDBY_MIN_INT      0x000C  // 15 ms  (12 * 1.25 ms)
+#define BLE_CONN_STANDBY_MAX_INT      0x0018  // 30 ms  (24 * 1.25 ms)
+#define BLE_CONN_STANDBY_LATENCY      20      // Skip up to 20 empty events (~315..630 ms wakeup)
+#define BLE_CONN_SUPERVISION_TIMEOUT  400     // 4000 ms (400 * 10 ms)
+
+struct BleConnParams {
+  uint16_t min_int;
+  uint16_t max_int;
+  uint16_t latency;
+  uint16_t timeout;
+};
+
+struct BleConnParamTracker {
+  uint8_t peerBda[6];
+  bool hasPeer;
+  bool inStandby;
+  bool appliedValid;
+  BleConnParams applied;
+};
+
+inline BleConnParams bleConnParamsForStandby(bool standby) {
+  BleConnParams p;
+  if (standby) {
+    p.min_int = BLE_CONN_STANDBY_MIN_INT;
+    p.max_int = BLE_CONN_STANDBY_MAX_INT;
+    p.latency = BLE_CONN_STANDBY_LATENCY;
+  } else {
+    p.min_int = BLE_CONN_ACTIVE_MIN_INT;
+    p.max_int = BLE_CONN_ACTIVE_MAX_INT;
+    p.latency = BLE_CONN_ACTIVE_LATENCY;
+  }
+  p.timeout = BLE_CONN_SUPERVISION_TIMEOUT;
+  return p;
+}
+
+inline bool bleConnParamsEqual(const BleConnParams &a, const BleConnParams &b) {
+  return a.min_int == b.min_int && a.max_int == b.max_int &&
+         a.latency == b.latency && a.timeout == b.timeout;
+}
+
+inline void bleConnInitTracker(BleConnParamTracker &t) {
+  for (int i = 0; i < 6; i++) t.peerBda[i] = 0;
+  t.hasPeer = false;
+  t.inStandby = false;
+  t.appliedValid = false;
+  t.applied = {0, 0, 0, 0};
+}
+
+inline bool bleConnTrackConnect(BleConnParamTracker &t, const uint8_t *bda, BleConnParams &out) {
+  if (bda) {
+    for (int i = 0; i < 6; i++) t.peerBda[i] = bda[i];
+    t.hasPeer = true;
+  } else {
+    t.hasPeer = false;
+  }
+  t.appliedValid = false;
+  out = bleConnParamsForStandby(t.inStandby);
+  return t.hasPeer;
+}
+
+inline void bleConnTrackDisconnect(BleConnParamTracker &t) {
+  t.hasPeer = false;
+  t.appliedValid = false;
+}
+
+inline bool bleConnTrackStandby(BleConnParamTracker &t, bool standby, BleConnParams &out) {
+  t.inStandby = standby;
+  if (!t.hasPeer) return false;
+  BleConnParams target = bleConnParamsForStandby(standby);
+  if (t.appliedValid && bleConnParamsEqual(t.applied, target)) return false;
+  out = target;
+  return true;
+}
+
+inline void bleConnTrackResult(BleConnParamTracker &t, const BleConnParams &requested, bool ok) {
+  if (ok) {
+    t.applied = requested;
+    t.appliedValid = true;
+  }
+}

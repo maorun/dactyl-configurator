@@ -489,6 +489,7 @@ static bool setupEspNow() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   esp_wifi_set_channel(SPLIT_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_max_tx_power(SPLIT_ESPNOW_TX_POWER);
 
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);

@@ -263,8 +263,37 @@ public:
   std::vector<uint8_t> clickedMouseButtons;
   std::vector<int8_t> mouseScrolls;
 
-  BleKeyboard(std::string n, std::string m, uint8_t b) : name(n), mfr(m), batt(b) {}
+  BleKeyboard(std::string n, std::string m, uint8_t b) : name(n), mfr(m), batt(b) {
+    bleConnInitTracker(connTracker);
+  }
   bool isConnected() { return connected; }
+  BleConnParamTracker connTracker;
+  std::vector<BleConnParams> connParamRequests;
+  bool failConnUpdate = false;
+
+  void connectPeer(const uint8_t* bda = nullptr) {
+    connected = true;
+    uint8_t defaultBda[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
+    const uint8_t* addr = bda ? bda : defaultBda;
+    BleConnParams p;
+    if (bleConnTrackConnect(connTracker, addr, p)) {
+      connParamRequests.push_back(p);
+      bleConnTrackResult(connTracker, p, !failConnUpdate);
+    }
+  }
+
+  void disconnectPeer() {
+    connected = false;
+    bleConnTrackDisconnect(connTracker);
+  }
+
+  void setStandbyMode(bool standby) {
+    BleConnParams p;
+    if (bleConnTrackStandby(connTracker, standby, p)) {
+      connParamRequests.push_back(p);
+      bleConnTrackResult(connTracker, p, !failConnUpdate);
+    }
+  }
   std::vector<uint8_t> pressHistory; // jeder press() an den Host, wird von releaseAll() nicht geleert
   std::vector<int> keyEvents;        // +code = press, -code = release, in Aufrufreihenfolge
   void press(uint8_t k) { pressedKeys.push_back(k); pressHistory.push_back(k); keyEvents.push_back(k); }

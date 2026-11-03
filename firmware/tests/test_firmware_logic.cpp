@@ -3868,6 +3868,144 @@ TEST(test_mouse_move_host_loss_restarts_acceleration) {
   applyMatrixKeyChange(2, 1, false, 4100);
 }
 
+// -----------------------------------------------------------------------------
+// BLE Connection Parameters & Standby Power Saving
+// -----------------------------------------------------------------------------
+
+TEST(test_ble_conn_params_apple_guidelines_compliance) {
+  // Apple Accessory Design Guidelines for BLE:
+  // 1. Interval Max * (Slave Latency + 1) <= 2 s
+  // 2. Interval Min >= 15 ms OR Interval Min in {7.5 ms, 11.25 ms, 15 ms, ...}
+  // 3. (Interval Min + 15 ms <= Interval Max) OR (Interval Min == Interval Max)
+  // 4. Slave Latency <= 30
+  // 5. connSupervisionTimeout <= 6 s (600 in 10 ms units)
+  // 6. Interval Max * (Slave Latency + 1) * 3 < connSupervisionTimeout
+  const BleConnParams active = bleConnParamsForStandby(false);
+  const BleConnParams standby = bleConnParamsForStandby(true);
+
+  // Active Profile: Fast typing response
+  assert(active.min_int == 6);      // 7.5 ms
+  assert(active.max_int == 18);     // 22.5 ms (min + 15 ms <= max for Apple guidelines)
+  assert(active.latency == 0);      // No latency during active typing
+  assert(active.timeout == 400);    // 4000 ms
+
+  double activeMaxMs = active.max_int * 1.25;
+  double activeEffMs = activeMaxMs * (active.latency + 1);
+  double activeTimeoutMs = active.timeout * 10.0;
+  assert(activeEffMs <= 2000.0);
+  assert(active.latency <= 30);
+  assert(activeTimeoutMs <= 6000.0);
+  assert(activeEffMs * 3.0 < activeTimeoutMs);
+  assert(active.min_int == active.max_int || active.min_int * 1.25 + 15.0 <= activeMaxMs);
+
+  // Standby Profile: Skip up to 20 connection intervals when idle (~315..630 ms)
+  assert(standby.min_int == 12);    // 15 ms
+  assert(standby.max_int == 24);    // 30 ms
+  assert(standby.latency == 20);    // Skips up to 20 empty intervals
+  assert(standby.timeout == 400);   // 4000 ms
+
+  double standbyMaxMs = standby.max_int * 1.25;
+  double standbyEffMs = standbyMaxMs * (standby.latency + 1); // 30 ms * 21 = 630 ms
+  double standbyTimeoutMs = standby.timeout * 10.0;           // 4000 ms
+  assert(standbyEffMs <= 2000.0);
+  assert(standby.latency <= 30);
+  assert(standbyTimeoutMs <= 6000.0);
+  assert(standbyEffMs * 3.0 < standbyTimeoutMs);              // 1890 ms < 4000 ms
+  assert(standby.min_int * 1.25 + 15.0 <= standbyMaxMs);     // 15 ms + 15 ms <= 30 ms
+}
+
+TEST(test_ble_conn_param_tracker_transitions) {
+  BleConnParamTracker tracker;
+  bleConnInitTracker(tracker);
+  assert(!tracker.hasPeer);
+  assert(!tracker.inStandby);
+  assert(!tracker.appliedValid);
+
+  BleConnParams req = {};
+  // 1. Changing standby before any peer is connected does not emit request
+  assert(!bleConnTrackStandby(tracker, true, req));
+  assert(tracker.inStandby == true);
+
+  // 2. Peer connects while in standby -> immediately requests standby parameters
+  uint8_t mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+  assert(bleConnTrackConnect(tracker, mac, req));
+  assert(tracker.hasPeer);
+  assert(req.latency == BLE_CONN_STANDBY_LATENCY);
+  bleConnTrackResult(tracker, req, true);
+  assert(tracker.appliedValid);
+
+  // 3. Repeated standby call with identical parameters -> suppressed
+  assert(!bleConnTrackStandby(tracker, true, req));
+
+  // 4. Exit standby -> requests active parameters
+  assert(bleConnTrackStandby(tracker, false, req));
+  assert(req.latency == BLE_CONN_ACTIVE_LATENCY);
+  bleConnTrackResult(tracker, req, true);
+
+  // 5. Repeated active call -> suppressed
+  assert(!bleConnTrackStandby(tracker, false, req));
+
+  // 6. Disconnect clears peer and applied state
+  bleConnTrackDisconnect(tracker);
+  assert(!tracker.hasPeer);
+  assert(!tracker.appliedValid);
+
+  // 7. Reconnect -> requests active parameters again
+  assert(bleConnTrackConnect(tracker, mac, req));
+  assert(req.latency == BLE_CONN_ACTIVE_LATENCY);
+}
+
+TEST(test_ble_keyboard_standby_mode_requests) {
+  BleKeyboard mockKbd("Test", "Dactyl", 100);
+  mockKbd.disconnectPeer();
+  mockKbd.connParamRequests.clear();
+
+  // No requests when disconnected
+  mockKbd.setStandbyMode(true);
+  assert(mockKbd.connParamRequests.empty());
+
+  // Connect peer -> requests standby profile because standby was set
+  mockKbd.connectPeer();
+  assert(mockKbd.connParamRequests.size() == 1);
+  assert(mockKbd.connParamRequests.back().latency == BLE_CONN_STANDBY_LATENCY);
+
+  // Return to active mode
+  mockKbd.setStandbyMode(false);
+  assert(mockKbd.connParamRequests.size() == 2);
+  assert(mockKbd.connParamRequests.back().latency == BLE_CONN_ACTIVE_LATENCY);
+
+  // Transition back to standby
+  mockKbd.setStandbyMode(true);
+  assert(mockKbd.connParamRequests.size() == 3);
+  assert(mockKbd.connParamRequests.back().latency == BLE_CONN_STANDBY_LATENCY);
+
+  // Redundant transition does not send duplicate request
+  mockKbd.setStandbyMode(true);
+  assert(mockKbd.connParamRequests.size() == 3);
+}
+
+TEST(test_ble_conn_param_retry_on_failure) {
+  BleKeyboard mockKbd("Test", "Dactyl", 100);
+  mockKbd.connectPeer();
+  mockKbd.connParamRequests.clear();
+
+  // Simulate GAP update failure during standby transition
+  mockKbd.failConnUpdate = true;
+  mockKbd.setStandbyMode(true);
+  assert(mockKbd.connParamRequests.size() == 1);
+  assert(!bleConnParamsEqual(mockKbd.connTracker.applied, bleConnParamsForStandby(true)));
+
+  // Because previous attempt failed, next attempt retries instead of suppressing
+  mockKbd.failConnUpdate = false;
+  mockKbd.setStandbyMode(true);
+  assert(mockKbd.connParamRequests.size() == 2);
+  assert(bleConnParamsEqual(mockKbd.connTracker.applied, bleConnParamsForStandby(true)));
+
+  // Now that it succeeded, next call is suppressed
+  mockKbd.setStandbyMode(true);
+  assert(mockKbd.connParamRequests.size() == 2);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

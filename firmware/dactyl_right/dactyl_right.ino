@@ -55,6 +55,8 @@ public:
   DactylBleKeyboard(std::string name, std::string mfr, uint8_t batt)
     : DactylBleComposite(name, mfr, batt) {}
 
+  using DactylBleComposite::onConnect;
+
   void onConnect(BLEServer *pServer) override {
     DactylBleComposite::onConnect(pServer);
   }
@@ -259,6 +261,7 @@ void exitStandby() {
   if (isStandby) {
     isStandby = false;
     setCpuFrequencyMhz(240);
+    bleKeyboard.setStandbyMode(false);
     Serial.println("[POWER] Standby beendet -> CPU wieder auf 240 MHz");
   }
 }
@@ -267,6 +270,7 @@ void enterStandby() {
   if (!isStandby) {
     isStandby = true;
     setCpuFrequencyMhz(80);
+    bleKeyboard.setStandbyMode(true);
     Serial.println("[POWER] Inaktivität erreicht -> Standby aktiv (CPU 80 MHz, gedrosselter Matrix-Scan)");
   }
 }
@@ -567,6 +571,7 @@ void setupSplitReceiver() {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   esp_wifi_set_channel(SPLIT_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_max_tx_power(SPLIT_ESPNOW_TX_POWER);
   if (esp_now_init() != ESP_OK) {
     Serial.println("[SPLIT] ERR ESPNOW_INIT");
     return;

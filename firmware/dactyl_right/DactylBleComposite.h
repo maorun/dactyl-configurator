@@ -6,11 +6,15 @@
 #include <BLE2902.h>
 #include <BLEHIDDevice.h>
 #include <BLESecurity.h>
+#include <esp_bt.h>
+#include <esp_gap_ble_api.h>
 #include "HIDTypes.h"
 #include "Print.h"
 #include "DactylKeycodes.h" // Keycodes & Report-Typen (keine externe BleKeyboard-Bibliothek nötig)
 
 #include "DactylHidDescriptor.h" // Report-IDs, Maus-Buttons & Composite-Report-Descriptor
+
+#define BLE_HID_TX_POWER ESP_PWR_LVL_N0
 
 class DactylBleSecurityCallbacks : public BLESecurityCallbacks {
   bool onSecurityRequest() override { return true; }
@@ -52,6 +56,8 @@ protected:
   uint16_t pid;
   uint16_t version;
 
+  BleConnParamTracker connTracker;
+
   virtual void onStarted(BLEServer *pServer) {}
 
 public:
@@ -73,6 +79,7 @@ public:
   {
     memset(&_keyReport, 0, sizeof(KeyReport));
     memset(&_mediaKeyReport, 0, sizeof(MediaKeyReport));
+    bleConnInitTracker(connTracker);
   }
 
   // Muss vor begin() aufgerufen werden, damit der Name im Advertising erscheint
@@ -82,6 +89,8 @@ public:
 
   void begin() {
     BLEDevice::init(String(deviceName.c_str()));
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, BLE_HID_TX_POWER);
+    esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, BLE_HID_TX_POWER);
     BLEServer* pServer = BLEDevice::createServer();
     pServer->setCallbacks(this);
 
@@ -325,6 +334,11 @@ public:
   }
 
   void onConnect(BLEServer* pServer) override {
+    onConnect(pServer, nullptr);
+  }
+
+  void onConnect(BLEServer* pServer, esp_ble_gatts_cb_param_t* param) override {
+    (void)pServer;
     this->connected = true;
     if (inputKeyboard != nullptr) {
       BLE2902* desc = (BLE2902*)inputKeyboard->getDescriptorByUUID(BLEUUID((uint16_t)0x2902));
@@ -338,10 +352,30 @@ public:
       BLE2902* desc = (BLE2902*)inputMouse->getDescriptorByUUID(BLEUUID((uint16_t)0x2902));
       if (desc) desc->setNotifications(true);
     }
+
+    if (param != nullptr) {
+      uint16_t connId = param->connect.conn_id;
+      if (connId <= 8) {
+        esp_ble_power_type_t pwrType = (esp_ble_power_type_t)(ESP_BLE_PWR_TYPE_CONN_HDL0 + connId);
+        esp_ble_tx_power_set(pwrType, BLE_HID_TX_POWER);
+      }
+      BleConnParams targetParams;
+      if (bleConnTrackConnect(connTracker, param->connect.remote_bda, targetParams)) {
+        esp_ble_conn_update_params_t gapParams;
+        memcpy(gapParams.bda, connTracker.peerBda, sizeof(esp_bd_addr_t));
+        gapParams.min_int = targetParams.min_int;
+        gapParams.max_int = targetParams.max_int;
+        gapParams.latency = targetParams.latency;
+        gapParams.timeout = targetParams.timeout;
+        esp_err_t err = esp_ble_gap_update_conn_params(&gapParams);
+        bleConnTrackResult(connTracker, targetParams, (err == ESP_OK));
+      }
+    }
   }
 
   void onDisconnect(BLEServer* pServer) override {
     this->connected = false;
+    bleConnTrackDisconnect(connTracker);
     if (inputKeyboard != nullptr) {
       BLE2902* desc = (BLE2902*)inputKeyboard->getDescriptorByUUID(BLEUUID((uint16_t)0x2902));
       if (desc) desc->setNotifications(false);
@@ -356,6 +390,20 @@ public:
     }
     if (advertising) {
       advertising->start();
+    }
+  }
+
+  void setStandbyMode(bool standby) {
+    BleConnParams targetParams;
+    if (bleConnTrackStandby(connTracker, standby, targetParams)) {
+      esp_ble_conn_update_params_t gapParams;
+      memcpy(gapParams.bda, connTracker.peerBda, sizeof(esp_bd_addr_t));
+      gapParams.min_int = targetParams.min_int;
+      gapParams.max_int = targetParams.max_int;
+      gapParams.latency = targetParams.latency;
+      gapParams.timeout = targetParams.timeout;
+      esp_err_t err = esp_ble_gap_update_conn_params(&gapParams);
+      bleConnTrackResult(connTracker, targetParams, (err == ESP_OK));
     }
   }
 

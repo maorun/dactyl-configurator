@@ -2897,11 +2897,24 @@ function profilesHarness(responses) {
   const h = uiHarness();
   const queue = responses.slice();
   h.backups = { body: { backups: [], skipped: 0 } };
+  h.nvsBackups = { body: { backups: [] } };
+  h.nvsRestore = { status: 200, body: { success: true, port: "/dev/cu.usbserial-a", side: "R", id: "nvs-000001-20261103-120000-000" } };
   h.w.fetch = async (url, opts = {}) => {
     // Backups haben eine eigene Antwort; die Warteschlange gilt nur für /api/profiles
     if (url.startsWith("/api/backups")) {
       h.log.backupFetches = (h.log.backupFetches || 0) + 1;
       const { status = 200, body } = h.backups;
+      return { ok: status >= 200 && status < 300, status, json: async () => body };
+    }
+    if (url.startsWith("/api/nvs_backups")) {
+      h.log.nvsBackupFetches = (h.log.nvsBackupFetches || 0) + 1;
+      const { status = 200, body } = h.nvsBackups;
+      return { ok: status >= 200 && status < 300, status, json: async () => body };
+    }
+    if (url.startsWith("/api/nvs_restore")) {
+      h.log.nvsRestoreCalls = (h.log.nvsRestoreCalls || 0) + 1;
+      h.log.fetches.push({ url, method: opts.method || "POST", body: opts.body ? JSON.parse(opts.body) : null });
+      const { status = 200, body } = h.nvsRestore;
       return { ok: status >= 200 && status < 300, status, json: async () => body };
     }
     h.log.fetches.push({ url, method: opts.method || "GET", body: opts.body ? JSON.parse(opts.body) : null });
@@ -2987,6 +3000,83 @@ asyncTests.push(["Backups: Fehler und leere Liste zeigen einen Hinweis", async (
   await h.w.openLayoutProfilesDialog();
   assert.ok(h.dom.document.getElementById("layoutBackupsStatus").textContent.includes("Noch kein Backup"));
   assert.strictEqual(h.dom.document.getElementById("layoutBackupsList").children.length, 0);
+}]);
+
+asyncTests.push(["NVS-Sicherungen: Dialog listet NVS-Abbilder der Hälfte und stellt eines nach Bestätigung wieder her", async () => {
+  const h = profilesHarness([{ body: { profiles: [], revision: 0, skipped: [] } }]);
+  h.nvsBackups = { body: { backups: [
+    { id: "nvs-000002-20261103-120000-000", savedAt: "2026-11-03T12:00:00+0100" },
+    { id: "nvs-000001-20261103-110000-000", savedAt: "" }
+  ] } };
+  await h.w.openLayoutProfilesDialog();
+  const list = h.dom.document.getElementById("nvsBackupsList");
+  assert.strictEqual(list.children.length, 2);
+  assert.ok(h.dom.document.getElementById("nvsBackupsStatus").textContent.includes("2 NVS-Sicherungen"));
+  // Zeile 1 hat formatiertes Datum
+  assert.notStrictEqual(list.children[0].children[0].textContent, "nvs-000002-20261103-120000-000");
+  assert.strictEqual(list.children[0].children[1].textContent, "nvs-000002-20261103-120000-000");
+  // Zeile 2 ohne gültiges savedAt zeigt die ID als Name
+  assert.strictEqual(list.children[1].children[0].textContent, "nvs-000001-20261103-110000-000");
+
+  // Abbruch in der Rückfrage
+  h.log.confirm = false;
+  await list.children[0].children[2].click();
+  assert.strictEqual(h.log.nvsRestoreCalls || 0, 0);
+
+  // Bestätigt
+  h.log.confirm = true;
+  await list.children[0].children[2].click();
+  assert.strictEqual(h.log.nvsRestoreCalls, 1);
+  const post = h.log.fetches.find(f => f.url.startsWith("/api/nvs_restore"));
+  assert.strictEqual(post.url, "/api/nvs_restore?side=R");
+  assert.deepStrictEqual(post.body, { id: "nvs-000002-20261103-120000-000" });
+  assert.ok(h.log.toasts.some(t => t.includes("NVS-Sicherung") && t.includes("zurückgeschrieben")));
+  // Nach dem Restore wurden die NVS-Backups neu geladen
+  assert.ok((h.log.nvsBackupFetches || 0) >= 2);
+
+  // Klick bei abweichender Hälfte tut nichts
+  vm.runInContext(`editSide = "L";`, h.w);
+  h.w.restoreNvsBackup("nvs-000002-20261103-120000-000");
+  assert.strictEqual(h.log.nvsRestoreCalls, 1);
+}]);
+
+asyncTests.push(["NVS-Sicherungen: Fehler und leere Liste zeigen einen Hinweis; Restore-Fehler meldet Alert", async () => {
+  const h = profilesHarness([{ body: { profiles: [], revision: 0, skipped: [] } }, { body: { profiles: [], revision: 0, skipped: [] } }]);
+  h.nvsBackups = { status: 500, body: { success: false, error: "NVS nicht lesbar" } };
+  await h.w.openLayoutProfilesDialog();
+  assert.ok(h.dom.document.getElementById("nvsBackupsStatus").textContent.includes("NVS nicht lesbar"));
+
+  h.nvsBackups = { body: { backups: [] } };
+  await h.w.openLayoutProfilesDialog();
+  assert.ok(h.dom.document.getElementById("nvsBackupsStatus").textContent.includes("Noch keine NVS-Sicherung"));
+  assert.strictEqual(h.dom.document.getElementById("nvsBackupsList").children.length, 0);
+
+  // Fehlgeschlagener Restore
+  h.nvsBackups = { body: { backups: [{ id: "nvs-000001", savedAt: "" }] } };
+  h.nvsRestore = { status: 500, body: { success: false, error: "Kein USB-Port gefunden" } };
+  await h.w.openLayoutProfilesDialog();
+  h.log.confirm = true;
+  await h.dom.document.getElementById("nvsBackupsList").children[0].children[2].click();
+  assert.ok(h.log.alerts.some(a => a.includes("Kein USB-Port gefunden")));
+  assert.strictEqual(vm.runInContext("layoutProfilesBusy", h.w), false);
+}]);
+
+asyncTests.push(["NVS-Sicherungen: restoreNvsBackup trennt aktiven Serial-Port und verbindet ihn wieder", async () => {
+  const h = profilesHarness([{ body: { profiles: [], revision: 0, skipped: [] } }]);
+  h.nvsBackups = { body: { backups: [{ id: "nvs-000001", savedAt: "" }] } };
+  vm.runInContext(`
+    serialPort = { dummy: true };
+    window.serialPort = serialPort;
+    disconnectSerial = async () => { log.disconnected = (log.disconnected || 0) + 1; serialPort = null; window.serialPort = null; };
+    window.disconnectSerial = disconnectSerial;
+    connectSerial = async (opts) => { log.reconnected = (log.reconnected || 0) + 1; serialPort = { dummy: true }; window.serialPort = serialPort; };
+    window.connectSerial = connectSerial;
+  `, h.w);
+  await h.w.openLayoutProfilesDialog();
+  h.log.confirm = true;
+  await h.dom.document.getElementById("nvsBackupsList").children[0].children[2].click();
+  assert.strictEqual(h.log.disconnected, 1);
+  assert.strictEqual(h.log.reconnected, 1);
 }]);
 
 asyncTests.push(["Layout-Profile: Antwort ohne Liste, übersprungene Profile und Konflikt", async () => {

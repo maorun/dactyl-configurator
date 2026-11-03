@@ -25,14 +25,7 @@ No open entry.
 
 ## Priority 3
 
-### Restore NVS backup in the app
-
-- **Rank:** Feature model. Total 21/40 (typing 0, configuration 7, harmony 7, safety 7). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/layout-profiles-ui.js`, `index.html`, `tests/test_app_logic.js`.
-- **Problem:** `GET /api/nvs_backups` and `POST /api/nvs_restore` exist on the server, but the app has no UI to list or restore an NVS image.
-- **Goal:** Show the NVS backups of the edited half in the "Profile" dialog and restore a selected backup after a confirmation.
-- **Acceptance test:** A test checks that the dialog lists the backups of the active half and calls `/api/nvs_restore?side=L|R`.
+No open entry.
 
 ## Priority 4
 

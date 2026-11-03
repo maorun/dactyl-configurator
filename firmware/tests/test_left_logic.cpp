@@ -658,6 +658,51 @@ TEST(test_tap_pending_retried_after_full_queue_or_link_loss) {
   assert(queueTapPendingIfChanged(tq, rep, true, true) && tq.count == 1 && tq.items[tq.head].code == 1);
 }
 
+TEST(test_standby_wake_window_reached_by_retries) {
+  // Überprüft, dass bei beliebigem Phasenversatz (0..99 ms) zum 100-ms-Zyklus des Empfängers
+  // (im Standby wach in [0..40 ms]) die 5 Retries à 30 ms garantiert ein Wachfenster treffen.
+  for (int phase = 0; phase < SPLIT_ESPNOW_WAKE_INTERVAL_MS; phase++) {
+    SplitSendQueue qSim;
+    queueReset(qSim);
+    queuePush(qSim, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+
+    bool delivered = false;
+    unsigned long now = 0;
+    for (int attempt = 0; attempt <= ESPNOW_MAX_RETRIES; attempt++) {
+      SplitHidEvent ev;
+      assert(queueNextToSend(qSim, now, ev));
+      unsigned long rxPhase = (phase + now) % SPLIT_ESPNOW_WAKE_INTERVAL_MS;
+      bool rxAwake = (rxPhase < SPLIT_ESPNOW_WAKE_WINDOW_STANDBY_MS);
+      if (rxAwake) {
+        assert(queueOnSendResult(qSim, true, now) == SEND_DELIVERED);
+        delivered = true;
+        break;
+      } else {
+        SendOutcome outcome = queueOnSendResult(qSim, false, now);
+        if (attempt < ESPNOW_MAX_RETRIES) {
+          assert(outcome == SEND_RETRY);
+        }
+        now += ESPNOW_RETRY_DELAY_MS;
+      }
+    }
+    assert(delivered);
+  }
+}
+
+TEST(test_left_loop_delay_stays_fast_while_queue_busy) {
+  SplitSendQueue qSim;
+  queueReset(qSim);
+  // Aktiv: immer 1 ms
+  assert(leftLoopDelayMs(false, qSim) == 1UL);
+
+  // Standby leer: 40 ms gedrosselt
+  assert(leftLoopDelayMs(true, qSim) == 40UL);
+
+  // Standby mit Paket in Warteschlange: 1 ms schnelles loop() für zügiges Senden / Retries
+  queuePush(qSim, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'z'));
+  assert(leftLoopDelayMs(true, qSim) == 1UL);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Left Firmware Unit Test Suite" << std::endl;

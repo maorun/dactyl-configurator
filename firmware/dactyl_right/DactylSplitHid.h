@@ -21,6 +21,40 @@
 // 34 = 8.5 dBm (~7 mW, 0 Paketverlust bei ~20 cm Schreibtischabstand bei stark reduzierter Sendeleistung)
 #define SPLIT_ESPNOW_TX_POWER 34
 
+// ESP-NOW Stromsparen (Modem-Sleep zwischen periodischen Empfangsfenstern):
+// Intervall 100 ms (Vielfaches von 100 ms für stabile Wi-Fi/BLE-Koexistenz am Master).
+// Aktiv: volles Fenster (100 ms = 100 % wach, 0 ms Zusatzlatenz beim Tippen).
+// Standby: kurzes Fenster (40 ms wach, 60 ms Schlaf pro Intervall; 30-ms-Retries treffen jedes Fenster).
+#define SPLIT_ESPNOW_WAKE_INTERVAL_MS       100
+#define SPLIT_ESPNOW_WAKE_WINDOW_ACTIVE_MS  100
+#define SPLIT_ESPNOW_WAKE_WINDOW_STANDBY_MS 40
+
+inline uint16_t splitEspNowWakeWindowMs(bool isStandby) {
+  return isStandby ? (uint16_t)SPLIT_ESPNOW_WAKE_WINDOW_STANDBY_MS
+                   : (uint16_t)SPLIT_ESPNOW_WAKE_WINDOW_ACTIVE_MS;
+}
+
+struct SplitWakeWindowState {
+  uint16_t appliedWindowMs;
+  bool initialized;
+};
+
+inline void splitWakeWindowReset(SplitWakeWindowState &s) {
+  s.appliedWindowMs = 0;
+  s.initialized = false;
+}
+
+template <class ApplyFn>
+inline bool splitWakeWindowUpdateIfNeeded(SplitWakeWindowState &s, bool espNowReady, bool isStandby, ApplyFn apply) {
+  if (!espNowReady) return false;
+  uint16_t target = splitEspNowWakeWindowMs(isStandby);
+  if (s.initialized && s.appliedWindowMs == target) return false;
+  if (!apply(target)) return false;
+  s.appliedWindowMs = target;
+  s.initialized = true;
+  return true;
+}
+
 // Wi-Fi-STA-MAC (= Basis-MAC) beider Hälften
 static const uint8_t SPLIT_MASTER_MAC[6] = {0x2E, 0xBC, 0xBB, 0x81, 0x61, 0xA6};
 static const uint8_t SPLIT_LEFT_MAC[6] = {0x2E, 0xBC, 0xBB, 0x81, 0x61, 0xB0};

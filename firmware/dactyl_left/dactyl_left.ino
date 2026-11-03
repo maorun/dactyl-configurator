@@ -172,11 +172,14 @@ void exitConfigMode() {
   ESP.restart();
 }
 
+void applyLeftWakeWindow(bool standby);
+
 // Der Standby drosselt nur den Matrix-Scan. Kein setCpuFrequencyMhz(): ein Taktwechsel bei laufendem
 // Wi-Fi ließ jeden ESP-NOW-Versand scheitern, bis ESPNOW_RESTART griff (Tasten nach dem Aufwachen verloren).
 void exitStandby() {
   if (isStandby) {
     isStandby = false;
+    applyLeftWakeWindow(false);
     Serial.println("[POWER] Standby beendet -> normaler Matrix-Scan");
   }
 }
@@ -184,6 +187,7 @@ void exitStandby() {
 void enterStandby() {
   if (!isStandby) {
     isStandby = true;
+    applyLeftWakeWindow(true);
     Serial.println("[POWER] Inaktivität erreicht -> Standby aktiv (gedrosselter Matrix-Scan, CPU bleibt 240 MHz)");
   }
 }
@@ -324,6 +328,13 @@ static void onDoubleTapFlushed() {
 // ESP-NOW-Sender
 // -----------------------------------------------------------------------------
 static bool espNowReady = false;
+static SplitWakeWindowState leftWakeWindow = {};
+
+void applyLeftWakeWindow(bool standby) {
+  splitWakeWindowUpdateIfNeeded(leftWakeWindow, espNowReady && !isConfigMode, standby, [](uint16_t windowMs) {
+    return esp_now_set_wake_window(windowMs) == ESP_OK;
+  });
+}
 static uint32_t droppedReported = 0;
 // Von der Warteschlangen-Grenze verworfene Diagnose-Ereignisse (Live-Monitor am Master)
 static uint32_t diagDropped = 0;
@@ -490,6 +501,8 @@ static bool setupEspNow() {
   WiFi.disconnect();
   esp_wifi_set_channel(SPLIT_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
   esp_wifi_set_max_tx_power(SPLIT_ESPNOW_TX_POWER);
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+  esp_wifi_connectionless_module_set_wake_interval(SPLIT_ESPNOW_WAKE_INTERVAL_MS);
 
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -530,6 +543,8 @@ static bool setupEspNow() {
   }
   espNowReady = true;
   heartbeatCounter = 0;
+  splitWakeWindowReset(leftWakeWindow);
+  applyLeftWakeWindow(isStandby);
   // Der Master löscht die Meldung bei einem neuen Link; ein noch wartender Tipp wird neu gemeldet
   tapPendingReset(tapPendingReporter, masterTapFlushRequested);
   // Dasselbe für Mod-Tap: nichts gilt als gemeldet, eine alte Meldung und Anforderung des Masters entfallen,
@@ -918,5 +933,5 @@ void loop() {
     feedSerialChar((char)Serial.read(), serialRxBuf);
   }
 
-  delay(isStandby ? 40 : 1);
+  delay(leftLoopDelayMs(isStandby, sendQueue));
 }

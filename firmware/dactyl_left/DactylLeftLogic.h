@@ -70,10 +70,11 @@ bool updateLeftKey(int r, int c, bool rawPressed, unsigned long nowMs, unsigned 
 // ESPNOW_MAX_RETRIES-mal wiederholt, bevor es verworfen wird. Die Reihenfolge bleibt erhalten,
 // damit ein UP nie vor seinem DOWN ankommt.
 #define SPLIT_QUEUE_SIZE 64
-#define ESPNOW_MAX_RETRIES 3
+#define ESPNOW_MAX_RETRIES 5
 // Fehlt der Sende-Callback so lange, gilt das Paket als fehlgeschlagen
 #define ESPNOW_SEND_TIMEOUT_MS 200
 // Wartezeit vor einem Retry, damit ein voller Wi-Fi-Puffer (ESP_ERR_ESPNOW_NO_MEM) frei wird
+// und die Versuche das 40-ms-Aufwachfenster im 100-ms-Intervall sicher treffen
 #define ESPNOW_RETRY_DELAY_MS 30
 
 enum SendOutcome { SEND_DELIVERED = 0, SEND_RETRY = 1, SEND_DROPPED = 2 };
@@ -92,6 +93,10 @@ struct SplitSendQueue {
   // und ein ganz fehlender Callback verschieben die Zuordnung deshalb nicht dauerhaft.
   uint32_t expectedSeq;
 };
+
+inline unsigned long leftLoopDelayMs(bool isStandby, const SplitSendQueue &q) {
+  return (isStandby && q.count == 0) ? 40UL : 1UL;
+}
 
 void queueReset(SplitSendQueue &q) {
   q.head = 0;

@@ -29,17 +29,6 @@ No open entry.
 
 ## Priority 4
 
-### ESP-NOW power saving
-
-- **Rank:** Feature model. Total 18/40 (typing 6, configuration 2, harmony 6, safety 4). Effort M. Estimate.
-- **Area:** Firmware.
-- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`setupSplitReceiver()`), `firmware/dactyl_left/dactyl_left.ino` (ESP-NOW setup), `firmware/dactyl_right/DactylSplitHid.h`.
-- **Problem:** Both halves run Wi-Fi in `WIFI_STA` mode for ESP-NOW without an access point. The radio receives all the time and draws about 95 to 100 mA. The standby lowers only the CPU clock and the scan rate. A 2000 mAh battery lasts about 2 work days (estimate from data sheet values, not measured).
-- **Goal:** Let the radio sleep between short wake windows with `esp_wifi_connectionless_module_set_wake_interval()` and `esp_now_set_wake_window()`. Use a long window while keys are active and a short window in standby.
-- **Goal:** Keep the key latency and the split protocol unchanged for the user. The sender must retry until the receiver is awake. Check the coexistence with BLE HID on the master.
-- **Note:** Do not change `setCpuFrequencyMhz()` on the left half (see "Config mode, NVS, power" in `AGENTS.md`).
-- **Acceptance test:** A firmware test checks the selection of the wake window for active state and standby. A current measurement at the JST socket shows a lower standby current for each half.
-
 ### Matrix scan settle time and deep-sleep pin power
 
 - **Rank:** Feature model. Total 17/40 (typing 4, configuration 1, harmony 5, safety 7). Effort S. Estimate.

@@ -499,29 +499,67 @@ const WPM_WINDOW_MS = 60000;
 const CHARS_PER_WORD = 5;
 const HEAT_LEVELS = 5;
 
-function createTypingStats(counts, profile) {
-  const stats = { counts: {}, total: 0, recent: [], profile };
-  if (counts && typeof counts === "object") {
+// Zähler je Taste aus gespeicherten Daten, nur physische Tasten der Hälfte
+function sanitizeKeyCounts(counts, profile) {
+  const out = {};
+  let total = 0;
+  if (counts && typeof counts === "object" && !Array.isArray(counts)) {
     for (const [id, n] of Object.entries(counts)) {
       const m = /^(\d+)_(\d+)$/.exec(id);
       if (!m || !Number.isSafeInteger(n) || n <= 0) continue;
       const r = Number(m[1]), c = Number(m[2]);
       if (!isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS) || !isPhysicalKey(r, c, profile)) continue;
-      stats.counts[`${r}_${c}`] = n;
-      stats.total += n;
+      out[`${r}_${c}`] = n;
+      total += n;
+    }
+  }
+  return { counts: out, total };
+}
+
+// stored: { "r_c": n, layers: { "<ebene>": { "r_c": n } } }. Die Gesamtzähler bleiben oben, so liest eine
+// ältere App-Version sie weiter (sie verwirft den Schlüssel "layers"); die alte Form hat nur "r_c"-Schlüssel.
+function createTypingStats(stored, profile) {
+  const base = sanitizeKeyCounts(stored, profile);
+  const stats = { counts: base.counts, total: base.total, layerCounts: [], recent: [], profile };
+  for (let l = 0; l < NUM_LAYERS; l++) stats.layerCounts.push({});
+  const layers = stored && typeof stored === "object" && !Array.isArray(stored)
+    && Object.prototype.hasOwnProperty.call(stored, "layers") ? stored.layers : null;
+  if (layers && typeof layers === "object" && !Array.isArray(layers)) {
+    for (const [key, counts] of Object.entries(layers)) {
+      if (!/^\d+$/.test(key) || !isValidIndex(Number(key), NUM_LAYERS)) continue;
+      stats.layerCounts[Number(key)] = sanitizeKeyCounts(counts, profile).counts;
     }
   }
   return stats;
 }
 
-function recordKeyPress(stats, r, c, nowMs) {
+// Speicherform für localStorage (createTypingStats liest sie wieder)
+function serializeTypingStats(stats) {
+  const layers = {};
+  stats.layerCounts.forEach((counts, l) => {
+    if (Object.keys(counts).length) layers[l] = counts;
+  });
+  return { ...stats.counts, layers };
+}
+
+// layer: Ebene beim Drücken (KEY_PRESS / SPLIT_KEY); ohne gültige Ebene zählt die Taste nur gesamt
+function recordKeyPress(stats, r, c, nowMs, layer) {
   if (!isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS) || !isPhysicalKey(r, c, stats.profile)) return false;
   const id = `${r}_${c}`;
   stats.counts[id] = (stats.counts[id] || 0) + 1;
   stats.total++;
+  if (isValidIndex(layer, NUM_LAYERS)) {
+    const layerCounts = stats.layerCounts[layer];
+    layerCounts[id] = (layerCounts[id] || 0) + 1;
+  }
   stats.recent.push(nowMs);
   pruneRecentPresses(stats, nowMs);
   return true;
+}
+
+// Zähler für die Heatmap: alle Ebenen (layer null) oder nur eine Ebene
+function heatmapCounts(stats, layer) {
+  return isValidIndex(layer, NUM_LAYERS) ? stats.layerCounts[layer] : stats.counts;
 }
 
 function pruneRecentPresses(stats, nowMs) {
@@ -542,9 +580,9 @@ function heatLevel(count, maxCount) {
   return Math.max(1, Math.ceil(count / maxCount * HEAT_LEVELS));
 }
 
-function maxKeyCount(stats) {
+function maxKeyCount(stats, layer = null) {
   let max = 0;
-  for (const n of Object.values(stats.counts)) if (n > max) max = n;
+  for (const n of Object.values(heatmapCounts(stats, layer))) if (n > max) max = n;
   return max;
 }
 

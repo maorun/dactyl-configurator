@@ -32,7 +32,7 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
-             createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, WPM_WINDOW_MS, HEAT_LEVELS,
+             createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, clearAbsentKeyActions,
              SIDE_PROFILES,
@@ -229,6 +229,51 @@ test("Heatmap links: R4C0 zählt, R4C5 und R5C0 zählen nicht", () => {
   assert.strictEqual(api.recordKeyPress(s, 4, 5, 0), false);
   assert.strictEqual(api.recordKeyPress(s, 5, 0, 0), false);
   assert.strictEqual(api.recordKeyPress(s, 5, 5, 0), true);
+});
+
+test("Heatmap pro Ebene: Drücke auf zwei Ebenen ergeben getrennte Zähler", () => {
+  const s = api.createTypingStats(null, R);
+  api.recordKeyPress(s, 2, 1, 0, 0);
+  api.recordKeyPress(s, 2, 1, 10, 0);
+  api.recordKeyPress(s, 2, 1, 20, 3);
+  api.recordKeyPress(s, 1, 1, 30, 3);
+  api.recordKeyPress(s, 1, 1, 40); // ohne Ebene: nur gesamt
+  api.recordKeyPress(s, 1, 1, 50, 8); // ungültige Ebene: nur gesamt
+  assert.deepStrictEqual({ ...api.heatmapCounts(s, 0) }, { "2_1": 2 });
+  assert.deepStrictEqual({ ...api.heatmapCounts(s, 3) }, { "2_1": 1, "1_1": 1 });
+  assert.deepStrictEqual({ ...api.heatmapCounts(s, 5) }, {});
+  assert.deepStrictEqual({ ...api.heatmapCounts(s, null) }, { "2_1": 3, "1_1": 3 });
+  assert.strictEqual(s.total, 6);
+  assert.strictEqual(api.maxKeyCount(s, 0), 2);
+  assert.strictEqual(api.maxKeyCount(s, 3), 1);
+  assert.strictEqual(api.maxKeyCount(s), 3);
+});
+
+test("Heatmap pro Ebene: Speicherform übersteht Laden, alte Form bleibt lesbar", () => {
+  const s = api.createTypingStats(null, R);
+  api.recordKeyPress(s, 0, 1, 0, 2);
+  api.recordKeyPress(s, 0, 1, 0, 2);
+  api.recordKeyPress(s, 3, 3, 0, 0);
+  const stored = JSON.parse(JSON.stringify(api.serializeTypingStats(s)));
+  assert.deepStrictEqual(stored, { "0_1": 2, "3_3": 1, layers: { 0: { "3_3": 1 }, 2: { "0_1": 2 } } });
+  // Eine ältere App-Version liest die Gesamtzähler weiter (ihre Prüfung der Schlüssel verwirft "layers")
+  assert.deepStrictEqual(Object.keys(stored).filter(k => /^(\d+)_(\d+)$/.test(k)).sort(), ["0_1", "3_3"]);
+  const back = api.createTypingStats(stored, R);
+  assert.strictEqual(back.total, 3);
+  assert.deepStrictEqual({ ...api.heatmapCounts(back, 2) }, { "0_1": 2 });
+  assert.deepStrictEqual({ ...api.heatmapCounts(back, 0) }, { "3_3": 1 });
+  // Alte Speicherform ohne Ebenen: Gesamtzähler bleiben, Ebenen sind leer
+  const legacy = api.createTypingStats({ "0_1": 4 }, R);
+  assert.strictEqual(legacy.total, 4);
+  assert.deepStrictEqual({ ...api.heatmapCounts(legacy, 0) }, {});
+  // Ungültige Ebenen und Zähler werden verworfen
+  const bad = api.createTypingStats(JSON.parse('{"0_1": 1, "layers": {"9": {"0_1": 1}, "x": {"0_1": 1}, "1": {"4_0": 3, "0_1": 2}, "__proto__": {"0_1": 5}}}'), R);
+  assert.deepStrictEqual({ ...api.heatmapCounts(bad, 1) }, { "0_1": 2 });
+  assert.deepStrictEqual({ ...bad.counts }, { "0_1": 1 });
+  assert.strictEqual(bad.layerCounts.length, 8);
+  const broken = api.createTypingStats({ layers: [1] }, R);
+  assert.strictEqual(broken.total, 0);
+  assert.deepStrictEqual({ ...api.heatmapCounts(broken, 0) }, {});
 });
 
 test("WPM: gleitendes 60-s-Fenster mit 5 Anschlägen pro Wort", () => {
@@ -883,11 +928,13 @@ function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + 
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
 ${section("js/serial.js", "// Gedrückte SPLIT_KEY-Tasten", "function switchLayerUI")}
 this.handle = handleSerialLine; this.tested = side => [...tests[side].tested];
-this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);`, s);
+this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);
+this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
   // Arrays aus dem VM-Kontext haben einen anderen Prototyp: für deepStrictEqual in einfache Werte kopieren
   const plain = v => JSON.parse(JSON.stringify(v));
   return {
     handle: (...a) => s.handle(...a), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
+    layerCounts: (side, l) => plain(s.layerCounts(side, l)),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
     set snapshotActive(v) { s.snapshotActive = v; }
   };
@@ -996,6 +1043,30 @@ test("serial.js: Ebenenwechsel der nicht bearbeiteten Hälfte schaltet die getei
   // LAYER-Zeile vom Abgleich mit der anderen Hälfte ("LAYER: SPLIT -> Layer n")
   s.handle("LAYER: SPLIT -> Layer 3", "L", "usb");
   assert.deepStrictEqual(s.calls.layers, [2, 3]);
+});
+
+test("serial.js: KEY_PRESS und SPLIT_KEY zählen die Heatmap nach ihrer Ebene", () => {
+  const s = serialLineHarness();
+  s.handle('KEY_PRESS:{"r":1,"c":2,"key":"q","layer":0}', "R", "usb");
+  s.handle('KEY_PRESS:{"r":1,"c":2,"key":"!","layer":3}', "R", "usb");
+  s.handle('SPLIT_KEY:{"r":2,"c":2,"pressed":1,"layer":3}', "R", "usb");
+  assert.deepStrictEqual(s.layerCounts("R", 0), { "1_2": 1 });
+  assert.deepStrictEqual(s.layerCounts("R", 3), { "1_2": 1 });
+  assert.deepStrictEqual(s.layerCounts("L", 3), { "2_2": 1 });
+});
+
+test("heatmap.js: heatmapLayer folgt der angezeigten Ebene nur im Modus pro Ebene", () => {
+  const h = {};
+  vm.createContext(h);
+  vm.runInContext(`var heatmapPerLayer = false, activeLayerIndex = 4;
+${section("js/heatmap.js", "// Ebene der Heatmap", "function applyHeatClass")}
+this.layer = () => heatmapLayer();
+this.set = (p, l) => { heatmapPerLayer = p; activeLayerIndex = l; };`, h);
+  assert.strictEqual(h.layer(), null);
+  h.set(true, 4);
+  assert.strictEqual(h.layer(), 4);
+  h.set(true, 0);
+  assert.strictEqual(h.layer(), 0);
 });
 
 // Diff-Ablauf aus js/config-sync.js mit Fake-Timern, Fake-Gerät und Fake-Dialog

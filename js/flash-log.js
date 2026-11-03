@@ -5,7 +5,16 @@
 // Höchstzahl der angezeigten Zeilen; ältere fallen weg (der Server meldet Fehler zusätzlich im Ergebnis)
 const FLASH_LOG_MAX_LINES = 400;
 
-const FLASH_STAGE_LABELS = { port: "USB-Port", compile: "Kompilieren", nvs: "NVS-Sicherung", upload: "Upload" };
+const FLASH_STAGE_LABELS = {
+  port: "USB-Port",
+  compile: "Kompilieren",
+  nvs: "NVS-Sicherung",
+  upload: "Upload",
+  sign: "Signieren",
+  ota: "Bluetooth-OTA-Upload",
+  verify: "Verifizieren & Neustart",
+  done: "Fertig"
+};
 
 function flashStageLabel(stage) {
   return FLASH_STAGE_LABELS[stage] || "Flashen";
@@ -72,7 +81,7 @@ async function readFlashStream(body, onEvent) {
 }
 
 // Dialog mit der Live-Ausgabe; schließen lässt er sich erst nach dem Ergebnis
-function openFlashLogDialog(profile) {
+function openFlashLogDialog(profile, customTitle) {
   const modal = document.getElementById("flashLogModal");
   const title = document.getElementById("flashLogTitle");
   const stageEl = document.getElementById("flashLogStage");
@@ -80,7 +89,7 @@ function openFlashLogDialog(profile) {
   const closeBtn = document.getElementById("btnCloseFlashLog");
   const lines = [];
   if (!modal || !output) return { onEvent() {}, finish() {} };
-  title.textContent = `Flashen: ${profile.label}`;
+  title.textContent = customTitle || `Flashen: ${profile?.label || "Dactyl"}`;
   stageEl.textContent = "Speichere die Konfiguration ...";
   output.textContent = "";
   closeBtn.disabled = true;

@@ -31,6 +31,9 @@ if [ -e "$KEY_FILE" ] && [ "$MODE" = "--if-missing" ]; then
     exit 1
   fi
   chmod 600 "$KEY_FILE"
+  if [ -z "${DACTYL_SPLIT_KEY_FILE:-}" ] && [ -f "$REPO_DIR/scripts/generate-ota-key.py" ]; then
+    python3 "$REPO_DIR/scripts/generate-ota-key.py" --if-missing
+  fi
   exit 0
 fi
 if [ -e "$KEY_FILE" ] && [ "$MODE" != "--force" ]; then
@@ -65,4 +68,7 @@ HEADER
 chmod 600 "$TMP"
 mv "$TMP" "$KEY_FILE"
 trap - EXIT
+if [ -z "${DACTYL_SPLIT_KEY_FILE:-}" ] && [ -f "$REPO_DIR/scripts/generate-ota-key.py" ]; then
+  python3 "$REPO_DIR/scripts/generate-ota-key.py" --if-missing
+fi
 echo "ESP-NOW-Schlüssel erzeugt: $KEY_FILE (Modus 0600). Jetzt beide Hälften flashen."

@@ -278,6 +278,10 @@ function setupEventListeners() {
   if (btnSaveToDactyl) {
     btnSaveToDactyl.addEventListener("click", saveAndFlashToDactyl);
   }
+  const btnFlashOta = document.getElementById("btnFlashOta");
+  if (btnFlashOta) {
+    btnFlashOta.addEventListener("click", flashOtaToDactyl);
+  }
 
   const btnSaveSettings = document.getElementById("btnSaveSettings");
   if (btnSaveSettings) {
@@ -411,6 +415,36 @@ async function saveAndFlashToDactyl() {
     flashLog.finish(false, "Server nicht erreichbar");
     showToast("❌ Server nicht erreichbar!");
     alert("Netzwerkfehler: Konnte /api/save_and_flash nicht erreichen.\nLäuft python3 server.py?");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+  }
+}
+
+async function flashOtaToDactyl() {
+  const btn = document.getElementById("btnFlashOta");
+  if (!btn) return;
+
+  const side = editSide;
+  const profile = SIDE_PROFILES[side];
+
+  if (!bleConfigChar) {
+    showToast(`⚠️ Bitte die ${profile.label} zuerst im Config-Modus per Bluetooth verbinden (${profile.comboLabel} für 0.5s gedrückt halten).`, 6000);
+    alert(`⚠️ Bluetooth Config-Modus nicht verbunden!\n\nBitte halte ${profile.comboLabel} auf der ${profile.label} für ca. 0.5s gedrückt, um den Config-Modus zu starten, und verbinde die Tastatur über 'Bluetooth Live-Sync'.`);
+    return;
+  }
+  if (bleSide && bleSide !== side) {
+    showToast(`⚠️ Per Bluetooth ist die ${SIDE_PROFILES[bleSide].label} verbunden, im Editor ist aber die ${profile.label} aktiv!`, 7000);
+    alert(`⚠️ Falsche Hälfte verbunden!\n\nIm Editor ist die ${profile.label} ausgewählt, die aktive Bluetooth-Verbindung gehört aber zur ${SIDE_PROFILES[bleSide].label}.`);
+    return;
+  }
+
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner-icon">⏳</span> Flashe ${profile.label} (OTA)...`;
+
+  try {
+    await runBleOtaUpdate(side);
   } finally {
     btn.disabled = false;
     btn.innerHTML = originalHtml;

@@ -50,6 +50,105 @@
 // (splitLeftFwStatus: > 0 Stand, 0 unbekannt, -1 linke Firmware ohne Version); nur dann enthält DEVICE_INFO
 // "left_fw".
 #include "DactylVersion.h"
+#ifdef ARDUINO
+#include <Update.h>
+#include <esp_ota_ops.h>
+#endif
+#include "DactylOtaVerify.h"
+
+#if __has_include("DactylOtaKey.h")
+#include "DactylOtaKey.h"
+#elif __has_include("../dactyl_right/DactylOtaKey.h")
+#include "../dactyl_right/DactylOtaKey.h"
+#endif
+
+#ifndef DACTYL_OTA_KEY_PRESENT
+#ifdef ARDUINO
+#error "DactylOtaKey.h fehlt. Erzeuge die Datei mit: python3 scripts/generate-ota-key.py --if-missing"
+#else
+#define DACTYL_OTA_KEY_PRESENT 1
+static const uint8_t DACTYL_OTA_PUBLIC_KEY[32] = {
+  0xe7,0xe4,0x4f,0xa1,0xd0,0x29,0xc1,0x28,0x4d,0xd8,0xf4,0x08,0xee,0xd0,0x2a,0xa9,
+  0x66,0x8f,0xe3,0x38,0x5e,0xe5,0x4f,0xc1,0x47,0xf9,0x20,0x07,0xd3,0x16,0xf6,0x73
+};
+#endif
+#endif
+
+// -----------------------------------------------------------------------------
+// BLE OTA Firmware Update
+// -----------------------------------------------------------------------------
+static bool otaInProgress = false;
+static size_t otaExpectedSize = 0;
+static size_t otaWrittenBytes = 0;
+static uint16_t otaNextSeq = 0;
+static uint8_t otaExpectedSig[64] = {0};
+static unsigned long lastOtaChunkTime = 0;
+static DactylOtaVerifier otaVerifier;
+
+void resetOtaState() {
+  if (otaInProgress) {
+    Update.abort();
+  }
+  otaInProgress = false;
+  otaExpectedSize = 0;
+  otaWrittenBytes = 0;
+  otaNextSeq = 0;
+  memset(otaExpectedSig, 0, sizeof(otaExpectedSig));
+  lastOtaChunkTime = 0;
+}
+
+void handleOtaChunk(const uint8_t *data, size_t len) {
+  if (!otaInProgress) {
+    sendConfigNotification("OTA_ERR:NOT_IN_PROGRESS");
+    return;
+  }
+  if (len < 2) {
+    sendConfigNotification("OTA_ERR:CHUNK_TOO_SHORT");
+    return;
+  }
+  uint16_t seq = (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+  if (seq != otaNextSeq) {
+    Update.abort();
+    otaInProgress = false;
+    sendConfigNotification("OTA_ERR:SEQ_MISMATCH " + String(seq) + " expected " + String(otaNextSeq));
+    return;
+  }
+  size_t payloadLen = len - 2;
+  if (otaWrittenBytes + payloadLen > otaExpectedSize) {
+    Update.abort();
+    otaInProgress = false;
+    sendConfigNotification("OTA_ERR:SIZE_EXCEEDED");
+    return;
+  }
+  if (payloadLen > 0) {
+    size_t written = Update.write(const_cast<uint8_t*>(data + 2), payloadLen);
+    if (written != payloadLen) {
+      Update.abort();
+      otaInProgress = false;
+      sendConfigNotification("OTA_ERR:WRITE_FAILED");
+      return;
+    }
+    otaVerifier.update(data + 2, payloadLen);
+    otaWrittenBytes += payloadLen;
+  }
+  otaNextSeq++;
+  lastOtaChunkTime = millis();
+  lastActivityTime = millis();
+
+  if ((otaNextSeq % 16 == 0) || (otaWrittenBytes == otaExpectedSize)) {
+    sendConfigNotification("OTA_ACK:" + String(seq) + ":" + String(otaWrittenBytes));
+  }
+}
+
+void processOtaTimeout() {
+  if (otaInProgress) {
+    if (millis() - lastOtaChunkTime >= 15000) {
+      Update.abort();
+      otaInProgress = false;
+      sendConfigNotification("OTA_ERR:TIMEOUT");
+    }
+  }
+}
 
 // Standardwert des Tapping-Terms (Mod-Tap und Tap-Dance) ohne NVS-Eintrag; zur Laufzeit gilt tappingTermMs
 #ifndef TAPPING_TERM_MS
@@ -1915,7 +2014,15 @@ void handleConfigCommand(String cmd, bool fromBle) {
   // Über BLE ist im normalen Tastaturmodus nur GET_INFO erlaubt. Der Config-Modus wird ausschließlich
   // physisch (Config-Combo CONFIG_COMBO_*) oder per USB-Serial (ENTER_CONFIG) aktiviert.
   if (fromBle && !isConfigMode && cmd != "GET_INFO") {
+    if (cmd.startsWith("OTA_")) {
+      sendConfigNotification("OTA_ERR:NOT_CONFIG_MODE");
+    }
     Serial.println("WARN: BLE-Befehl abgelehnt (nicht im Config-Modus): " + cmd);
+    return;
+  }
+
+  if (otaInProgress && !cmd.startsWith("OTA_")) {
+    sendConfigNotification("ERR BUSY OTA_IN_PROGRESS");
     return;
   }
 
@@ -1931,7 +2038,92 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
   }
 
-  if (cmd.startsWith("SET_KEY ")) {
+  if (cmd.startsWith("OTA_BEGIN ")) {
+    if (!isConfigMode) {
+      sendConfigNotification("OTA_ERR:NOT_CONFIG_MODE");
+    } else {
+      int firstSpace = cmd.indexOf(' ', 10);
+      if (firstSpace < 0) {
+        sendConfigNotification("OTA_ERR:ARGS");
+      } else {
+        long long sz = cmd.substring(10, firstSpace).toInt();
+        if (sz <= 0 || sz > 1900000) {
+          sendConfigNotification("OTA_ERR:SIZE_INVALID");
+        } else {
+          String sigHex = cmd.substring(firstSpace + 1);
+          sigHex.trim();
+          if (sigHex.length() != 128) {
+            sendConfigNotification("OTA_ERR:SIG_FORMAT");
+          } else {
+            uint8_t sigBytes[64];
+            bool hexOk = true;
+            for (int i = 0; i < 64; i++) {
+              char c1 = sigHex.charAt(i * 2);
+              char c2 = sigHex.charAt(i * 2 + 1);
+              int v1 = (c1 >= '0' && c1 <= '9') ? (c1 - '0') :
+                       (c1 >= 'a' && c1 <= 'f') ? (c1 - 'a' + 10) :
+                       (c1 >= 'A' && c1 <= 'F') ? (c1 - 'A' + 10) : -1;
+              int v2 = (c2 >= '0' && c2 <= '9') ? (c2 - '0') :
+                       (c2 >= 'a' && c2 <= 'f') ? (c2 - 'a' + 10) :
+                       (c2 >= 'A' && c2 <= 'F') ? (c2 - 'A' + 10) : -1;
+              if (v1 < 0 || v2 < 0) { hexOk = false; break; }
+              sigBytes[i] = (uint8_t)((v1 << 4) | v2);
+            }
+            if (!hexOk) {
+              sendConfigNotification("OTA_ERR:SIG_FORMAT");
+            } else {
+              if (otaInProgress) {
+                Update.abort();
+                otaInProgress = false;
+              }
+              if (!Update.begin((size_t)sz, U_FLASH)) {
+                sendConfigNotification("OTA_ERR:UPDATE_BEGIN_FAILED");
+              } else if (!otaVerifier.init(DACTYL_OTA_PUBLIC_KEY, sigBytes, (size_t)sz)) {
+                Update.abort();
+                sendConfigNotification("OTA_ERR:VERIFIER_INIT_FAILED");
+              } else {
+                otaExpectedSize = (size_t)sz;
+                otaWrittenBytes = 0;
+                otaNextSeq = 0;
+                memcpy(otaExpectedSig, sigBytes, 64);
+                otaInProgress = true;
+                lastOtaChunkTime = millis();
+                sendConfigNotification("OTA_READY");
+              }
+            }
+          }
+        }
+      }
+    }
+  } else if (cmd == "OTA_END") {
+    if (!otaInProgress) {
+      sendConfigNotification("OTA_ERR:NOT_IN_PROGRESS");
+    } else if (otaWrittenBytes != otaExpectedSize) {
+      Update.abort();
+      otaInProgress = false;
+      sendConfigNotification("OTA_ERR:INCOMPLETE");
+    } else if (!otaVerifier.verify()) {
+      Update.abort();
+      otaInProgress = false;
+      sendConfigNotification("OTA_ERR:SIGNATURE_INVALID");
+    } else if (!Update.end(true)) {
+      otaInProgress = false;
+      sendConfigNotification("OTA_ERR:UPDATE_END_FAILED");
+    } else {
+      otaInProgress = false;
+      sendConfigNotification("OTA_OK");
+#ifdef ARDUINO
+      delay(200);
+      ESP.restart();
+#endif
+    }
+  } else if (cmd == "OTA_ABORT") {
+    if (otaInProgress) {
+      Update.abort();
+      otaInProgress = false;
+    }
+    sendConfigNotification("OTA_ABORTED");
+  } else if (cmd.startsWith("SET_KEY ")) {
     int l, r, c, val, hold, dtap;
     if (parseKeyCommand(cmd, "SET_KEY %d %d %d %d %d %d %c", l, r, c, val, hold, dtap)) {
       KEYMAP[l][r][c] = (uint16_t)val;

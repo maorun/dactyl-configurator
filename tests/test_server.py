@@ -1,4 +1,5 @@
 import unittest
+import base64
 import json
 import os
 import re
@@ -943,7 +944,9 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertEqual(pkg["main"], "main.js")
         # Der ESP-NOW-Schlüssel entsteht vor dem Bau, sonst kompiliert "Auf Dactyl flashen" in der App nicht
         self.assertEqual(pkg["scripts"]["build:app"],
-                         "bash scripts/generate-split-key.sh --if-missing && bash scripts/build-app.sh")
+                         "bash scripts/generate-split-key.sh --if-missing && python3 scripts/generate-ota-key.py --if-missing && bash scripts/build-app.sh")
+        self.assertEqual(pkg["scripts"]["flash"],
+                         "bash scripts/generate-split-key.sh --if-missing && python3 scripts/generate-ota-key.py --if-missing && python3 scripts/flash.py")
         with tempfile.TemporaryDirectory() as tmp:
             # Repository-Kopie mit einer Nutzer-Config, Electron-Paket mit einer veralteten Datei
             repo = os.path.join(tmp, "repo")
@@ -1313,7 +1316,7 @@ class TestServerAndCodegen(unittest.TestCase):
         with open(os.path.join(root, "package.json"), encoding="utf-8") as f:
             pkg = json.load(f)
         self.assertEqual(pkg["scripts"]["rebuild:app"],
-                         "bash scripts/generate-split-key.sh --if-missing && bash scripts/rebuild-app.sh")
+                         "bash scripts/generate-split-key.sh --if-missing && python3 scripts/generate-ota-key.py --if-missing && bash scripts/rebuild-app.sh")
         with open(os.path.join(root, "scripts", "rebuild-app.sh"), encoding="utf-8") as f:
             script = f.read()
         self.assertIn("set -euo pipefail", script)
@@ -1730,7 +1733,7 @@ class TestFlashScript(unittest.TestCase):
         with open(os.path.join(self.root, "package.json"), encoding="utf-8") as f:
             scripts = json.load(f)["scripts"]
         self.assertEqual(scripts["flash"],
-                         "bash scripts/generate-split-key.sh --if-missing && python3 scripts/flash.py")
+                         "bash scripts/generate-split-key.sh --if-missing && python3 scripts/generate-ota-key.py --if-missing && python3 scripts/flash.py")
 
     def test_flash_uses_repository_sketch_and_app_backup_dir(self):
         # Ein vorher gesetzter Datenordner-Sketch (wie in der App) darf nicht gelten
@@ -2357,6 +2360,79 @@ class TestServerHttp(unittest.TestCase):
         finally:
             server.save_config_and_firmware, server.flash_firmware = old
             restore()
+
+    def test_compile_ota_endpoint_checks_side(self):
+        status, data = self.request("POST", "/api/compile_ota?side=X", body="{}",
+                                    headers={"Origin": "http://localhost:8088"})
+        self.assertEqual(status, 400)
+        self.assertIn("Ungültiger Parameter 'side'", json.loads(data)["error"])
+
+    def test_compile_ota_endpoint_validation_failure(self):
+        status, data = self.request("POST", "/api/compile_ota?side=R", body=json.dumps({"layers": []}),
+                                    headers={"Origin": "http://localhost:8088"})
+        self.assertEqual(status, 400)
+
+    def test_compile_ota_endpoint_compiles_and_signs(self):
+        old = (getattr(server, "save_config_and_firmware", None),
+               getattr(server, "compile_ota_firmware", None))
+        fake_bin = b"MOCK_FIRMWARE_BINARY_12345"
+        def fake_compile(side, on_output=None):
+            return {
+                "success": True,
+                "side": side,
+                "size": len(fake_bin),
+                "signature": "ab" * 64,
+                "fw_version": 9,
+                "binary_b64": base64.b64encode(fake_bin).decode("ascii"),
+                "message": "OTA-Firmware erfolgreich kompiliert und signiert!"
+            }
+        server.save_config_and_firmware = lambda cfg, side: None
+        server.compile_ota_firmware = fake_compile
+        try:
+            status, data = self.request("POST", "/api/compile_ota?side=R", body=json.dumps({"layers": [[]]}),
+                                        headers={"Origin": "http://localhost:8088"})
+            self.assertEqual(status, 200)
+            res = json.loads(data)
+            self.assertTrue(res["success"])
+            self.assertEqual(res["side"], "R")
+            self.assertEqual(res["size"], len(fake_bin))
+            self.assertEqual(len(res["signature"]), 128)
+            self.assertEqual(base64.b64decode(res["binary_b64"]), fake_bin)
+        finally:
+            server.save_config_and_firmware, server.compile_ota_firmware = old
+
+    def test_compile_ota_stream_sends_ndjson_and_result(self):
+        old = (getattr(server, "save_config_and_firmware", None),
+               getattr(server, "compile_ota_firmware", None))
+        fake_bin = b"MOCK_FIRMWARE_BINARY_LEFT"
+        def fake_compile(side, on_output=None):
+            if on_output:
+                on_output("compile", "Compiling left firmware...")
+                on_output("sign", "Signing with Ed25519 key...")
+            return {
+                "success": True,
+                "side": side,
+                "size": len(fake_bin),
+                "signature": "cd" * 64,
+                "fw_version": 9,
+                "binary_b64": base64.b64encode(fake_bin).decode("ascii"),
+                "message": "OTA-Firmware erfolgreich kompiliert und signiert!"
+            }
+        server.save_config_and_firmware = lambda cfg, side: None
+        server.compile_ota_firmware = fake_compile
+        try:
+            status, data = self.request("POST", "/api/compile_ota?side=L&stream=1", body=json.dumps({"layers": [[]]}),
+                                        headers={"Origin": "http://localhost:8088"})
+            self.assertEqual(status, 200)
+            events = [json.loads(line) for line in data.decode("utf-8").splitlines()]
+            self.assertTrue(any(e.get("stage") == "compile" for e in events))
+            self.assertTrue(any(e.get("stage") == "sign" for e in events))
+            self.assertEqual(events[-1]["type"], "result")
+            self.assertTrue(events[-1]["success"])
+            self.assertEqual(events[-1]["side"], "L")
+        finally:
+            server.save_config_and_firmware, server.compile_ota_firmware = old
+
 
     def test_layout_profiles_are_not_versioned(self):
         root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")

@@ -29,6 +29,7 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <esp_ota_ops.h>
 
 #define CONFIG_SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CONFIG_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
@@ -58,6 +59,7 @@ RTC_NOINIT_ATTR uint32_t rtcEspNowBootRetry;
 void handleConfigCommand(String cmd, bool fromBle = false);
 void sendConfigNotification(String msg, bool addDelay = false);
 BLECharacteristic *pConfigCharacteristic = nullptr;
+BLECharacteristic *pOtaCharacteristic = nullptr;
 volatile bool isConfigMode = false;
 volatile bool isBleTransitioning = false;
 volatile bool exitConfigRequested = false;
@@ -705,6 +707,7 @@ void setup() {
   Serial.println("=============================================");
 
   // 1. Feste Basis-MAC vor dem Wi-Fi-/BLE-Start (Wi-Fi-STA = Basis, BT = Basis + 2)
+  esp_ota_mark_app_valid_cancel_rollback();
   esp_base_mac_addr_set(LEFT_BASE_MAC);
 
   // 2. NVS initialisieren
@@ -926,6 +929,10 @@ void loop() {
 
   // Inaktivitäts-Timeouts für Standby (Stufe 1) und Deep Sleep (Stufe 2)
   if (isConfigMode) {
+    processOtaTimeout();
+    if (otaInProgress && (millis() - lastOtaChunkTime < 15000)) {
+      lastActivityTime = millis();
+    }
     if (millis() - lastActivityTime > (3UL * 60UL * 1000UL)) {
       Serial.println("[CONFIG MODE] 3 Min Inaktivität -> Kehre automatisch in Tastaturmodus zurück.");
       exitConfigMode();

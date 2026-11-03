@@ -2,6 +2,37 @@
 // Web Bluetooth Permission Management & Live-Sync Flow
 // =============================================================================
 
+let bleOtaChar = null;
+let otaNotificationListeners = [];
+
+function addOtaNotificationListener(listener) {
+  otaNotificationListeners.push(listener);
+  return () => {
+    otaNotificationListeners = otaNotificationListeners.filter(l => l !== listener);
+  };
+}
+
+function waitForOtaMessage(predicate, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    let timer = null;
+    const unsub = addOtaNotificationListener((line) => {
+      if (predicate(line)) {
+        clearTimeout(timer);
+        unsub();
+        resolve(line);
+      } else if (line.startsWith("OTA_ERR:")) {
+        clearTimeout(timer);
+        unsub();
+        reject(new Error(line));
+      }
+    });
+    timer = setTimeout(() => {
+      unsub();
+      reject(new Error("Timeout beim Warten auf Firmware-Antwort"));
+    }, timeoutMs);
+  });
+}
+
 function isBtPermissionVerified() {
   return localStorage.getItem("dactyl_bt_permission_verified") === "true";
 }
@@ -203,6 +234,16 @@ async function connectToBleDevice(device, isAutoTriggered = false, advName = "")
     char.addEventListener("characteristicvaluechanged", handleBleNotification);
     bleConfigChar = char;
 
+    try {
+      bleOtaChar = await service.getCharacteristic(OTA_CHAR_UUID);
+      if (bleOtaChar && bleOtaChar.properties && bleOtaChar.properties.notify) {
+        await bleOtaChar.startNotifications();
+        bleOtaChar.addEventListener("characteristicvaluechanged", handleBleNotification);
+      }
+    } catch (_) {
+      bleOtaChar = null;
+    }
+
     // Hälfte über DEVICE_INFO bestätigen, bevor ein Sync die Config einer Hälfte sendet
     const infoSide = await requestBleDeviceSide(1500);
     if (infoSide) bleSide = infoSide;
@@ -345,8 +386,12 @@ function onBleDisconnected() {
   if (!bleDevice && !bleConfigChar && !bleServer) return;
   if (bleDevice) bleDevice.removeEventListener("gattserverdisconnected", onBleDisconnected);
   if (bleConfigChar) bleConfigChar.removeEventListener("characteristicvaluechanged", handleBleNotification);
+  if (bleOtaChar) {
+    try { bleOtaChar.removeEventListener("characteristicvaluechanged", handleBleNotification); } catch (_) {}
+  }
   rejectAllPendingAcks("Bluetooth-Verbindung getrennt", bleSide);
   bleConfigChar = null;
+  bleOtaChar = null;
   bleServer = null;
   bleDevice = null;
   bleSide = null;
@@ -485,7 +530,153 @@ function handleBleNotification(event) {
     const trimmed = line.trim();
     if (trimmed) {
       console.log("[BLE RECV]", trimmed);
+      for (const listener of otaNotificationListeners.slice()) {
+        try { listener(trimmed); } catch (_) {}
+      }
       handleSerialLine(trimmed, bleSide);
     }
+  }
+}
+
+async function runBleOtaUpdate(side) {
+  const profile = SIDE_PROFILES[side];
+  const cfg = currentConfig;
+  const syncedChangeIds = new Set(pendingChanges.map(c => c.id));
+  isAutoSyncing = true;
+  const dialog = openFlashLogDialog(profile, `Bluetooth-OTA-Flash: ${profile.label}`);
+  logLayoutLintToFlashLog(dialog);
+
+  dialog.onEvent({ type: "log", stage: "compile", line: `Kompiliere OTA-Firmware für ${profile.label} auf dem Server ...` });
+
+  let result = null;
+  try {
+    const res = await fetch(`/api/compile_ota?side=${side}&stream=1`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg)
+    });
+
+    if ((res.headers.get("Content-Type") || "").includes("application/x-ndjson") && res.body) {
+      result = (await readFlashStream(res.body, dialog.onEvent)) || { success: false, error: "Verbindung zum Server vor dem Ergebnis beendet." };
+    } else {
+      try { result = await res.json(); } catch (_) {}
+    }
+
+    if (!res.ok || !result || !result.success) {
+      const err = (result && result.error) || "Kompilierung auf dem Server fehlgeschlagen.";
+      dialog.finish(false, err);
+      showToast(`❌ OTA-Kompilierung fehlgeschlagen: ${err}`, 7000);
+      return;
+    }
+
+    const { binary_b64, signature, size } = result;
+    if (!binary_b64 || !signature || !size) {
+      dialog.finish(false, "Ungültige OTA-Kompilierungsantwort vom Server.");
+      return;
+    }
+
+    // Base64 decodieren
+    const binaryStr = atob(binary_b64);
+    const binaryData = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      binaryData[i] = binaryStr.charCodeAt(i);
+    }
+
+    dialog.onEvent({ type: "log", stage: "ota", line: `Firmware erfolgreich signiert (${size} Bytes). Starte Übertragung ...` });
+
+    // OTA_BEGIN senden und auf OTA_READY warten
+    const beginAck = waitForOtaMessage(line => line === "OTA_READY", 10000);
+    const sentBegin = await sendBleCommand(`OTA_BEGIN ${size} ${signature}`);
+    if (!sentBegin) {
+      throw new Error("Konnte OTA_BEGIN nicht an die Tastatur senden.");
+    }
+    await beginAck;
+    dialog.onEvent({ type: "log", stage: "ota", line: "Firmware-Partition vorbereitet (OTA_READY). Sende Datenpakete ..." });
+
+    const CHUNK_PAYLOAD = 238; // 2 Bytes seq + 238 Bytes payload = 240 Bytes
+    const totalChunks = Math.ceil(binaryData.length / CHUNK_PAYLOAD);
+    let otaChar = bleOtaChar;
+    if (!otaChar && bleServer) {
+      try {
+        const s = await bleServer.getPrimaryService(CONFIG_SERVICE_UUID);
+        otaChar = await s.getCharacteristic(OTA_CHAR_UUID);
+        bleOtaChar = otaChar;
+      } catch (_) {}
+    }
+
+    if (!otaChar) {
+      throw new Error("OTA-GATT-Characteristic nicht verfügbar. Bitte Firmware zuerst per USB flashen.");
+    }
+
+    let writtenBytes = 0;
+    for (let seq = 0; seq < totalChunks; seq++) {
+      if (!bleConfigChar) {
+        throw new Error("Bluetooth-Verbindung während der Übertragung verloren.");
+      }
+      const start = seq * CHUNK_PAYLOAD;
+      const end = Math.min(start + CHUNK_PAYLOAD, binaryData.length);
+      const payload = binaryData.subarray(start, end);
+
+      const packet = new Uint8Array(2 + payload.length);
+      packet[0] = seq & 0xff;
+      packet[1] = (seq >> 8) & 0xff;
+      packet.set(payload, 2);
+
+      const isLastChunk = (seq === totalChunks - 1);
+      const shouldWaitAck = ((seq + 1) % 16 === 0) || isLastChunk;
+
+      let ackPromise = null;
+      if (shouldWaitAck) {
+        ackPromise = waitForOtaMessage(line => line.startsWith(`OTA_ACK:${seq}:`), 8000);
+      }
+
+      if (otaChar.writeValueWithoutResponse) {
+        await otaChar.writeValueWithoutResponse(packet);
+      } else if (otaChar.writeValueWithResponse) {
+        await otaChar.writeValueWithResponse(packet);
+      } else {
+        await otaChar.writeValue(packet);
+      }
+
+      writtenBytes += payload.length;
+
+      if (ackPromise) {
+        await ackPromise;
+        const pct = Math.round((writtenBytes / size) * 100);
+        dialog.onEvent({
+          type: "log",
+          stage: "ota",
+          line: `Upload: ${pct}% (${writtenBytes}/${size} Bytes, Chunk ${seq + 1}/${totalChunks})`
+        });
+      }
+    }
+
+    dialog.onEvent({ type: "log", stage: "verify", line: "Alle Chunks gesendet. Prüfe Ed25519-Signatur auf dem Board ..." });
+    const endAck = waitForOtaMessage(line => line === "OTA_OK", 15000);
+    const sentEnd = await sendBleCommand("OTA_END");
+    if (!sentEnd) {
+      throw new Error("Konnte OTA_END nicht senden.");
+    }
+    await endAck;
+
+    dialog.onEvent({ type: "log", stage: "verify", line: "✅ Ed25519-Signatur gültig! Firmware aktiviert. Das Board startet neu." });
+    dialog.finish(true, "Firmware erfolgreich per Bluetooth aktualisiert!");
+    showToast("✅ OTA-Update erfolgreich! Tastatur startet neu.", 6000);
+
+    setPendingFor(side, pendingFor(side).filter(c => !syncedChangeIds.has(c.id)));
+    if (side === editSide) renderPendingSyncUI();
+
+    firmwareVersions.forget(side);
+    updateFirmwareVersionUI();
+
+  } catch (err) {
+    console.error("BLE OTA update error:", err);
+    try {
+      await sendBleCommand("OTA_ABORT");
+    } catch (_) {}
+    dialog.finish(false, err.message || "OTA-Update fehlgeschlagen.");
+    showToast(`❌ OTA-Fehler: ${err.message}`, 8000);
+  } finally {
+    isAutoSyncing = false;
   }
 }

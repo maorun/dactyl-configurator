@@ -32,9 +32,9 @@ cp "$REPO_DIR/main.js" "$REPO_DIR/package.json" "$REPO_DIR/server.py" \
    "$REPO_DIR/index.html" "$REPO_DIR/app.js" "$REPO_DIR/style.css" \
    "$REPO_DIR/default_config.json" "$REPO_DIR/default_config_left.json" "$STAGE/"
 cp "$REPO_DIR"/js/*.js "$STAGE/js/"
-# Ohne den ESP-NOW-Schlüssel und Temp-Reste von generate-split-key.sh: der Schlüssel folgt getrennt mit 0600,
-# damit er nie mit weiteren Rechten im Paket liegt
-rsync -a --exclude 'DactylSplitKey.h*' "$REPO_DIR/firmware/dactyl_right" "$REPO_DIR/firmware/dactyl_left" "$STAGE/firmware/"
+# Ohne den ESP-NOW-Schlüssel, OTA-Dateien und Temp-Reste: Schlüssel folgen getrennt mit 0600,
+# damit sie nie mit weiteren Rechten im Paket liegen
+rsync -a --exclude 'DactylSplitKey.h*' --exclude 'DactylOtaKey.h*' "$REPO_DIR/firmware/dactyl_right" "$REPO_DIR/firmware/dactyl_left" "$STAGE/firmware/"
 # Der Schlüssel kommt mit, sonst kompiliert "Auf Dactyl flashen" nicht
 SPLIT_KEY="$REPO_DIR/firmware/dactyl_right/DactylSplitKey.h"
 if [ -f "$SPLIT_KEY" ]; then
@@ -42,6 +42,16 @@ if [ -f "$SPLIT_KEY" ]; then
   chmod 600 "$STAGE/firmware/dactyl_right/DactylSplitKey.h"
 else
   echo "WARNUNG: Kein ESP-NOW-Schlüssel (bash scripts/generate-split-key.sh). \"Auf Dactyl flashen\" bricht ohne ihn ab." >&2
+fi
+OTA_KEY="$REPO_DIR/firmware/dactyl_right/DactylOtaKey.h"
+if [ -f "$OTA_KEY" ]; then
+  (umask 077 && cp "$OTA_KEY" "$STAGE/firmware/dactyl_right/DactylOtaKey.h")
+  chmod 600 "$STAGE/firmware/dactyl_right/DactylOtaKey.h"
+fi
+OTA_PRIV="$REPO_DIR/.ota_signing_key.pem"
+if [ -f "$OTA_PRIV" ]; then
+  (umask 077 && cp "$OTA_PRIV" "$STAGE/.ota_signing_key.pem")
+  chmod 600 "$STAGE/.ota_signing_key.pem"
 fi
 
 # Altes Verzeichnis erst zur Seite legen und erst nach bestandener Signaturprüfung löschen: ein Abbruch oder ein

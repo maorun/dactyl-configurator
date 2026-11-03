@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import fcntl
 import select
+import base64
 import time
 import termios
 from urllib.parse import parse_qs, urlsplit
@@ -1501,6 +1502,163 @@ def flash_firmware(side="R", on_output=None):
             "message": "Firmware erfolgreich kompiliert und geflasht!"}
 
 
+def read_firmware_version():
+    ver_path = os.path.join(DIRECTORY, "firmware", "dactyl_right", "DactylVersion.h")
+    try:
+        with open(ver_path, "r", encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r"#define\s+DACTYL_FW_VERSION\s+(\d+)", line.strip())
+                if m:
+                    return int(m.group(1))
+    except Exception:
+        pass
+    return 9
+
+
+def sign_firmware(data: bytes, priv_pem_path: str = None) -> bytes:
+    if priv_pem_path is None:
+        priv_pem_path = os.environ.get("DACTYL_OTA_PRIV_KEY_FILE", os.path.join(DIRECTORY, ".ota_signing_key.pem"))
+    if not os.path.exists(priv_pem_path):
+        subprocess.run([sys.executable, os.path.join(DIRECTORY, "scripts", "generate-ota-key.py"), "--if-missing"], check=True)
+    with open(priv_pem_path, "rb") as f:
+        pem_data = f.read()
+    try:
+        from cryptography.hazmat.primitives import serialization
+        priv_key = serialization.load_pem_private_key(pem_data, password=None)
+        return priv_key.sign(data)
+    except Exception:
+        lines = [line.strip() for line in pem_data.decode("ascii").splitlines() if not line.startswith("---")]
+        der = base64.b64decode("".join(lines))
+        seed = der[-32:]
+        import hashlib
+        h = hashlib.sha512(seed).digest()
+        a = bytearray(h[:32])
+        a[0] &= 248
+        a[31] &= 127
+        a[31] |= 64
+        s = int.from_bytes(a, "little")
+        prefix = h[32:]
+        p = 2**255 - 19
+        q = 2**252 + 27742317777372353535851937790883648493
+        d = -121665 * pow(121666, p - 2, p) % p
+        def xrecover(y):
+            xx = (y * y - 1) * pow(d * y * y + 1, p - 2, p) % p
+            x = pow(xx, (p + 3) // 8, p)
+            if (x * x - xx) % p != 0:
+                x = (x * pow(2, (p - 1) // 4, p)) % p
+            if x % 2 != 0:
+                x = p - x
+            return x
+        By = 4 * pow(5, p - 2, p) % p
+        Bx = xrecover(By)
+        def edwards_add(P, Q):
+            x1, y1 = P
+            x2, y2 = Q
+            x3 = (x1 * y2 + y1 * x2) * pow(1 + d * x1 * x2 * y1 * y2, p - 2, p) % p
+            y3 = (y1 * y2 + x1 * x2) * pow(1 - d * x1 * x2 * y1 * y2, p - 2, p) % p
+            return (x3, y3)
+        def scalarmult(P, e):
+            Q = (0, 1)
+            while e > 0:
+                if e & 1:
+                    Q = edwards_add(Q, P)
+                P = edwards_add(P, P)
+                e >>= 1
+            return Q
+        A = scalarmult((Bx, By), s)
+        Ax, Ay = A
+        A_bytes = bytearray(Ay.to_bytes(32, "little"))
+        if Ax & 1:
+            A_bytes[31] |= 0x80
+        r = int.from_bytes(hashlib.sha512(prefix + data).digest(), "little") % q
+        R = scalarmult((Bx, By), r)
+        Rx, Ry = R
+        R_bytes = bytearray(Ry.to_bytes(32, "little"))
+        if Rx & 1:
+            R_bytes[31] |= 0x80
+        k = int.from_bytes(hashlib.sha512(bytes(R_bytes) + bytes(A_bytes) + data).digest(), "little") % q
+        S = (r + k * s) % q
+        S_bytes = S.to_bytes(32, "little")
+        return bytes(R_bytes) + bytes(S_bytes)
+
+
+def compile_ota_firmware(side="R", on_output=None):
+    arduino_cli = find_arduino_cli()
+    if not arduino_cli:
+        return {"success": False, "error": "arduino-cli wurde nicht im System-Pfad gefunden! Bitte über 'brew install arduino-cli' installieren."}
+
+    def output_for(stage):
+        if on_output is None:
+            return None
+        return lambda line: on_output(stage, line)
+
+    def status(stage, text):
+        if on_output is not None:
+            on_output(stage, text)
+
+    label = "linke" if side == "L" else "rechte"
+    sketch = side_paths(side)["sketch"]
+
+    status("compile", f"Kompiliere OTA-Firmware der {label}n Hälfte ...")
+
+    # Stelle sicher, dass die OTA-Schlüsseldatei vorhanden ist
+    priv_key_file = os.environ.get("DACTYL_OTA_PRIV_KEY_FILE", os.path.join(DIRECTORY, ".ota_signing_key.pem"))
+    if not os.path.exists(priv_key_file):
+        status("sign", "Erzeuge lokales Ed25519-OTA-Schlüsselpaar ...")
+        cmd_gen = [sys.executable, os.path.join(DIRECTORY, "scripts", "generate-ota-key.py"), "--if-missing"]
+        code, out = run_cli(cmd_gen, 30, output_for("sign"))
+        if code != 0:
+            return {"success": False, "stage": "sign", "error": f"OTA-Schlüsselerzeugung fehlgeschlagen: {out}"}
+
+    tmpdir = tempfile.mkdtemp(prefix=f"dactyl_ota_build_{side}_")
+    try:
+        compile_cmd = [
+            arduino_cli, "compile",
+            "--fqbn", FIRMWARE_FQBN,
+            "--build-path", tmpdir,
+            sketch
+        ]
+        code, output = run_cli(compile_cmd, COMPILE_TIMEOUT_S, output_for("compile"))
+        if code != 0:
+            return {
+                "success": False,
+                "stage": "compile",
+                "error": output[-FLASH_ERROR_TAIL_CHARS:]
+            }
+
+        sketch_name = os.path.basename(sketch)
+        bin_path = os.path.join(tmpdir, f"{sketch_name}.bin")
+        if not os.path.exists(bin_path):
+            bins = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir) if f.endswith(".ino.bin") or f.endswith(".bin")]
+            if not bins:
+                return {"success": False, "stage": "compile", "error": f"Keine Firmware-Binärdatei in {tmpdir} gefunden!"}
+            bin_path = bins[0]
+
+        with open(bin_path, "rb") as f:
+            bin_data = f.read()
+
+        status("sign", f"Signiere Firmware ({len(bin_data)} Bytes) mit Ed25519 ...")
+        sig = sign_firmware(bin_data, priv_key_file)
+        sig_hex = sig.hex()
+
+        fw_version = read_firmware_version()
+
+        status("done", "OTA-Firmware erfolgreich kompiliert und signiert!")
+        return {
+            "success": True,
+            "side": side,
+            "size": len(bin_data),
+            "signature": sig_hex,
+            "fw_version": fw_version,
+            "binary_b64": base64.b64encode(bin_data).decode("ascii"),
+            "message": "OTA-Firmware erfolgreich kompiliert und signiert!"
+        }
+    except Exception as err:
+        return {"success": False, "stage": "compile", "error": str(err)}
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
     # Der Server bleibt bewusst single-threaded (Flash-Vorgänge laufen nie parallel).
     # Ein Client, der nach den Headern stockt, darf ihn daher nicht dauerhaft blockieren.
@@ -1562,6 +1720,31 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as err:
             # Die Header sind gesendet: der Fehler muss als Ergebnis-Zeile kommen, sonst sieht die App nur einen Abbruch
             result = {"success": False, "error": f"Flashen fehlgeschlagen: {err}"}
+        write_event(dict(result, type="result"))
+        self.close_connection = True
+
+    def stream_compile_ota(self, side):
+        """Sendet die Kompilierungs- und Signaturausgabe als NDJSON (eine JSON-Zeile pro Ereignis), zuletzt das Ergebnis.
+        Ohne Content-Length: die Antwort endet mit dem Schließen der Verbindung (HTTP/1.0)."""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.end_headers()
+        client_gone = False
+
+        def write_event(event):
+            nonlocal client_gone
+            if client_gone:
+                return
+            try:
+                self.wfile.write((json.dumps(event) + "\n").encode("utf-8"))
+                self.wfile.flush()
+            except OSError:
+                client_gone = True
+
+        try:
+            result = compile_ota_firmware(side, on_output=lambda stage, line: write_event({"type": "log", "stage": stage, "line": line}))
+        except Exception as err:
+            result = {"success": False, "error": f"OTA-Kompilierung fehlgeschlagen: {err}"}
         write_event(dict(result, type="result"))
         self.close_connection = True
 
@@ -1664,7 +1847,7 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
             return
         path = urlsplit(self.path).path
 
-        if path in ("/api/save_and_flash", "/api/config", "/api/profiles", "/api/backups", "/api/nvs_restore"):
+        if path in ("/api/save_and_flash", "/api/compile_ota", "/api/config", "/api/profiles", "/api/backups", "/api/nvs_restore"):
             side = parse_side(self.path)
             if side is None:
                 self.send_json(400, {"success": False, "error": "Ungültiger Parameter 'side' (L oder R)."})
@@ -1702,6 +1885,33 @@ class ConfiguratorHandler(http.server.SimpleHTTPRequestHandler):
                 self.stream_flash(side)
                 return
             result = flash_firmware(side)
+            self.send_json(200 if result.get("success") else 500, result)
+            return
+
+        if path == "/api/compile_ota":
+            config = self.read_json_body()
+            if config is None:
+                return
+            try:
+                # 1. Validieren, C++ rendern und erst danach Config & .ino der Hälfte atomar schreiben
+                save_config_and_firmware(config, side)
+            except ValueError as err:
+                self.send_json(400, {"success": False, "error": str(err)})
+                return
+            except Exception as err:
+                self.send_json(500, {"success": False, "error": str(err)})
+                return
+            # Backup vor dem Flash; ein Fehler dabei hält den Flash nicht auf
+            try:
+                create_backup(config, side, "flash")
+            except (OSError, ValueError) as err:
+                print(f"[BACKUP] Backup vor dem Flash fehlgeschlagen: {err}", file=sys.stderr)
+
+            # 2. Kompilieren & Signieren
+            if parse_qs(urlsplit(self.path).query).get("stream") == ["1"]:
+                self.stream_compile_ota(side)
+                return
+            result = compile_ota_firmware(side)
             self.send_json(200 if result.get("success") else 500, result)
             return
 

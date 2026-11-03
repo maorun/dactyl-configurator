@@ -19,6 +19,7 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <esp_ota_ops.h>
 
 /*
  * =============================================================================
@@ -41,6 +42,7 @@ RTC_NOINIT_ATTR uint32_t rtcConfigModeMagic;
 void handleConfigCommand(String cmd, bool fromBle = false);
 void sendConfigNotification(String msg, bool addDelay = false);
 BLECharacteristic *pConfigCharacteristic = nullptr;
+BLECharacteristic *pOtaCharacteristic = nullptr;
 volatile bool isConfigMode = false;
 volatile bool isBleTransitioning = false;
 volatile bool exitConfigRequested = false;
@@ -845,6 +847,7 @@ void setup() {
   Serial.println("=============================================");
 
   // 1. MAC-Adresse: Feste, reproduzierbare Basis-MAC (Bluetooth-MAC = Base + 2: 2E:BC:BB:81:61:A8)
+  esp_ota_mark_app_valid_cancel_rollback();
   // Durch feste Zuweisung bleibt die MAC auch nach Soft-Reboot (exitConfigMode) absolut stabil und driftet nicht.
   const uint8_t base_mac[6] = {0x2E, 0xBC, 0xBB, 0x81, 0x61, 0xA6};
   esp_base_mac_addr_set(base_mac);
@@ -1057,6 +1060,10 @@ void loop() {
 
   // Inaktivitäts-Timeouts für Standby (Stufe 1) und Deep Sleep (Stufe 2)
   if (isConfigMode) {
+    processOtaTimeout();
+    if (otaInProgress && (millis() - lastOtaChunkTime < 15000)) {
+      lastActivityTime = millis();
+    }
     // Im Config Mode: Nach 3 Min ohne Aktion automatisch in Tastaturmodus zurückkehren
     if (millis() - lastActivityTime > (3UL * 60UL * 1000UL)) {
       Serial.println("[CONFIG MODE] 3 Min Inaktivität -> Kehre automatisch in Tastaturmodus zurück.");

@@ -241,6 +241,16 @@ Rules for this file:
 - `validateConfigShape(cfg, profile)` applies the absent-key rules of `server.py` before an import or a loaded config replaces the state (`Dactyl.absentKeyViolations`): left keys `R4C5`/`R5C0` must not carry an action, no combo may use an absent key. Layout presets are right-hand layouts in `presets` of the right profile; the left profile has `presets: null`, which disables the preset button.
 - `tests/test_side_profiles.js` checks the profiles against the firmware sources (combo, names, pins, `KEYMAP` of `dactyl_left.ino`, `default_config_left.json`) and against `index.html` (hand buttons, preset options).
 
+### Shared matrix constants (`js/matrix-constants.js`, `DactylMatrixConstants.h`)
+
+- Matrix dimensions (`NUM_LAYERS`, `NUM_ROWS`, `NUM_COLS`), GPIO pin mappings, absent keys, and hardware combo coordinates are defined in `js/matrix-constants.js` and `firmware/dactyl_right/DactylMatrixConstants.h`.
+- `js/matrix-constants.js` exports a Universal Module Definition (UMD) object with global `DACTYL_MATRIX_CONSTANTS` in the browser, `module.exports` in Node.js, and an embedded JSON block for `server.py`.
+- `firmware/dactyl_right/DactylMatrixConstants.h` defines `ROW_PINS_RIGHT`, `COL_PINS_RIGHT`, `ROW_PINS_LEFT`, `COL_PINS_LEFT`, `LEFT_ROW_PINS`, `LEFT_COL_PINS`, and the combo coordinate macros (`RIGHT_CONFIG_COMBO_*`, `LEFT_CONFIG_COMBO_*`).
+- `dactyl_right.ino` and `DactylLeftLogic.h` include `DactylMatrixConstants.h` directly and use the central pin and dimension macros.
+- `js/side-right.js` and `js/side-left.js` obtain their wires, absent keys, and combo coordinates directly from `DACTYL_MATRIX_CONSTANTS`.
+- `server.py` parses `js/matrix-constants.js` to initialize `NUM_LAYERS`, `NUM_ROWS`, `NUM_COLS`, `LEFT_MISSING_KEYS`, and `ABSENT_KEYS`.
+- `tests/test_side_profiles.js` runs a drift check that verifies all C++, JavaScript, and Python sources stay consistent with the shared constants.
+
 ---
 
 ## Configuration and Sync

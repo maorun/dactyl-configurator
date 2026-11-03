@@ -18,7 +18,7 @@ function section(file, startMarker, endMarker) {
 
 // Reihenfolge wie im Browser (index.html); keycodes.js und config-model.js sind ganz DOM-frei
 const code = [
-  ...["js/side-profiles.js", "js/side-right.js", "js/side-left.js", "js/side-state.js", "js/keycodes.js",
+  ...["js/matrix-constants.js", "js/side-profiles.js", "js/side-right.js", "js/side-left.js", "js/side-state.js", "js/keycodes.js",
       "js/config-model.js", "js/flash-log.js"].map(read),
   section("js/editor.js", "// Alte Configs speichern Modifier-Halte-Aktionen", "function appendOptionGroup"),
   section("js/editor.js", "// Sichtbarkeit der Optionen bei einer Suche", "// Auswahl-IDs, deren Suche"),
@@ -476,7 +476,14 @@ test("Matrix-Test: Zeilen und Spalten ohne Treffer gelten als verdächtig", () =
 
 test("Matrix-Test: Leitungsliste entspricht ROW_PINS/COL_PINS der Firmware", () => {
   const ino = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "dactyl_right.ino"), "utf8");
-  const pins = name => ino.match(new RegExp(name + "\\s*\\[[^\\]]*\\]\\s*=\\s*\\{([^}]*)\\}"))[1].split(",").map(v => Number(v.trim()));
+  const matrixH = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylMatrixConstants.h"), "utf8");
+  const pins = name => {
+    const m = ino.match(new RegExp(name + "\\s*\\[[^\\]]*\\]\\s*=\\s*([A-Za-z0-9_{} ,]+);"));
+    assert.ok(m, `${name} in dactyl_right.ino fehlt`);
+    const val = m[1].trim();
+    const raw = val.startsWith("{") ? val : matrixH.match(new RegExp(`#define\\s+${val}\\s*\\{([^}]*)\\}`))[1];
+    return raw.replace(/[{}]/g, "").split(",").map(v => Number(v.trim()));
+  };
   assert.deepStrictEqual([...R.rowWires.map(w => w.gpio)], pins("ROW_PINS"));
   assert.deepStrictEqual([...R.colWires.map(w => w.gpio)], pins("COL_PINS"));
 });

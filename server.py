@@ -79,8 +79,40 @@ INO_TEMPLATE_FILE = os.path.join(SOURCE_FIRMWARE_DIR, "dactyl_right", "dactyl_ri
 LEFT_INO_TEMPLATE_FILE = os.path.join(SOURCE_FIRMWARE_DIR, "dactyl_left", "dactyl_left.ino") if SEPARATE_FIRMWARE else None
 
 SIDES = ("R", "L")
+
+
+def _load_matrix_constants():
+    matrix_file = os.path.join(DIRECTORY, "js", "matrix-constants.js")
+    if os.path.exists(matrix_file):
+        with open(matrix_file, "r", encoding="utf-8") as f:
+            content = f.read()
+        m = re.search(r'/\*\s*MATRIX_CONSTANTS_JSON\s*\*/\s*(\{.*?\})\s*/\*\s*END_MATRIX_CONSTANTS_JSON\s*\*/', content, re.DOTALL)
+        if m:
+            return json.loads(m.group(1))
+    return {
+        "NUM_LAYERS": 8, "NUM_ROWS": 6, "NUM_COLS": 7,
+        "RIGHT": {"missingKeys": ["R4C0", "R5C5"]},
+        "LEFT": {"missingKeys": ["R4C5", "R5C0"]}
+    }
+
+
+MATRIX_CONSTANTS = _load_matrix_constants()
+NUM_LAYERS = int(MATRIX_CONSTANTS.get("NUM_LAYERS", 8))
+NUM_ROWS = int(MATRIX_CONSTANTS.get("NUM_ROWS", 6))
+NUM_COLS = int(MATRIX_CONSTANTS.get("NUM_COLS", 7))
+
+
+def _parse_coord(k):
+    m = re.match(r"^R?(\d+)[C_](\d+)$", str(k))
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+LEFT_MISSING_KEYS = tuple(MATRIX_CONSTANTS.get("LEFT", {}).get("missingKeys", ["R4C5", "R5C0"]))
 # Physisch nicht vorhandene Tasten (rechts R4C0/R5C5, links gespiegelt R4C5/R5C0): dort darf keine Aktion liegen
-ABSENT_KEYS = {"R": {(4, 0), (5, 5)}, "L": {(4, 5), (5, 0)}}
+ABSENT_KEYS = {
+    "R": {_parse_coord(k) for k in MATRIX_CONSTANTS.get("RIGHT", {}).get("missingKeys", ["R4C0", "R5C5"])},
+    "L": {_parse_coord(k) for k in LEFT_MISSING_KEYS}
+}
 DEFAULT_DEVICE_NAMES = {"R": "Dactyl Keyboard", "L": "Dactyl Links"}
 
 
@@ -323,9 +355,6 @@ def code_to_cpp(code):
         return "0"
     return "0"
 
-NUM_LAYERS = 8
-NUM_ROWS = 6
-NUM_COLS = 7
 MAX_COMBOS = 16
 MAX_KEY_PAIRS = 16
 MAX_KEY_OVERRIDES = 16
@@ -348,7 +377,7 @@ STATIC_ALLOWLIST = {
     "/js/side-right.js": "js/side-right.js", "/js/side-left.js": "js/side-left.js",
 }
 # Module der Web-App (Reihenfolge in index.html)
-APP_MODULES = ("keycodes", "config-model", "editor", "key-pairs-ui", "key-overrides-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
+APP_MODULES = ("matrix-constants", "keycodes", "config-model", "editor", "key-pairs-ui", "key-overrides-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
                "live-monitor", "heatmap", "matrix-test", "layout-lint-ui", "keyboard-hooks", "config-sync")
 STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 

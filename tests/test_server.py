@@ -993,8 +993,8 @@ class TestServerAndCodegen(unittest.TestCase):
             proc = build()
             self.assertEqual(proc.returncode, 0, proc.stderr)
             for rel in ("main.js", "package.json", "server.py", "index.html", "app.js", "style.css",
-                        "default_config.json", "default_config_left.json", "js/side-profiles.js",
-                        "js/config-sync.js", "firmware/dactyl_right/dactyl_right.ino",
+                        "default_config.json", "default_config_left.json", "js/matrix-constants.js", "js/side-profiles.js",
+                        "js/config-sync.js", "firmware/dactyl_right/DactylMatrixConstants.h", "firmware/dactyl_right/dactyl_right.ino",
                         "firmware/dactyl_right/DactylLogic.h", "firmware/dactyl_left/dactyl_left.ino"):
                 self.assertTrue(os.path.isfile(os.path.join(app_dir, rel)), rel)
             bundle_key = os.path.join(app_dir, "firmware", "dactyl_right", "DactylSplitKey.h")

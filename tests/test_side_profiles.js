@@ -11,6 +11,7 @@ const read = rel => fs.readFileSync(path.join(root, rel), "utf8");
 
 const ctx = {};
 vm.createContext(ctx);
+vm.runInContext(read("js/matrix-constants.js"), ctx);
 vm.runInContext(read("js/side-profiles.js"), ctx);
 vm.runInContext(read("js/side-right.js"), ctx);
 vm.runInContext(read("js/side-left.js"), ctx);
@@ -19,6 +20,7 @@ vm.runInContext(read("js/side-routing.js"), ctx);
 const D = ctx.Dactyl;
 const { L, R } = D.SIDE_PROFILES;
 
+const matrixHeader = read("firmware/dactyl_right/DactylMatrixConstants.h");
 const leftIno = read("firmware/dactyl_left/dactyl_left.ino");
 const leftLogic = read("firmware/dactyl_left/DactylLeftLogic.h");
 const rightIno = read("firmware/dactyl_right/dactyl_right.ino");
@@ -42,10 +44,21 @@ async function runAll() {
 const define = (src, name) => {
   const m = src.match(new RegExp(`#define ${name}\\s+(.+)`));
   assert.ok(m, `#define ${name} fehlt`);
-  return m[1].trim().replace(/^"(.*)"$/, "$1");
+  const val = m[1].trim().replace(/^"(.*)"$/, "$1");
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(val)) {
+    const resolved = matrixHeader.match(new RegExp(`#define ${val}\\s+(.+)`));
+    if (resolved) return resolved[1].trim().replace(/^"(.*)"$/, "$1");
+  }
+  return val;
 };
-const pins = (src, name) => src.match(new RegExp(name + "\\s*\\[[^\\]]*\\]\\s*=\\s*\\{([^}]*)\\}"))[1]
-  .split(",").map(v => Number(v.trim()));
+const pins = (src, name) => {
+  const m = src.match(new RegExp(name + "\\s*\\[[^\\]]*\\]\\s*=\\s*([A-Za-z0-9_{} ,]+);"))
+         || matrixHeader.match(new RegExp(name + "\\s*\\[[^\\]]*\\]\\s*=\\s*([A-Za-z0-9_{} ,]+);"));
+  assert.ok(m, `${name} fehlt`);
+  const val = m[1].trim();
+  const raw = val.startsWith("{") ? val : matrixHeader.match(new RegExp(`#define\\s+${val}\\s*\\{([^}]*)\\}`))[1];
+  return raw.replace(/[{}]/g, "").split(",").map(v => Number(v.trim()));
+};
 
 test("Links: Config-Combo, BLE-Name, Gerätename und Hälfte entsprechen dactyl_left.ino", () => {
   const combo = [
@@ -835,6 +848,83 @@ test("Matrix-Scan und Deep Sleep: Matrix-Einschwingzeit als Konstante und RTC-Ho
   // Beide Hälften müssen in enterDeepSleep() und setup() rtc_gpio_is_valid_gpio prüfen
   assert.match(rightIno, /rtc_gpio_is_valid_gpio\(pin\)/);
   assert.match(leftIno, /rtc_gpio_is_valid_gpio\(pin\)/);
+});
+
+test("Gemeinsame Matrix-Definition: js/matrix-constants.js, DactylMatrixConstants.h, Firmwares, Profile und server.py driften nicht", () => {
+  // 1. Gemeinsames JS-Modul matrix-constants.js existiert und exportiert die kanonischen Konstanten
+  const matrixJsSrc = read("js/matrix-constants.js");
+  const mCtx = {};
+  vm.createContext(mCtx);
+  vm.runInContext(matrixJsSrc, mCtx);
+  const MC = mCtx.DACTYL_MATRIX_CONSTANTS || mCtx.Dactyl;
+  assert.ok(MC, "DACTYL_MATRIX_CONSTANTS in js/matrix-constants.js fehlt");
+  assert.strictEqual(MC.NUM_LAYERS, 8, "NUM_LAYERS muss 8 sein");
+  assert.strictEqual(MC.NUM_ROWS, 6, "NUM_ROWS muss 6 sein");
+  assert.strictEqual(MC.NUM_COLS, 7, "NUM_COLS muss 7 sein");
+
+  const expectedRightRows = [13, 14, 27, 26, 33, 32];
+  const expectedRightCols = [23, 19, 18, 17, 16, 4, 25];
+  const expectedLeftRows = [23, 19, 18, 17, 16, 4];
+  const expectedLeftCols = [13, 14, 27, 26, 33, 32, 25];
+
+  assert.deepStrictEqual([...MC.RIGHT.rowPins], expectedRightRows);
+  assert.deepStrictEqual([...MC.RIGHT.colPins], expectedRightCols);
+  assert.deepStrictEqual([...MC.RIGHT.missingKeys], ["R4C0", "R5C5"]);
+  assert.deepStrictEqual([...MC.LEFT.rowPins], expectedLeftRows);
+  assert.deepStrictEqual([...MC.LEFT.colPins], expectedLeftCols);
+  assert.deepStrictEqual([...MC.LEFT.missingKeys], ["R4C5", "R5C0"]);
+
+  // 2. C++-Header firmware/dactyl_right/DactylMatrixConstants.h
+  const matrixH = read("firmware/dactyl_right/DactylMatrixConstants.h");
+  assert.strictEqual(Number(define(matrixH, "NUM_LAYERS")), 8);
+  assert.strictEqual(Number(define(matrixH, "NUM_ROWS")), 6);
+  assert.strictEqual(Number(define(matrixH, "NUM_COLS")), 7);
+
+  const parsePinMacro = (src, macro) => {
+    const m = src.match(new RegExp(`#define\\s+${macro}\\s+\\{([^}]*)\\}`));
+    assert.ok(m, `#define ${macro} fehlt in Header`);
+    return m[1].split(",").map(v => Number(v.trim()));
+  };
+  assert.deepStrictEqual(parsePinMacro(matrixH, "ROW_PINS_RIGHT"), expectedRightRows);
+  assert.deepStrictEqual(parsePinMacro(matrixH, "COL_PINS_RIGHT"), expectedRightCols);
+  assert.deepStrictEqual(parsePinMacro(matrixH, "ROW_PINS_LEFT"), expectedLeftRows);
+  assert.deepStrictEqual(parsePinMacro(matrixH, "COL_PINS_LEFT"), expectedLeftCols);
+
+  // Combos in DactylMatrixConstants.h
+  assert.strictEqual(Number(define(matrixH, "RIGHT_CONFIG_COMBO_R1")), 0);
+  assert.strictEqual(Number(define(matrixH, "RIGHT_CONFIG_COMBO_C1")), 0);
+  assert.strictEqual(Number(define(matrixH, "RIGHT_CONFIG_COMBO_R2")), 4);
+  assert.strictEqual(Number(define(matrixH, "RIGHT_CONFIG_COMBO_C2")), 5);
+  assert.strictEqual(Number(define(matrixH, "LEFT_CONFIG_COMBO_R1")), 0);
+  assert.strictEqual(Number(define(matrixH, "LEFT_CONFIG_COMBO_C1")), 5);
+  assert.strictEqual(Number(define(matrixH, "LEFT_CONFIG_COMBO_R2")), 4);
+  assert.strictEqual(Number(define(matrixH, "LEFT_CONFIG_COMBO_C2")), 0);
+
+  // 3. Firmware-Quellen binden DactylMatrixConstants.h ein
+  const commonH = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(commonH, /#include\s+["<]DactylMatrixConstants\.h[">]/, "DactylCommon.h muss DactylMatrixConstants.h einbinden");
+  assert.match(rightIno, /ROW_PINS_RIGHT/, "dactyl_right.ino muss ROW_PINS_RIGHT nutzen");
+  assert.match(rightIno, /COL_PINS_RIGHT/, "dactyl_right.ino muss COL_PINS_RIGHT nutzen");
+  assert.match(leftLogic, /DactylMatrixConstants\.h/, "DactylLeftLogic.h muss DactylMatrixConstants.h einbinden");
+
+  // 4. server.py bezieht Dimensionen, APP_MODULES und fehlende Tasten aus matrix-constants.js
+  const serverPy = read("server.py");
+  assert.match(serverPy, /"matrix-constants"/, "server.py APP_MODULES muss matrix-constants enthalten");
+  assert.match(serverPy, /matrix-constants\.js/, "server.py muss js/matrix-constants.js parsen oder laden");
+
+  // 5. index.html lädt js/matrix-constants.js vor js/side-profiles.js
+  const indexHtml = read("index.html");
+  const matrixScriptIdx = indexHtml.indexOf('src="js/matrix-constants.js"');
+  const sideProfilesScriptIdx = indexHtml.indexOf('src="js/side-profiles.js');
+  assert.ok(matrixScriptIdx !== -1, "index.html muss js/matrix-constants.js einbinden");
+  assert.ok(sideProfilesScriptIdx !== -1, "index.html muss js/side-profiles.js einbinden");
+  assert.ok(matrixScriptIdx < sideProfilesScriptIdx, "js/matrix-constants.js muss vor js/side-profiles.js geladen werden");
+
+  // 6. Seitenprofile js/side-right.js und js/side-left.js nutzen die gemeinsamen Konstanten
+  const sideRightJs = read("js/side-right.js");
+  const sideLeftJs = read("js/side-left.js");
+  assert.match(sideRightJs, /DACTYL_MATRIX_CONSTANTS/, "js/side-right.js muss DACTYL_MATRIX_CONSTANTS nutzen");
+  assert.match(sideLeftJs, /DACTYL_MATRIX_CONSTANTS/, "js/side-left.js muss DACTYL_MATRIX_CONSTANTS nutzen");
 });
 
 runAll().catch((err) => {

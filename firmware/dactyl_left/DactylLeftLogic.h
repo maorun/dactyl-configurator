@@ -11,17 +11,10 @@
  * Deshalb liegen alle Spalten auf RTC-fähigen GPIOs.
  */
 #include <stdint.h>
+#include "../dactyl_right/DactylMatrixConstants.h"
 #include "../dactyl_right/DactylSplitHid.h"
 
-#define LEFT_NUM_ROWS 6
-#define LEFT_NUM_COLS 7
 #define LEFT_DEBOUNCE_MS 5
-
-// Zeilen von oben nach unten: Gelb, Orange, Grün, Braun, Blau, Lila (Daumen)
-static const uint8_t LEFT_ROW_PINS[LEFT_NUM_ROWS] = {23, 19, 18, 17, 16, 4};
-
-// Spalten von links (außen) nach rechts (innen): Lila, Braun, Grün, Orange, Gelb, Rot, Blau (nur Daumen)
-static const uint8_t LEFT_COL_PINS[LEFT_NUM_COLS] = {13, 14, 27, 26, 33, 32, 25};
 
 // RTC-fähige GPIOs des ESP32 (nur diese können per Ext1 aus dem Deep Sleep wecken)
 inline bool isRtcGpio(uint8_t gpio) {

@@ -32,6 +32,7 @@
 #define CONFIG_CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define CONFIG_MODE_MAGIC          0xDAC7CF60UL
 
+#include "DactylMatrixConstants.h"
 #include "DactylCommon.h"
 
 // Überlebt ESP.restart() im RTC-Slow-Memory, wird aber beim Kaltstart ignoriert
@@ -93,13 +94,11 @@ protected:
 // Gemeinsamer HID-Report beider Hälften mit Besitz pro Hälfte (DactylSplitHid.h)
 SplitArbitratedKeyboard<DactylBleKeyboard> bleKeyboard("Dactyl Keyboard", "Dactyl DIY", 100);
 
-// 6 Zeilen (Rows)
-const int ROW_PINS[6] = {13, 14, 27, 26, 33, 32};
-const int NUM_ROWS = 6;
+// 6 Zeilen (Rows) aus DactylMatrixConstants.h
+const int ROW_PINS[NUM_ROWS] = ROW_PINS_RIGHT;
 
-// 7 Spalten (Columns) - von links nach rechts
-const int COL_PINS[7] = {23, 19, 18, 17, 16, 4, 25};
-const int NUM_COLS = 7;
+// 7 Spalten (Columns) - von links nach rechts aus DactylMatrixConstants.h
+const int COL_PINS[NUM_COLS] = COL_PINS_RIGHT;
 
 // QWERTY / QWERTZ Basis-Belegung für die rechte Hand (Dactyl Manuform)
 // Finger: 6 Spalten (Col 0..5), R4C0 existiert nicht

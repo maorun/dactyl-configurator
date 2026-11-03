@@ -18,8 +18,12 @@
 #include "../dactyl_left/DactylLeftLogic.h"
 #include "../dactyl_left/DactylSplitKeyboard.h"
 
+#ifndef NUM_ROWS
 #define NUM_ROWS LEFT_NUM_ROWS
+#endif
+#ifndef NUM_COLS
 #define NUM_COLS LEFT_NUM_COLS
+#endif
 
 static SplitSendQueue sendQueue;
 static DactylSplitKeyboard bleKeyboard(sendQueue);

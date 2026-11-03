@@ -157,6 +157,12 @@ function initUI() {
     });
   });
 
+  // Toggle Layer Overview Button
+  const btnToggleOverview = document.getElementById("btnToggleLayerOverview");
+  if (btnToggleOverview) {
+    btnToggleOverview.addEventListener("click", toggleLayerOverview);
+  }
+
   // Apply Layout Preset Button
   const btnPreset = document.getElementById("btnApplyPreset");
   if (btnPreset) {
@@ -578,6 +584,198 @@ function renderMatrix() {
   }
   if (heatmapEnabled) applyHeatmap();
   renderLayoutLint();
+  if (layerOverviewOpen) renderLayerOverview();
+}
+
+let layerOverviewOpen = false;
+
+function toggleLayerOverview() {
+  layerOverviewOpen = !layerOverviewOpen;
+  const panel = document.getElementById("layerOverviewPanel");
+  const btn = document.getElementById("btnToggleLayerOverview");
+  if (panel) panel.style.display = layerOverviewOpen ? "block" : "none";
+  if (btn) {
+    btn.classList.toggle("active", layerOverviewOpen);
+    btn.setAttribute("aria-expanded", layerOverviewOpen ? "true" : "false");
+  }
+  if (layerOverviewOpen) {
+    renderLayerOverview();
+  }
+}
+
+function renderLayerOverview() {
+  const panel = document.getElementById("layerOverviewPanel");
+  const grid = document.getElementById("layerOverviewGrid");
+  const badge = document.getElementById("layerOverviewSideBadge");
+  if (!panel || !grid) return;
+
+  const profile = activeProfile();
+  if (badge) badge.textContent = profile.label;
+
+  const overviewData = buildLayerOverview(currentConfig, profile);
+  grid.replaceChildren();
+
+  for (const data of overviewData) {
+    const card = document.createElement("div");
+    card.className = "layer-overview-card" + (data.layer === activeLayerIndex ? " is-active-layer" : "");
+    card.dataset.layer = String(data.layer);
+
+    // Header
+    const cardHeader = document.createElement("div");
+    cardHeader.className = "layer-overview-card-header";
+    cardHeader.title = `Klicken, um zu L${data.layer} (${data.name}) zu wechseln`;
+
+    const titleGroup = document.createElement("div");
+    titleGroup.className = "layer-overview-title-group";
+
+    const numSpan = document.createElement("span");
+    numSpan.className = "layer-overview-num";
+    numSpan.textContent = `L${data.layer}`;
+    titleGroup.appendChild(numSpan);
+
+    const nameEl = document.createElement("strong");
+    nameEl.className = "layer-overview-name";
+    nameEl.textContent = data.name;
+    titleGroup.appendChild(nameEl);
+
+    cardHeader.appendChild(titleGroup);
+
+    const badgesDiv = document.createElement("div");
+    badgesDiv.className = "layer-overview-badges";
+
+    if (data.conflictCount > 0) {
+      const bConf = document.createElement("span");
+      bConf.className = "badge badge-conflict";
+      bConf.title = `${data.conflictCount} Konflikt${data.conflictCount === 1 ? "" : "e"}`;
+      bConf.textContent = `⚠️ ${data.conflictCount}`;
+      badgesDiv.appendChild(bConf);
+    }
+    if (data.layer > 0) {
+      const bTrans = document.createElement("span");
+      bTrans.className = "badge badge-trans";
+      bTrans.title = `${data.transparentCount} transparente Taste${data.transparentCount === 1 ? "" : "n"}`;
+      bTrans.textContent = `▽ ${data.transparentCount}`;
+      badgesDiv.appendChild(bTrans);
+    }
+    const bOwn = document.createElement("span");
+    bOwn.className = "badge badge-own";
+    bOwn.title = `${data.ownCount} eigene Taste${data.ownCount === 1 ? "" : "n"}`;
+    bOwn.textContent = String(data.ownCount);
+    badgesDiv.appendChild(bOwn);
+
+    cardHeader.appendChild(badgesDiv);
+
+    cardHeader.addEventListener("click", () => {
+      if (activeLayerIndex !== data.layer) {
+        activeLayerIndex = data.layer;
+        document.querySelectorAll(".layer-btn").forEach(b => b.classList.toggle("active", Number(b.dataset.layer) === data.layer));
+        updateLayerNameInput();
+        renderMatrix();
+        if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+      }
+    });
+
+    card.appendChild(cardHeader);
+
+    // Matrix
+    const matrixWrap = document.createElement("div");
+    matrixWrap.className = "layer-overview-matrix-wrap";
+
+    const halfEl = document.createElement("div");
+    halfEl.className = "overview-half " + profile.cssClass;
+
+    // Finger matrix
+    const fingerMatrixEl = document.createElement("div");
+    fingerMatrixEl.className = "overview-finger-matrix";
+
+    for (let r = 0; r < 5; r++) {
+      const rowEl = document.createElement("div");
+      rowEl.className = "overview-row";
+      rowEl.dataset.row = String(r);
+
+      for (let c = 0; c < 6; c++) {
+        const key = data.rows[r][c];
+        rowEl.appendChild(createOverviewKeyElement(key, data.layer, profile));
+      }
+      fingerMatrixEl.appendChild(rowEl);
+    }
+
+    // Thumb cluster
+    const thumbGrid = document.createElement("div");
+    thumbGrid.className = "overview-thumb-grid";
+
+    (profile.thumbDefs || []).forEach((def, i) => {
+      const key = data.thumbs[i];
+      const keyEl = createOverviewKeyElement(key, data.layer, profile);
+      keyEl.style.gridColumn = def.col;
+      keyEl.style.gridRow = def.row;
+      if (def.isTall) keyEl.classList.add("is-tall-2u");
+      thumbGrid.appendChild(keyEl);
+    });
+
+    if (profile.thumbsFirst) {
+      halfEl.appendChild(thumbGrid);
+      halfEl.appendChild(fingerMatrixEl);
+    } else {
+      halfEl.appendChild(fingerMatrixEl);
+      halfEl.appendChild(thumbGrid);
+    }
+
+    matrixWrap.appendChild(halfEl);
+    card.appendChild(matrixWrap);
+
+    grid.appendChild(card);
+  }
+}
+
+function createOverviewKeyElement(key, layerIdx, profile) {
+  const keyEl = document.createElement("div");
+  keyEl.className = "overview-key";
+  keyEl.dataset.row = String(key.r);
+  keyEl.dataset.col = String(key.c);
+  keyEl.dataset.layer = String(layerIdx);
+  if (key.isThumb) keyEl.dataset.isThumb = "true";
+
+  if (!key.exists) {
+    keyEl.classList.add("overview-key-spacer");
+    return keyEl;
+  }
+
+  if (key.transparent) {
+    keyEl.classList.add("is-transparent");
+    keyEl.dataset.transparent = "true";
+    keyEl.title = `L${layerIdx} R${key.r}C${key.c}: Transparent ➔ erbt von L0 (${key.inheritedLabel || "---"})`;
+  } else {
+    keyEl.title = `L${layerIdx} R${key.r}C${key.c}: ${key.label || key.tap || "---"}`;
+  }
+
+  if (key.conflict) {
+    keyEl.classList.add("is-conflict");
+    keyEl.dataset.conflict = "true";
+    keyEl.title += ` ⚠️ ${key.conflictReason}`;
+  }
+
+  if (layerIdx === activeLayerIndex && selectedKey && selectedKey.r === key.r && selectedKey.c === key.c) {
+    keyEl.classList.add("is-selected");
+  }
+
+  const labelSpan = document.createElement("span");
+  labelSpan.className = "overview-key-label";
+  labelSpan.textContent = key.label || (key.transparent ? "▽" : "·");
+  keyEl.appendChild(labelSpan);
+
+  keyEl.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (activeLayerIndex !== layerIdx) {
+      activeLayerIndex = layerIdx;
+      document.querySelectorAll(".layer-btn").forEach(b => b.classList.toggle("active", Number(b.dataset.layer) === layerIdx));
+      updateLayerNameInput();
+    }
+    selectKey(key.r, key.c, editSide, key.isThumb);
+    renderMatrix();
+  });
+
+  return keyEl;
 }
 
 function createHalfMatrix(matrixData, side) {

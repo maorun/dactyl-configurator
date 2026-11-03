@@ -53,7 +53,8 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
              moveKeySelection, ARROW_KEY_DIRECTIONS,
-             createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES };`, ctx);
+             createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES,
+             buildLayerOverview };`, ctx);
 const api = ctx.api;
 const R = api.SIDE_PROFILES.R;
 const L = api.SIDE_PROFILES.L;
@@ -4260,6 +4261,114 @@ test("UI-Restrukturierung: Split-View aktiviert nebeneinander stehende Tastature
   assert.ok(css.includes(".split-keyboard-col"), "CSS muss .split-keyboard-col Pane-Stile definieren");
   assert.ok(css.includes("flex: 1 1 0"), "Panes müssen flex: 1 1 0 für gleichmäßiges Vergrößern haben");
   assert.ok(css.includes("max-width: 1800px"), ".app-container muss breitere Bildschirme unterstützen");
+});
+
+test("Layer overview: buildLayerOverview markiert transparente Tasten auf Ebene 1..7", () => {
+  const profile = api.SIDE_PROFILES.R;
+  const cfg = JSON.parse(JSON.stringify(profile.defaultConfig));
+  // Layer 0 R0C1 hat Taste '7' (KEY_7)
+  // Auf Layer 1 setzen wir R0C1 auf NONE (Transparent)
+  cfg.layers[1][0][1] = { tap: "NONE", hold: "NONE", dtap: "NONE", label: "" };
+  // Und R0C2 auf Layer 1 mit eigener Aktion KEY_F1
+  cfg.layers[1][0][2] = { tap: "KEY_F1", hold: "NONE", dtap: "NONE", label: "F1" };
+
+  const overview = api.buildLayerOverview(cfg, profile);
+  assert.strictEqual(overview.length, 8, "Overview muss 8 Layer enthalten");
+
+  // Layer 0: keine Taste darf als transparent markiert sein, ownCount muss > 0 sein
+  const l0 = overview[0];
+  assert.strictEqual(l0.layer, 0);
+  assert.strictEqual(l0.transparentCount, 0, "Layer 0 darf keine transparenten Tasten zählen");
+  assert.ok(l0.ownCount > 0, "Layer 0 muss eigene Tasten zählen");
+  const l0Key1 = l0.rows[0][1];
+  assert.ok(l0Key1, "R0C1 auf Layer 0 existiert");
+  assert.strictEqual(l0Key1.transparent, false, "Layer 0 Tasten sind nie transparent");
+
+  // Layer 1: R0C1 muss als transparent markiert sein und inheritedLabel von Layer 0 tragen
+  const l1 = overview[1];
+  assert.strictEqual(l1.layer, 1);
+  const l1Key1 = l1.rows[0][1];
+  assert.ok(l1Key1, "R0C1 auf Layer 1 existiert");
+  assert.strictEqual(l1Key1.transparent, true, "R0C1 auf Layer 1 muss als transparent markiert sein");
+  assert.ok(l1Key1.inheritedLabel, "R0C1 muss inheritedLabel von Layer 0 besitzen");
+
+  // R0C2 auf Layer 1 hat eigene Aktion -> nicht transparent
+  const l1Key2 = l1.rows[0][2];
+  assert.ok(l1Key2, "R0C2 auf Layer 1 existiert");
+  assert.strictEqual(l1Key2.transparent, false, "R0C2 mit eigener Aktion darf nicht transparent sein");
+  assert.strictEqual(l1Key2.hasOwn, true);
+});
+
+test("Layer overview: buildLayerOverview erkennt physisch fehlende Tasten je Seite", () => {
+  const rightProfile = api.SIDE_PROFILES.R;
+  const leftProfile = api.SIDE_PROFILES.L;
+  const rightCfg = JSON.parse(JSON.stringify(rightProfile.defaultConfig));
+  const leftCfg = JSON.parse(JSON.stringify(leftProfile.defaultConfig));
+
+  const rightOverview = api.buildLayerOverview(rightCfg, rightProfile);
+  const leftOverview = api.buildLayerOverview(leftCfg, leftProfile);
+
+  // Rechte Hand: R4C0 existiert nicht (Finger-Matrix)
+  const r0 = rightOverview[0];
+  const r4c0 = r0.rows[4][0];
+  assert.strictEqual(r4c0.exists, false, "Rechts R4C0 darf nicht existieren");
+
+  // Linke Hand: R4C5 existiert nicht (Finger-Matrix)
+  const l0 = leftOverview[0];
+  const l4c5 = l0.rows[4][5];
+  assert.strictEqual(l4c5.exists, false, "Links R4C5 darf nicht existieren");
+});
+
+test("Layer overview: buildLayerOverview erkennt Konflikte (trigger-shadowed und duplicate-action)", () => {
+  const profile = api.SIDE_PROFILES.R;
+  const cfg = JSON.parse(JSON.stringify(profile.defaultConfig));
+
+  // Layer 0: Taste R0C3 triggert MO_1
+  cfg.layers[0][0][3] = { tap: "MO_1", hold: "NONE", dtap: "NONE", label: "MO 1" };
+  // Auf Layer 1: Taste R0C3 hat eine eigene Aktion -> trigger-shadowed
+  cfg.layers[1][0][3] = { tap: "KEY_1", hold: "NONE", dtap: "NONE", label: "1" };
+
+  // Auf Layer 2: Zwei Tasten mit gleicher Aktion (nicht Modifikator) -> duplicate-action
+  cfg.layers[2][0][1] = { tap: "KEY_5", hold: "NONE", dtap: "NONE", label: "5" };
+  cfg.layers[2][0][2] = { tap: "KEY_5", hold: "NONE", dtap: "NONE", label: "5" };
+
+  const overview = api.buildLayerOverview(cfg, profile);
+
+  const l1Key3 = overview[1].rows[0][3];
+  assert.strictEqual(l1Key3.conflict, true, "Trigger-shadowed Konflikt muss conflict=true sein");
+  assert.ok(l1Key3.conflictReason.includes("schaltet per MO_1"), "Trigger-shadowed Konflikt muss in conflictReason stehen");
+
+  const l2Key1 = overview[2].rows[0][1];
+  const l2Key2 = overview[2].rows[0][2];
+  assert.strictEqual(l2Key1.conflict, true, "Duplicate-action Konflikt auf Taste 1");
+  assert.strictEqual(l2Key2.conflict, true, "Duplicate-action Konflikt auf Taste 2");
+  assert.ok(l2Key1.conflictReason.includes("Doppelte Belegung"), "Duplicate-action Begründung auf Taste 1");
+});
+
+test("Layer overview: UI-Elemente und CSS-Klassen sind in HTML, CSS und editor.js vorhanden", () => {
+  const html = read("index.html");
+  assert.ok(html.includes('id="btnToggleLayerOverview"'), "Toggle-Button btnToggleLayerOverview fehlt in index.html");
+  assert.ok(html.includes('id="layerOverviewPanel"'), "layerOverviewPanel fehlt in index.html");
+
+  const css = read("style.css");
+  assert.ok(css.includes(".layer-overview-panel"), "CSS muss .layer-overview-panel definieren");
+  assert.ok(css.includes(".layer-overview-grid"), "CSS muss .layer-overview-grid definieren");
+  assert.ok(css.includes(".layer-overview-card"), "CSS muss .layer-overview-card definieren");
+  assert.ok(css.includes(".overview-key.is-transparent"), "CSS muss .overview-key.is-transparent definieren");
+  assert.ok(css.includes(".overview-key.is-conflict"), "CSS muss .overview-key.is-conflict definieren");
+
+  const editorJs = read("js/editor.js");
+  assert.ok(editorJs.includes("toggleLayerOverview"), "toggleLayerOverview Funktion fehlt in editor.js");
+  assert.ok(editorJs.includes("renderLayerOverview"), "renderLayerOverview Funktion fehlt in editor.js");
+  assert.ok(editorJs.includes("createOverviewKeyElement"), "createOverviewKeyElement Funktion fehlt in editor.js");
+  assert.ok(editorJs.includes("btnToggleLayerOverview"), "Event-Listener für btnToggleLayerOverview fehlt in editor.js");
+});
+
+test("Layer overview: buildLayerOverview wirft keinen Fehler bei null oder undefined cfg", () => {
+  assert.doesNotThrow(() => api.buildLayerOverview(null));
+  assert.doesNotThrow(() => api.buildLayerOverview(undefined));
+  const res = api.buildLayerOverview(null, api.SIDE_PROFILES.R);
+  assert.strictEqual(res.length, 8);
 });
 
 (async () => {

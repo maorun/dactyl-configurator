@@ -1128,3 +1128,154 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
 
   return [...out.filter(f => f.level === "warn"), ...out.filter(f => f.level !== "warn")];
 }
+
+// =============================================================================
+// Ebenen-Übersicht (DOM-frei): 8 Ebenen nebeneinander mit Transparenz & Konflikten
+// =============================================================================
+
+function buildLayerOverview(cfg, profile) {
+  cfg = (cfg && typeof cfg === "object") ? cfg : {};
+  profile = profile || (typeof Dactyl !== "undefined" && Dactyl.SIDE_PROFILES ? Dactyl.SIDE_PROFILES[Dactyl.getMasterSide()] : null);
+  const layers = (cfg && Array.isArray(cfg.layers)) ? cfg.layers : [];
+  const layerNames = (cfg && Array.isArray(cfg.layerNames)) ? cfg.layerNames : DEFAULT_LAYER_NAMES;
+  const result = [];
+
+  // Layer-0-Trigger (z.B. MO_1, MO_2...) ermitteln für verdeckte Tasten (trigger-shadowed)
+  const layer0Triggers = new Map();
+  for (let r = 0; r < NUM_ROWS; r++) {
+    for (let c = 0; c < NUM_COLS; c++) {
+      if (!isPhysicalKey(r, c, profile)) continue;
+      const c0 = lintCellAt(cfg, 0, r, c);
+      for (const act of [c0.tap, c0.hold]) {
+        const la = lintLayerAction(act);
+        if (la && la.kind === "MO" && isValidIndex(la.layer, NUM_LAYERS) && la.layer > 0) {
+          layer0Triggers.set(`${r}_${c}`, la.layer);
+        }
+      }
+    }
+  }
+
+  for (let l = 0; l < NUM_LAYERS; l++) {
+    const name = sanitizeCommandText(layerNames[l], DEFAULT_LAYER_NAMES[l] || `Layer ${l}`);
+    const rows = [];
+    let transparentCount = 0;
+    let ownCount = 0;
+    let conflictCount = 0;
+
+    const cellEntries = [];
+
+    const inspectKey = (r, c, isThumb) => {
+      const exists = isPhysicalKey(r, c, profile);
+      if (!exists) {
+        return {
+          r, c, isThumb, exists: false, transparent: false, empty: true,
+          hasOwn: false, conflict: false, conflictReason: "", label: "",
+          tap: "NONE", hold: "NONE", dtap: "NONE", inheritedLabel: ""
+        };
+      }
+      const own = lintCellAt(cfg, l, r, c);
+      const hasOwn = lintHasAction(own);
+      const base = lintCellAt(cfg, 0, r, c);
+      const baseHas = lintHasAction(base);
+      const rawCell = (layers[l] && layers[l][r] && layers[l][r][c]) || {};
+      const baseRawCell = (layers[0] && layers[0][r] && layers[0][r][c]) || {};
+
+      const ownLabel = typeof rawCell.label === "string" && rawCell.label ? rawCell.label : (own.tap !== "NONE" ? own.tap.replace(/^KEY_/, "") : "");
+      const baseLabel = typeof baseRawCell.label === "string" && baseRawCell.label ? baseRawCell.label : (base.tap !== "NONE" ? base.tap.replace(/^KEY_/, "") : "");
+
+      let transparent = false;
+      let label = ownLabel;
+      let inheritedLabel = "";
+
+      if (l === 0) {
+        transparent = false;
+        label = ownLabel || (hasOwn ? (own.tap !== "NONE" ? own.tap.replace(/^KEY_/, "") : "•") : "---");
+        if (hasOwn) ownCount++;
+      } else {
+        if (!hasOwn) {
+          transparent = true;
+          transparentCount++;
+          inheritedLabel = baseLabel || (baseHas ? (base.tap !== "NONE" ? base.tap.replace(/^KEY_/, "") : "•") : "---");
+          label = inheritedLabel;
+        } else {
+          ownCount++;
+        }
+      }
+
+      const item = {
+        r, c, isThumb, exists: true,
+        transparent,
+        empty: !hasOwn && (!transparent || !baseHas),
+        hasOwn,
+        label,
+        ownLabel,
+        inheritedLabel,
+        tap: own.tap,
+        hold: own.hold,
+        dtap: own.dtap,
+        conflict: false,
+        conflictReason: ""
+      };
+      cellEntries.push(item);
+      return item;
+    };
+
+    // Finger-Matrix 5x6
+    for (let r = 0; r < FINGER_NAV_ROWS; r++) {
+      const row = [];
+      for (let c = 0; c < FINGER_NAV_COLS; c++) {
+        row.push(inspectKey(r, c, false));
+      }
+      rows.push(row);
+    }
+
+    // Daumen-Cluster
+    const thumbDefs = (profile && Array.isArray(profile.thumbDefs)) ? profile.thumbDefs : [];
+    const thumbs = thumbDefs.map(def => inspectKey(def.r, def.c, true));
+
+    // Konflikte prüfen
+    // 1. trigger-shadowed: Taste auf Ebene 0 schaltet per MO_l auf Ebene l, aber dieselbe Taste hat eigene Belegung auf l
+    for (const item of cellEntries) {
+      const trigTarget = layer0Triggers.get(`${item.r}_${item.c}`);
+      if (trigTarget === l && item.hasOwn) {
+        item.conflict = true;
+        item.conflictReason = `Taste auf Ebene 0 schaltet per MO_${l} auf diese Ebene, verdeckt eigene Belegung auf Ebene ${l}.`;
+        conflictCount++;
+      }
+    }
+
+    // 2. duplicate-action: zwei oder mehr physische Tasten auf Ebene l haben denselben non-modifier tap-Code
+    const tapMap = new Map();
+    for (const item of cellEntries) {
+      if (!item.hasOwn || item.tap === "NONE") continue;
+      if (isModifierKeyCode(item.tap)) continue;
+      if (!tapMap.has(item.tap)) tapMap.set(item.tap, []);
+      tapMap.get(item.tap).push(item);
+    }
+    for (const [tapCode, items] of tapMap.entries()) {
+      if (items.length > 1) {
+        for (const item of items) {
+          if (!item.conflict) conflictCount++;
+          item.conflict = true;
+          const def = findDefinitionByCode(actionCodeToNumeric(tapCode));
+          const actName = def.label || tapCode;
+          item.conflictReason = item.conflictReason
+            ? `${item.conflictReason} Doppelte Belegung: ${actName}.`
+            : `Doppelte Belegung auf Ebene ${l}: ${actName} (${items.length}× vergeben).`;
+        }
+      }
+    }
+
+    result.push({
+      layer: l,
+      name,
+      rows,
+      thumbs,
+      transparentCount,
+      ownCount,
+      conflictCount
+    });
+  }
+
+  return result;
+}

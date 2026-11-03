@@ -154,6 +154,7 @@
             </select>
             <select id="layerToolTarget" class="form-control" style="width: auto; padding: 0.25rem 0.5rem; font-size: 0.85rem;" title="Ziel-Ebene"></select>
             <button id="btnApplyLayerTool" class="btn btn-outline btn-sm" title="Aktion ausführen (wird vorgemerkt und ist rückgängig machbar)">Ausführen</button>
+            <button id="btnToggleLayerOverview" class="btn btn-outline btn-sm" type="button" aria-expanded="false" title="Alle 8 Ebenen nebeneinander anzeigen">🗺️ Ebenen-Übersicht</button>
           </div>
         </div>
 
@@ -172,6 +173,23 @@
         <summary id="layoutLintSummary"></summary>
         <ul class="layout-lint-list" id="layoutLintList"></ul>
       </details>
+
+      <!-- Ebenen-Übersicht: Alle 8 Ebenen in kompakter Miniatur-Ansicht nebeneinander -->
+      <div class="layer-overview-panel" id="layerOverviewPanel" style="display: none;">
+        <div class="layer-overview-header">
+          <div class="layer-overview-title">
+            <h4>🗺️ Ebenen-Übersicht (8 Ebenen)</h4>
+            <span class="badge" id="layerOverviewSideBadge">Rechte Hand</span>
+            <span class="help-hint">Klicke auf eine Ebene oder Taste, um dorthin zu wechseln. Transparente Tasten erben die Belegung von Ebene 0.</span>
+          </div>
+          <div class="layer-overview-legend">
+            <span class="overview-legend-item"><span class="overview-legend-swatch own"></span> Eigene Belegung</span>
+            <span class="overview-legend-item"><span class="overview-legend-swatch transparent"></span> Transparent (erbt von L0)</span>
+            <span class="overview-legend-item"><span class="overview-legend-swatch conflict"></span> Konflikt / Verdeckt</span>
+          </div>
+        </div>
+        <div class="layer-overview-grid" id="layerOverviewGrid"></div>
+      </div>
 
       <div class="editor-workspace">
         <!-- Visual Keyboard Canvas -->

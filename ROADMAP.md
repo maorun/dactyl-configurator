@@ -29,14 +29,6 @@ No open entry.
 
 ## Priority 4
 
-### Layer overview
-
-- **Rank:** Feature model. Total 17/40 (typing 0, configuration 5, harmony 5, safety 7). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/editor.js`, `style.css`.
-- **Goal:** Show all 8 layers in small size side by side, so transparent keys and conflicts are visible.
-- **Acceptance test:** A test shows that the overview marks a key that is transparent on a layer.
-
 ### Permissive hold and tap-preferred Mod-Tap
 
 - **Rank:** Feature model. Total 17/40 (typing 7, configuration 3, harmony 4, safety 3). Effort M. Estimate.

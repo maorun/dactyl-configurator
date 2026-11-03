@@ -595,6 +595,39 @@ TEST(test_heartbeat_fw_version_waits_for_queue_room) {
   assert(queueHeartbeat(q, counter) && q.items[q.head].op == SPLIT_OP_FW_VERSION);
 }
 
+TEST(test_heartbeat_if_due_respects_refresh_interval) {
+  SplitSendQueue q;
+  queueReset(q);
+  uint8_t counter = 1; // start with HEARTBEAT rather than FW_VERSION
+  unsigned long lastSendMs = 1000;
+
+  // Im aktiven Modus (1000 ms Intervall): bei 1500 ms noch nicht fällig
+  assert(!queueHeartbeatIfDue(q, counter, lastSendMs, 1500, splitRefreshIntervalMs(false)));
+  assert(q.count == 0);
+  assert(lastSendMs == 1000);
+
+  // Bei 2000 ms fällig
+  assert(queueHeartbeatIfDue(q, counter, lastSendMs, 2000, splitRefreshIntervalMs(false)));
+  assert(q.count == 1 && q.items[q.head].op == SPLIT_OP_HEARTBEAT);
+  assert(lastSendMs == 2000);
+  queueReset(q);
+
+  // Im Standby (5000 ms Intervall): bei 3000 ms noch lange nicht fällig
+  assert(!queueHeartbeatIfDue(q, counter, lastSendMs, 3000, splitRefreshIntervalMs(true)));
+  assert(q.count == 0);
+  // Erst bei 7000 ms fällig
+  assert(!queueHeartbeatIfDue(q, counter, lastSendMs, 6999, splitRefreshIntervalMs(true)));
+  assert(queueHeartbeatIfDue(q, counter, lastSendMs, 7000, splitRefreshIntervalMs(true)));
+  assert(q.count == 1 && q.items[q.head].op == SPLIT_OP_HEARTBEAT);
+  assert(lastSendMs == 7000);
+  queueReset(q);
+
+  // Rückkehr zu normalem Modus: wenn seit letztem Senden bereits >= 1000 ms vergangen sind, sofort fällig
+  assert(queueHeartbeatIfDue(q, counter, lastSendMs, 8000, splitRefreshIntervalMs(false)));
+  assert(q.count == 1);
+  assert(lastSendMs == 8000);
+}
+
 TEST(test_tap_pending_reported_on_change_only) {
   SplitSendQueue tq;
   queueReset(tq);

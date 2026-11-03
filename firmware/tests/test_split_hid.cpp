@@ -686,6 +686,70 @@ TEST(test_master_packet_accepts_activity_and_master_layer_only) {
   assert(!parse(SPLIT_LEFT_MAC, m, tmp));
 }
 
+TEST(test_quiet_standby_and_refresh_intervals) {
+  // Quiet standby nur wenn im Standby, keine lokale Taste und keine MO-Ebenen gehalten werden
+  assert(!splitQuietStandby(false, false, 0, 0));
+  assert(!splitQuietStandby(true, true, 0, 0));
+  assert(!splitQuietStandby(true, false, 0x02, 0));
+  assert(!splitQuietStandby(true, false, 0, 0x04));
+  assert(splitQuietStandby(true, false, 0, 0));
+
+  // Intervalle im aktiven Betrieb vs. quiet standby
+  assert(splitRefreshIntervalMs(false) == SPLIT_LAYER_REFRESH_MS);
+  assert(splitRefreshIntervalMs(true) == SPLIT_STANDBY_REFRESH_MS);
+  assert(splitTimeoutIntervalMs(false) == SPLIT_LINK_TIMEOUT_MS);
+  assert(splitTimeoutIntervalMs(true) == SPLIT_STANDBY_TIMEOUT_MS);
+}
+
+TEST(test_layer_sync_quiet_standby_refresh_interval) {
+  SplitLayerSync s;
+  splitLayerReset(s, 0);
+  SplitHidEvent ev;
+
+  // Erstes Paket
+  assert(splitLayerTake(s, 0, 0, false, 100, true, ev, splitRefreshIntervalMs(false)));
+
+  // Im quiet standby: nach 1000 ms noch nicht fällig, erst nach 5000 ms
+  assert(!splitLayerTake(s, 0, 0, false, 100 + SPLIT_LAYER_REFRESH_MS, true, ev, splitRefreshIntervalMs(true)));
+  assert(!splitLayerTake(s, 0, 0, false, 100 + SPLIT_STANDBY_REFRESH_MS - 1, true, ev, splitRefreshIntervalMs(true)));
+  assert(splitLayerTake(s, 0, 0, false, 100 + SPLIT_STANDBY_REFRESH_MS, true, ev, splitRefreshIntervalMs(true)));
+
+  // Sobald quiet standby endet (z. B. Taste/MO-Ebene oder Standby beendet): sofort nach >= 1000 ms fällig
+  assert(!splitLayerTake(s, 0, 0, false, 100 + SPLIT_STANDBY_REFRESH_MS + 500, true, ev, splitRefreshIntervalMs(false)));
+  assert(splitLayerTake(s, 0, 0, false, 100 + SPLIT_STANDBY_REFRESH_MS + SPLIT_LAYER_REFRESH_MS, true, ev, splitRefreshIntervalMs(false)));
+}
+
+TEST(test_link_timeout_with_standby_timeout) {
+  SplitLeftHeld h;
+  splitHeldReset(h);
+  RecordingSink s;
+
+  // Paket empfangen bei t = 1000
+  splitApplyHidEvent(h, makeSplitHidEvent(SPLIT_OP_HEARTBEAT), 1000, s);
+  assert(h.linkUp);
+
+  // Mit Standby-Timeout (12000 ms): nach 3000 ms noch nicht getrennt
+  assert(!splitCheckLinkTimeout(h, 1000 + SPLIT_LINK_TIMEOUT_MS, s, SPLIT_STANDBY_TIMEOUT_MS));
+  assert(!splitCheckLinkTimeout(h, 1000 + SPLIT_STANDBY_TIMEOUT_MS - 1, s, SPLIT_STANDBY_TIMEOUT_MS));
+  assert(splitCheckLinkTimeout(h, 1000 + SPLIT_STANDBY_TIMEOUT_MS, s, SPLIT_STANDBY_TIMEOUT_MS));
+  assert(!h.linkUp);
+}
+
+TEST(test_master_standby_exit_grace_period) {
+  // Wenn im Standby: grace ist immer aktiv
+  assert(splitStandbyGraceActive(true, 1000, 1000));
+  assert(splitStandbyGraceActive(true, 1000, 5000));
+
+  // Beim Aufwachen bei t=5000 (lastStandbyMs = 5000):
+  // Innerhalb von 3000 ms Grace Period bleibt splitStandbyGraceActive true
+  assert(splitStandbyGraceActive(false, 5000, 5000));
+  assert(splitStandbyGraceActive(false, 5000, 5000 + SPLIT_LINK_TIMEOUT_MS - 1));
+
+  // Nach 3000 ms fällt die Grace Period ab
+  assert(!splitStandbyGraceActive(false, 5000, 5000 + SPLIT_LINK_TIMEOUT_MS));
+  assert(!splitStandbyGraceActive(false, 0, 5000));
+}
+
 TEST(test_sleep_packet_accepts_only_master_sleep_without_args) {
   assert(SPLIT_OP_SLEEP == 26); // append-only: Nummer nie ändern
   SplitHidEvent out;

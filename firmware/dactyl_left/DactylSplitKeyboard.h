@@ -12,10 +12,35 @@
 
 // Ohne erfolgreichen Sende-Callback so lange gilt der Master als nicht erreichbar
 #define SPLIT_LINK_DOWN_MS 2000
+#define SPLIT_STANDBY_LINK_DOWN_MS 11000
 
 class DactylSplitKeyboard {
 public:
   explicit DactylSplitKeyboard(SplitSendQueue &queue) : q(queue) {}
+
+  void setQuietStandby(bool quiet, unsigned long nowMs = 0) {
+    unsigned long now = nowMs ? nowMs : millis();
+    if (quiet) {
+      lastQuietMs = now;
+      hadQuietStandby = true;
+    } else if (quietStandby) {
+      lastQuietMs = now;
+    }
+    quietStandby = quiet;
+  }
+
+  void resetQuietStandby() {
+    quietStandby = false;
+    hadQuietStandby = false;
+    lastQuietMs = 0;
+  }
+
+  unsigned long linkDownMs(unsigned long nowMs) const {
+    if (quietStandby || (hadQuietStandby && (nowMs - lastQuietMs) < SPLIT_LINK_DOWN_MS)) {
+      return SPLIT_STANDBY_LINK_DOWN_MS;
+    }
+    return SPLIT_LINK_DOWN_MS;
+  }
 
   // Vom Sende-Ergebnis in loop() aufgerufen.
   // Während eines Ausfalls (isConnected() false) sendet DactylLogic.h kein Loslassen. Der Master löst linke
@@ -23,7 +48,8 @@ public:
   // Lücke zurück, hielte der Master eine schon losgelassene Taste: RELEASE_ALL gleicht beide Seiten ab.
   void onSendResult(bool success, unsigned long nowMs) {
     if (!success) return;
-    bool wasDown = everAcked && (nowMs - lastAckMs) >= SPLIT_LINK_DOWN_MS;
+    unsigned long timeout = linkDownMs(nowMs);
+    bool wasDown = everAcked && (nowMs - lastAckMs) >= timeout;
     lastAckMs = nowMs;
     everAcked = true;
     if (wasDown) releaseAll();
@@ -31,8 +57,12 @@ public:
 
   // Wie bei BLE: ohne erreichbaren Master gehen keine Tasten verloren in einer Warteschlange,
   // sondern DactylLogic.h sendet erst gar nicht (gleiches Verhalten wie ein getrennter Mac).
+  bool isConnected(unsigned long nowMs) const {
+    return everAcked && (nowMs - lastAckMs) < linkDownMs(nowMs);
+  }
+
   bool isConnected() const {
-    return everAcked && (millis() - lastAckMs) < SPLIT_LINK_DOWN_MS;
+    return isConnected(millis());
   }
 
   // Einmal-Aktionen (write, mouseClick) gehen als PRESS + RELEASE an den Master: ein Retry stellt ein Paket
@@ -120,6 +150,9 @@ private:
   unsigned long lastAckMs = 0;
   bool everAcked = false;
   uint32_t dropped = 0;
+  bool quietStandby = false;
+  unsigned long lastQuietMs = 0;
+  bool hadQuietStandby = false;
 
   size_t push(uint8_t op, uint16_t code) {
     if (code == 0) return 0;

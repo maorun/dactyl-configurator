@@ -611,7 +611,8 @@ test("Firmwarestand: links meldet ihn mit dem Lebenszeichen, gleich nach jedem S
     return src.slice(start, src.indexOf("\n}\n", start));
   };
   const heartbeat = fnBody(leftIno, "static void sendHeartbeatIfDue()");
-  assert.ok(heartbeat.includes("queueHeartbeat(sendQueue, heartbeatCounter);"));
+  assert.ok(heartbeat.includes("queueHeartbeat(sendQueue, heartbeatCounter") ||
+            heartbeat.includes("queueHeartbeatIfDue(sendQueue, heartbeatCounter"));
   assert.ok(!heartbeat.includes("SPLIT_OP_HEARTBEAT"));
   // setupEspNow läuft beim Start, beim Aufwachen und in restartEspNow
   const setup = fnBody(leftIno, "static bool setupEspNow()");

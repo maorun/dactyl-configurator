@@ -257,11 +257,14 @@ void toggleConfigMode() {
   }
 }
 
+void applySplitWakeWindow(bool standby);
+
 void exitStandby() {
   if (isStandby) {
     isStandby = false;
     setCpuFrequencyMhz(240);
     bleKeyboard.setStandbyMode(false);
+    applySplitWakeWindow(false);
     Serial.println("[POWER] Standby beendet -> CPU wieder auf 240 MHz");
   }
 }
@@ -271,6 +274,7 @@ void enterStandby() {
     isStandby = true;
     setCpuFrequencyMhz(80);
     bleKeyboard.setStandbyMode(true);
+    applySplitWakeWindow(true);
     Serial.println("[POWER] Inaktivität erreicht -> Standby aktiv (CPU 80 MHz, gedrosselter Matrix-Scan)");
   }
 }
@@ -468,6 +472,13 @@ static bool splitRxReady = false;
 static uint32_t splitRxDroppedSeen = 0;
 static bool splitHostWasReady = false;
 static SplitLinkReporter splitLinkReporter;
+static SplitWakeWindowState splitWakeWindow = {};
+
+void applySplitWakeWindow(bool standby) {
+  splitWakeWindowUpdateIfNeeded(splitWakeWindow, splitRxReady && !isConfigMode, standby, [](uint16_t windowMs) {
+    return esp_now_set_wake_window(windowMs) == ESP_OK;
+  });
+}
 
 // DEVICE_INFO.left_link. Im Config Mode und nach einem fehlgeschlagenen Start von ESP-NOW läuft der Empfang
 // nicht (setupSplitReceiver nur im Tastaturmodus): "null" statt eines Stands, der "nie verbunden" vortäuscht.
@@ -572,6 +583,8 @@ void setupSplitReceiver() {
   WiFi.disconnect();
   esp_wifi_set_channel(SPLIT_ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
   esp_wifi_set_max_tx_power(SPLIT_ESPNOW_TX_POWER);
+  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+  esp_wifi_connectionless_module_set_wake_interval(SPLIT_ESPNOW_WAKE_INTERVAL_MS);
   if (esp_now_init() != ESP_OK) {
     Serial.println("[SPLIT] ERR ESPNOW_INIT");
     return;
@@ -604,6 +617,8 @@ void setupSplitReceiver() {
     return;
   }
   splitRxReady = true;
+  splitWakeWindowReset(splitWakeWindow);
+  applySplitWakeWindow(isStandby);
   uint8_t mac[6];
   esp_read_mac(mac, ESP_MAC_WIFI_STA);
   Serial.printf("[SPLIT] ESP-NOW-Empfang bereit (Kanal %d, verschlüsselt, Wi-Fi-STA-MAC %02X:%02X:%02X:%02X:%02X:%02X)\n",
@@ -759,9 +774,10 @@ void sendSplitLayerRelease() {
 void sendSplitSleep() {
   if (!splitActivityPeerReady || isConfigMode) return;
   SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_SLEEP);
-  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
-  delay(5);
-  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+  for (int i = 0; i < 3; i++) {
+    esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+    if (i < 2) delay(35);
+  }
 }
 
 static bool anyRightKeyHeld() {

@@ -3141,6 +3141,60 @@ TEST(test_override_validation) {
   assert(keyOverrideClassOfCode('a') == 0);
 }
 
+TEST(test_espnow_wake_window_constants_and_logic) {
+  assert(SPLIT_ESPNOW_WAKE_INTERVAL_MS == 100);
+  assert(SPLIT_ESPNOW_WAKE_WINDOW_ACTIVE_MS == 100);
+  assert(SPLIT_ESPNOW_WAKE_WINDOW_STANDBY_MS == 40);
+
+  assert(splitEspNowWakeWindowMs(false) == 100);
+  assert(splitEspNowWakeWindowMs(true) == 40);
+
+  SplitWakeWindowState state;
+  splitWakeWindowReset(state);
+  assert(!state.initialized);
+  assert(state.appliedWindowMs == 0);
+
+  int applyCalls = 0;
+  uint16_t lastApplied = 0;
+  auto mockApply = [&](uint16_t w) {
+    applyCalls++;
+    lastApplied = w;
+    return true;
+  };
+
+  // Nicht bereit: keine Ausführung
+  assert(!splitWakeWindowUpdateIfNeeded(state, false, false, mockApply));
+  assert(applyCalls == 0);
+
+  // Initialisieren mit active (standby = false)
+  assert(splitWakeWindowUpdateIfNeeded(state, true, false, mockApply));
+  assert(applyCalls == 1);
+  assert(lastApplied == 100);
+  assert(state.initialized);
+  assert(state.appliedWindowMs == 100);
+
+  // Gleicher Zustand: kein zweiter Aufruf
+  assert(!splitWakeWindowUpdateIfNeeded(state, true, false, mockApply));
+  assert(applyCalls == 1);
+
+  // Wechsel in Standby (standby = true)
+  assert(splitWakeWindowUpdateIfNeeded(state, true, true, mockApply));
+  assert(applyCalls == 2);
+  assert(lastApplied == 40);
+  assert(state.appliedWindowMs == 40);
+
+  // Fehlgeschlagene Zuweisung setzt Zustand nicht
+  auto failApply = [](uint16_t) { return false; };
+  assert(!splitWakeWindowUpdateIfNeeded(state, true, false, failApply));
+  assert(state.appliedWindowMs == 40);
+
+  // Nach Reset: erneuter Aufruf ausgeführt
+  splitWakeWindowReset(state);
+  assert(splitWakeWindowUpdateIfNeeded(state, true, true, mockApply));
+  assert(applyCalls == 3);
+  assert(lastApplied == 40);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Split HID Protocol Test Suite" << std::endl;

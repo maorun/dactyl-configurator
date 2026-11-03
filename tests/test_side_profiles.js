@@ -808,6 +808,18 @@ test("Funk-Sendeleistung und BLE-Latenz: Firmware drosselt BLE und ESP-NOW im Be
   assert.ok(rightEnterStandby && /bleKeyboard\.setStandbyMode\(true\)/.test(rightEnterStandby[1]), "rechts: enterStandby() ruft nicht bleKeyboard.setStandbyMode(true) auf");
   const rightExitStandby = rightIno.match(/void exitStandby\(\) \{([\s\S]*?)\n\}/);
   assert.ok(rightExitStandby && /bleKeyboard\.setStandbyMode\(false\)/.test(rightExitStandby[1]), "rechts: exitStandby() ruft nicht bleKeyboard.setStandbyMode(false) auf");
+
+  // ESP-NOW Stromsparen: Modem-Sleep, Aufwachintervall und Wake-Window-Umschaltung
+  assert.match(rightIno, /esp_wifi_set_ps\(\s*WIFI_PS_MIN_MODEM\s*\)/, "rechts: esp_wifi_set_ps fehlt");
+  assert.match(leftIno, /esp_wifi_set_ps\(\s*WIFI_PS_MIN_MODEM\s*\)/, "links: esp_wifi_set_ps fehlt");
+  assert.match(rightIno, /esp_wifi_connectionless_module_set_wake_interval\(\s*SPLIT_ESPNOW_WAKE_INTERVAL_MS\s*\)/);
+  assert.match(leftIno, /esp_wifi_connectionless_module_set_wake_interval\(\s*SPLIT_ESPNOW_WAKE_INTERVAL_MS\s*\)/);
+  assert.match(rightIno, /applySplitWakeWindow\(true\)/);
+  assert.match(rightIno, /applySplitWakeWindow\(false\)/);
+  assert.match(leftIno, /applyLeftWakeWindow\(true\)/);
+  assert.match(leftIno, /applyLeftWakeWindow\(false\)/);
+  const leftEnterStandby = leftIno.match(/void enterStandby\(\) \{([\s\S]*?)\n\}/);
+  assert.ok(leftEnterStandby && !/setCpuFrequencyMhz/.test(leftEnterStandby[1]), "links: enterStandby() darf Takt nicht ändern");
 });
 
 runAll().catch((err) => {

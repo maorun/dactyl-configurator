@@ -32,6 +32,18 @@ function setupEventListeners() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && selectedKey && !isEditableTarget(e.target)) clearKeySelection();
   });
+  // Pfeiltasten: Auswahl in der Matrix der bearbeiteten Hälfte bewegen (außerhalb von Eingabefeldern)
+  document.addEventListener("keydown", (e) => {
+    const direction = ARROW_KEY_DIRECTIONS[e.key];
+    if (!direction || !selectedKey || e.defaultPrevented || isEditableTarget(e.target)) return;
+    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    // Offener Dialog: die Auswahl dahinter bleibt
+    if ([...document.querySelectorAll(".modal-backdrop")].some(m => m.style.display !== "none")) return;
+    e.preventDefault();
+    const next = moveKeySelection(selectedKey.r, selectedKey.c, direction, activeProfile());
+    if (next.r === selectedKey.r && next.c === selectedKey.c) return;
+    selectKey(next.r, next.c, editSide, next.isThumb);
+  });
 
   // Apply key inspector changes
   document.getElementById("btnApplyKey").addEventListener("click", async () => {

@@ -29,14 +29,6 @@ No open entry.
 
 ## Priority 4
 
-### Keyboard control in the editor
-
-- **Rank:** Feature model. Total 18/40 (typing 0, configuration 5, harmony 5, safety 8). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/editor.js`, `js/editor-events.js`.
-- **Goal:** Let the arrow keys change the selected key in the matrix.
-- **Acceptance test:** A test shows that the arrow keys move the selection and stop at the edge of the matrix.
-
 ### ESP-NOW power saving
 
 - **Rank:** Feature model. Total 18/40 (typing 6, configuration 2, harmony 6, safety 4). Effort M. Estimate.

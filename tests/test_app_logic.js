@@ -52,6 +52,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
+             moveKeySelection, ARROW_KEY_DIRECTIONS,
              createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES };`, ctx);
 const api = ctx.api;
 const R = api.SIDE_PROFILES.R;
@@ -2702,6 +2703,71 @@ test("Makro-UI: Löschen und Rückgängig behalten spätere Tastenänderungen", 
   assert.ok(log.toasts.at(-1).includes("Makro-Liste hat sich geändert"));
 });
 
+test("Pfeiltasten: Auswahl bewegt sich in der Finger-Matrix und überspringt fehlende Tasten", () => {
+  const mv = (r, c, d, p = R) => { const n = api.moveKeySelection(r, c, d, p); return [n.r, n.c, n.isThumb]; };
+  assert.deepStrictEqual(mv(2, 2, "up"), [1, 2, false]);
+  assert.deepStrictEqual(mv(2, 2, "down"), [3, 2, false]);
+  assert.deepStrictEqual(mv(2, 2, "left"), [2, 1, false]);
+  assert.deepStrictEqual(mv(2, 2, "right"), [2, 3, false]);
+  // Rechts fehlt R4C0: von R4C1 nach links bleibt die Auswahl, von R3C0 nach unten auch
+  assert.deepStrictEqual(mv(4, 1, "left"), [4, 1, false]);
+  assert.deepStrictEqual(mv(3, 0, "down"), [3, 0, false]);
+  // Links fehlt R4C5
+  assert.deepStrictEqual(mv(3, 5, "down", L), [3, 5, false]);
+  assert.deepStrictEqual(mv(4, 4, "right", L), [4, 4, false]);
+  assert.deepStrictEqual(mv(4, 5, "down"), [4, 5, false]);
+});
+
+test("Pfeiltasten: Auswahl stoppt am Rand der Matrix", () => {
+  for (const [r, c, d] of [[0, 3, "up"], [4, 3, "down"], [2, 0, "left"], [2, 5, "right"], [0, 0, "up"], [0, 0, "left"]]) {
+    const n = api.moveKeySelection(r, c, d, R);
+    assert.deepStrictEqual([n.r, n.c], [r, c], `${r},${c} ${d}`);
+  }
+  // Unbekannte Richtung oder kein Profil: keine Bewegung
+  assert.deepStrictEqual([api.moveKeySelection(2, 2, "diagonal", R).r, api.moveKeySelection(2, 2, "up", null).r], [2, 2]);
+});
+
+test("Pfeiltasten: Daumen-Cluster folgt seinem Raster und stoppt am Rand", () => {
+  const mv = (c, d, p = R) => { const n = api.moveKeySelection(5, c, d, p); return [n.r, n.c, n.isThumb]; };
+  // Rechts: Esc(5,6) | Cmd(5,0) oben; Alt(5,1), Tab(5,4) links; Space(5,3) und Enter(5,2) 2U
+  assert.deepStrictEqual(mv(6, "right"), [5, 0, true]);
+  assert.deepStrictEqual(mv(6, "down"), [5, 1, true]);
+  assert.deepStrictEqual(mv(1, "down"), [5, 4, true]);
+  assert.deepStrictEqual(mv(1, "right"), [5, 3, true]);
+  assert.deepStrictEqual(mv(4, "right"), [5, 3, true]);
+  assert.deepStrictEqual(mv(3, "right"), [5, 2, true]);
+  assert.deepStrictEqual(mv(3, "up"), [5, 0, true]);
+  assert.deepStrictEqual(mv(3, "left"), [5, 1, true]);
+  assert.deepStrictEqual(mv(0, "down"), [5, 3, true]);
+  for (const [c, d] of [[6, "up"], [6, "left"], [4, "down"], [2, "right"], [2, "up"], [2, "down"], [0, "right"]]) {
+    assert.deepStrictEqual(mv(c, d), [5, c, true], `R5C${c} ${d}`);
+  }
+  // Links (gespiegelt): Cmd(5,5) | Alt(5,6) oben
+  assert.deepStrictEqual(mv(5, "right", L), [5, 6, true]);
+  assert.deepStrictEqual(mv(6, "down", L), [5, 4, true]);
+  assert.deepStrictEqual(mv(3, "right", L), [5, 2, true]);
+  assert.deepStrictEqual(mv(3, "left", L), [5, 3, true]);
+  // Links: Ctrl(5,3) | Del(5,2) 2U, Space(5,4) und Bksp(5,1) rechts
+  assert.deepStrictEqual(mv(2, "up", L), [5, 5, true]);
+  assert.deepStrictEqual(mv(5, "left", L), [5, 5, true]);
+  assert.deepStrictEqual(mv(5, "down", L), [5, 2, true]);
+  assert.deepStrictEqual(mv(3, "up", L), [5, 3, true]);
+  assert.deepStrictEqual(mv(2, "right", L), [5, 4, true]);
+  assert.deepStrictEqual(mv(4, "down", L), [5, 1, true]);
+  assert.deepStrictEqual(mv(1, "up", L), [5, 4, true]);
+  assert.deepStrictEqual(mv(1, "left", L), [5, 2, true]);
+  assert.deepStrictEqual(mv(6, "right", L), [5, 6, true]);
+  // Gegenrichtung führt zurück, wo das Raster eindeutig ist (beide Hälften)
+  const back = { up: "down", down: "up", left: "right", right: "left" };
+  for (const [p, pairs] of [[R, [[6, "right"], [6, "down"], [1, "down"], [3, "right"]]],
+                            [L, [[5, "right"], [6, "down"], [4, "down"], [3, "right"]]]]) {
+    for (const [c, d] of pairs) {
+      const n = api.moveKeySelection(5, c, d, p);
+      assert.strictEqual(api.moveKeySelection(n.r, n.c, back[d], p).c, c, `R5C${c} ${d}`);
+    }
+  }
+});
+
 // Taste über den Inspektor übernehmen (setupEventListeners aus js/editor-events.js)
 function applyKeyHarness() {
   const h = uiHarness(`var pendingChanges = [];
@@ -2736,6 +2802,55 @@ asyncTests.push(["Live-Sync: Taste übernehmen merkt vor und sendet keinen Einze
   await dom.document.getElementById("btnSaveSettings").click();
   assert.deepStrictEqual(log.sent, []);
   assert.strictEqual(log.pending.at(-1).type, "settings");
+}]);
+
+asyncTests.push(["Pfeiltasten: keydown bewegt die Auswahl, nicht in Eingabefeldern und nicht mit Modifier", async () => {
+  const docListeners = [];
+  const h = uiHarness(`var pendingChanges = [], selected = [];
+function togglePendingChangesDrawer() {} function discardAllPendingChanges() {} function populateComboKeyDropdowns() {}
+function renderPendingSyncUI() {} function setPendingFor() {}
+function writeConfigWithDiff() {} function saveAndFlashToDactyl() {} function readConfigFromESP32() {}
+function selectKey(r, c, side, isThumb) { selectedKey = { r, c, side, isThumb }; selected.push([r, c, side, isThumb]); }
+${read("js/editor-events.js")}`);
+  const { w } = h;
+  w.document.addEventListener = (type, fn) => type === "keydown" && docListeners.push(fn);
+  const modals = [{ style: { display: "none" } }, { style: { display: "none" } }];
+  w.document.querySelectorAll = sel => (sel === ".modal-backdrop" ? modals : []);
+  w.setupEventListeners();
+  const press = (key, ev = {}) => {
+    let prevented = false;
+    for (const fn of docListeners) fn({ key, target: {}, preventDefault: () => { prevented = true; }, ...ev });
+    return prevented;
+  };
+  // Ohne Auswahl: keine Wirkung, Seite scrollt normal
+  assert.strictEqual(press("ArrowDown"), false);
+  vm.runInContext(`selectedKey = { r: 2, c: 2, side: "R", isThumb: false };`, w);
+  assert.strictEqual(press("ArrowDown"), true);
+  assert.strictEqual(vm.runInContext("JSON.stringify(selected.at(-1))", w), JSON.stringify([3, 2, "R", false]));
+  press("ArrowRight");
+  assert.strictEqual(vm.runInContext("`${selectedKey.r},${selectedKey.c}`", w), "3,3");
+  // Am Rand: keine neue Auswahl
+  vm.runInContext(`selectedKey = { r: 0, c: 0, side: "R", isThumb: false }; selected = [];`, w);
+  press("ArrowUp");
+  press("ArrowLeft");
+  assert.strictEqual(vm.runInContext("selected.length", w), 0);
+  // Eingabefeld und Modifier: keine Bewegung
+  vm.runInContext(`isEditableTarget = () => true;`, w);
+  assert.strictEqual(press("ArrowDown"), false);
+  vm.runInContext(`isEditableTarget = () => false;`, w);
+  for (const mod of ["metaKey", "ctrlKey", "altKey", "shiftKey"]) assert.strictEqual(press("ArrowDown", { [mod]: true }), false);
+  assert.strictEqual(vm.runInContext("selected.length", w), 0);
+  // Schon behandelter Tastendruck und offener Dialog: keine Bewegung
+  vm.runInContext(`selectedKey = { r: 2, c: 2, side: "R", isThumb: false };`, w);
+  assert.strictEqual(press("ArrowDown", { defaultPrevented: true }), false);
+  modals[1].style.display = "flex";
+  assert.strictEqual(press("ArrowDown"), false);
+  assert.strictEqual(vm.runInContext("selected.length", w), 0);
+  modals[1].style.display = "none";
+  // Daumen-Cluster: der Handler gibt isThumb weiter
+  vm.runInContext(`selectedKey = { r: 5, c: 6, side: "R", isThumb: true };`, w);
+  press("ArrowRight");
+  assert.strictEqual(vm.runInContext("JSON.stringify(selected.at(-1))", w), JSON.stringify([5, 0, "R", true]));
 }]);
 
 asyncTests.push(["Combo-Dialog: Modifier Hold mit One-Shot oder Caps Word wird nicht gespeichert", async () => {

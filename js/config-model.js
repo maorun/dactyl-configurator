@@ -35,6 +35,53 @@ function isWiredSwitch(r, c, profile) {
   return Dactyl.isWiredSwitch(profile, r, c);
 }
 
+// Pfeiltasten im Editor: nächste Taste in der Richtung. Finger-Matrix nach Zeile/Spalte (fehlende Tasten
+// werden übersprungen), Daumen-Cluster nach seinem Raster (thumbDefs). Am Rand eines Bereichs bleibt die Auswahl.
+const KEY_NAV_STEPS = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] };
+const FINGER_NAV_ROWS = 5;
+const FINGER_NAV_COLS = 6;
+
+function thumbGridCell(def) {
+  const [start, span] = String(def.row).split("/").map(s => s.trim());
+  const rowStart = parseInt(start, 10);
+  const rowSpan = span ? parseInt(span.replace("span", ""), 10) : 1;
+  return { col: parseInt(def.col, 10), rowStart, rowEnd: rowStart + rowSpan - 1 };
+}
+
+function moveKeySelection(r, c, direction, profile) {
+  const step = KEY_NAV_STEPS[direction];
+  const stay = { r, c, isThumb: r >= FINGER_NAV_ROWS };
+  if (!step || !profile) return stay;
+  if (r < FINGER_NAV_ROWS) {
+    let nr = r + step[0], nc = c + step[1];
+    while (nr >= 0 && nr < FINGER_NAV_ROWS && nc >= 0 && nc < FINGER_NAV_COLS) {
+      if (isPhysicalKey(nr, nc, profile)) return { r: nr, c: nc, isThumb: false };
+      nr += step[0];
+      nc += step[1];
+    }
+    return stay;
+  }
+  const defs = profile.thumbDefs.map(def => ({ def, cell: thumbGridCell(def) }));
+  const current = defs.find(d => d.def.r === r && d.def.c === c);
+  if (!current) return stay;
+  const cur = current.cell;
+  let candidates;
+  if (step[1] !== 0) {
+    // Nachbarspalte, deren Zeilen sich mit der aktuellen Taste überschneiden; die oberste zuerst
+    candidates = defs.filter(d => d.cell.col === cur.col + step[1] &&
+      d.cell.rowStart <= cur.rowEnd && d.cell.rowEnd >= cur.rowStart)
+      .sort((a, b) => a.cell.rowStart - b.cell.rowStart);
+  } else {
+    // Gleiche Spalte, nächste Taste darüber oder darunter
+    candidates = defs.filter(d => d.cell.col === cur.col &&
+      (step[0] < 0 ? d.cell.rowEnd < cur.rowStart : d.cell.rowStart > cur.rowEnd))
+      .sort((a, b) => step[0] < 0 ? b.cell.rowEnd - a.cell.rowEnd : a.cell.rowStart - b.cell.rowStart);
+  }
+  return candidates.length ? { r: candidates[0].def.r, c: candidates[0].def.c, isThumb: true } : stay;
+}
+
+const ARROW_KEY_DIRECTIONS = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+
 // Matrix-Test (Löt-Tester) einer Hälfte; Leitungen laut Profil (AGENTS.md / docs/lolin32_lite_wiring.svg)
 // Ein Druck so kurz nach dem Loslassen derselben Taste ist kein Tippen mehr, sondern Prellen des Schalters
 const MATRIX_BOUNCE_MS = 30;

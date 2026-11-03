@@ -111,6 +111,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initKeyOverridesUI();
   initMacrosUI();
   initLayoutProfilesUI();
+  initOnScreenKeyboardPicker();
 });
 
 function updateConfigModeUI(active, syncing = false) {

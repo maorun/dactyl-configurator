@@ -43,18 +43,18 @@ The entry below is outside the priorities. It needs a hardware change first.
 
 - **Rank:** Feature model. Total 17/40 (typing 5, configuration 4, harmony 4, safety 4). Effort M. Estimate.
 - **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`BAT_SENSE`, GPIO 35), `app.js` (`updateBatteryUI`, disabled).
-- **Problem:** The app shows no battery level. Without it the keyboard stops without a warning.
-- **Decision needed:** Build an external voltage divider on `BAT_SENSE`. The code does not start before this hardware change.
-- **Hardware finding:** The board has no divider. A measurement confirmed this. The keyboard has no battery switch.
-- **Hardware plan:** Solder R1 between LiPo `+` and a middle point. Solder R2 between the middle point and GND. Connect the middle point to GPIO 35. Take `+` and GND at the JST socket of the board.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`BAT_SENSE`, GPIO 35), `firmware/dactyl_left/dactyl_left.ino` (`BAT_SENSE`, GPIO 35), `firmware/dactyl_right/DactylSplitHid.h`, `js/serial.js` (`updateBatteryUI`, disabled).
+- **Problem:** The app shows no battery level for either half. Without it the keyboard stops without a warning.
+- **Decision needed:** Build an external voltage divider on `BAT_SENSE` on both halves. The code does not start before this hardware change.
+- **Hardware finding:** Both boards have no divider. A measurement confirmed this. The keyboard has no battery switch.
+- **Hardware plan:** On both halves, solder R1 between LiPo `+` and a middle point. Solder R2 between the middle point and GND. Connect the middle point to GPIO 35. Take `+` and GND at the JST socket of each board.
   - Two equal resistors halve the voltage: 4.2 V gives 2.1 V, which is below the 3.3 V limit of the ADC. The firmware factor is 2.
   - 2 x 100 kOhm draw about 21 uA all the time. 2 x 470 kOhm draw about 4.5 uA; then add a 100 nF capacitor from the middle point to GND.
   - Without a switch, the divider also drains the battery in deep sleep. Prefer 470 kOhm.
   - Solder only with the battery disconnected. Check for a short between `+` and GND before the first connection. Check the middle point with a multimeter: maximum 2.1 V.
-  - The ESP32 ADC is inaccurate (about 5 %). Calibrate with a multimeter. This is an open hardware check.
-- **Goal:** Read `BAT_SENSE` and set the BLE battery level. Show it in the app.
-- **Acceptance test:** A firmware test maps ADC values to a battery level. The app shows the level of a connected half.
+  - The ESP32 ADC is inaccurate (about 5 %). Calibrate each half with a multimeter. This is an open hardware check.
+- **Goal:** Read `BAT_SENSE` on both halves, forward the left battery level over ESP-NOW to the master, set the BLE battery level and show the battery level of both halves in the app.
+- **Acceptance test:** A firmware test maps ADC values to a battery level and verifies split forwarding. The app shows the battery level of both halves.
 
 ## Rules for ranking
 

@@ -351,3 +351,15 @@ Rules for this file:
 - Late list lines after a timeout are discarded like the key lines (`captureDeviceSnapshotLine`).
 - `GET_CONFIG` with "Vom ESP32 laden" ignores these lines: the app does not take combos, key pairs and macros from the device into the local config. The direct device read of a complete backup is not part of this feature.
 - Security: in config mode, a nearby BLE client can now also read the macros (they can hold typed text). See "BLE Command Authorization" in `AGENTS.md`.
+
+### Layer overview (`buildLayerOverview`, `js/editor.js`)
+
+- Button `#btnToggleLayerOverview` in the layer bar toggles the overview panel (`#layerOverviewPanel`).
+- The panel renders 8 mini keyboard cards side by side in a responsive grid.
+- Each mini card shows the layer name, the finger matrix, and the thumb cluster.
+- Active layer card carries the `.is-active-layer` class. Clicking a card switches the editor to that layer.
+- `buildLayerOverview(cfg, profile)` in `js/config-model.js` creates the data model without DOM access.
+- Keys without an action on layers 1 to 7 receive `transparent: true`. They display the inherited label of layer 0 with low contrast (`.is-transparent`).
+- Keys with action conflicts receive `conflict: true` and `.is-conflict` highlighting.
+- Supported conflicts include `trigger-shadowed` (own key obscured by layer-switch trigger on layer 0) and `duplicate-action` (repeated tap action on the same layer).
+- Selecting a key in any mini card updates the inspector and highlights the key in all views.

@@ -1,6 +1,8 @@
 #include <cassert>
 #include <iostream>
 
+#include "../dactyl_right/DactylCommon.h"
+
 // Die getestete Logik stammt unverändert aus firmware/dactyl_left/DactylLeftLogic.h.
 #include "../dactyl_left/DactylLeftLogic.h"
 
@@ -105,6 +107,20 @@ TEST(test_columns_are_rtc_wakeup_capable) {
   for (int c = 0; c < LEFT_NUM_COLS; c++) assert(isRtcGpio(LEFT_COL_PINS[c]));
   assert(!isRtcGpio(23) && !isRtcGpio(19) && !isRtcGpio(18) && !isRtcGpio(17) && !isRtcGpio(16));
   assert(isRtcGpio(4) && isRtcGpio(32) && isRtcGpio(39));
+}
+
+// MATRIX_SETTLE_US und Deep-Sleep-Hold-Einteilung der linken Zeilen
+TEST(test_matrix_settle_time_and_deep_sleep_row_rtc_partition) {
+#ifdef MATRIX_SETTLE_US
+  assert(MATRIX_SETTLE_US >= 5 && MATRIX_SETTLE_US <= 10);
+#else
+  assert(false && "MATRIX_SETTLE_US fehlt");
+#endif
+  // Zeile 5 (GPIO 4) ist RTC-fähig, Zeilen 0..4 (GPIO 23, 19, 18, 17, 16) sind Nicht-RTC
+  assert(isRtcGpio(LEFT_ROW_PINS[5]));
+  for (int r = 0; r < 5; r++) {
+    assert(!isRtcGpio(LEFT_ROW_PINS[r]));
+  }
 }
 
 // Lötbelegung links (Spalten auf RTC-Pins für den Deep-Sleep-Wakeup)

@@ -211,6 +211,8 @@ bool queueKeyEventDiagnostic(SplitSendQueue &q, bool linkUp, const SplitHidEvent
 // ankommt; sonst bleibt counter 0 bis zum nächsten Intervall), sonst HEARTBEAT nur bei leerer Warteschlange.
 // Ein Master ohne FW_VERSION verwirft das Paket; die Heartbeats dazwischen halten den Link.
 // Rückgabe: true = eingereiht.
+#define HEARTBEAT_INTERVAL_MS 1000
+
 bool queueHeartbeat(SplitSendQueue &q, uint8_t &counter) {
   if (counter == 0) {
     if (!queuePushDiagnostic(q, makeSplitHidEvent(SPLIT_OP_FW_VERSION, (uint16_t)DACTYL_FW_VERSION))) return false;
@@ -219,6 +221,15 @@ bool queueHeartbeat(SplitSendQueue &q, uint8_t &counter) {
   }
   counter = (uint8_t)((counter + 1) % SPLIT_FW_VERSION_EVERY);
   return q.count == 0 && queuePush(q, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+}
+
+// Lebenszeichen nach Ablauf von intervalMs abschicken.
+// Gibt true zurück, wenn das Intervall erreicht war und queueHeartbeat erfolgreich war.
+inline bool queueHeartbeatIfDue(SplitSendQueue &q, uint8_t &counter, unsigned long &lastSendMs, unsigned long nowMs,
+                                unsigned long intervalMs = HEARTBEAT_INTERVAL_MS) {
+  if (lastSendMs != 0 && (nowMs - lastSendMs) < intervalMs) return false;
+  lastSendMs = nowMs;
+  return queueHeartbeat(q, counter);
 }
 
 // Doppel-Tipp-Zustand an den Master (SPLIT_OP_TAP_PENDING): 1, solange ein Einzel-Tipp auf den zweiten Tipp

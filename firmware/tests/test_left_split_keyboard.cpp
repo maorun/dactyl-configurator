@@ -110,6 +110,7 @@ static void resetState() {
   // Gehaltene Eingaben des vorigen Tests vergessen; Master hat einmal bestätigt: Proxy meldet "verbunden".
   // Die Warteschlange erst danach leeren (onSendResult kann nach einem Zeitsprung RELEASE_ALL einreihen).
   bleKeyboard.releaseAll();
+  bleKeyboard.resetQuietStandby();
   bleKeyboard.onSendResult(true, millis());
   queueReset(sendQueue);
   Serial.clear();
@@ -868,6 +869,74 @@ TEST(test_master_hold_note_state_is_read_before_the_time) {
   assert(!masterHoldPending(m, 1210));
   masterHoldNote(m, true, 5000);
   assert(masterHoldPending(m, 5100) && !masterHoldPending(m, 5000 + SPLIT_HOLD_PENDING_MAX_MS));
+}
+
+TEST(test_split_keyboard_quiet_standby_link_down_timeout) {
+  // Im aktiven Modus: Link fällt nach SPLIT_LINK_DOWN_MS (2000 ms) ab
+  assert(bleKeyboard.isConnected());
+  advanceMillis(SPLIT_LINK_DOWN_MS - 1);
+  assert(bleKeyboard.isConnected());
+  advanceMillis(1);
+  assert(!bleKeyboard.isConnected());
+
+  // Link wiederherstellen
+  bleKeyboard.onSendResult(true, millis());
+  assert(bleKeyboard.isConnected());
+
+  // In den Quiet Standby wechseln
+  bleKeyboard.setQuietStandby(true, millis());
+  // Nach 2000 ms bleibt der Link weiterhin verbunden
+  advanceMillis(SPLIT_LINK_DOWN_MS);
+  assert(bleKeyboard.isConnected());
+
+  // Nach 5000 ms (ein Standby-Heartbeat-Intervall) weiterhin verbunden
+  advanceMillis(SPLIT_STANDBY_REFRESH_MS - SPLIT_LINK_DOWN_MS);
+  assert(bleKeyboard.isConnected());
+
+  // Erst nach SPLIT_STANDBY_LINK_DOWN_MS (11000 ms) fällt der Link ab
+  setMillis(100000);
+  bleKeyboard.onSendResult(true, millis());
+  drain();
+  assert(bleKeyboard.isConnected());
+  advanceMillis(SPLIT_STANDBY_LINK_DOWN_MS - 1);
+  assert(bleKeyboard.isConnected());
+  advanceMillis(1);
+  assert(!bleKeyboard.isConnected());
+}
+
+TEST(test_split_keyboard_standby_exit_grace_period) {
+  setMillis(50000);
+  bleKeyboard.onSendResult(true, millis());
+  drain();
+  bleKeyboard.setQuietStandby(true, millis());
+
+  // 4500 ms vergehen im Quiet Standby (vor dem nächsten 5000 ms Heartbeat)
+  advanceMillis(4500);
+  assert(bleKeyboard.isConnected());
+
+  // Tastendruck beendet Quiet Standby: Grace Period greift sofort
+  bleKeyboard.setQuietStandby(false, millis());
+  assert(bleKeyboard.isConnected());
+
+  // Wiederholte Aufrufe während des Tippens in loop() dürfen lastQuietMs nicht überschreiben
+  advanceMillis(1000);
+  bleKeyboard.setQuietStandby(false, millis());
+  assert(bleKeyboard.isConnected());
+
+  // Noch innerhalb der 2000 ms Grace Period (1999 ms seit Standby-Ende)
+  advanceMillis(999);
+  assert(bleKeyboard.isConnected());
+
+  // Nach Ablauf der 2000 ms Grace Period (2001 ms seit Standby-Ende) verfällt der Link
+  advanceMillis(2);
+  bleKeyboard.setQuietStandby(false, millis());
+  assert(!bleKeyboard.isConnected());
+
+  // Sobald neues Ack eintrifft, wird der Link reaktiviert und schickt RELEASE_ALL
+  bleKeyboard.onSendResult(true, millis());
+  assert(bleKeyboard.isConnected());
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && is(ev[0], SPLIT_OP_RELEASE_ALL, 0));
 }
 
 int main() {

@@ -25,15 +25,6 @@ No open entry.
 
 ## Priority 3
 
-### Quiet standby on the split link
-
-- **Rank:** Feature model. Total 21/40 (typing 5, configuration 2, harmony 7, safety 7). Effort S. Estimate.
-- **Area:** Firmware.
-- **Code:** `firmware/dactyl_left/dactyl_left.ino` (`sendHeartbeatIfDue()`, `queueSplitLayerStateIfDue()`), `firmware/dactyl_right/dactyl_right.ino` (`sendSplitLayerStateIfDue()`), `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_LAYER_REFRESH_MS`, `SPLIT_LINK_TIMEOUT_MS`), `firmware/dactyl_left/DactylLeftLogic.h`.
-- **Problem:** Both halves send `SPLIT_OP_HEARTBEAT` and `SPLIT_OP_LAYER_STATE` every second (`1000 ms`), also in standby. This causes 120 packets per minute without key presses and wakes the radio during power-saving windows.
-- **Goal:** Increase the heartbeat and layer refresh intervals in standby (for example to 5 s) while no key and no momentary layer (`MO_n`) is held, and adjust the link timeout in standby to match. Switch back to the 1 s interval immediately on the first matrix change.
-- **Acceptance test:** A unit test in `firmware/tests/test_split_hid.cpp` and `firmware/tests/test_left_logic.cpp` checks the standby interval, the link timeout and the immediate return to the active rate on a key press.
-
 ### Restore NVS backup in the app
 
 - **Rank:** Feature model. Total 21/40 (typing 0, configuration 7, harmony 7, safety 7). Effort S. Estimate.

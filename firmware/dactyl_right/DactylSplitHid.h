@@ -283,6 +283,9 @@ inline bool splitEventRetryable(const SplitHidEvent &ev) {
 // Hälfte behält ihre eigenen Ebenen (Verhalten vor dem Abgleich). Der Heartbeat bleibt deshalb unverändert.
 #define SPLIT_LAYER_REFRESH_MS 1000
 #define SPLIT_LAYER_REPEAT_MS 30
+// Ruhiger Standby auf dem Split-Link: reduzierter Funkverkehr, wenn keine Tasten oder MO-Ebenen gehalten werden
+#define SPLIT_STANDBY_REFRESH_MS 5000
+#define SPLIT_STANDBY_TIMEOUT_MS 12000
 // Ohne Layer-Paket so lange verfallen die entfernten MO-Ebenen (andere Hälfte aus oder im Deep Sleep)
 #define SPLIT_LAYER_REMOTE_TIMEOUT_MS 3000
 // Höchste Dauer eines offenen SET links. Deckt die Retries der Sendewarteschlange (4 x 200 ms Timeout) und
@@ -291,6 +294,27 @@ inline bool splitEventRetryable(const SplitHidEvent &ev) {
 // Nummern eines linken SET: 1..SPLIT_LAYER_SEQ_MAX (arg > 0). Master-Pakete tragen arg < 0 mit der
 // zurückgemeldeten Nummer in den Bits 0..6 (0 = noch keine).
 #define SPLIT_LAYER_SEQ_MAX 127
+
+// Vorwärts-Deklaration von SPLIT_LINK_TIMEOUT_MS (Definiert unter Master-Zustand)
+#define SPLIT_LINK_TIMEOUT_MS 3000
+
+inline bool splitQuietStandby(bool isStandby, bool anyLocalKeyHeld, uint8_t localMomentaryMask,
+                             uint8_t remoteMomentaryMask = 0) {
+  return isStandby && !anyLocalKeyHeld && localMomentaryMask == 0 && remoteMomentaryMask == 0;
+}
+
+inline unsigned long splitRefreshIntervalMs(bool quietStandby) {
+  return quietStandby ? (unsigned long)SPLIT_STANDBY_REFRESH_MS : (unsigned long)SPLIT_LAYER_REFRESH_MS;
+}
+
+inline unsigned long splitTimeoutIntervalMs(bool quietStandby) {
+  return quietStandby ? (unsigned long)SPLIT_STANDBY_TIMEOUT_MS : (unsigned long)SPLIT_LINK_TIMEOUT_MS;
+}
+
+inline bool splitStandbyGraceActive(bool isStandby, unsigned long lastStandbyMs, unsigned long nowMs,
+                                    unsigned long graceMs = SPLIT_LINK_TIMEOUT_MS) {
+  return isStandby || (lastStandbyMs != 0 && (nowMs - lastStandbyMs) < graceMs);
+}
 
 struct SplitLayerSync {
   uint8_t sentMomentary;
@@ -346,7 +370,8 @@ inline uint8_t splitLayerSeq(const SplitHidEvent &ev) { return (uint8_t)(ev.arg 
 // Liefert true und das Paket, wenn sich der Zustand geändert hat, ein Senden erzwungen ist, die
 // Wiederholung (Master) oder das Auffrischen fällig ist. refreshAllowed = false: kein Auffrischen.
 inline bool splitLayerTake(SplitLayerSync &s, uint8_t momentary, uint8_t toggles, bool master,
-                           unsigned long nowMs, bool refreshAllowed, SplitHidEvent &out) {
+                           unsigned long nowMs, bool refreshAllowed, SplitHidEvent &out,
+                           unsigned long refreshIntervalMs = SPLIT_LAYER_REFRESH_MS) {
   toggles &= 0xFE;
   // Ein nie gesendetes SET, dessen Toggle-Änderung schon zurückgenommen ist, entfällt: es sendete sonst
   // den alten Stand als SET und nähme eine spätere Änderung des Masters zurück
@@ -359,7 +384,7 @@ inline bool splitLayerTake(SplitLayerSync &s, uint8_t momentary, uint8_t toggles
                  (master && s.echoSeq != s.sentEchoSeq);
   unsigned long since = nowMs - s.lastSentMs;
   bool due = (s.repeatPending && since >= SPLIT_LAYER_REPEAT_MS) ||
-             (refreshAllowed && since >= SPLIT_LAYER_REFRESH_MS);
+             (refreshAllowed && since >= refreshIntervalMs);
   if (!changed && !due) return false;
   if (master) {
     out = makeSplitMasterLayerEvent(momentary, toggles, s.echoSeq);
@@ -404,10 +429,10 @@ inline void splitLayerNoteAdoptedToggles(SplitLayerSync &s, uint8_t toggles) {
 // Nummernzähler geht zurück: der nächste Versuch vergibt dieselbe Nummer (sie war noch nie unterwegs).
 template <class SendFn>
 bool splitLayerSendIfDue(SplitLayerSync &s, uint8_t momentary, uint8_t toggles, bool master, unsigned long nowMs,
-                         bool refreshAllowed, SendFn send) {
+                         bool refreshAllowed, SendFn send, unsigned long refreshIntervalMs = SPLIT_LAYER_REFRESH_MS) {
   SplitLayerSync before = s;
   SplitHidEvent ev;
-  if (!splitLayerTake(s, momentary, toggles, master, nowMs, refreshAllowed, ev)) return false;
+  if (!splitLayerTake(s, momentary, toggles, master, nowMs, refreshAllowed, ev, refreshIntervalMs)) return false;
   if (send(ev)) {
     s.setUnsent = false;
     return true;
@@ -491,8 +516,9 @@ inline void splitRemoteLayersApply(SplitRemoteLayers &r, const SplitHidEvent &ev
 }
 
 // Liefert true, wenn die entfernten MO-Ebenen gerade verfallen sind
-inline bool splitRemoteLayersExpire(SplitRemoteLayers &r, unsigned long nowMs) {
-  if (!r.momentary || (nowMs - r.lastRxMs) < SPLIT_LAYER_REMOTE_TIMEOUT_MS) return false;
+inline bool splitRemoteLayersExpire(SplitRemoteLayers &r, unsigned long nowMs,
+                                   unsigned long timeoutMs = SPLIT_LAYER_REMOTE_TIMEOUT_MS) {
+  if (!r.momentary || (nowMs - r.lastRxMs) < timeoutMs) return false;
   r.momentary = 0;
   return true;
 }
@@ -500,14 +526,15 @@ inline bool splitRemoteLayersExpire(SplitRemoteLayers &r, unsigned long nowMs) {
 // Master nach splitProcessRx: bei Link-Aufbau sofort senden, bei Link-Ausfall die linken MO-Ebenen lösen,
 // sonst nach dem Verfall. Liefert true, wenn sie jetzt 0 sind und die aktive Ebene neu zu bestimmen ist.
 inline bool splitLayerMasterAfterRx(SplitLayerSync &s, SplitRemoteLayers &r, bool linkWasUp, bool linkUp,
-                                    bool linkLost, unsigned long nowMs) {
+                                    bool linkLost, unsigned long nowMs,
+                                    unsigned long timeoutMs = SPLIT_LAYER_REMOTE_TIMEOUT_MS) {
   if (!linkWasUp && linkUp) splitLayerForce(s, nowMs);
   if (linkLost) {
     bool held = r.momentary != 0;
     splitRemoteLayersReset(r);
     return held;
   }
-  return splitRemoteLayersExpire(r, nowMs);
+  return splitRemoteLayersExpire(r, nowMs, timeoutMs);
 }
 
 // Master: Paket der linken Hälfte auswerten. Ihre MO-Ebenen gelten immer. Ein SET mit neuer Nummer liefert
@@ -561,8 +588,10 @@ inline void splitMediaReport(uint16_t bits, uint8_t report[2]) {
 // -----------------------------------------------------------------------------
 // Ein Retry der linken Seite kann ein Paket doppelt zustellen; ein Press setzt nur den Zustand, ein Release
 // löst nur Gedrücktes. Bleiben die Pakete SPLIT_LINK_TIMEOUT_MS lang aus, löst der Master genau die linken
-// Eingaben (keine hängende Taste bei Funkausfall).
+// Eingaben (keine hängende Taste bei Funkausfall). Im ruhigen Standby greift SPLIT_STANDBY_TIMEOUT_MS.
+#ifndef SPLIT_LINK_TIMEOUT_MS
 #define SPLIT_LINK_TIMEOUT_MS 3000
+#endif
 
 struct SplitHeldSet {
   uint8_t keys[32];     // Bitfeld für Tastatur-Codes 0..255
@@ -1007,8 +1036,8 @@ inline void splitReleaseHeld(SplitLeftHeld &h, SplitHidSink &sink) {
 // (queueHeartbeat in DactylLeftLogic.h). Bleibt er SPLIT_FW_DETECT_MS nach dem Link-Aufbau aus, sendet die
 // linke Hälfte keine Version: ihre Firmware ist älter als SPLIT_OP_FW_VERSION.
 #define SPLIT_FW_VERSION_EVERY 5
-// Länger als zwei Abstände (2 x 5 s): eine verlorene Meldung ergibt kein falsches "alt"
-#define SPLIT_FW_DETECT_MS 12000UL
+// Länger als zwei Abstände im Standby (2 x 5 s): eine verlorene Meldung ergibt kein falsches "alt"
+#define SPLIT_FW_DETECT_MS 28000UL
 
 // Für jedes gültige Paket der linken Hälfte, vor der Auswertung: Link-Zustand und Firmwarestand.
 // Ein neuer Link setzt den Stand zurück: Flashen der linken Hälfte dauert länger als SPLIT_LINK_TIMEOUT_MS.
@@ -1142,8 +1171,9 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
 }
 
 // Regelmäßig aus loop() aufrufen. Liefert true, wenn der Link gerade ausgefallen ist.
-inline bool splitCheckLinkTimeout(SplitLeftHeld &h, unsigned long nowMs, SplitHidSink &sink) {
-  if (!h.linkUp || (nowMs - h.lastRxMs) < SPLIT_LINK_TIMEOUT_MS) return false;
+inline bool splitCheckLinkTimeout(SplitLeftHeld &h, unsigned long nowMs, SplitHidSink &sink,
+                                 unsigned long timeoutMs = SPLIT_LINK_TIMEOUT_MS) {
+  if (!h.linkUp || (nowMs - h.lastRxMs) < timeoutMs) return false;
   h.linkUp = false;
   h.linkChangedMs = h.lastRxMs; // der Link ist seit dem letzten Paket weg, nicht erst seit der Erkennung
   splitCountAdd(h.linkLosses, 1);
@@ -1888,7 +1918,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
                              bool hostReady, unsigned long nowMs, SplitRxAppliedFn onApplied,
                              SplitRxAppliedFn onKeyEvent = nullptr, SplitRxAppliedFn onLayer = nullptr,
                              SplitRxAppliedFn onBeforeLeftPress = nullptr, SplitRxAppliedFn onRepeat = nullptr,
-                             SplitRxAppliedFn onHoldResolve = nullptr) {
+                             SplitRxAppliedFn onHoldResolve = nullptr,
+                             unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
   SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -1969,7 +2000,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
     if (hostReady) splitReleaseHeld(kbd.splitLeft, kbd);
   }
   if (haveLayer && onLayer) onLayer(layerEv);
-  if (splitCheckLinkTimeout(kbd.splitLeft, nowMs, kbd)) rep.linkLost = true;
+  if (splitCheckLinkTimeout(kbd.splitLeft, nowMs, kbd, linkTimeoutMs)) rep.linkLost = true;
   // Link weg, Ring voll oder Mac getrennt: eine offene Repeat-Taste links endet ohne ihr Loslassen
   if (onRepeat && (rep.linkLost || rep.overflow || rep.hostLost)) onRepeat(makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
   return rep;

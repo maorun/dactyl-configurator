@@ -538,14 +538,14 @@ static bool leftHoldPendingNow() {
 // Eigene offene Mod-Tap-Tasten an die linke Hälfte melden (SPLIT_OP_HOLD_PENDING, nur bei einer Änderung)
 static SplitHoldReporter splitHoldReporter;
 
-void sendSplitLayerStateIfDue();
+void sendSplitLayerStateIfDue(unsigned long refreshIntervalMs = SPLIT_LAYER_REFRESH_MS);
 
 // Layer-Zustand und Meldung "Mod-Tap offen/entschieden" gemeinsam: die 0 geht erst, wenn der Layer-Zustand der
 // Entscheidung gesendet ist (DactylSplitHid.h, splitSendLayerThenHold). linkUp: ohne Link gilt nichts als gemeldet.
-static void sendSplitLayerAndHoldIfDue() {
+static void sendSplitLayerAndHoldIfDue(unsigned long refreshIntervalMs = SPLIT_LAYER_REFRESH_MS) {
   if (!splitActivityPeerReady || isConfigMode) return;
   splitSendLayerThenHold(splitLayerSync, splitHoldReporter, bleKeyboard.splitLeft.linkUp, anyTapHoldPending(),
-                         localMomentaryLayerMask(), toggleLayerMask(), [] { sendSplitLayerStateIfDue(); },
+                         localMomentaryLayerMask(), toggleLayerMask(), [refreshIntervalMs] { sendSplitLayerStateIfDue(refreshIntervalMs); },
                          [](const SplitHidEvent &ev) {
                            return esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK;
                          });
@@ -693,18 +693,19 @@ static void onSplitLayer(const SplitHidEvent &ev) {
 }
 
 // Ereignisse der linken Hälfte aus loop() ausführen (Logik: splitProcessRx in DactylSplitHid.h)
-void processSplitEvents() {
+void processSplitEvents(unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
   if (!splitRxReady) return;
   unsigned long now = millis();
   bool hostReady = !isConfigMode && bleKeyboard.isConnected();
   bool linkWasUp = bleKeyboard.splitLeft.linkUp;
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
                                      hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer,
-                                     onSplitBeforeLeftPress, onSplitRepeat, onSplitHoldResolve);
+                                     onSplitBeforeLeftPress, onSplitRepeat, onSplitHoldResolve,
+                                     linkTimeoutMs);
   // Linke Hälfte gerade erreichbar (Start, Aufwachen): sofort den Layer-Zustand des Masters senden
   // Linke Hälfte nicht erreichbar, aus oder im Deep Sleep: ihre gehaltenen MO-Ebenen verfallen
   if (splitLayerMasterAfterRx(splitLayerSync, splitRemoteLayers, linkWasUp, bleKeyboard.splitLeft.linkUp,
-                              rep.linkLost, now)) {
+                              rep.linkLost, now, linkTimeoutMs)) {
     applyRemoteLayerState(0, false, 0);
   }
   // Auch ein KEY_EVENT (linke Taste mit Aktion 0) hält den Master wach
@@ -768,13 +769,13 @@ static bool anyRightKeyHeld() {
 }
 
 // Layer-Zustand an die linke Hälfte, immer als SET: bei jeder Änderung (mit Wiederholung) und, solange die
-// linke Hälfte erreichbar ist, jede Sekunde (ohne linke Hälfte kein Funkverkehr ohne Änderung)
-void sendSplitLayerStateIfDue() {
+// linke Hälfte erreichbar ist, im normalen Betrieb jede Sekunde, im ruhigen Standby alle 5 Sekunden
+void sendSplitLayerStateIfDue(unsigned long refreshIntervalMs) {
   if (!splitActivityPeerReady || isConfigMode) return;
   splitLayerSendIfDue(splitLayerSync, localMomentaryLayerMask(), toggleLayerMask(), true, millis(),
                       bleKeyboard.splitLeft.linkUp, [](const SplitHidEvent &ev) {
                         return esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK;
-                      });
+                      }, refreshIntervalMs);
 }
 
 void setup() {
@@ -1008,12 +1009,20 @@ void loop() {
   }
 
   // Ereignisse der linken Hälfte (ESP-NOW) anzeigen
-  processSplitEvents();
+  static unsigned long lastStandbyMs = 0;
+  if (isStandby) {
+    lastStandbyMs = millis();
+  }
+  bool inStandbyOrGrace = splitStandbyGraceActive(isStandby, lastStandbyMs, millis());
+  bool isLeftIdleInStandby = inStandbyOrGrace && !splitHeldAny(bleKeyboard.splitLeft) && splitRemoteLayers.momentary == 0;
+  unsigned long linkTimeoutMs = isLeftIdleInStandby ? SPLIT_STANDBY_TIMEOUT_MS : SPLIT_LINK_TIMEOUT_MS;
+  processSplitEvents(linkTimeoutMs);
   servicePendingRepeat();
   sendSplitRepeatCopyIfDue();
   sendSplitActivityIfDue();
   // Layer-Zustand und Meldung "Mod-Tap offen/entschieden" zusammen: die linke Hälfte sieht die neue Ebene vor der 0
-  sendSplitLayerAndHoldIfDue();
+  bool masterQuiet = splitQuietStandby(isStandby, anyRightKeyHeld(), localMomentaryLayerMask(), splitRemoteLayers.momentary);
+  sendSplitLayerAndHoldIfDue(splitRefreshIntervalMs(masterQuiet));
 
   // Deferriertes Starten/Beenden des Config-Modus aus loopTask
   if (enterConfigRequested) {

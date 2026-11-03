@@ -446,24 +446,25 @@ static bool masterHoldNow() {
 
 // Layer-Zustand des Masters übernehmen: seine MO-Ebenen immer, seine Toggles ohne offenes eigenes SET
 // (DactylSplitHid.h). Ohne Paket verfallen seine MO-Ebenen.
-static void processMasterLayerState() {
+static void processMasterLayerState(unsigned long timeoutMs = SPLIT_LAYER_REMOTE_TIMEOUT_MS) {
   unsigned long now = millis();
   SplitHidEvent ev;
   if (splitLayerMailboxTake(masterLayerMailbox, masterLayerSeen, ev)) {
     bool adopt = splitLayerLeftReceive(splitLayerSync, splitRemoteLayers, ev, now);
     applyRemoteLayerState(splitLayerMomentary(ev), adopt, splitLayerToggles(ev));
   }
-  if (splitRemoteLayersExpire(splitRemoteLayers, now)) applyRemoteLayerState(0, false, 0);
+  if (splitRemoteLayersExpire(splitRemoteLayers, now, timeoutMs)) applyRemoteLayerState(0, false, 0);
 }
 
 // Eigenen Layer-Zustand an den Master: Änderungen sofort, das Auffrischen nur bis zur halben Warteschlange
 // (wie Diagnose-Ereignisse), damit es beim schnellen Tippen nicht ausbleibt und der Master eine gehaltene
 // MO-Ebene nicht verfallen lässt. Eine volle Warteschlange stellt den Stand wieder her: der nächste
 // Durchlauf sendet neu.
-static void queueSplitLayerStateIfDue() {
+static void queueSplitLayerStateIfDue(unsigned long refreshIntervalMs = SPLIT_LAYER_REFRESH_MS) {
   splitLayerSendIfDue(splitLayerSync, localMomentaryLayerMask(), toggleLayerMask(), false, millis(),
                       sendQueue.count < SPLIT_DIAG_QUEUE_LIMIT,
-                      [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); });
+                      [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); },
+                      refreshIntervalMs);
 }
 
 // Vor Config Mode und Deep Sleep: eigene MO-Ebenen am Master lösen (sonst erst nach dem Verfall). Eine
@@ -632,9 +633,8 @@ void flushSendQueue(unsigned long maxMs) {
 // Meldet regelmäßig den Firmwarestand (queueHeartbeat).
 static void sendHeartbeatIfDue() {
   static unsigned long lastHeartbeatMs = 0;
-  if (millis() - lastHeartbeatMs < HEARTBEAT_INTERVAL_MS) return;
-  lastHeartbeatMs = millis();
-  queueHeartbeat(sendQueue, heartbeatCounter);
+  bool quiet = splitQuietStandby(isStandby, anyLeftKeyHeld(), localMomentaryLayerMask(), splitRemoteLayers.momentary);
+  queueHeartbeatIfDue(sendQueue, heartbeatCounter, lastHeartbeatMs, millis(), splitRefreshIntervalMs(quiet));
 }
 
 void setup() {
@@ -854,10 +854,15 @@ void loop() {
   }
 
   if (!isConfigMode) {
+    bool quiet = splitQuietStandby(isStandby, anyLeftKeyHeld(), localMomentaryLayerMask(), splitRemoteLayers.momentary);
+    bleKeyboard.setQuietStandby(quiet);
+    unsigned long refreshMs = splitRefreshIntervalMs(quiet);
+    unsigned long timeoutMs = splitTimeoutIntervalMs(quiet);
+
     // Eigene Änderung zuerst einreihen: ihr SET startet das Schutzfenster, bevor ein Master-Paket aus
     // demselben Durchlauf die noch nicht gesendete Toggle-Änderung überschreibt
-    queueSplitLayerStateIfDue();
-    processMasterLayerState();
+    queueSplitLayerStateIfDue(refreshMs);
+    processMasterLayerState(timeoutMs);
     sendHeartbeatIfDue();
     leftRepeatServiceNote(leftRepeatLink, sendQueue, millis());
     serviceSendQueue();

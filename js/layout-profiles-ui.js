@@ -23,11 +23,15 @@ let layoutBackups = null;
 let layoutBackupsSeq = 0;
 const BACKUP_REASON_LABELS = { sync: "vor Sync", flash: "vor Flash" };
 
-function setLayoutProfilesBusy(busy) {
+// NVS-Sicherungen der Hälfte, für die der Dialog offen ist (server.py sichert vor jedem Flash)
+let nvsBackups = null;
+let nvsBackupsSeq = 0;
+
+function setLayoutProfilesBusy(busy, statusText = "Speichert …") {
   layoutProfilesBusy = busy;
   const modal = document.getElementById("layoutProfilesModal");
   if (modal) modal.querySelectorAll(".modal-body button").forEach(btn => { btn.disabled = busy; });
-  if (busy) setLayoutProfilesStatus("Speichert …");
+  if (busy) setLayoutProfilesStatus(statusText);
   else if (layoutProfiles) renderLayoutProfiles();
 }
 
@@ -116,7 +120,7 @@ async function openLayoutProfilesDialog() {
   renderLayoutProfiles();
   if (!layoutProfilesBusy) setLayoutProfilesStatus("Profile werden geladen …");
   modal.style.display = "flex";
-  await Promise.all([reloadLayoutProfiles(side), reloadLayoutBackups(side)]);
+  await Promise.all([reloadLayoutProfiles(side), reloadLayoutBackups(side), reloadNvsBackups(side)]);
 }
 
 // Liest die Liste der Hälfte (neu) vom Server, z. B. nach dem Öffnen oder nach einem Konflikt (HTTP 409)
@@ -208,12 +212,117 @@ function loadLayoutBackup(id) {
   });
 }
 
+// Liest die NVS-Sicherungen der Hälfte vom Server (neueste zuerst)
+async function reloadNvsBackups(side) {
+  const seq = ++nvsBackupsSeq;
+  nvsBackups = null;
+  renderNvsBackups();
+  setNvsBackupsStatus("NVS-Sicherungen werden geladen …");
+  try {
+    const res = await fetch(`/api/nvs_backups?side=${side}`);
+    let data = null;
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok) throw new Error((data && data.error) || `HTTP ${res.status}`);
+    if (!data || !Array.isArray(data.backups)) throw new Error("Antwort des Servers enthält keine NVS-Backup-Liste.");
+    if (seq !== nvsBackupsSeq || layoutProfilesSide !== side) return;
+    nvsBackups = data.backups;
+    renderNvsBackups();
+  } catch (e) {
+    if (seq !== nvsBackupsSeq || layoutProfilesSide !== side) return;
+    setNvsBackupsStatus(`⚠️ NVS-Sicherungen konnten nicht geladen werden: ${e.message}`);
+  }
+}
+
+function setNvsBackupsStatus(text) {
+  const el = document.getElementById("nvsBackupsStatus");
+  if (el) el.textContent = text;
+}
+
+function renderNvsBackups() {
+  const list = document.getElementById("nvsBackupsList");
+  if (!list) return;
+  list.replaceChildren();
+  if (!nvsBackups) return;
+  if (nvsBackups.length === 0) {
+    setNvsBackupsStatus("Noch keine NVS-Sicherung. Der nächste Flash legt eine an.");
+    return;
+  }
+  setNvsBackupsStatus(`Die letzten ${nvsBackups.length} NVS-Sicherungen (Tastenbelegung & Bluetooth-Bond).`);
+  nvsBackups.forEach(entry => {
+    const li = document.createElement("li");
+    const name = document.createElement("strong");
+    const date = new Date(entry.savedAt);
+    const hasValidDate = !Number.isNaN(date.getTime());
+    name.textContent = hasValidDate ? date.toLocaleString() : entry.id;
+    const meta = document.createElement("span");
+    meta.className = "layout-profile-time";
+    meta.textContent = hasValidDate ? entry.id : "";
+    const btnRestore = document.createElement("button");
+    btnRestore.className = "btn btn-outline btn-sm";
+    btnRestore.textContent = "Zurückschreiben";
+    btnRestore.addEventListener("click", () => restoreNvsBackup(entry.id));
+    li.append(name, meta, btnRestore);
+    list.appendChild(li);
+  });
+  if (layoutProfilesBusy) setLayoutProfilesBusy(true);
+}
+
+// Schreibt eine NVS-Sicherung der Hälfte per USB zurück
+async function restoreNvsBackup(id) {
+  const side = layoutProfilesSide;
+  if (!nvsBackups || layoutProfilesBusy || side !== editSide) return;
+  const entry = nvsBackups.find(b => b.id === id);
+  if (!entry) return;
+  const date = new Date(entry.savedAt);
+  const label = Number.isNaN(date.getTime()) ? entry.id : date.toLocaleString();
+  const profile = SIDE_PROFILES[side];
+  if (!confirm(`NVS-Sicherung vom ${label} auf die ${profile.label} zurückschreiben?\n\nDie Hälfte muss per USB angeschlossen sein. Der aktuelle Stand wird vor dem Schreiben gesichert.`)) {
+    return;
+  }
+  const hadSerial = typeof serialPort !== "undefined" && !!serialPort;
+  if (hadSerial) {
+    try {
+      if (typeof disconnectSerial === "function") await disconnectSerial();
+    } catch (_) {}
+  }
+  setLayoutProfilesBusy(true, "Schreibt NVS zurück …");
+  setNvsBackupsStatus(`Schreibe Sicherung ${entry.id} auf ${profile.label} zurück …`);
+  try {
+    const res = await fetch(`/api/nvs_restore?side=${side}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: entry.id })
+    });
+    let data = null;
+    try { data = await res.json(); } catch (_) {}
+    if (!res.ok || !data || !data.success) {
+      throw new Error((data && data.error) || `HTTP ${res.status}`);
+    }
+    showToast(`✅ NVS-Sicherung auf die ${profile.label} zurückgeschrieben.`);
+    alert(`✅ NVS-Sicherung erfolgreich auf die ${profile.label} zurückgeschrieben!\n\nDas Board wurde neu gestartet.`);
+    if (layoutProfilesSide === side) await reloadNvsBackups(side);
+  } catch (e) {
+    alert(`NVS-Sicherung konnte nicht zurückgeschrieben werden:\n${e.message}`);
+    if (layoutProfilesSide === side) setNvsBackupsStatus(`⚠️ Zurückschreiben fehlgeschlagen: ${e.message}`);
+  } finally {
+    setLayoutProfilesBusy(false);
+    if (hadSerial && typeof connectSerial === "function") {
+      try {
+        await connectSerial({ reuseGrantedPort: true });
+      } catch (err) {
+        console.warn("Serial reconnect nach NVS-Restore fehlgeschlagen:", err);
+      }
+    }
+  }
+}
+
 function closeLayoutProfilesDialog() {
   const modal = document.getElementById("layoutProfilesModal");
   if (modal) modal.style.display = "none";
   layoutProfilesSide = null;
   layoutProfiles = null;
   layoutBackups = null;
+  nvsBackups = null;
 }
 
 // Speichert die aktuelle Config der Hälfte unter dem eingegebenen Namen (gleicher Name: Rückfrage, dann ersetzen)

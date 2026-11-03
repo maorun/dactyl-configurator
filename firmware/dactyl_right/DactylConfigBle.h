@@ -7,6 +7,12 @@
  * Ohne HID-Dienst und ohne Bonding, damit ein gespeicherter macOS-Bond unangetastet bleibt.
  */
 
+#ifndef OTA_CHAR_UUID
+#define OTA_CHAR_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a9"
+#endif
+
+extern BLECharacteristic *pOtaCharacteristic;
+
 void startConfigModeBle() {
   Serial.println("=============================================");
   Serial.println("  [CONFIG MODE] Isolierter BLE-Config-Server");
@@ -46,6 +52,17 @@ void startConfigModeBle() {
   pConfigCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE);
   pConfigCharacteristic->setCallbacks(new ConfigCallbacks());
   pConfigCharacteristic->addDescriptor(new BLE2902());
+
+  pOtaCharacteristic = pConfigService->createCharacteristic(
+    OTA_CHAR_UUID,
+    BLECharacteristic::PROPERTY_WRITE |
+    BLECharacteristic::PROPERTY_WRITE_NR |
+    BLECharacteristic::PROPERTY_NOTIFY
+  );
+  pOtaCharacteristic->setAccessPermissions(ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE);
+  pOtaCharacteristic->setCallbacks(new OtaCallbacks());
+  pOtaCharacteristic->addDescriptor(new BLE2902());
+
   pConfigService->start();
 
   BLEAdvertising *pAdv = pServer->getAdvertising();

@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "build:app": "bash scripts/generate-split-key.sh --if-missing && bash scripts/build-app.sh",
-    "rebuild:app": "bash scripts/generate-split-key.sh --if-missing && bash scripts/rebuild-app.sh",
-    "flash": "bash scripts/generate-split-key.sh --if-missing && python3 scripts/flash.py"
+    "build:app": "bash scripts/generate-split-key.sh --if-missing && python3 scripts/generate-ota-key.py --if-missing && bash scripts/build-app.sh",
+    "rebuild:app": "bash scripts/generate-split-key.sh --if-missing && python3 scripts/generate-ota-key.py --if-missing && bash scripts/rebuild-app.sh",
+    "flash": "bash scripts/generate-split-key.sh --if-missing && python3 scripts/generate-ota-key.py --if-missing && python3 scripts/flash.py"
   }
 }

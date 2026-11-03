@@ -67,6 +67,7 @@ static SemaphoreHandle_t configMutex = xSemaphoreCreateMutex();
 static Preferences preferences;
 static BLECharacteristic mockChar;
 static BLECharacteristic* pConfigCharacteristic = &mockChar;
+[[maybe_unused]] static BLECharacteristic* pOtaCharacteristic = &mockChar;
 
 void handleConfigCommand(String cmd, bool fromBle = false);
 void sendConfigNotification(String msg, bool addDelay = false);

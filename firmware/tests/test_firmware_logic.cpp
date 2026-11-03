@@ -69,6 +69,7 @@ static SemaphoreHandle_t configMutex = xSemaphoreCreateMutex();
 static Preferences preferences;
 static BLECharacteristic mockChar;
 static BLECharacteristic* pConfigCharacteristic = &mockChar;
+[[maybe_unused]] static BLECharacteristic* pOtaCharacteristic = &mockChar;
 static BleKeyboard bleKeyboard("Dactyl Keyboard", "Dactyl DIY", 100);
 
 void handleConfigCommand(String cmd, bool fromBle = false);
@@ -188,6 +189,7 @@ void resetState() {
   mockChar.notifications.clear();
   Serial.clear();
   bleKeyboard.releaseAll();
+  resetOtaState();
 }
 
 // -----------------------------------------------------------------------------
@@ -4098,6 +4100,220 @@ TEST(test_hold_tap_mode_commands_and_nvs) {
   loadKeymapFromNVS();
   assert(holdTapMode == 1);
 }
+
+// =============================================================================
+// PLAN 4: BLE OTA UPDATE TESTS
+// =============================================================================
+
+static const uint8_t OTA_TEST_PUB[32] = {
+  0xe7,0xe4,0x4f,0xa1,0xd0,0x29,0xc1,0x28,0x4d,0xd8,0xf4,0x08,0xee,0xd0,0x2a,0xa9,
+  0x66,0x8f,0xe3,0x38,0x5e,0xe5,0x4f,0xc1,0x47,0xf9,0x20,0x07,0xd3,0x16,0xf6,0x73
+};
+static const uint8_t OTA_TEST_SIG[64] = {
+  0x3c,0x68,0xef,0x0f,0x05,0xb5,0x5d,0x56,0x0e,0xc9,0x44,0xe4,0xef,0x33,0xfe,0x7e,
+  0xf9,0xe9,0x8b,0x43,0x8c,0xeb,0xa5,0x5f,0x22,0x3a,0x2a,0x4f,0x8f,0x2c,0x91,0xd2,
+  0x3e,0x07,0x1a,0xd6,0xbb,0xa0,0x9f,0xce,0x4d,0x24,0xe9,0xd1,0x48,0x0a,0xb1,0x3a,
+  0x48,0x8f,0x8d,0x73,0x21,0x82,0x45,0x1c,0x0c,0xc2,0x2c,0x2a,0xbc,0xfc,0x2e,0x0e
+};
+static const uint8_t OTA_TEST_MSG[] = {
+  0x48,0x65,0x6c,0x6c,0x6f,0x20,0x4f,0x54,0x41,0x20,0x77,0x6f,0x72,0x6c,0x64,0x21,
+  0x20,0x54,0x68,0x69,0x73,0x20,0x69,0x73,0x20,0x61,0x20,0x74,0x65,0x73,0x74,0x20,
+  0x66,0x69,0x72,0x6d,0x77,0x61,0x72,0x65,0x20,0x62,0x69,0x6e,0x61,0x72,0x79,0x20,
+  0x73,0x74,0x72,0x65,0x61,0x6d,0x2e
+};
+static const size_t OTA_TEST_MSG_LEN = 55;
+
+static std::string hexEncode(const uint8_t *data, size_t len) {
+  static const char hexChars[] = "0123456789abcdef";
+  std::string s;
+  s.reserve(len * 2);
+  for (size_t i = 0; i < len; i++) {
+    s.push_back(hexChars[(data[i] >> 4) & 0x0f]);
+    s.push_back(hexChars[data[i] & 0x0f]);
+  }
+  return s;
+}
+
+#include "../dactyl_right/DactylOtaVerify.h"
+
+
+TEST(test_ota_ed25519_signature_verification) {
+  // Test valid signature
+  bool ok = dactyl_ota_verify(OTA_TEST_PUB, OTA_TEST_SIG, OTA_TEST_MSG, OTA_TEST_MSG_LEN);
+  assert(ok);
+
+  // Test manipulated message byte
+  uint8_t bad_msg[OTA_TEST_MSG_LEN];
+  memcpy(bad_msg, OTA_TEST_MSG, OTA_TEST_MSG_LEN);
+  bad_msg[0] ^= 1;
+  assert(!dactyl_ota_verify(OTA_TEST_PUB, OTA_TEST_SIG, bad_msg, OTA_TEST_MSG_LEN));
+
+  // Test manipulated signature byte
+  uint8_t bad_sig[64];
+  memcpy(bad_sig, OTA_TEST_SIG, 64);
+  bad_sig[63] ^= 1;
+  assert(!dactyl_ota_verify(OTA_TEST_PUB, bad_sig, OTA_TEST_MSG, OTA_TEST_MSG_LEN));
+}
+
+TEST(test_ota_state_machine_begin_and_abort) {
+  resetState();
+  isConfigMode = true;
+  mockChar.value = "";
+  mockChar.notifications.clear();
+
+  std::string sigHex = hexEncode(OTA_TEST_SIG, 64);
+  handleConfigCommand(String(("OTA_BEGIN 1024 " + sigHex).c_str()), true);
+  assert(mockChar.value == "OTA_READY");
+
+  handleConfigCommand("OTA_ABORT", true);
+  assert(mockChar.value == "OTA_ABORTED");
+}
+
+TEST(test_ota_state_machine_chunk_sequences) {
+  resetState();
+  isConfigMode = true;
+  mockChar.value = "";
+  mockChar.notifications.clear();
+
+  std::string sigHex = hexEncode(OTA_TEST_SIG, 64);
+  handleConfigCommand(String(("OTA_BEGIN 400 " + sigHex).c_str()), true);
+  assert(mockChar.value == "OTA_READY");
+
+  // Send chunk seq 0 (2 header bytes + 200 payload bytes)
+  uint8_t chunk0[202];
+  chunk0[0] = 0x00; chunk0[1] = 0x00; // seq = 0
+  memset(chunk0 + 2, 0x41, 200);
+  handleOtaChunk(chunk0, sizeof(chunk0));
+
+  // Send chunk seq 2 (skipped seq 1!) -> sequence mismatch
+  uint8_t chunk2[202];
+  chunk2[0] = 0x02; chunk2[1] = 0x00; // seq = 2
+  memset(chunk2 + 2, 0x42, 200);
+  handleOtaChunk(chunk2, sizeof(chunk2));
+  assert(mockChar.value.rfind("OTA_ERR:SEQ_MISMATCH", 0) == 0);
+}
+
+TEST(test_ota_state_machine_invalid_signature_at_end) {
+  resetState();
+  isConfigMode = true;
+  mockChar.value = "";
+  mockChar.notifications.clear();
+
+  // Begin with invalid signature
+  uint8_t bad_sig[64];
+  memcpy(bad_sig, OTA_TEST_SIG, 64);
+  bad_sig[0] ^= 0x55;
+  std::string badSigHex = hexEncode(bad_sig, 64);
+
+  handleConfigCommand(String(("OTA_BEGIN 100 " + badSigHex).c_str()), true);
+  assert(mockChar.value == "OTA_READY");
+
+  // Send chunk 0 with 100 bytes
+  uint8_t chunk[102];
+  chunk[0] = 0; chunk[1] = 0;
+  memset(chunk + 2, 0xAA, 100);
+  handleOtaChunk(chunk, sizeof(chunk));
+
+  handleConfigCommand("OTA_END", true);
+  assert(mockChar.value.rfind("OTA_ERR:SIGNATURE_INVALID", 0) == 0);
+}
+
+TEST(test_ota_timeout_and_config_mode_pause) {
+  resetState();
+  isConfigMode = true;
+  mockChar.value = "";
+  mockChar.notifications.clear();
+
+  std::string sigHex = hexEncode(OTA_TEST_SIG, 64);
+  handleConfigCommand(String(("OTA_BEGIN 1024 " + sigHex).c_str()), true);
+  assert(mockChar.value == "OTA_READY");
+
+  // Advance time by 10s -> still within 15s chunk timeout
+  advanceMillis(10000);
+  processOtaTimeout();
+  assert(mockChar.value == "OTA_READY");
+
+  // Advance time by another 6s (total 16s without chunk) -> chunk timeout triggers abort
+  advanceMillis(6000);
+  processOtaTimeout();
+  assert(mockChar.value == "OTA_ERR:TIMEOUT");
+}
+
+TEST(test_ota_rejected_outside_config_mode) {
+  resetState();
+  isConfigMode = false;
+  mockChar.value = "";
+  mockChar.notifications.clear();
+
+  std::string sigHex = hexEncode(OTA_TEST_SIG, 64);
+  handleConfigCommand(String(("OTA_BEGIN 1024 " + sigHex).c_str()), true);
+  assert(mockChar.value.rfind("OTA_ERR:NOT_CONFIG_MODE", 0) == 0);
+}
+
+TEST(test_ota_16_chunk_acknowledgement_boundary) {
+  resetState();
+  isConfigMode = true;
+  mockChar.value = "";
+  mockChar.notifications.clear();
+
+  // 17 chunks of 100 bytes = 1700 bytes
+  std::string sigHex = hexEncode(OTA_TEST_SIG, 64);
+  handleConfigCommand(String(("OTA_BEGIN 1700 " + sigHex).c_str()), true);
+  assert(mockChar.value == "OTA_READY");
+  mockChar.notifications.clear();
+
+  // Send chunks 0 to 14 (15 chunks) -> no ACK yet
+  uint8_t chunk[102];
+  memset(chunk + 2, 0x11, 100);
+  for (uint16_t seq = 0; seq < 15; seq++) {
+    chunk[0] = (uint8_t)(seq & 0xFF);
+    chunk[1] = (uint8_t)((seq >> 8) & 0xFF);
+    handleOtaChunk(chunk, sizeof(chunk));
+    assert(mockChar.notifications.empty());
+  }
+
+  // Send chunk 15 (16th chunk) -> triggers OTA_ACK:15:1600
+  chunk[0] = 15;
+  chunk[1] = 0;
+  handleOtaChunk(chunk, sizeof(chunk));
+  assert(mockChar.notifications.size() == 1);
+  assert(mockChar.notifications[0] == "OTA_ACK:15:1600");
+  mockChar.notifications.clear();
+
+  // Send chunk 16 (17th chunk, final chunk) -> triggers OTA_ACK:16:1700 because written == expected
+  chunk[0] = 16;
+  chunk[1] = 0;
+  handleOtaChunk(chunk, sizeof(chunk));
+  assert(mockChar.notifications.size() == 1);
+  assert(mockChar.notifications[0] == "OTA_ACK:16:1700");
+}
+
+TEST(test_ota_blocks_non_ota_commands) {
+  resetState();
+  isConfigMode = true;
+  mockChar.value = "";
+  mockChar.notifications.clear();
+
+  std::string sigHex = hexEncode(OTA_TEST_SIG, 64);
+  handleConfigCommand(String(("OTA_BEGIN 1024 " + sigHex).c_str()), true);
+  assert(mockChar.value == "OTA_READY");
+
+  // Non-OTA command during OTA should be rejected
+  handleConfigCommand("GET_CONFIG", true);
+  assert(mockChar.value == "ERR BUSY OTA_IN_PROGRESS");
+
+  handleConfigCommand("SET_NAME TestDactyl", true);
+  assert(mockChar.value == "ERR BUSY OTA_IN_PROGRESS");
+
+  // OTA_ABORT is allowed
+  handleConfigCommand("OTA_ABORT", true);
+  assert(mockChar.value == "OTA_ABORTED");
+
+  // After abort, normal commands work again
+  handleConfigCommand("GET_CONFIG", true);
+  assert(mockChar.value != "ERR BUSY OTA_IN_PROGRESS");
+}
+
 
 int main() {
   std::cout << "==================================================" << std::endl;

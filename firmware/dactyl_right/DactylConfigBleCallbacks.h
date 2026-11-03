@@ -6,10 +6,21 @@
  * handleConfigCommand(String, bool), isBleTransitioning und exitConfigRequested.
  */
 
+void handleConfigCommand(String cmd, bool fromBle);
+void handleOtaChunk(const uint8_t *data, size_t len);
+
 class ConfigCallbacks : public BLECharacteristicCallbacks {
   void onWrite(BLECharacteristic *pChar) override {
     String val = pChar->getValue().c_str();
     handleConfigCommand(val, true);
+  }
+};
+
+class OtaCallbacks : public BLECharacteristicCallbacks {
+  void onWrite(BLECharacteristic *pChar) override {
+    size_t len = pChar->getLength();
+    const uint8_t *data = pChar->getData();
+    handleOtaChunk(data, len);
   }
 };
 

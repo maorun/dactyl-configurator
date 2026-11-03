@@ -236,8 +236,58 @@ public:
   std::string value;
   std::vector<std::string> notifications;
   void setValue(const char* v) { value = v ? v : ""; }
+  void setValue(const uint8_t* d, size_t len) { value.assign((const char*)d, len); }
   void notify() { notifications.push_back(value); }
+  const uint8_t* getData() const { return (const uint8_t*)value.data(); }
+  size_t getLength() const { return value.size(); }
 };
+
+#define U_FLASH 0
+class UpdateClass {
+public:
+  size_t _size = 0;
+  size_t _written = 0;
+  bool _inProgress = false;
+  bool _aborted = false;
+  bool _ended = false;
+  bool failBegin = false;
+  bool failWrite = false;
+  bool failEnd = false;
+  std::vector<uint8_t> writtenData;
+
+  bool begin(size_t size, int /*cmd*/ = U_FLASH) {
+    if (failBegin) return false;
+    _size = size;
+    _written = 0;
+    _inProgress = true;
+    _aborted = false;
+    _ended = false;
+    writtenData.clear();
+    return true;
+  }
+  size_t write(const uint8_t *data, size_t len) {
+    if (!_inProgress || failWrite) return 0;
+    writtenData.insert(writtenData.end(), data, data + len);
+    _written += len;
+    return len;
+  }
+  bool end(bool /*evenIfRemaining*/ = false) {
+    if (!_inProgress || failEnd) return false;
+    _inProgress = false;
+    _ended = true;
+    return true;
+  }
+  void abort() {
+    _inProgress = false;
+    _aborted = true;
+  }
+  bool isFinished() const { return _ended; }
+  bool hasError() const { return _aborted; }
+  size_t size() const { return _size; }
+  size_t progress() const { return _written; }
+};
+static UpdateClass Update;
+inline int esp_ota_mark_app_valid_cancel_rollback() { return 0; }
 
 // Report-IDs, Maus-Buttons & Report-Descriptor direkt aus der Firmware
 // ("HIDTypes.h" wird zuerst im Testordner gefunden: Host-Ersatz ohne ESP32-Core)

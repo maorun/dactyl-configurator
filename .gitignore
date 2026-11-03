@@ -12,3 +12,6 @@ config_backups/
 .claude
 # Gemeinsamer ESP-NOW-Schlüssel beider Hälften (scripts/generate-split-key.sh)
 firmware/dactyl_right/DactylSplitKey.h*
+# BLE OTA Signaturschlüssel und Header (scripts/generate-ota-key.py)
+.ota_signing_key.pem*
+firmware/dactyl_right/DactylOtaKey.h*

@@ -4,6 +4,9 @@
  * Vor den Keymaps und vor DactylLogic.h einbinden.
  */
 
+// Einschwingzeit des Matrix-Treibers in Mikrosekunden (Row/Col auf LOW treiben, Pegel stabilisieren)
+#define MATRIX_SETTLE_US 10
+
 // Layer Action Codes (Values >= 0x100)
 #define ACT_MO_BASE 0x100
 #define ACT_MO_0  0x100

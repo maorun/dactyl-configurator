@@ -29,15 +29,6 @@ No open entry.
 
 ## Priority 4
 
-### Matrix scan settle time and deep-sleep pin power
-
-- **Rank:** Feature model. Total 17/40 (typing 4, configuration 1, harmony 5, safety 7). Effort S. Estimate.
-- **Area:** Firmware.
-- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`loop()`), `firmware/dactyl_left/dactyl_left.ino` (`loop()`, `enterDeepSleep()`).
-- **Problem:** Each matrix scan pass busy-waits `30 us` per row or column (`180` to `210 us` per pass), and the left half holds 6 non-RTC row pins `HIGH` with `gpio_deep_sleep_hold_en()` during deep sleep.
-- **Goal:** Reduce the matrix strobe settle delay to the minimum stable value (for example `5` to `10 us`), and check if internal RTC pull-ups (`ESP_EXT1_WAKEUP_ALL_LOW`) or a single RTC high pin can replace the 6 non-RTC digital pad holds in deep sleep.
-- **Acceptance test:** The matrix test shows 0 false bounces on both halves, and a multimeter measurement at the JST socket confirms the deep-sleep current.
-
 ### Layer overview
 
 - **Rank:** Feature model. Total 17/40 (typing 0, configuration 5, harmony 5, safety 7). Effort M. Estimate.

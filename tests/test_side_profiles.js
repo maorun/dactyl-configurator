@@ -822,6 +822,21 @@ test("Funk-Sendeleistung und BLE-Latenz: Firmware drosselt BLE und ESP-NOW im Be
   assert.ok(leftEnterStandby && !/setCpuFrequencyMhz/.test(leftEnterStandby[1]), "links: enterStandby() darf Takt nicht ändern");
 });
 
+test("Matrix-Scan und Deep Sleep: Matrix-Einschwingzeit als Konstante und RTC-Hold für RTC-fähige Pins", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(common, /#define\s+MATRIX_SETTLE_US\s+(?:10|[5-9])\b/, "MATRIX_SETTLE_US fehlt in DactylCommon.h");
+
+  // Beide Hälften müssen MATRIX_SETTLE_US nutzen und dürfen keine hardcodierten delayMicroseconds(30) mehr haben
+  assert.doesNotMatch(rightIno, /delayMicroseconds\(\s*30\s*\)/, "rightIno enthält noch delayMicroseconds(30)");
+  assert.doesNotMatch(leftIno, /delayMicroseconds\(\s*30\s*\)/, "leftIno enthält noch delayMicroseconds(30)");
+  assert.match(rightIno, /delayMicroseconds\(\s*MATRIX_SETTLE_US\s*\)/, "rightIno nutzt MATRIX_SETTLE_US nicht");
+  assert.match(leftIno, /delayMicroseconds\(\s*MATRIX_SETTLE_US\s*\)/, "leftIno nutzt MATRIX_SETTLE_US nicht");
+
+  // Beide Hälften müssen in enterDeepSleep() und setup() rtc_gpio_is_valid_gpio prüfen
+  assert.match(rightIno, /rtc_gpio_is_valid_gpio\(pin\)/);
+  assert.match(leftIno, /rtc_gpio_is_valid_gpio\(pin\)/);
+});
+
 runAll().catch((err) => {
   console.error(err);
   process.exit(1);

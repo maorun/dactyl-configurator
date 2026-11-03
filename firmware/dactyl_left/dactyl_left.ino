@@ -204,12 +204,19 @@ void enterDeepSleep() {
   esp_now_deinit();
   WiFi.mode(WIFI_OFF);
 
-  // 1. Zeilen als OUTPUT HIGH halten (3.3V); Zeilen-GPIOs sind keine RTC-Pins -> gpio_hold
+  // 1. Zeilen als OUTPUT HIGH halten (3.3V) - RTC-fähig per RTC-Driver, Nicht-RTC per digital pad hold
   for (int r = 0; r < NUM_ROWS; r++) {
     gpio_num_t pin = (gpio_num_t)LEFT_ROW_PINS[r];
-    pinMode(LEFT_ROW_PINS[r], OUTPUT);
-    digitalWrite(LEFT_ROW_PINS[r], HIGH);
-    gpio_hold_en(pin);
+    if (rtc_gpio_is_valid_gpio(pin)) {
+      rtc_gpio_init(pin);
+      rtc_gpio_set_direction(pin, RTC_GPIO_MODE_OUTPUT_ONLY);
+      rtc_gpio_set_level(pin, 1);
+      rtc_gpio_hold_en(pin);
+    } else {
+      pinMode(LEFT_ROW_PINS[r], OUTPUT);
+      digitalWrite(LEFT_ROW_PINS[r], HIGH);
+      gpio_hold_en(pin);
+    }
   }
   gpio_deep_sleep_hold_en();
 
@@ -667,7 +674,13 @@ void setup() {
   // Deep-Sleep-Holds aufheben & RTC-Pins zurücksetzen
   gpio_deep_sleep_hold_dis();
   for (int r = 0; r < NUM_ROWS; r++) {
-    gpio_hold_dis((gpio_num_t)LEFT_ROW_PINS[r]);
+    gpio_num_t pin = (gpio_num_t)LEFT_ROW_PINS[r];
+    if (rtc_gpio_is_valid_gpio(pin)) {
+      rtc_gpio_hold_dis(pin);
+      rtc_gpio_deinit(pin);
+    } else {
+      gpio_hold_dis(pin);
+    }
   }
   for (int c = 0; c < NUM_COLS; c++) {
     gpio_num_t pin = (gpio_num_t)LEFT_COL_PINS[c];
@@ -763,7 +776,7 @@ void loop() {
     for (int c = 0; c < NUM_COLS; c++) {
       pinMode(LEFT_COL_PINS[c], OUTPUT);
       digitalWrite(LEFT_COL_PINS[c], LOW);
-      delayMicroseconds(30);
+      delayMicroseconds(MATRIX_SETTLE_US);
 
       for (int r = 0; r < NUM_ROWS; r++) {
         bool raw = (digitalRead(LEFT_ROW_PINS[r]) == LOW);
@@ -837,13 +850,13 @@ void loop() {
           bool p1, p2;
           pinMode(LEFT_COL_PINS[CONFIG_COMBO_C1], OUTPUT);
           digitalWrite(LEFT_COL_PINS[CONFIG_COMBO_C1], LOW);
-          delayMicroseconds(30);
+          delayMicroseconds(MATRIX_SETTLE_US);
           p1 = (digitalRead(LEFT_ROW_PINS[CONFIG_COMBO_R1]) == LOW);
           pinMode(LEFT_COL_PINS[CONFIG_COMBO_C1], INPUT);
 
           pinMode(LEFT_COL_PINS[CONFIG_COMBO_C2], OUTPUT);
           digitalWrite(LEFT_COL_PINS[CONFIG_COMBO_C2], LOW);
-          delayMicroseconds(30);
+          delayMicroseconds(MATRIX_SETTLE_US);
           p2 = (digitalRead(LEFT_ROW_PINS[CONFIG_COMBO_R2]) == LOW);
           pinMode(LEFT_COL_PINS[CONFIG_COMBO_C2], INPUT);
 

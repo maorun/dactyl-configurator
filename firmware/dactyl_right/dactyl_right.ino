@@ -920,7 +920,7 @@ void loop() {
     for (int r = 0; r < NUM_ROWS; r++) {
       pinMode(ROW_PINS[r], OUTPUT);
       digitalWrite(ROW_PINS[r], LOW);
-      delayMicroseconds(30);
+      delayMicroseconds(MATRIX_SETTLE_US);
 
       for (int c = 0; c < NUM_COLS; c++) {
         bool isPressed = (digitalRead(COL_PINS[c]) == LOW);
@@ -998,13 +998,13 @@ void loop() {
 
           pinMode(ROW_PINS[0], OUTPUT);
           digitalWrite(ROW_PINS[0], LOW);
-          delayMicroseconds(30);
+          delayMicroseconds(MATRIX_SETTLE_US);
           r0c0_pressed = (digitalRead(COL_PINS[0]) == LOW);
           pinMode(ROW_PINS[0], INPUT);
 
           pinMode(ROW_PINS[4], OUTPUT);
           digitalWrite(ROW_PINS[4], LOW);
-          delayMicroseconds(30);
+          delayMicroseconds(MATRIX_SETTLE_US);
           r4c5_pressed = (digitalRead(COL_PINS[5]) == LOW);
           pinMode(ROW_PINS[4], INPUT);
 

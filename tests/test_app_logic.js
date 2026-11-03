@@ -1764,7 +1764,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM) /.test(c)).length;
+  const settings = sent.filter(c => /^SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE) /.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;

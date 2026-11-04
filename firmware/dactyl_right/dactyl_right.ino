@@ -810,6 +810,7 @@ void setup() {
 
   // Prüfen, ob wir per Soft-Reboot gezielt in den isolierten Config-Modus gewechselt sind
   esp_reset_reason_t resetReason = esp_reset_reason();
+  diagBootReason = resetReason;
   bool bootIntoConfigMode = shouldBootIntoConfigMode(resetReason, rtcConfigModeMagic);
   // Sofort löschen, damit jeder künftige Reset garantiert wieder im normalen Tastaturmodus startet
   rtcConfigModeMagic = 0;
@@ -894,6 +895,8 @@ void setup() {
 }
 
 void loop() {
+  // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende
+  const uint32_t diagLoopStartUs = micros();
   static unsigned long lastHeartbeat = 0;
   if (millis() - lastHeartbeat > 2500) {
     lastHeartbeat = millis();
@@ -1093,5 +1096,6 @@ void loop() {
     feedSerialChar((char)Serial.read(), serialRxBuf);
   }
 
+  diagNoteLoopUs(micros() - diagLoopStartUs);
   delay(isStandby ? 40 : debounceMs);
 }

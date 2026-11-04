@@ -53,6 +53,15 @@
       </div>
     </header>
 
+    <!-- Diagnose (GET_DIAG): Reset-Grund, Laufzeit, Heap und längster loop()-Durchlauf je Hälfte (js/serial.js) -->
+    <details class="diag-panel" id="diagPanel">
+      <summary id="diagSummary">Diagnose</summary>
+      <div class="diag-body">
+        <button id="btnDiagRefresh" class="btn btn-outline btn-sm" title="Fragt die Werte der verbundenen Tastatur ab. Über Bluetooth nur im Config-Modus.">Diagnose abfragen</button>
+        <ul class="diag-list" id="diagList"><li class="diag-empty">Noch keine Werte. Verbinde die Tastatur und klicke auf "Diagnose abfragen".</li></ul>
+      </div>
+    </details>
+
     <!-- Wireless Bluetooth Config Mode & Auto-Sync Banner -->
     <div class="config-mode-guide-card" id="configModeGuideCard">
       <div class="config-guide-icon" id="configGuideIcon">⚡</div>
@@ -832,7 +841,7 @@
   <script src="js/side-right.js?v=2"></script>
   <script src="js/side-left.js?v=2"></script>
   <script src="js/side-state.js?v=1"></script>
-  <script src="js/side-routing.js?v=4"></script>
+  <script src="js/side-routing.js?v=5"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=3"></script>
   <script src="js/config-model.js?v=7"></script>
@@ -842,9 +851,9 @@
   <script src="js/macros-ui.js?v=2"></script>
   <script src="js/layout-profiles-ui.js?v=2"></script>
   <script src="js/flash-log.js?v=1"></script>
-  <script src="js/editor-events.js?v=6"></script>
+  <script src="js/editor-events.js?v=7"></script>
   <script src="js/ble.js?v=1"></script>
-  <script src="js/serial.js?v=6"></script>
+  <script src="js/serial.js?v=7"></script>
   <script src="js/live-monitor.js?v=2"></script>
   <script src="js/heatmap.js?v=2"></script>
   <script src="js/matrix-test.js?v=1"></script>

@@ -239,6 +239,43 @@ function updateFirmwareVersionUI() {
     Dactyl.SIDE_IDS.map(id => `${SIDE_PROFILES[id].label}: ${label(versions[id])}`).join(", ");
 }
 
+// Diagnose (GET_DIAG): letzter Stand je Hälfte, Panel "Diagnose" in index.html
+const diagByRole = {};
+function updateDiagUI() {
+  const panel = document.getElementById("diagPanel");
+  const list = document.getElementById("diagList");
+  const summary = document.getElementById("diagSummary");
+  if (!panel || !list || !summary) return;
+  const sides = Dactyl.SIDE_IDS.filter(id => diagByRole[id]);
+  if (!sides.length) return;
+  list.textContent = "";
+  for (const id of sides) {
+    const view = Dactyl.describeDiag(diagByRole[id]);
+    const li = document.createElement("li");
+    li.textContent = `${SIDE_PROFILES[id].label}: Reset-Grund ${view.reset}, Laufzeit ${view.uptime}, ` +
+      `Heap frei ${view.heapFree} (Minimum ${view.heapMin}), längster loop() ${view.loopMax} ` +
+      `(Stand ${new Date(diagByRole[id].at).toLocaleTimeString()})`;
+    if (view.abnormal) {
+      const flag = document.createElement("span");
+      flag.className = "diag-flag";
+      flag.textContent = " Unerwarteter Neustart";
+      li.appendChild(flag);
+    }
+    list.appendChild(li);
+  }
+  const sum = Dactyl.summarizeDiag(sides.map(id => diagByRole[id]));
+  panel.classList.toggle("diag-abnormal", sum.abnormal);
+  summary.textContent = sum.summary;
+}
+function requestDiag() {
+  const side = Dactyl.connectedSide(connectionState());
+  const route = Dactyl.routeCommand(side, connectionState());
+  if (route === "ble") return sendBleCommand("GET_DIAG");
+  if (route === "usb") return sendSerialCommand("GET_DIAG");
+  showToast("Keine Verbindung zur Tastatur.");
+  return Promise.resolve(false);
+}
+
 // Funkverbindung zur Sender-Hälfte (SPLIT_LINK, DEVICE_INFO.left_link); nur der Master kennt sie
 const splitLinkStatus = Dactyl.createSplitLinkStatus();
 function updateSplitLinkUI() {
@@ -421,6 +458,17 @@ function handleSerialLine(line, side = null, transport = "ble") {
       const bounced = evt.t !== undefined && recordMatrixBounce(matrixTest, evt.r, evt.c, evt.pressed, evt.t);
       const marked = evt.pressed && markMatrixKeyTested(matrixTest, evt.r, evt.c);
       if ((marked || bounced) && isEditSide) renderMatrixTest();
+    }
+  }
+
+  // 2a''. Diagnose (Antwort auf GET_DIAG)
+  else if (line.startsWith("DIAG:")) {
+    const diag = Dactyl.parseDiagLine(line);
+    if (diag) {
+      diagByRole[lineSide] = { ...diag, at: Date.now() };
+      updateDiagUI();
+    } else {
+      console.warn("Failed to parse DIAG:", line);
     }
   }
 

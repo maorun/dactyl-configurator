@@ -218,7 +218,21 @@ std::map<std::string, std::vector<uint8_t>> Preferences::bytesStore;
 bool Preferences::failWrites = false;
 std::string Preferences::failBytesKey;
 
-enum esp_reset_reason_t { ESP_RST_POWERON = 1, ESP_RST_SW = 3, ESP_RST_DEEPSLEEP = 5 };
+// Werte wie im ESP-IDF (esp_system.h)
+enum esp_reset_reason_t {
+  ESP_RST_UNKNOWN = 0, ESP_RST_POWERON = 1, ESP_RST_EXT = 2, ESP_RST_SW = 3, ESP_RST_PANIC = 4,
+  ESP_RST_INT_WDT = 5, ESP_RST_TASK_WDT = 6, ESP_RST_WDT = 7, ESP_RST_DEEPSLEEP = 8, ESP_RST_BROWNOUT = 9,
+  ESP_RST_SDIO = 10, ESP_RST_USB = 11, ESP_RST_JTAG = 12, ESP_RST_EFUSE = 13, ESP_RST_PWR_GLITCH = 14,
+  ESP_RST_CPU_LOCKUP = 15
+};
+// Diagnose (GET_DIAG): Laufzeit und Heap; Testwerte setzbar
+static uint32_t _mock_heap_free = 123456, _mock_heap_min = 100000;
+struct _MockEspClass {
+  uint32_t getFreeHeap() { return _mock_heap_free; }
+  uint32_t getMinFreeHeap() { return _mock_heap_min; }
+};
+static _MockEspClass ESP;
+inline int64_t esp_timer_get_time() { return (int64_t)millis() * 1000; }
 
 // Mock BLE
 #define ESP_MAC_BT 2

@@ -669,6 +669,7 @@ void setup() {
   delay(200);
 
   esp_reset_reason_t resetReason = esp_reset_reason();
+  diagBootReason = resetReason;
   bool bootIntoConfigMode = shouldBootIntoConfigMode(resetReason, rtcConfigModeMagic);
   rtcConfigModeMagic = 0;
   isConfigMode = bootIntoConfigMode;
@@ -749,6 +750,8 @@ void setup() {
 }
 
 void loop() {
+  // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende
+  const uint32_t diagLoopStartUs = micros();
   static unsigned long lastHeartbeat = 0;
   if (millis() - lastHeartbeat > 2500) {
     lastHeartbeat = millis();
@@ -953,5 +956,6 @@ void loop() {
     feedSerialChar((char)Serial.read(), serialRxBuf);
   }
 
+  diagNoteLoopUs(micros() - diagLoopStartUs);
   delay(leftLoopDelayMs(isStandby, sendQueue));
 }

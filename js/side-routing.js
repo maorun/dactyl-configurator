@@ -286,7 +286,48 @@
     return { state: "down", text: `${label}: getrennt seit ${formatTime(status.since)}`, title: counters };
   }
 
+  // Diagnose (GET_DIAG): DIAG:{"reset":"<Grund>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n}
+  // Reset-Gründe, die keine Störung zeigen (Firmware: resetReasonName in DactylLogic.h)
+  const NORMAL_RESET_REASONS = ["power_on", "deep_sleep", "software"];
+  // Rückgabe: bereinigte Werte oder undefined (kein DIAG, ungültiges JSON, Feld fehlt oder falscher Typ)
+  function parseDiagLine(line) {
+    if (typeof line !== "string" || !line.startsWith("DIAG:")) return undefined;
+    let raw;
+    try { raw = JSON.parse(line.substring(5)); } catch (_) { return undefined; }
+    if (!raw || typeof raw !== "object") return undefined;
+    if (typeof raw.reset !== "string" || !/^[a-z_]{1,24}$/.test(raw.reset)) return undefined;
+    if (!isCount(raw.uptime_s) || !isCount(raw.heap_free) || !isCount(raw.heap_min) || !isCount(raw.loop_max_us)) return undefined;
+    return {
+      reset: raw.reset, uptimeS: raw.uptime_s, heapFree: raw.heap_free, heapMin: raw.heap_min, loopMaxUs: raw.loop_max_us,
+      abnormal: !NORMAL_RESET_REASONS.includes(raw.reset)
+    };
+  }
+
+  function formatUptime(s) {
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    return d > 0 ? `${d} d ${h} h` : h > 0 ? `${h} h ${m} min` : m > 0 ? `${m} min ${s % 60} s` : `${s} s`;
+  }
+
+  // Anzeigetexte einer Hälfte (Label kommt aus dem Profil)
+  function describeDiag(diag) {
+    return {
+      reset: diag.reset,
+      abnormal: diag.abnormal,
+      uptime: formatUptime(diag.uptimeS),
+      heapFree: `${diag.heapFree} B`,
+      heapMin: `${diag.heapMin} B`,
+      loopMax: `${diag.loopMaxUs} µs`
+    };
+  }
+
+  // Kopfzeile des Panels: markiert, sobald eine Hälfte einen unerwarteten Reset meldet
+  function summarizeDiag(diags) {
+    const abnormal = diags.some(d => d && d.abnormal);
+    return { abnormal, summary: abnormal ? "Diagnose (unerwarteter Neustart)" : "Diagnose" };
+  }
+
   root.Dactyl = Object.assign(root.Dactyl || {}, {
+    parseDiagLine, describeDiag, summarizeDiag, NORMAL_RESET_REASONS,
     parseSplitFwLine, createFirmwareVersions, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
     parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil

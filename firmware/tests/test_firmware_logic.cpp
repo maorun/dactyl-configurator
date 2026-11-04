@@ -4386,6 +4386,56 @@ TEST(test_ota_blocks_non_ota_commands) {
   assert(mockChar.value != "ERR BUSY OTA_IN_PROGRESS");
 }
 
+// -----------------------------------------------------------------------------
+// GET_DIAG: Reset-Grund, Laufzeit, Heap und längster loop()-Durchlauf
+// -----------------------------------------------------------------------------
+TEST(test_get_diag_json_and_reset_reason_mapping) {
+  resetState();
+  struct { esp_reset_reason_t r; const char* name; } expected[] = {
+    {ESP_RST_UNKNOWN, "unknown"}, {ESP_RST_POWERON, "power_on"}, {ESP_RST_EXT, "external"},
+    {ESP_RST_SW, "software"}, {ESP_RST_PANIC, "panic"}, {ESP_RST_INT_WDT, "int_wdt"},
+    {ESP_RST_TASK_WDT, "task_wdt"}, {ESP_RST_WDT, "wdt"}, {ESP_RST_DEEPSLEEP, "deep_sleep"},
+    {ESP_RST_BROWNOUT, "brownout"}, {ESP_RST_SDIO, "sdio"}, {ESP_RST_USB, "usb"},
+    {ESP_RST_JTAG, "jtag"}, {ESP_RST_EFUSE, "efuse"}, {ESP_RST_PWR_GLITCH, "pwr_glitch"},
+    {ESP_RST_CPU_LOCKUP, "cpu_lockup"},
+  };
+  for (auto& e : expected) assert(std::string(resetReasonName(e.r)) == e.name);
+  // Unbekannter Zahlenwert: sicherer Name, kein JSON-Bruch
+  assert(std::string(resetReasonName((esp_reset_reason_t)99)) == "unknown");
+
+  assert(buildDiagLine(ESP_RST_TASK_WDT, 12, 3, 4, 5).c_str() == std::string(
+    "DIAG:{\"reset\":\"task_wdt\",\"uptime_s\":12,\"heap_free\":3,\"heap_min\":4,\"loop_max_us\":5}"));
+  // Größte Werte passen in den Puffer und bleiben gültig abgeschlossen
+  std::string big = buildDiagLine(ESP_RST_CPU_LOCKUP, 4294967295u, 4294967295u, 4294967295u, 4294967295u).c_str();
+  assert(big.size() < 159 && big.back() == '}' && big.find("\"loop_max_us\":4294967295}") != std::string::npos);
+
+  // Befehl über USB-Serial
+  diagBootReason = ESP_RST_BROWNOUT;
+  diagLoopMaxUs = 0;
+  diagNoteLoopUs(700);
+  diagNoteLoopUs(200);                      // kleinerer Wert senkt das Maximum nicht
+  _mock_heap_free = 111; _mock_heap_min = 99;
+  setMillis(5000);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_DIAG", false);
+  assert(mockChar.value == "DIAG:{\"reset\":\"brownout\",\"uptime_s\":5,\"heap_free\":111,\"heap_min\":99,\"loop_max_us\":700}");
+}
+
+TEST(test_get_diag_ble_rejected_in_keyboard_mode) {
+  resetState();
+  isConfigMode = false;
+  mockChar.notifications.clear();
+  mockChar.value.clear();
+  handleConfigCommand("GET_DIAG", true);
+  assert(mockChar.notifications.size() == 1);
+  assert(mockChar.value == "ERR FORBIDDEN GET_DIAG");
+  // Config-Modus: über BLE erlaubt
+  isConfigMode = true;
+  handleConfigCommand("GET_DIAG", true);
+  assert(mockChar.value.rfind("DIAG:{", 0) == 0);
+  isConfigMode = false;
+}
+
 
 int main() {
   std::cout << "==================================================" << std::endl;

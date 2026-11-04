@@ -187,6 +187,22 @@ function sanitizeCommandText(value, fallback = "") {
   return cleaned || fallback;
 }
 
+// Tri-Layer-Regeln bereinigen (wie server.py validate_tri_layers): höchstens 2, Ebenen 1..7, a != b, Ziel weder a noch b
+const MAX_TRI_LAYER_RULES = 2;
+function normalizeTriLayers(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const rule of value) {
+    if (out.length >= MAX_TRI_LAYER_RULES) break;
+    if (!rule || typeof rule !== "object") continue;
+    const { a, b, target } = rule;
+    if (![a, b, target].every(n => Number.isInteger(n) && n >= 1 && n < NUM_LAYERS)) continue;
+    if (a === b || target === a || target === b) continue;
+    out.push({ a, b, target });
+  }
+  return out;
+}
+
 function clampSetting(field, value) {
   const [lo, hi, def] = SETTINGS_RANGES[field];
   const n = Number(value);
@@ -609,6 +625,7 @@ function normalizeConfig(cfg, profile) {
     comboTimeoutMs: clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40),
     tappingTermMs: clampSetting("tappingTermMs", s.tappingTermMs ?? 200),
     holdTapMode: clampSetting("holdTapMode", s.holdTapMode ?? 0),
+    triLayers: normalizeTriLayers(s.triLayers),
     standbyTimeoutMinutes: clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5),
     sleepTimeoutMinutes: clampSetting("sleepTimeoutMinutes", s.sleepTimeoutMinutes ?? 60)
   };
@@ -1116,31 +1133,54 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
       }
     }
   }
-  const reachable = new Set([0]);
-  const lockable = new Set();   // Ebenen, die sich einrasten lassen (TG, LAYER_UP/DOWN, Combo)
-  for (const n of comboToggles) {
-    if (n > 0) { reachable.add(n); lockable.add(n); }
-  }
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const l of [...reachable]) {
-      for (const a of onLayer[l]) {
-        let target = -1;
-        let lock = false;
-        if (a.kind === "MO") target = a.layer;
-        else if (a.kind === "TG") { target = a.layer; lock = true; }
-        else if (a.kind === "LAYER_UP") { target = (l + 1) % NUM_LAYERS; lock = true; }
-        else if (a.kind === "LAYER_DOWN") { target = (l + NUM_LAYERS - 1) % NUM_LAYERS; lock = true; }
-        if (target < 0) continue;
-        if (lock && target > 0) lockable.add(target);
-        if (!reachable.has(target)) { reachable.add(target); grew = true; }
+  // Erreichbare Ebenen mit den Tri-Layer-Regeln aus triRules (jede Regel gilt nur auf der Hälfte, die sie hält)
+  const computeReach = triRules => {
+    const reach = new Set([0]);
+    const lock = new Set();   // Ebenen, die sich einrasten lassen (TG, LAYER_UP/DOWN, Combo)
+    for (const n of comboToggles) {
+      if (n > 0) { reach.add(n); lock.add(n); }
+    }
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const l of [...reach]) {
+        for (const a of onLayer[l]) {
+          let target = -1;
+          let locks = false;
+          if (a.kind === "MO") target = a.layer;
+          else if (a.kind === "TG") { target = a.layer; locks = true; }
+          else if (a.kind === "LAYER_UP") { target = (l + 1) % NUM_LAYERS; locks = true; }
+          else if (a.kind === "LAYER_DOWN") { target = (l + NUM_LAYERS - 1) % NUM_LAYERS; locks = true; }
+          if (target < 0) continue;
+          if (locks && target > 0) lock.add(target);
+          if (!reach.has(target)) { reach.add(target); grew = true; }
+        }
+      }
+      // Tri-Layer: das Ziel ist erreichbar, sobald a und b erreichbar sind (a und b dürfen auf verschiedenen Hälften liegen)
+      for (const { a, b, target } of triRules) {
+        if (reach.has(a) && reach.has(b) && !reach.has(target)) { reach.add(target); grew = true; }
       }
     }
-  }
+    return { reach, lock };
+  };
+  const triOf = side => normalizeTriLayers(configs[side].settings && configs[side].settings.triLayers);
+  const { reach: reachable, lock: lockable } = computeReach(sides.flatMap(triOf));
+  // Die Firmware wertet nur die Regeln der eigenen Hälfte aus: eine Ebene mit Belegung auf einer Hälfte
+  // braucht dort einen Weg hinein
+  const reachableOn = new Map(sides.map(side => [side, computeReach(triOf(side)).reach]));
 
   const unreachable = [];
   for (let n = 1; n < NUM_LAYERS; n++) {
     if (!reachable.has(n) && sides.some(s => lintLayerHasOwnContent(configs[s], profiles[s], n))) unreachable.push(n);
+  }
+  // Tri-Layer-Ziel mit Belegung auf einer Hälfte, die die Regel nicht hält: dort wird das Ziel nie aktiv
+  for (const side of sides) {
+    const missing = [...new Set(sides.flatMap(triOf).map(r => r.target))]
+      .filter(n => reachable.has(n) && !reachableOn.get(side).has(n) && lintLayerHasOwnContent(configs[side], profiles[side], n))
+      .sort((a, b) => a - b);
+    if (missing.length) {
+      add("warn", side, "tri-layer-other-half",
+        `${lintLayerName(missing)} wird nur durch eine Tri-Layer-Regel der anderen Hälfte erreicht. Setze dieselbe Regel auch an dieser Hälfte.`);
+    }
   }
   if (unreachable.length) {
     add("warn", null, "layer-unreachable",

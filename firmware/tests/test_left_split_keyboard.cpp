@@ -52,6 +52,8 @@ static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
 static uint16_t tappingTermMs = 200;
 static uint8_t holdTapMode = 0;
+static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
+static uint8_t numTriLayers = 0;
 static uint32_t standbyTimeoutMinutes = 5;
 static uint32_t deepSleepTimeoutMinutes = 60;
 

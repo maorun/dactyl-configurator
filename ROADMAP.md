@@ -31,15 +31,6 @@ Rules for this file:
 - **Dependency:** "Three-key combos with their own window" also changes the combo format. Define one new NVS format for both entries.
 - **Acceptance test:** A firmware test shows that a combo with the mask of layer 0 triggers on layer 0 and that its keys send without delay on layer 2. A test loads the old NVS format with the mask of all layers.
 
-### Tri-layer (conditional layer)
-
-- **Rank:** Feature model. Total 24/40 (typing 6, configuration 3, harmony 8, safety 7). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (`getActiveLayer`), `firmware/dactyl_right/DactylVersion.h`, `server.py` (`[[[START_SETTINGS]]]`), `js/config-model.js` (`lintLayouts`), `js/editor.js`.
-- **Problem:** A user who holds `MO_1` and `MO_2` at the same time gets layer 2. A third layer, for example a function layer, needs its own key.
-- **Goal:** Add a setting per half with up to two rules `{ a, b, target }`: when layer `a` and layer `b` are both active, layer `target` becomes active. `getActiveLayer` evaluates the rules after the local and the remote layer state (`remoteMomentaryLayers`), so the rule also works when each half holds one layer. Add the command `SET_TRI_LAYER`, an NVS key and a field in `DEVICE_INFO`. Increase `DACTYL_FW_VERSION`. `lintLayouts` counts a target layer as reachable.
-- **Acceptance test:** A firmware test holds `MO_1` on the right half and a remote `MO_2` from the left half and expects the target layer. An app test checks that the layout check finds the target layer reachable.
-
 ### Tapping term per key
 
 - **Rank:** Feature model. Total 24/40 (typing 7, configuration 4, harmony 7, safety 6). Effort M. Estimate.

@@ -421,6 +421,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("holdTapModeSelect", info.hold_tap_mode);
         if (cfg.settings) cfg.settings.holdTapMode = info.hold_tap_mode;
       }
+      if (Array.isArray(info.tri_layer)) {
+        const rules = normalizeTriLayers(info.tri_layer.map(r => Array.isArray(r) ? { a: r[0], b: r[1], target: r[2] } : null));
+        if (isEditSide) applyTriLayersToInputs(rules);
+        if (cfg.settings) cfg.settings.triLayers = rules;
+      }
       if (info.name && !info.name.includes("Config")) {
         setInput("deviceNameInput", info.name);
         if (cfg.settings) cfg.settings.deviceName = info.name;

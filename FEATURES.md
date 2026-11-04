@@ -158,6 +158,18 @@ Rules for this file:
 - Mixed firmware: both halves need a firmware with `LAYER_STATE`. An older half rejects op 17 as invalid; each half then keeps its own layers, as before the sync. Flash both halves.
 - Known limit: a key that is held while the layer changes keeps its action (the release uses `pressedAction`). A combo `LAYER_TOGGLE` also syncs, because it changes `toggleLayers[]`.
 
+### Tri-layer (conditional layer)
+
+- Setting `triLayers` per half: up to two rules `{ a, b, target }` (layers 1..7). When layers `a` and `b` are both active, layer `target` becomes active too. The highest active layer still wins, so the target applies when it is higher than every other active layer.
+- `getActiveLayer()` (`DactylLogic.h`) collects the active layers from the own MO layers, `toggleLayers[]` and `remoteMomentaryLayers`, then applies the rules once (no cascade: a target does not trigger another rule). The rule works when each half holds one layer. `MO_0` still forces layer 0.
+- A rule is valid when `a`, `b` and `target` are in 1..7, `a != b` and `target` is neither `a` nor `b`. Each half keeps its own rules; set the same rule on both halves when both halves must resolve the target.
+- Firmware: `triLayerRules[6]` and `numTriLayers` (settings block `[[[START_SETTINGS]]]`). Command `SET_TRI_LAYER <a> <b> <target> [<a> <b> <target>]` stores the rules, `SET_TRI_LAYER -` clears them. Answers `OK SET_TRI_LAYER <count>`, `ERR ARGS` for invalid values, `ERR NVS` when the write fails (the RAM state stays). NVS keys: `tri_n` (count) and `tri_data` (3 bytes per rule). A stored count of 0 overrides the compiled-in rules; a stored invalid rule is ignored. `DEVICE_INFO` carries `"tri_layer":[[a,b,target],...]`.
+- Server: `validate_tri_layers` (`server.py`) rejects more than two rules, values outside 1..7, `a == b` and a target equal to `a` or `b`; `generate_settings_cpp` renders the rules.
+- App: settings card, two rows of three selects (`triLayerA<i>`, `triLayerB<i>`, `triLayerT<i>`); empty = off. `normalizeTriLayers` (`js/config-model.js`) drops invalid rules. The full sync sends `SET_TRI_LAYER` (`buildSettingCommands`) as an optional step: firmware without it answers `ERR UNKNOWN`, the app shows a flash hint and continues.
+- `lintLayouts`: a target layer counts as reachable when `a` and `b` are reachable. A half with keys on the target layer but without the rule gets the warning `tri-layer-other-half`, because each half evaluates only its own rules.
+- NVS write order: `tri_data`, then `tri_n`. When the second write fails, the old `tri_data` is written back, so the previous rules stay valid.
+- Mixed firmware: needs `DACTYL_FW_VERSION` 14 or newer on the half that holds the rule.
+
 ### Double-tap across both halves (`SPLIT_OP_TAP_PENDING`, `SPLIT_OP_TAP_FLUSH`)
 
 - A waiting single tap (see "Tap-Dance / Double-Tap") goes out before a key press of the other half, so the character order stays correct on both halves.

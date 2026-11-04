@@ -289,8 +289,15 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_DEBOUNCE ${clampSetting("debounceMs", s.debounceMs ?? 5)}`, ack: "SET_DEBOUNCE" },
     { cmd: `SET_COMBO_TIMEOUT ${clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40)}`, ack: "SET_COMBO_TIMEOUT" },
     { cmd: `SET_TAPPING_TERM ${clampSetting("tappingTermMs", s.tappingTermMs ?? 200)}`, ack: "SET_TAPPING_TERM", optional: true },
-    { cmd: `SET_HOLD_MODE ${clampSetting("holdTapMode", s.holdTapMode ?? 0)}`, ack: "SET_HOLD_MODE", optional: true }
+    { cmd: `SET_HOLD_MODE ${clampSetting("holdTapMode", s.holdTapMode ?? 0)}`, ack: "SET_HOLD_MODE", optional: true },
+    { cmd: `SET_TRI_LAYER ${triLayerArgs(s.triLayers)}`, ack: "SET_TRI_LAYER", optional: true }
   ];
+}
+
+// Argument von SET_TRI_LAYER: "a b target" je Regel, "-" ohne Regel
+function triLayerArgs(rules) {
+  const list = normalizeTriLayers(rules);
+  return list.length ? list.map(r => `${r.a} ${r.b} ${r.target}`).join(" ") : "-";
 }
 
 // Text über dem Fortschrittsbalken, z. B. "Übertrage an rechte Hälfte: 120 / 395 Schritte"

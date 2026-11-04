@@ -1601,8 +1601,8 @@ bool saveKeymapToNVS() {
 
 // FNV-1a-Prüfsumme über die EINKOMPILIERTEN Defaults (KEYMAP + HOLDMAP vor dem NVS-Laden) und
 // KEYMAP_DEFAULTS_ID. Die ID ist im Repository 0; "Auf Dactyl flashen" (server.py) setzt bei jedem Flash
-// aus der App eine neue ID. Ein Flash aus der App übernimmt so immer die App-Belegung, ein reiner
-// Firmware-Flash aus dem Repository (gleiche Defaults, gleiche ID) behält die Belegung im NVS.
+// aus der App eine neue ID. Ein Flash aus der App übernimmt so immer die App-Belegung, ein Flash aus
+// dem Repository (ID 0) behält die Belegung im NVS (loadKeymapFromNVS vergleicht die ID, nicht den Fingerprint).
 // DTAPMAP zählt nur mit, wenn sie belegt ist: eine leere DTAPMAP ergibt den Fingerprint älterer Firmware,
 // sonst würde das erste Update auf diese Firmware die gespeicherte Belegung überschreiben.
 uint32_t keymapDefaultsFingerprint() {
@@ -1631,9 +1631,19 @@ void loadKeymapFromNVS() {
   uint32_t storedHash = hasStoredHash ? preferences.getUInt("defaults_fp", 0) : 0;
   bool hasKeymap = preferences.isKey("keymap") && preferences.getBytesLength("keymap") == sizeof(KEYMAP);
 
-  // Defaults übernehmen bei: erstem Start / nach RESET_CONFIG (keine Keymap), neuer Belegung aus der App
-  // (anderer Fingerprint) oder Migration vom alten fw_build-Schema mit einem Flash aus der App (ID != 0).
-  bool useDefaults = !hasKeymap || (hasStoredHash ? storedHash != defaultsHash : KEYMAP_DEFAULTS_ID != 0);
+  // Angewendete ID (NVS-Key "applied_id"): die letzte Nicht-Null-ID, deren Defaults dieses Gerät übernommen hat.
+  bool hasAppliedId = preferences.isKey("applied_id");
+  uint32_t appliedId = hasAppliedId ? preferences.getUInt("applied_id", 0) : 0;
+
+  // Defaults übernehmen bei: erstem Start / nach RESET_CONFIG (keine Keymap) oder einer neuen Nicht-Null-ID
+  // (Flash aus der App). ID 0 (Flash aus dem Repository) ersetzt nie eine vorhandene Keymap, auch nicht
+  // bei geänderten Repository-Defaults. Ohne "applied_id" (Firmware davor) gilt der alte Fingerprint-Vergleich
+  // bzw. die fw_build-Migration (ID != 0).
+  bool useDefaults = !hasKeymap;
+  if (hasKeymap && KEYMAP_DEFAULTS_ID != 0) {
+    useDefaults = hasAppliedId ? appliedId != (uint32_t)KEYMAP_DEFAULTS_ID
+                               : (hasStoredHash ? storedHash != defaultsHash : true);
+  }
 
   if (useDefaults) {
     Serial.printf("NVS: Neue Default-Belegung (0x%08X). Synchronisiere NVS mit Firmware-Defaults.\n", (unsigned)defaultsHash);
@@ -1656,6 +1666,12 @@ void loadKeymapFromNVS() {
       preferences.remove("macros_data");
     }
     // Fingerprint zuletzt und nur nach vollständigem Schreiben: sonst beim nächsten Start erneut versuchen
+    // Angewendete ID vor dem Fingerprint schreiben: schlägt sie fehl, wiederholt der nächste Start das Übernehmen
+    if (KEYMAP_DEFAULTS_ID != 0) {
+      ok = (preferences.putUInt("applied_id", (uint32_t)KEYMAP_DEFAULTS_ID) == sizeof(uint32_t)) && ok;
+    } else {
+      preferences.remove("applied_id");
+    }
     if (ok) {
       preferences.putUInt("defaults_fp", defaultsHash);
       preferences.remove("fw_build");
@@ -1674,6 +1690,10 @@ void loadKeymapFromNVS() {
     if (!hasStoredHash && holdmapOk && dtapmapOk) {
       preferences.putUInt("defaults_fp", defaultsHash);
       preferences.remove("fw_build");
+    }
+    // Gleiche ID wie die gespeicherte Belegung (Firmware davor ohne "applied_id"): ID nachtragen
+    if (KEYMAP_DEFAULTS_ID != 0 && !hasAppliedId && hasStoredHash && storedHash == defaultsHash) {
+      preferences.putUInt("applied_id", (uint32_t)KEYMAP_DEFAULTS_ID);
     }
     preferences.getBytes("keymap", KEYMAP, sizeof(KEYMAP));
     Serial.println("NVS: Gespeicherte Keymap geladen.");

@@ -1306,15 +1306,13 @@ def list_serial_ports():
 
 DEVICE_INFO_TIMEOUT_S = 5.0
 DEVICE_INFO_RETRY_S = 0.5
+BOOT_LOG_TIMEOUT_S = 8.0
 
 
-def query_device_side(port, timeout_s=DEVICE_INFO_TIMEOUT_S):
-    """Sendet GET_INFO und liefert DEVICE_INFO.side ("R" ohne Feld = Firmware vor der Erkennung), sonst None.
-    DTR und RTS werden gelöscht: auf dem LOLIN32 Lite lösen sie sonst Reset bzw. Bootloader aus."""
-    try:
-        fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-    except OSError:
-        return None
+def open_raw_port(port):
+    """Öffnet den Port im Rohmodus (115200 Baud, 8N1) mit gelöschten DTR und RTS: auf dem LOLIN32 Lite lösen
+    sie sonst Reset bzw. Bootloader aus. Wirft OSError oder termios.error; der Aufrufer schließt den Deskriptor."""
+    fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     try:
         # Rohmodus wie pyserial: blockierender Deskriptor, VMIN/VTIME 0, gelesen wird nur nach select()
         fcntl.fcntl(fd, fcntl.F_SETFL, 0)
@@ -1330,6 +1328,54 @@ def query_device_side(port, timeout_s=DEVICE_INFO_TIMEOUT_S):
         attrs[6][termios.VTIME] = 0
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
         fcntl.ioctl(fd, termios.TIOCMBIC, (termios.TIOCM_DTR | termios.TIOCM_RTS).to_bytes(4, "little"))
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def read_boot_log(port, timeout_s=BOOT_LOG_TIMEOUT_S, markers=(), reset=False):
+    """Liest den Port bis zu timeout_s Sekunden und gibt den Text zurück; mit markers (Tupel von Texten) endet das
+    Lesen, sobald eine Zeile mit einem Marker vollständig ist. reset=True startet das Board vorher mit einem RTS-Puls neu, damit
+    der Start-Log vollständig im Lesefenster liegt. Ein Fehler beim Öffnen gibt "" zurück (best effort)."""
+    try:
+        fd = open_raw_port(port)
+    except (OSError, termios.error):
+        return ""
+    buf = b""
+    try:
+        if reset:
+            rts = termios.TIOCM_RTS.to_bytes(4, "little")
+            fcntl.ioctl(fd, termios.TIOCMBIS, rts)
+            time.sleep(0.1)
+            fcntl.ioctl(fd, termios.TIOCMBIC, rts)
+            termios.tcflush(fd, termios.TCIFLUSH)
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([fd], [], [], 0.1)
+            if not ready:
+                continue
+            chunk = os.read(fd, 512)
+            if not chunk:
+                break
+            buf += chunk
+            if buf.endswith(b"\n") and any(m.encode("utf-8") in buf for m in markers):
+                break
+    except (OSError, termios.error):
+        pass
+    finally:
+        os.close(fd)
+    return buf.decode("utf-8", "replace")
+
+
+def query_device_side(port, timeout_s=DEVICE_INFO_TIMEOUT_S):
+    """Sendet GET_INFO und liefert DEVICE_INFO.side ("R" ohne Feld = Firmware vor der Erkennung), sonst None.
+    DTR und RTS werden gelöscht: auf dem LOLIN32 Lite lösen sie sonst Reset bzw. Bootloader aus."""
+    try:
+        fd = open_raw_port(port)
+    except (OSError, termios.error):
+        return None
+    try:
         time.sleep(0.3)
         termios.tcflush(fd, termios.TCIFLUSH)
         # Das Öffnen des Ports kann das Board neu starten (der Master braucht für BLE über 1 s bis loop()):

@@ -17,16 +17,6 @@ Rules for this file:
 
 ## Priority 1: Faults that disturb daily typing
 
-### Repository flash overwrites the stored keymap
-
-- **Rank:** Feature model. Total 31/40 (typing 9, configuration 8, harmony 7, safety 7). Effort S. Estimate. Priority 1 has no score band.
-- **Area:** Firmware, Tooling.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (`loadKeymapFromNVS`, `keymapDefaultsFingerprint`, NVS key `defaults_fp`), `scripts/flash.py`, `firmware/tests/test_firmware_logic.cpp`.
-- **Problem:** After `npm run flash`, the keyboard uses the compiled-in repository layout, not the layout of the user. `loadKeymapFromNVS` applies the compiled-in defaults when `defaults_fp` in NVS differs from the fingerprint of the new firmware. The fingerprint covers `KEYMAP`, `HOLDMAP`, `DTAPMAP` and `KEYMAP_DEFAULTS_ID`. After "Auf Dactyl flashen" (random ID) the stored value is the fingerprint of the app layout. A repository flash (ID `0`, other defaults) always has a different fingerprint, so it overwrites `keymap`, `holdmap` and `dtapmap` and removes the stored key pairs, key overrides and macros. A change of the repository defaults has the same effect. The rule "a plain re-flash keeps the key assignment" (`AGENTS.md`, rule 3) is true only when the last flash came from the repository with the same defaults.
-- **Goal:** A firmware with `KEYMAP_DEFAULTS_ID 0` never replaces an existing keymap. Only a firmware with a new non-zero ID applies its defaults, once. Store the applied ID in NVS (new key) and compare the ID, not only the fingerprint. Keep the first start and `RESET_CONFIG` behavior. Keep the migration of devices with `fw_build`. Add a check to `scripts/flash.py` that prints the NVS backup path and the restore command (`/api/nvs_restore?side=L|R`) when the first boot log reports `NVS: Neue Default-Belegung`. Update rule 3 in `AGENTS.md` and the NVS section in `FEATURES.md`.
-- **Recovery now:** The NVS backups of the last flash are in `~/Library/Application Support/dactyl-configurator/data/config_backups/right` and `.../left` (`nvs-*.bin`). Restore them in the dialog "Profile" of the app.
-- **Acceptance test:** A firmware test stores an app layout with ID `0xBEEF`, loads a firmware with ID `0` and other defaults, and expects the stored keymap, key pairs and macros. A test expects that a new non-zero ID applies its defaults once and that a second boot with the same ID keeps a later BLE edit. The existing tests for the first start, `RESET_CONFIG` and `fw_build` still pass.
-
 ## Priority 2
 
 ## Priority 3

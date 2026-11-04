@@ -47,7 +47,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
              MAX_KEY_OVERRIDES, KEY_OVERRIDE_MODS, isValidKeyOverride, isKeyOverrideMember, keyOverrideModsValue,
              normalizeKeyOverride, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
-             isValidMacroStep, isValidMacro, normalizeMacroStep, macroCommands, isMacroUsed, removeMacroAt,
+             isValidMacroStep, isValidMacro, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
              macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
@@ -4545,6 +4545,64 @@ test("On-Screen-Keyboard: Suchhinweis wird nach select-picker-row eingefügt", (
   vm.runInContext(fn, ctx);
   ctx.applySelectFilter("primaryActionSelect");
   assert.strictEqual(insertedAfter, pickerRow, "Hint muss nach pickerRow eingefügt werden");
+});
+
+test("Text als Makro: Hallo, Wörld! wird in tap-, Shift- und Dead-Key-Schritte umgesetzt", () => {
+  const r = api.textToMacroSteps("Hallo, Wörld!");
+  const short = r.steps.map(st => `${st.type}:${st.code.replace("KEY_", "").replace("LEFT_", "")}`);
+  assert.deepStrictEqual(Array.from(short), [
+    "down:SHIFT", "tap:H", "up:SHIFT", "tap:A", "tap:L", "tap:L", "tap:O", "tap:COMMA", "tap:SPACE",
+    "down:SHIFT", "tap:W", "up:SHIFT",
+    "down:ALT", "tap:U", "up:ALT", "tap:O",
+    "tap:R", "tap:L", "tap:D",
+    "down:SHIFT", "tap:1", "up:SHIFT"
+  ]);
+  assert.strictEqual(r.count, 22);
+  assert.deepStrictEqual(Array.from(r.unsupported), []);
+  assert.strictEqual(r.tooLong, false);
+  assert.ok(api.isValidMacro({ name: "t", steps: r.steps }));
+});
+
+test("Text als Makro: ß, Großumlaut und gemeinsames Shift-Paar", () => {
+  assert.deepStrictEqual(Array.from(api.textToMacroSteps("ß").steps.map(s => `${s.type}:${s.code}`)),
+    ["down:KEY_LEFT_ALT", "tap:KEY_S", "up:KEY_LEFT_ALT"]);
+  // Shift wird vor der Dead-Key-Folge losgelassen; der große Vokal bekommt eigenes Shift
+  assert.deepStrictEqual(Array.from(api.textToMacroSteps("AÄ").steps.map(s => `${s.type}:${s.code}`)), [
+    "down:KEY_LEFT_SHIFT", "tap:KEY_A", "up:KEY_LEFT_SHIFT",
+    "down:KEY_LEFT_ALT", "tap:KEY_U", "up:KEY_LEFT_ALT",
+    "down:KEY_LEFT_SHIFT", "tap:KEY_A", "up:KEY_LEFT_SHIFT"]);
+  assert.strictEqual(api.textToMacroSteps("AB").count, 4, "zwei Großbuchstaben teilen ein Shift-Paar");
+});
+
+test("Text als Makro: Limit von MAX_MACRO_STEPS und nicht konvertierbare Zeichen", () => {
+  assert.strictEqual(api.textToMacroSteps("a".repeat(api.MAX_MACRO_STEPS)).tooLong, false);
+  const over = api.textToMacroSteps("a".repeat(api.MAX_MACRO_STEPS + 1));
+  assert.strictEqual(over.tooLong, true);
+  assert.strictEqual(over.count, api.MAX_MACRO_STEPS + 1);
+  const bad = api.textToMacroSteps("5€ 7€ ☃");
+  assert.deepStrictEqual(Array.from(bad.unsupported), ["€", "☃"], "jedes Zeichen nur einmal benennen");
+  assert.deepStrictEqual(Array.from(api.textToMacroSteps("").steps), []);
+});
+
+test("Text als Makro: Status zählt die vorhandenen Schritte mit und nennt Zeichen", () => {
+  const ctx2 = { MAX_MACRO_STEPS: api.MAX_MACRO_STEPS };
+  vm.createContext(ctx2);
+  vm.runInContext(section("js/macros-ui.js", "function macroTextStatus", "function updateMacroTextPreview"), ctx2);
+  const mk = (count, unsupported = []) => ({ count, unsupported });
+  assert.strictEqual(ctx2.macroTextStatus(mk(10), 22).ok, true);
+  assert.strictEqual(ctx2.macroTextStatus(mk(10), 23).ok, false, "bestehende Schritte zählen zum Limit");
+  const bad = ctx2.macroTextStatus(mk(1, ["€"]), 0);
+  assert.strictEqual(bad.ok, false);
+  assert.ok(bad.text.includes("€"));
+});
+
+test("Text als Makro: index.html und macros-ui.js nutzen dieselben Element-IDs", () => {
+  const html = read("index.html");
+  const ui = read("js/macros-ui.js");
+  for (const id of ["macroTextInput", "btnMacroFromText", "macroTextInfo"]) {
+    assert.ok(html.includes(`id="${id}"`), `index.html ohne ${id}`);
+    assert.ok(ui.includes(`"${id}"`), `macros-ui.js ohne ${id}`);
+  }
 });
 
 (async () => {

@@ -29,15 +29,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Macro from text
-
-- **Rank:** Feature model. Total 26/40 (typing 3, configuration 8, harmony 7, safety 8). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/macros-ui.js`, `js/keycodes.js` (`DE_MAC_CHARS`), `js/config-model.js`, `index.html`, `tests/test_app_logic.js`.
-- **Problem:** The macro editor adds one step at a time. A macro that types a text, for example an e-mail signature or a terminal command, needs many manual steps.
-- **Goal:** Add a text field "Text als Makro" to the macro editor. The app converts each character into `tap` steps with the US HID code and `Shift` (`down`/`up`) for shifted characters. Umlauts and `ß` use the dead key sequence of the macOS layout "U.S." (`Alt` + `u`, then the vowel). The app shows the step count and rejects a text that needs more than `MAX_MACRO_STEPS` (32) steps. It names each character that it cannot convert.
-- **Acceptance test:** A test in `tests/test_app_logic.js` converts `Hallo, Wörld!` into the expected steps, checks the step limit and checks the error for a character without a mapping (for example `€`).
-
 ## Priority 3
 
 ### Printable layer sheet

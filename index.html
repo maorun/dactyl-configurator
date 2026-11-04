@@ -423,6 +423,11 @@
               <button id="btnAddMacroStep" class="btn btn-secondary btn-sm" type="button">+ Schritt</button>
               <span id="macroStepCount" class="subtitle"></span>
             </div>
+            <div class="key-pair-form">
+              <input id="macroTextInput" class="form-control" type="text" placeholder="Text als Makro, z. B. Hallo, Wörld!" aria-label="Text als Makro">
+              <button id="btnMacroFromText" class="btn btn-secondary btn-sm" type="button" disabled>Text anhängen</button>
+              <span id="macroTextInfo" class="subtitle"></span>
+            </div>
             <ol class="macro-steps" id="macroStepsList"></ol>
             <div class="key-pair-form">
               <button id="btnSaveMacro" class="btn btn-primary btn-sm" type="button">Makro speichern</button>
@@ -816,7 +821,7 @@
   <script src="js/editor.js?v=6"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/key-overrides-ui.js?v=1"></script>
-  <script src="js/macros-ui.js?v=1"></script>
+  <script src="js/macros-ui.js?v=2"></script>
   <script src="js/layout-profiles-ui.js?v=2"></script>
   <script src="js/flash-log.js?v=1"></script>
   <script src="js/editor-events.js?v=6"></script>

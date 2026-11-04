@@ -325,6 +325,70 @@ function isValidMacro(macro) {
     macro.steps.length <= MAX_MACRO_STEPS && macro.steps.every(isValidMacroStep);
 }
 
+// Text als Makro: Zeichen -> Schritte für das macOS-Layout "U.S." (reine Funktion, ohne DOM).
+// Kleinbuchstaben, Ziffern und unverschobene Zeichen sind ein tap; Großbuchstaben und Shift-Zeichen setzen Shift
+// per down/up (aufeinanderfolgende Shift-Zeichen teilen sich ein Paar). Umlaute und ß senden die Dead-Key-Folge
+// Alt + u (ß: Alt + s), danach den Vokal. Option-Zeichen (° € ´) und alle anderen Zeichen sind nicht konvertierbar.
+const MACRO_TEXT_SHIFT_CHARS = {
+  "!": "KEY_1", "@": "KEY_2", "#": "KEY_3", "$": "KEY_4", "%": "KEY_5", "^": "KEY_6", "&": "KEY_7", "*": "KEY_8",
+  "(": "KEY_9", ")": "KEY_0", "_": "KEY_MINUS", "+": "KEY_EQUAL", "{": "KEY_LEFT_BRACKET", "}": "KEY_RIGHT_BRACKET",
+  "|": "KEY_BACKSLASH", ":": "KEY_SEMICOLON", "\"": "KEY_QUOTE", "~": "KEY_GRAVE", "<": "KEY_COMMA", ">": "KEY_PERIOD",
+  "?": "KEY_SLASH"
+};
+const MACRO_TEXT_UMLAUTS = { "ä": "a", "ö": "o", "ü": "u", "Ä": "A", "Ö": "O", "Ü": "U" };
+
+function macroTextKeyFor(ch) {
+  // Zeichen -> { code, shift } oder null
+  if (Object.prototype.hasOwnProperty.call(MACRO_TEXT_SHIFT_CHARS, ch)) return { code: MACRO_TEXT_SHIFT_CHARS[ch], shift: true };
+  if (ch >= "A" && ch <= "Z") return { code: `KEY_${ch}`, shift: true };
+  for (const group of KEYCODES) {
+    const key = group.keys.find(k => k.char === ch && k.char !== "" && /^KEY_/.test(k.code));
+    if (key) return { code: key.code, shift: false };
+  }
+  return null;
+}
+
+// Ergebnis: { steps, count, unsupported (eindeutige Zeichen), tooLong (count > maxSteps) }
+function textToMacroSteps(text, maxSteps = MAX_MACRO_STEPS) {
+  const steps = [];
+  const unsupported = [];
+  let shiftDown = false;
+  const releaseShift = () => {
+    if (shiftDown) steps.push({ type: "up", code: "KEY_LEFT_SHIFT" });
+    shiftDown = false;
+  };
+  const tap = (code, shift) => {
+    if (shift && !shiftDown) steps.push({ type: "down", code: "KEY_LEFT_SHIFT" });
+    if (!shift) releaseShift();
+    shiftDown = shift;
+    steps.push({ type: "tap", code });
+  };
+  for (const ch of String(text == null ? "" : text).normalize("NFC")) {
+    if (ch === "\n" || ch === "\r") {
+      tap("KEY_RETURN", false);
+      continue;
+    }
+    if (ch === "ß" || Object.prototype.hasOwnProperty.call(MACRO_TEXT_UMLAUTS, ch)) {
+      releaseShift();
+      steps.push({ type: "down", code: "KEY_LEFT_ALT" }, { type: "tap", code: ch === "ß" ? "KEY_S" : "KEY_U" },
+        { type: "up", code: "KEY_LEFT_ALT" });
+      if (ch !== "ß") {
+        const vowel = MACRO_TEXT_UMLAUTS[ch];
+        tap(`KEY_${vowel.toUpperCase()}`, vowel !== vowel.toLowerCase());
+      }
+      continue;
+    }
+    const key = macroTextKeyFor(ch);
+    if (!key) {
+      if (!unsupported.includes(ch)) unsupported.push(ch);
+      continue;
+    }
+    tap(key.code, key.shift);
+  }
+  releaseShift();
+  return { steps, count: steps.length, unsupported, tooLong: steps.length > maxSteps };
+}
+
 // Schritt in die gespeicherte Form bringen (nur die Felder seines Typs)
 function normalizeMacroStep(step) {
   return step.type === "pause" ? { type: "pause", ms: step.ms } : { type: step.type, code: step.code };

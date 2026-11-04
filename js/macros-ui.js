@@ -135,6 +135,7 @@ function renderMacroDraftSteps() {
     list.appendChild(li);
   });
   if (count) count.textContent = `${macroDraftSteps.length} / ${MAX_MACRO_STEPS} Schritte`;
+  updateMacroTextPreview();
 }
 
 function moveMacroStep(i, delta) {
@@ -169,6 +170,42 @@ function addMacroStepFromUI() {
   renderMacroDraftSteps();
 }
 
+// Text als Makro: Vorschau (Schrittzahl, Fehler) und Anhängen an die Schritte des Entwurfs
+function macroTextStatus(result, existing) {
+  if (result.unsupported.length) return { ok: false, text: `Nicht konvertierbar: ${result.unsupported.map(c => `"${c}"`).join(" ")}` };
+  const total = existing + result.count;
+  if (total > MAX_MACRO_STEPS) return { ok: false, text: `${result.count} Schritte (bisher ${existing}): zu lang, maximal ${MAX_MACRO_STEPS}.` };
+  return { ok: true, text: `${result.count} Schritte (${total} / ${MAX_MACRO_STEPS})` };
+}
+
+function updateMacroTextPreview() {
+  const input = document.getElementById("macroTextInput");
+  const info = document.getElementById("macroTextInfo");
+  const btn = document.getElementById("btnMacroFromText");
+  if (!input || !info || !btn) return;
+  if (!input.value) {
+    info.textContent = "";
+    btn.disabled = true;
+    return;
+  }
+  const status = macroTextStatus(textToMacroSteps(input.value), macroDraftSteps.length);
+  info.textContent = status.text;
+  btn.disabled = !status.ok;
+}
+
+function addMacroFromTextUI() {
+  const input = document.getElementById("macroTextInput");
+  const result = textToMacroSteps(input.value);
+  const status = macroTextStatus(result, macroDraftSteps.length);
+  if (!status.ok || !result.count) {
+    showToast(status.text);
+    return;
+  }
+  macroDraftSteps.push(...result.steps);
+  input.value = "";
+  renderMacroDraftSteps();
+}
+
 function openMacroEditor(idx) {
   const macro = idx >= 0 ? currentConfig.macros[idx] : null;
   if (idx < 0 && currentConfig.macros.length >= MAX_MACROS) {
@@ -182,6 +219,7 @@ function openMacroEditor(idx) {
   document.getElementById("macroEditorTitle").textContent = macro ? `Makro ${idx} bearbeiten` : "Neues Makro";
   document.getElementById("macroEditor").style.display = "";
   clearSelectFilter("macroStepCode");
+  document.getElementById("macroTextInput").value = "";
   renderMacroDraftSteps();
 }
 
@@ -284,6 +322,8 @@ function initMacrosUI() {
   document.getElementById("macroStepMs").max = String(MACRO_MAX_PAUSE_MS);
   document.getElementById("macroStepType").addEventListener("change", updateMacroStepInputs);
   document.getElementById("btnAddMacroStep").addEventListener("click", addMacroStepFromUI);
+  document.getElementById("macroTextInput").addEventListener("input", updateMacroTextPreview);
+  document.getElementById("btnMacroFromText").addEventListener("click", addMacroFromTextUI);
   document.getElementById("btnNewMacro").addEventListener("click", () => openMacroEditor(-1));
   document.getElementById("btnSaveMacro").addEventListener("click", saveMacroFromUI);
   document.getElementById("btnCancelMacro").addEventListener("click", closeMacroEditor);

@@ -1661,6 +1661,14 @@ TEST(test_add_pair_validation) {
   assert(mockChar.value == "ERR ARGS ADD_PAIR 129");
   handleConfigCommand("ADD_PAIR 129 46 7", false);
   assert(mockChar.value == "ERR ARGS ADD_PAIR 129 46 7");
+  // Globe, Media und Maus sind gültige Mitglieder
+  handleConfigCommand("ADD_PAIR 295 129", false); // Globe + Shift
+  assert(mockChar.value == "OK ADD_PAIR 0");
+  handleConfigCommand("ADD_PAIR 288 129", false); // Play/Pause + Shift
+  assert(mockChar.value == "OK ADD_PAIR 1");
+  handleConfigCommand("ADD_PAIR 304 129", false); // Left Click + Shift
+  assert(mockChar.value == "OK ADD_PAIR 2");
+  handleConfigCommand("CLEAR_PAIRS", false);
   assert(numKeyPairs == 0);
   for (int i = 0; i < MAX_KEY_PAIRS; i++) handleConfigCommand("ADD_PAIR 129 46", false);
   assert(numKeyPairs == MAX_KEY_PAIRS);
@@ -1668,6 +1676,70 @@ TEST(test_add_pair_validation) {
   assert(mockChar.value == "ERR ARGS ADD_PAIR 129 46");
   handleConfigCommand("CLEAR_PAIRS", false);
   assert(mockChar.value == "OK CLEAR_PAIRS" && numKeyPairs == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Test 28c2: Tastenpaar mit Mac Globe (Fn) und Maustaste
+// -----------------------------------------------------------------------------
+TEST(test_key_pair_with_globe_and_mouse) {
+  resetState();
+  handleConfigCommand("ADD_PAIR 295 129", false); // Globe + Shift
+  assert(mockChar.value == "OK ADD_PAIR 0");
+  handleConfigCommand("ADD_PAIR 304 129", false); // Left Click + Shift
+  assert(mockChar.value == "OK ADD_PAIR 1");
+
+  KEYMAP[0][2][1] = ACT_KEY_PAIR_BASE + 0;
+  KEYMAP[0][2][2] = ACT_KEY_PAIR_BASE + 1;
+
+  // Globe + Shift drücken
+  setMillis(1000);
+  onMatrixKeyChange(2, 1, true);
+  assert(mediaBits(KEY_MEDIA_GLOBE) == 0x0400);
+  assert(std::find(bleKeyboard.pressedMediaKeys.begin(), bleKeyboard.pressedMediaKeys.end(), 0x0400) != bleKeyboard.pressedMediaKeys.end());
+  assert(std::find(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), 129) != bleKeyboard.pressedKeys.end());
+
+  // Loslassen
+  setMillis(1100);
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedMediaKeys.empty());
+  assert(bleKeyboard.pressedKeys.empty());
+
+  // Maus Linksklick + Shift drücken
+  setMillis(1200);
+  onMatrixKeyChange(2, 2, true);
+  assert((bleKeyboard.mouseButtons & MOUSE_BUTTON_LEFT) != 0);
+  assert(std::find(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), 129) != bleKeyboard.pressedKeys.end());
+
+  // Loslassen
+  setMillis(1300);
+  onMatrixKeyChange(2, 2, false);
+  assert(bleKeyboard.mouseButtons == 0);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Test 28c3: Migration von altem 2-Byte-Format in NVS
+// -----------------------------------------------------------------------------
+TEST(test_key_pair_nvs_legacy_migration) {
+  resetState();
+  uint8_t legacy[2][2] = { { 129, 46 }, { 131, 52 } };
+  preferences.putUChar("num_pairs", 2);
+  preferences.putBytes("pairs_data", legacy, sizeof(legacy));
+
+  KeyCombo testCombo = { 2, 1, 2, 2, 0, 'x' };
+  preferences.putUChar("num_combos", 1);
+  preferences.putBytes("combos_data", &testCombo, sizeof(KeyCombo));
+
+  numKeyPairs = 0;
+  numCombos = 0;
+  userKeyPairs[0] = { 0, 0 };
+  userKeyPairs[1] = { 0, 0 };
+  loadKeymapFromNVS();
+  assert(numKeyPairs == 2);
+  assert(userKeyPairs[0].first == 129 && userKeyPairs[0].second == 46);
+  assert(userKeyPairs[1].first == 131 && userKeyPairs[1].second == 52);
+  assert(preferences.getBytesLength("pairs_data") == 2 * sizeof(KeyPair));
+  assert(numCombos == 1 && userCombos[0].action == 'x');
 }
 
 // -----------------------------------------------------------------------------

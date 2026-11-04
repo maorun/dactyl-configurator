@@ -244,6 +244,12 @@ bool isKeyPairAction(uint16_t action) {
   return action >= ACT_KEY_PAIR_BASE && action < ACT_KEY_PAIR_BASE + MAX_KEY_PAIRS;
 }
 
+bool isValidKeyPairMemberCode(uint16_t code) {
+  return (code >= 1 && code <= 0xFF) ||
+         (code >= ACT_MEDIA_PLAY_PAUSE && code <= ACT_MAC_GLOBE) ||
+         (code >= ACT_MOUSE_LEFT && code <= ACT_MOUSE_WHEEL_DOWN);
+}
+
 // Liefert das Paar zur Aktion oder nullptr, wenn der Index nicht (mehr) belegt ist
 const KeyPair* keyPairForAction(uint16_t action) {
   if (!isKeyPairAction(action)) return nullptr;
@@ -252,12 +258,54 @@ const KeyPair* keyPairForAction(uint16_t action) {
   return &userKeyPairs[idx];
 }
 
+void pressKeyPairMember(uint16_t code) {
+  if (code >= 1 && code <= 0xFF) {
+    bleKeyboard.press((uint8_t)code);
+  } else if (code == ACT_MAC_GLOBE) {
+    bleKeyboard.press(KEY_MEDIA_GLOBE);
+  } else if (code >= 0x120 && code <= 0x126) {
+    if (code == ACT_MEDIA_PLAY_PAUSE) bleKeyboard.press(KEY_MEDIA_PLAY_PAUSE);
+    else if (code == ACT_MEDIA_MUTE) bleKeyboard.press(KEY_MEDIA_MUTE);
+    else if (code == ACT_MEDIA_VOLUME_UP) bleKeyboard.press(KEY_MEDIA_VOLUME_UP);
+    else if (code == ACT_MEDIA_VOLUME_DOWN) bleKeyboard.press(KEY_MEDIA_VOLUME_DOWN);
+    else if (code == ACT_MEDIA_NEXT_TRACK) bleKeyboard.press(KEY_MEDIA_NEXT_TRACK);
+    else if (code == ACT_MEDIA_PREVIOUS_TRACK) bleKeyboard.press(KEY_MEDIA_PREVIOUS_TRACK);
+    else if (code == ACT_MEDIA_STOP) bleKeyboard.press(KEY_MEDIA_STOP);
+  } else if (code >= 0x130 && code <= 0x134) {
+    if (code == ACT_MOUSE_LEFT) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
+    else if (code == ACT_MOUSE_RIGHT) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
+    else if (code == ACT_MOUSE_MIDDLE) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
+    else if (code == ACT_MOUSE_WHEEL_UP) bleKeyboard.mouseScroll(1);
+    else if (code == ACT_MOUSE_WHEEL_DOWN) bleKeyboard.mouseScroll(-1);
+  }
+}
+
+void releaseKeyPairMember(uint16_t code) {
+  if (code >= 1 && code <= 0xFF) {
+    bleKeyboard.release((uint8_t)code);
+  } else if (code == ACT_MAC_GLOBE) {
+    bleKeyboard.release(KEY_MEDIA_GLOBE);
+  } else if (code >= 0x120 && code <= 0x126) {
+    if (code == ACT_MEDIA_PLAY_PAUSE) bleKeyboard.release(KEY_MEDIA_PLAY_PAUSE);
+    else if (code == ACT_MEDIA_MUTE) bleKeyboard.release(KEY_MEDIA_MUTE);
+    else if (code == ACT_MEDIA_VOLUME_UP) bleKeyboard.release(KEY_MEDIA_VOLUME_UP);
+    else if (code == ACT_MEDIA_VOLUME_DOWN) bleKeyboard.release(KEY_MEDIA_VOLUME_DOWN);
+    else if (code == ACT_MEDIA_NEXT_TRACK) bleKeyboard.release(KEY_MEDIA_NEXT_TRACK);
+    else if (code == ACT_MEDIA_PREVIOUS_TRACK) bleKeyboard.release(KEY_MEDIA_PREVIOUS_TRACK);
+    else if (code == ACT_MEDIA_STOP) bleKeyboard.release(KEY_MEDIA_STOP);
+  } else if (code >= 0x130 && code <= 0x132) {
+    if (code == ACT_MOUSE_LEFT) bleKeyboard.mouseRelease(MOUSE_BUTTON_LEFT);
+    else if (code == ACT_MOUSE_RIGHT) bleKeyboard.mouseRelease(MOUSE_BUTTON_RIGHT);
+    else if (code == ACT_MOUSE_MIDDLE) bleKeyboard.mouseRelease(MOUSE_BUTTON_MIDDLE);
+  }
+}
+
 // Erste Taste zuerst drücken (z. B. Shift vor "."), dann die zweite
 bool pressKeyPair(uint16_t action) {
   const KeyPair* p = keyPairForAction(action);
   if (!p) return false;
-  bleKeyboard.press(p->first);
-  bleKeyboard.press(p->second);
+  pressKeyPairMember(p->first);
+  pressKeyPairMember(p->second);
   return true;
 }
 
@@ -265,8 +313,8 @@ bool pressKeyPair(uint16_t action) {
 void releaseKeyPair(uint16_t action) {
   const KeyPair* p = keyPairForAction(action);
   if (!p) return;
-  bleKeyboard.release(p->second);
-  bleKeyboard.release(p->first);
+  releaseKeyPairMember(p->second);
+  releaseKeyPairMember(p->first);
 }
 
 void tapKeyPair(uint16_t action) {
@@ -1667,10 +1715,21 @@ void loadKeymapFromNVS() {
     uint8_t n = preferences.getUChar("num_pairs", 0);
     if (n == 0) {
       numKeyPairs = 0;
-    } else if (n <= MAX_KEY_PAIRS && preferences.isKey("pairs_data") &&
-               preferences.getBytesLength("pairs_data") == n * sizeof(KeyPair)) {
-      preferences.getBytes("pairs_data", userKeyPairs, n * sizeof(KeyPair));
-      numKeyPairs = n;
+    } else if (n <= MAX_KEY_PAIRS && preferences.isKey("pairs_data")) {
+      size_t byteLen = preferences.getBytesLength("pairs_data");
+      if (byteLen == n * sizeof(KeyPair)) {
+        preferences.getBytes("pairs_data", userKeyPairs, n * sizeof(KeyPair));
+        numKeyPairs = n;
+      } else if (byteLen == n * 2) {
+        uint8_t oldPairs[MAX_KEY_PAIRS][2];
+        preferences.getBytes("pairs_data", oldPairs, byteLen);
+        for (uint8_t i = 0; i < n; i++) {
+          userKeyPairs[i].first = oldPairs[i][0];
+          userKeyPairs[i].second = oldPairs[i][1];
+        }
+        numKeyPairs = n;
+        preferences.putBytes("pairs_data", userKeyPairs, n * sizeof(KeyPair));
+      }
     }
     Serial.printf("NVS: %d Tastenpaare geladen.\n", numKeyPairs);
   }
@@ -2243,13 +2302,13 @@ void handleConfigCommand(String cmd, bool fromBle) {
     numKeyPairs = 0;
     sendConfigNotification("OK CLEAR_PAIRS");
   } else if (cmd.startsWith("ADD_PAIR ")) {
-    // ADD_PAIR <erste> <zweite>: beide Tastatur-Codes 1..255, wird als nächster Index angehängt
+    // ADD_PAIR <erste> <zweite>: Tastatur- oder HID-Codes (1..255, Media 0x120..0x126, Globe 0x127, Maus 0x130..0x134)
     int first, second;
     char extra;
     if (sscanf(cmd.c_str(), "ADD_PAIR %d %d %c", &first, &second, &extra) == 2 &&
-        numKeyPairs < MAX_KEY_PAIRS && first >= 1 && first <= 0xFF && second >= 1 && second <= 0xFF) {
-      userKeyPairs[numKeyPairs].first = (uint8_t)first;
-      userKeyPairs[numKeyPairs].second = (uint8_t)second;
+        numKeyPairs < MAX_KEY_PAIRS && isValidKeyPairMemberCode((uint16_t)first) && isValidKeyPairMemberCode((uint16_t)second)) {
+      userKeyPairs[numKeyPairs].first = (uint16_t)first;
+      userKeyPairs[numKeyPairs].second = (uint16_t)second;
       numKeyPairs++;
       sendConfigNotification("OK ADD_PAIR " + String(numKeyPairs - 1));
     } else {

@@ -37,7 +37,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, clearAbsentKeyActions,
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
-             ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, keyPairLabel,
+             ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell,
              createDeviceSnapshot, captureListLine, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
@@ -500,24 +500,43 @@ test("Tastenpaar: PAIR_<n> wird zu ACT_KEY_PAIR_BASE + n und zurück", () => {
   assert.deepStrictEqual({ ...api.keyToNumericActions({ tap: "KEY_A", hold: "PAIR_1" }) }, { tapCode: 97, holdCode: 0x141, dtapCode: 0 });
 });
 
-test("Tastenpaar: nur normale Tasten und Modifier sind erlaubt", () => {
-  for (const ok of ["KEY_LEFT_SHIFT", "KEY_PERIOD", "KEY_A", "KEY_F13", "KEY_RETURN", "KEY_RIGHT_GUI"]) {
+test("Tastenpaar: Standardtasten, Modifier, Globe, Media und Maus sind erlaubt", () => {
+  for (const ok of ["KEY_LEFT_SHIFT", "KEY_PERIOD", "KEY_A", "KEY_F13", "KEY_RETURN", "KEY_RIGHT_GUI",
+                    "MAC_GLOBE", "MEDIA_MUTE", "MEDIA_PLAY_PAUSE", "MOUSE_LEFT", "MOUSE_RIGHT", "MOUSE_MIDDLE",
+                    "MOUSE_WHEEL_UP", "MOUSE_WHEEL_DOWN"]) {
     assert.ok(api.isKeyPairMember(ok), ok);
   }
-  for (const bad of ["NONE", "", undefined, 5, "MO_1", "TG_2", "MEDIA_MUTE", "MAC_GLOBE", "MOUSE_LEFT", "PAIR_0", "LAYER_UP"]) {
+  for (const bad of ["NONE", "", undefined, 5, "MO_1", "TG_2", "PAIR_0", "LAYER_UP", "UMLAUT_AE", "OSM_LSHIFT", "CAPS_WORD", "REPEAT", "MOUSE_UP", "MACRO_0"]) {
     assert.ok(!api.isKeyPairMember(bad), String(bad));
   }
   assert.strictEqual(api.keyPairLabel({ first: "A", second: "B" }, c => c.toLowerCase()), "a + b");
+
+  // isStandardKeyOrModifier beschränkt Makroschritte und Überschreibungen auf 1..255
+  for (const ok of ["KEY_LEFT_SHIFT", "KEY_PERIOD", "KEY_A", "KEY_F13", "KEY_RETURN", "KEY_RIGHT_GUI"]) {
+    assert.ok(api.isStandardKeyOrModifier(ok), ok);
+  }
+  for (const notStd of ["MAC_GLOBE", "MEDIA_MUTE", "MOUSE_LEFT", "MO_1", "PAIR_0", "NONE"]) {
+    assert.ok(!api.isStandardKeyOrModifier(notStd), notStd);
+  }
 });
 
 test("Tastenpaar: Config-Validierung und Normalisierung", () => {
-  const good = { layers: [[]], keyPairs: [{ first: "KEY_LEFT_SHIFT", second: "KEY_PERIOD" }] };
+  const good = { layers: [[]], keyPairs: [
+    { first: "KEY_LEFT_SHIFT", second: "KEY_PERIOD" },
+    { first: "MAC_GLOBE", second: "KEY_LEFT_SHIFT" },
+    { first: "MEDIA_MUTE", second: "KEY_A" },
+    { first: "MOUSE_LEFT", second: "KEY_LEFT_SHIFT" }
+  ] };
   api.validateConfigShape(good);
   assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: "x" }));
   assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: [{ first: "MO_1", second: "KEY_A" }] }));
+  assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: [{ first: "PAIR_0", second: "KEY_A" }] }));
   assert.throws(() => api.validateConfigShape({ layers: [[]], keyPairs: new Array(17).fill({ first: "KEY_A", second: "KEY_B" }) }));
-  const n = api.normalizeConfig({ layers: [[]], keyPairs: [{ first: "KEY_A", second: "KEY_B", extra: 1 }, { first: "MO_1", second: "KEY_A" }, null] }, R);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(n.keyPairs)), [{ first: "KEY_A", second: "KEY_B" }]);
+  const n = api.normalizeConfig({ layers: [[]], keyPairs: [{ first: "KEY_A", second: "KEY_B", extra: 1 }, { first: "MAC_GLOBE", second: "KEY_LEFT_SHIFT" }, { first: "MO_1", second: "KEY_A" }, null] }, R);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(n.keyPairs)), [
+    { first: "KEY_A", second: "KEY_B" },
+    { first: "MAC_GLOBE", second: "KEY_LEFT_SHIFT" }
+  ]);
   assert.deepStrictEqual([...api.normalizeConfig({ layers: [[]] }, R).keyPairs], []);
 });
 

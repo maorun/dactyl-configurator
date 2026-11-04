@@ -64,7 +64,7 @@ function addKeyPairFromUI() {
   const first = document.getElementById("keyPairFirstSelect").value;
   const second = document.getElementById("keyPairSecondSelect").value;
   if (!isKeyPairMember(first) || !isKeyPairMember(second)) {
-    showToast("Bitte zwei normale Tasten oder Modifier wählen.");
+    showToast("Bitte zwei gültige Tasten wählen (Tastatur, Modifier, Fn, Media oder Maus).");
     return;
   }
   if (currentConfig.keyPairs.length >= MAX_KEY_PAIRS) {
@@ -119,7 +119,7 @@ function initKeyPairsUI() {
   const firstSel = document.getElementById("keyPairFirstSelect");
   const secondSel = document.getElementById("keyPairSecondSelect");
   if (!firstSel || !secondSel) return;
-  // Nur Tasten mit Code 1..255 (normale Tasten und Modifier)
+  // Gültige Tasten: Tastatur, Modifier, Fn, Media, Maus
   [firstSel, secondSel].forEach(select => {
     select.innerHTML = "";
     KEYCODES.forEach(group => {

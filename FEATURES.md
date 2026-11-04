@@ -25,8 +25,8 @@ Rules for this file:
 
 ### Key Pairs (`userKeyPairs`)
 
-- A key pair holds two keyboard codes `1..255` (ASCII, modifiers, special keys). It is pressed first-then-second and released in reverse order. It works as a tap action and as a hold action, also for combo candidates.
-- The app stores the list in `keyPairs` (`{ first, second }`, max. 16); `server.py` renders it between `[[[START_KEY_PAIRS]]]` / `[[[END_KEY_PAIRS]]]`. Layer, media, mouse and pair codes are rejected as members.
+- A key pair holds two HID action codes (standard keys and modifiers `1..255`, media keys `0x120..0x126`, Mac Globe / Fn `0x127`, mouse actions `0x130..0x134`). It is pressed first-then-second and released in reverse order. It works as a tap action and as a hold action, also for combo candidates.
+- The app stores the list in `keyPairs` (`{ first, second }`, max. 16); `server.py` renders it between `[[[START_KEY_PAIRS]]]` / `[[[END_KEY_PAIRS]]]`. Layer, mouse movement, pair, macro, umlaut, and one-shot codes are rejected as members.
 - Commands: `CLEAR_PAIRS`, `ADD_PAIR <first> <second>` (appends the next index), `SAVE_PAIRS` (NVS keys `num_pairs`, `pairs_data`). A persisted count of `0` overrides the compiled-in list at boot. An unassigned index sends nothing.
 - When `loadKeymapFromNVS()` applies new app defaults over a stored keymap, it removes `num_pairs`/`pairs_data`, because the new keymap references the compiled-in pairs. A plain repository flash keeps the stored pairs.
 - `CLEAR_PAIRS` first releases every pair that is held at the host; the physical release of that key then sends nothing.

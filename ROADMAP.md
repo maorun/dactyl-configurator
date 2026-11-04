@@ -31,15 +31,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Printable layer sheet
-
-- **Rank:** Feature model. Total 25/40 (typing 4, configuration 6, harmony 6, safety 9). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js` (`buildLayerOverview`), `js/editor.js`, `index.html`, `style.css` (`@media print`), `tests/test_app_logic.js`.
-- **Problem:** The layer overview shows all layers only in the app. A user who learns a new layout has no sheet next to the keyboard.
-- **Goal:** Add a button "Spickzettel" that builds a print view of all used layers of both halves, with tap, hold and double-tap labels per key. Layers without own content are left out. The user prints it or saves it as PDF with the print dialog of the app.
-- **Acceptance test:** A test checks the data model of the sheet: it lists only layers with own content, it contains the hold and double-tap labels, and it marks transparent keys.
-
 ### Combos per layer
 
 - **Rank:** Feature model. Total 25/40 (typing 5, configuration 5, harmony 8, safety 7). Effort M. Estimate.

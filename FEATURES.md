@@ -400,6 +400,14 @@ Rules for this file:
 - Supported conflicts include `trigger-shadowed` (own key obscured by layer-switch trigger on layer 0) and `duplicate-action` (repeated tap action on the same layer).
 - Selecting a key in any mini card updates the inspector and highlights the key in all views.
 
+### Printable layer sheet (`buildLayerSheet`, `js/layer-sheet-ui.js`)
+
+- Button `#btnLayerSheet` ("Spickzettel") in the layer bar opens the dialog `#layerSheetModal`. "Drucken / als PDF speichern" calls `window.print()`; `@media print` in `style.css` prints only this dialog, and only while it is open (class `layer-sheet-open` on `body`); a print with the dialog closed stays unchanged.
+- `buildLayerSheet(configs, profiles, labelFor, sideOrder)` in `js/config-model.js` creates the data model without DOM access. It reuses `buildLayerOverview` per half and returns `{ sides, layers }`. A half with a missing config is left out. The layer name comes from the first half in `sideOrder`.
+- A layer is listed when at least one half has an own key on it (layer 0 counts like any other). Other layers are left out.
+- Each key carries `tap`, `hold` and `dtap` labels. A key without own action on layers 1 to 7 has `transparent: true` and the label of layer 0 (`▽` mark); missing physical keys have `exists: false`.
+- `renderLayerSheet` reads the configs of all halves through `configFor` and `Dactyl.SIDE_IDS`; the order follows `Dactyl.sidesInDisplayOrder()`. No side literals.
+
 ### On-screen keyboard picker (`openOnScreenPickerForSelect`, `js/editor.js`)
 
 - Action select elements feature a dedicated picker trigger button (`🎹`, `.action-picker-trigger`).

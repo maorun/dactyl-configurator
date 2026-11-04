@@ -227,6 +227,20 @@ TEST(test_media_globe_and_mouse_are_forwarded) {
   assert(ev.size() == 7);
 }
 
+TEST(test_key_pair_with_globe_is_forwarded) {
+  numKeyPairs = 1;
+  userKeyPairs[0] = { ACT_MAC_GLOBE, KEY_LEFT_SHIFT };
+  KEYMAP[0][1][1] = ACT_KEY_PAIR_BASE + 0;
+  tap(1, 1);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 4);
+  for (const SplitHidEvent &e : ev) assert(isValidSplitHidEvent(e));
+  assert(is(ev[0], SPLIT_OP_MEDIA_PRESS, 0x0400));
+  assert(is(ev[1], SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT));
+  assert(is(ev[2], SPLIT_OP_KEY_RELEASE, KEY_LEFT_SHIFT));
+  assert(is(ev[3], SPLIT_OP_MEDIA_RELEASE, 0x0400));
+}
+
 TEST(test_mouse_move_is_forwarded_as_move_event) {
   bleKeyboard.mouseMove(3, -2);
   bleKeyboard.mouseMove(0, 0);      // keine Bewegung: nichts senden

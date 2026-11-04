@@ -103,10 +103,10 @@ struct ComboRuntime {
 
 #define MAX_KEY_PAIRS 16
 
-// Tastenpaar (exakt 2 Bytes): beide Tasten sind Tastatur-Codes 0x01..0xFF (ASCII, Modifier, Sondertasten)
+// Tastenpaar (exakt 4 Bytes): beide Tasten sind HID-Codes (Standard-Tasten 0x01..0xFF, Media 0x120..0x126, Globe 0x127, Maus 0x130..0x134)
 struct KeyPair {
-  uint8_t first;
-  uint8_t second;
+  uint16_t first;
+  uint16_t second;
 };
 
 // Makro: eine Taste spielt eine Folge aus Tippen, Drücken, Loslassen und Pausen ab; Index in userMacros[]

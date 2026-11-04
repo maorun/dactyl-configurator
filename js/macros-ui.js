@@ -266,12 +266,12 @@ function deleteMacro(idx) {
 function initMacrosUI() {
   const codeSel = document.getElementById("macroStepCode");
   if (!codeSel) return;
-  // Wie bei Tastenpaaren: nur Tasten mit Code 1..255 (normale Tasten und Modifier)
+  // Makroschritte: nur Tasten mit Code 1..255 (normale Tasten und Modifier)
   codeSel.innerHTML = "";
   KEYCODES.forEach(group => {
     const optgroup = document.createElement("optgroup");
     optgroup.label = group.group;
-    group.keys.filter(k => isKeyPairMember(k.code)).forEach(k => {
+    group.keys.filter(k => isStandardKeyOrModifier(k.code)).forEach(k => {
       const opt = document.createElement("option");
       opt.value = k.code;
       opt.textContent = `${k.label} (${k.code})`;

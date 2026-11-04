@@ -540,12 +540,32 @@ def generate_combos_cpp(combos):
     ]
     return "\n".join(lines)
 
-def key_pair_member_cpp(code, field):
-    """Ein Tastenpaar-Mitglied muss ein Tastatur-Code 1..255 sein (kein Layer-, Media-, Maus- oder Paar-Code)."""
+KEY_PAIR_ALLOWED_ACTIONS = {
+    "MAC_GLOBE": "ACT_MAC_GLOBE",
+    "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
+    "MEDIA_MUTE": "ACT_MEDIA_MUTE",
+    "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
+    "MEDIA_VOLUME_DOWN": "ACT_MEDIA_VOLUME_DOWN",
+    "MEDIA_NEXT_TRACK": "ACT_MEDIA_NEXT_TRACK",
+    "MEDIA_PREVIOUS_TRACK": "ACT_MEDIA_PREVIOUS_TRACK",
+    "MEDIA_STOP": "ACT_MEDIA_STOP",
+    "MOUSE_LEFT": "ACT_MOUSE_LEFT",
+    "MOUSE_RIGHT": "ACT_MOUSE_RIGHT",
+    "MOUSE_MIDDLE": "ACT_MOUSE_MIDDLE",
+    "MOUSE_WHEEL_UP": "ACT_MOUSE_WHEEL_UP",
+    "MOUSE_WHEEL_DOWN": "ACT_MOUSE_WHEEL_DOWN",
+    "ACT_MOUSE_LEFT": "ACT_MOUSE_LEFT",
+    "ACT_MOUSE_RIGHT": "ACT_MOUSE_RIGHT",
+    "ACT_MOUSE_MIDDLE": "ACT_MOUSE_MIDDLE",
+    "ACT_MOUSE_WHEEL_UP": "ACT_MOUSE_WHEEL_UP",
+    "ACT_MOUSE_WHEEL_DOWN": "ACT_MOUSE_WHEEL_DOWN",
+}
+
+def standard_key_member_cpp(code, field, err_msg=None):
+    """Ein Tastatur-Code 1..255 (normale Taste oder Modifier)."""
     if not isinstance(code, str) or code in ("", "NONE", "0"):
-        raise ValueError(f"Tastenpaar-Feld '{field}' fehlt.")
-    invalid = ValueError(f"Tastenpaar-Feld '{field}' muss eine normale Taste oder ein Modifier sein.")
-    # Nur bekannte Namen, ein druckbares Zeichen oder KEY_<n> mit n in 1..255 (uint8_t in KeyPair)
+        raise ValueError(f"Feld '{field}' fehlt." if err_msg is None else err_msg)
+    invalid = ValueError(f"Feld '{field}' muss eine normale Taste oder ein Modifier sein." if err_msg is None else err_msg)
     m = re.match(r"^KEY_(\d+)$", code)
     if m:
         if not 1 <= int(m.group(1)) <= 0xFF:
@@ -557,6 +577,14 @@ def key_pair_member_cpp(code, field):
     if cpp == "0" or cpp.startswith("ACT_") or cpp.startswith("(ACT_"):
         raise invalid
     return cpp
+
+def key_pair_member_cpp(code, field):
+    """Ein Tastenpaar-Mitglied: Tastatur-Code 1..255 oder HID-Aktion (Media, Globe, Maus)."""
+    if not isinstance(code, str) or code in ("", "NONE", "0"):
+        raise ValueError(f"Tastenpaar-Feld '{field}' fehlt.")
+    if code in KEY_PAIR_ALLOWED_ACTIONS:
+        return KEY_PAIR_ALLOWED_ACTIONS[code]
+    return standard_key_member_cpp(code, field, f"Tastenpaar-Feld '{field}' muss eine Tastatur- oder HID-Aktion sein.")
 
 # Modifier-Klassen einer Überschreibung (wie KEY_OVERRIDE_MOD_* in DactylKeyOverride.h)
 KEY_OVERRIDE_MODS = {"ctrl": 1, "shift": 2, "alt": 4, "gui": 8}
@@ -579,7 +607,7 @@ def key_override_mods_value(mods):
 
 def key_override_member_cpp(code, field):
     """Taste oder Ersatz einer Überschreibung: normale Taste 1..255, kein Modifier."""
-    cpp = key_pair_member_cpp(code, field)
+    cpp = standard_key_member_cpp(code, field, f"Tasten-Überschreibung: '{field}' muss eine normale Taste oder ein Modifier sein.")
     if cpp in MODIFIER_CPP_NAMES or (cpp.isdigit() and 0x80 <= int(cpp) <= 0x87):
         raise ValueError(f"Tasten-Überschreibung: '{field}' darf kein Modifier sein.")
     return cpp
@@ -637,7 +665,7 @@ def macro_step_cpp(step, label):
     if step_type == "pause":
         ms = validate_int(step.get("ms"), 1, MACRO_MAX_PAUSE_MS, f"{label} ms")
         return f"{{ {MACRO_STEP_TYPES[step_type]}, 0, {ms} }}"
-    return f"{{ {MACRO_STEP_TYPES[step_type]}, {key_pair_member_cpp(step.get('code'), f'{label} code')}, 0 }}"
+    return f"{{ {MACRO_STEP_TYPES[step_type]}, {standard_key_member_cpp(step.get('code'), f'{label} code')}, 0 }}"
 
 def generate_macros_cpp(macros):
     if macros is None:

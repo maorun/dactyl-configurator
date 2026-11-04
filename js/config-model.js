@@ -204,8 +204,15 @@ function normalizeKeyCell(cell) {
   };
 }
 
-// Ein Tastenpaar-Mitglied ist eine normale Taste oder ein Modifier (Code 1..255, wie in server.py/Firmware)
+// Ein Tastenpaar-Mitglied ist eine normale Taste, ein Modifier, eine Mediataste, Mac Globe oder eine Mausaktion
 function isKeyPairMember(code) {
+  if (typeof code !== "string" || pairIndexFromCode(code) >= 0 || macroIndexFromCode(code) >= 0) return false;
+  const n = actionCodeToNumeric(code);
+  return (n >= 1 && n <= 0xFF) || (n >= 0x120 && n <= 0x127) || (n >= 0x130 && n <= 0x134);
+}
+
+// Eine Standard-Taste oder ein Modifier (Code 1..255, für Makro-Schritte und Überschreibungen)
+function isStandardKeyOrModifier(code) {
   if (typeof code !== "string" || pairIndexFromCode(code) >= 0 || macroIndexFromCode(code) >= 0) return false;
   const n = actionCodeToNumeric(code);
   return n >= 1 && n <= 0xFF;
@@ -219,7 +226,7 @@ function isModifierKeyCode(code) {
 }
 
 function isKeyOverrideMember(code) {
-  return isKeyPairMember(code) && !isModifierKeyCode(code);
+  return isStandardKeyOrModifier(code) && !isModifierKeyCode(code);
 }
 
 function isValidKeyOverride(o) {
@@ -310,7 +317,7 @@ function revertResolvedPairs(pairs, layers, firstIdx, count) {
 function isValidMacroStep(step) {
   if (!step || typeof step !== "object" || !Object.prototype.hasOwnProperty.call(MACRO_STEP_TYPES, step.type)) return false;
   if (step.type === "pause") return Number.isInteger(step.ms) && step.ms >= 1 && step.ms <= MACRO_MAX_PAUSE_MS;
-  return isKeyPairMember(step.code);
+  return isStandardKeyOrModifier(step.code);
 }
 
 function isValidMacro(macro) {
@@ -433,7 +440,7 @@ function validateConfigShape(cfg, profile) {
     }
     cfg.keyPairs.forEach((p, i) => {
       if (!p || typeof p !== "object" || !isKeyPairMember(p.first) || !isKeyPairMember(p.second)) {
-        throw new Error(`Tastenpaar ${i} braucht zwei normale Tasten oder Modifier (first/second).`);
+        throw new Error(`Tastenpaar ${i} braucht zwei gültige Tasten (first/second).`);
       }
     });
   }

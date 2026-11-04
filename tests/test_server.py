@@ -319,12 +319,18 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("{ 'a', 's' }", cpp)
         self.assertIn("{ 0, 0 }", server.generate_key_pairs_cpp([]))
         self.assertIn("{ 0, 0 }", server.generate_key_pairs_cpp(None))
-        # Nur normale Tasten und Modifier: keine Layer-, Media-, Maus- oder Paar-Codes
+        # Beliebige Tastenpaare: Standardtasten, Modifier, Globe, Media und Maus
         self.assertIn("{ 'a', 200 }", server.generate_key_pairs_cpp([{"first": "KEY_A", "second": "KEY_200"}]))
         self.assertIn("{ ':', 'a' }", server.generate_key_pairs_cpp([{"first": ":", "second": "KEY_A"}]))
         self.assertIn("{ KEY_LEFT_SHIFT, KEY_NON_US_BACKSLASH }",
                       server.generate_key_pairs_cpp([{"first": "KEY_LEFT_SHIFT", "second": "KEY_NON_US_BACKSLASH"}]))
-        for bad in ("MO_1", "MEDIA_MUTE", "UMLAUT_AE", "OSM_LSHIFT", "CAPS_WORD", "REPEAT", "MOUSE_LEFT", "PAIR_0", "NONE", "", None, 5, "KEY_A; evil",
+        self.assertIn("{ ACT_MAC_GLOBE, KEY_LEFT_SHIFT }",
+                      server.generate_key_pairs_cpp([{"first": "MAC_GLOBE", "second": "KEY_LEFT_SHIFT"}]))
+        self.assertIn("{ ACT_MEDIA_MUTE, 'a' }",
+                      server.generate_key_pairs_cpp([{"first": "MEDIA_MUTE", "second": "KEY_A"}]))
+        self.assertIn("{ ACT_MOUSE_LEFT, KEY_LEFT_SHIFT }",
+                      server.generate_key_pairs_cpp([{"first": "MOUSE_LEFT", "second": "KEY_LEFT_SHIFT"}]))
+        for bad in ("MO_1", "UMLAUT_AE", "OSM_LSHIFT", "CAPS_WORD", "REPEAT", "MOUSE_UP", "PAIR_0", "MACRO_0", "NONE", "", None, 5, "KEY_A; evil",
                     "KEY_0256", "KEY_256", "KEY_300", "KEY_FOO", "\x01"):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 server.generate_key_pairs_cpp([{"first": "KEY_A", "second": bad}])
@@ -427,6 +433,7 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("{ { 0, 0, 0 } }", server.generate_macros_cpp([]))
         bad_steps = [
             {"type": "tap", "code": "MO_1"}, {"type": "tap", "code": "MACRO_0"}, {"type": "tap", "code": "PAIR_0"},
+            {"type": "tap", "code": "MAC_GLOBE"}, {"type": "tap", "code": "MEDIA_MUTE"}, {"type": "tap", "code": "MOUSE_LEFT"},
             {"type": "tap", "code": "UMLAUT_AE"}, {"type": "tap"}, {"type": "down", "code": "KEY_256"},
             {"type": "pause", "ms": 0}, {"type": "pause", "ms": 5001}, {"type": "pause", "ms": "100"},
             {"type": "pause", "ms": True}, {"type": "pause"}, {"type": "click", "code": "KEY_A"}, "tap", None,

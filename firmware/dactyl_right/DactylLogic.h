@@ -2066,6 +2066,50 @@ bool parseKeyCommand(const String &cmd, const char *fmt, int &l, int &r, int &c,
          tap >= 0 && tap <= 0xFFFF && hold >= 0 && hold <= 0xFFFF && dtap >= 0 && dtap <= 0xFFFF;
 }
 
+// -----------------------------------------------------------------------------
+// Diagnose (GET_DIAG)
+// -----------------------------------------------------------------------------
+// Reset-Grund des letzten Starts; das Setup setzt ihn aus esp_reset_reason()
+static volatile esp_reset_reason_t diagBootReason = ESP_RST_UNKNOWN;
+// Längster loop()-Durchlauf seit dem Start in Mikrosekunden, ohne das absichtliche delay() am Ende
+// (ein Schreiber: loop(); der BLE-Task liest nur)
+static volatile uint32_t diagLoopMaxUs = 0;
+
+void diagNoteLoopUs(uint32_t us) {
+  if (us > diagLoopMaxUs) diagLoopMaxUs = us;
+}
+
+// Reiner Name des Reset-Grunds (JSON-sicher). Die App wertet die Namen "power_on", "deep_sleep" und
+// "software" als normal; jeder andere Name erhält eine Markierung.
+const char* resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_EXT: return "external";
+    case ESP_RST_SW: return "software";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "int_wdt";
+    case ESP_RST_TASK_WDT: return "task_wdt";
+    case ESP_RST_WDT: return "wdt";
+    case ESP_RST_DEEPSLEEP: return "deep_sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    case ESP_RST_USB: return "usb";
+    case ESP_RST_JTAG: return "jtag";
+    case ESP_RST_EFUSE: return "efuse";
+    case ESP_RST_PWR_GLITCH: return "pwr_glitch";
+    case ESP_RST_CPU_LOCKUP: return "cpu_lockup";
+    default: return "unknown";
+  }
+}
+
+// DIAG:{"reset":"<Grund>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n}
+String buildDiagLine(esp_reset_reason_t reason, uint32_t uptimeS, uint32_t heapFree, uint32_t heapMin, uint32_t loopMaxUs) {
+  char buf[160];
+  snprintf(buf, sizeof(buf), "DIAG:{\"reset\":\"%s\",\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"loop_max_us\":%lu}",
+    resetReasonName(reason), (unsigned long)uptimeS, (unsigned long)heapFree, (unsigned long)heapMin, (unsigned long)loopMaxUs);
+  return String(buf);
+}
+
 void handleConfigCommand(String cmd, bool fromBle) {
   cmd.trim();
   if (cmd.length() == 0) return;
@@ -2075,6 +2119,10 @@ void handleConfigCommand(String cmd, bool fromBle) {
   if (fromBle && !isConfigMode && cmd != "GET_INFO") {
     if (cmd.startsWith("OTA_")) {
       sendConfigNotification("OTA_ERR:NOT_CONFIG_MODE");
+    }
+    // Diagnosewerte (Laufzeit, Heap) gibt es über BLE nur im Config-Modus
+    if (cmd == "GET_DIAG") {
+      sendConfigNotification("ERR FORBIDDEN GET_DIAG");
     }
     Serial.println("WARN: BLE-Befehl abgelehnt (nicht im Config-Modus): " + cmd);
     return;
@@ -2411,6 +2459,10 @@ void handleConfigCommand(String cmd, bool fromBle) {
 #endif
     snprintf(buf + n, sizeof(buf) - n, "}");
     sendConfigNotification(String(buf));
+  } else if (cmd == "GET_DIAG") {
+    // Über BLE im Tastaturmodus schon oben abgelehnt; hier: USB-Serial und Config-Modus
+    sendConfigNotification(buildDiagLine((esp_reset_reason_t)diagBootReason, (uint32_t)(esp_timer_get_time() / 1000000LL),
+      (uint32_t)ESP.getFreeHeap(), (uint32_t)ESP.getMinFreeHeap(), diagLoopMaxUs));
   } else if (cmd == "RESET_CONFIG") {
     bool ok = preferences.begin("dactyl", false) && preferences.clear();
     preferences.end();

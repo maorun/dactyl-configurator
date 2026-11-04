@@ -27,6 +27,9 @@ window.deleteCombo = function(id) {
 };
 
 function setupEventListeners() {
+  // Diagnose (GET_DIAG): Antwort kommt als DIAG-Zeile in handleSerialLine
+  const btnDiagRefresh = document.getElementById("btnDiagRefresh");
+  if (btnDiagRefresh) btnDiagRefresh.addEventListener("click", () => requestDiag());
   // Tasten-Inspektor zurücksetzen: Button im Header oder Esc (außerhalb von Eingabefeldern)
   document.getElementById("btnClearKeySelection").addEventListener("click", clearKeySelection);
   document.addEventListener("keydown", (e) => {

@@ -77,15 +77,6 @@ Rules for this file:
 - **Goal:** Add the action `LAYER_LOCK`. It locks the highest held momentary layer as a toggle layer. A second press, or a press without a held momentary layer, releases the lock. The lock goes to the other half through `SPLIT_OP_LAYER_STATE`. The action works as tap, hold, double-tap and combo action with `KEY_PRESS`.
 - **Acceptance test:** A firmware test holds `MO_3`, presses `LAYER_LOCK`, releases `MO_3` and expects layer 3; a second `LAYER_LOCK` returns to layer 0. An app test checks that `lintLayouts` treats `LAYER_LOCK` as a way back.
 
-### Firmware diagnostics in the app
-
-- **Rank:** Feature model. Total 23/40 (typing 0, configuration 8, harmony 6, safety 9). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (`handleConfigCommand`), `firmware/dactyl_right/dactyl_right.ino`, `firmware/dactyl_left/dactyl_left.ino`, `js/serial.js`, `index.html`.
-- **Problem:** After a crash or a watchdog restart, the app shows nothing. The user cannot see the reset reason, the uptime, the free heap or the longest `loop()` pass.
-- **Goal:** Add the command `GET_DIAG` (USB serial and config mode only, not in keyboard mode over BLE). It returns `DIAG:{"reset":"<reason>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n}` for each half. The app shows the values in a collapsible panel "Diagnose" and marks a reset reason other than power-on, deep-sleep wakeup or software restart.
-- **Acceptance test:** A firmware test checks the JSON format and the mapping of each `esp_reset_reason_t` value. A test checks that `GET_DIAG` over BLE in keyboard mode returns `ERR`. An app test parses the line.
-
 ### Quick tap term for Mod-Tap
 
 - **Rank:** Feature model. Total 23/40 (typing 6, configuration 2, harmony 8, safety 7). Effort S. Estimate.

@@ -502,6 +502,53 @@ test("Firmwarestand: ein erfolgreicher Flash vergisst den Stand der geflashten H
 
 const LINK_LINE = 'SPLIT_LINK:{"up":0,"ms":5000,"ever":1,"losses":2,"rx_dropped":3,"key_dropped":4}';
 
+test("Diagnose: DIAG-Zeile wird geprüft, Reset-Gründe außer Power-On, Deep-Sleep und Software sind markiert", () => {
+  const line = reason => `DIAG:{"reset":"${reason}","uptime_s":3700,"heap_free":150000,"heap_min":120000,"loop_max_us":900}`;
+  const ok = JSON.parse(JSON.stringify(D.parseDiagLine(line("task_wdt"))));
+  assert.deepStrictEqual(ok, { reset: "task_wdt", uptimeS: 3700, heapFree: 150000, heapMin: 120000, loopMaxUs: 900, abnormal: true });
+  for (const r of ["power_on", "deep_sleep", "software"]) assert.strictEqual(D.parseDiagLine(line(r)).abnormal, false, r);
+  for (const r of ["panic", "brownout", "int_wdt", "wdt", "external", "unknown"]) assert.strictEqual(D.parseDiagLine(line(r)).abnormal, true, r);
+  const view = D.describeDiag(D.parseDiagLine(line("panic")));
+  assert.deepStrictEqual([view.uptime, view.heapFree, view.loopMax], ["1 h 1 min", "150000 B", "900 µs"]);
+  assert.strictEqual(D.parseDiagLine("DIAG:kaputt"), undefined);
+  assert.strictEqual(D.parseDiagLine("DIAG:null"), undefined);
+  assert.strictEqual(D.parseDiagLine('DEVICE_INFO:{}'), undefined);
+  assert.strictEqual(D.parseDiagLine(line("<b>x</b>")), undefined);
+  assert.strictEqual(D.parseDiagLine(line("panic").replace('"uptime_s":3700', '"uptime_s":-1')), undefined);
+  assert.strictEqual(D.parseDiagLine(line("panic").replace('"heap_min":120000,', "")), undefined);
+});
+
+test("Diagnose: Panel in index.html, Parser in serial.js ohne Hälften-Literale", () => {
+  const html = read("index.html");
+  assert.ok(/<details[^>]*id="diagPanel"/.test(html) && html.includes('id="btnDiagRefresh"') && html.includes('id="diagList"'));
+  const serial = read("js/serial.js");
+  assert.ok(/line\.startsWith\("DIAG:"\)/.test(serial));
+  const ui = serial.slice(serial.indexOf("const diagByRole"), serial.indexOf("// Funkverbindung zur Sender-Hälfte"));
+  assert.ok(ui.includes("SIDE_PROFILES[id].label") && !/["'][RL]["']/.test(ui));
+  assert.ok(read("js/editor-events.js").includes('getElementById("btnDiagRefresh")'));
+  assert.ok(html.includes("js/editor-events.js?v=7"));
+});
+
+test("Diagnose: Kopfzeile markiert nur unerwartete Resets", () => {
+  const mk = r => D.parseDiagLine(`DIAG:{"reset":"${r}","uptime_s":1,"heap_free":1,"heap_min":1,"loop_max_us":1}`);
+  const ok = D.summarizeDiag([mk("power_on"), mk("software")]);
+  assert.deepStrictEqual([ok.abnormal, ok.summary], [false, "Diagnose"]);
+  const bad = D.summarizeDiag([mk("power_on"), mk("panic")]);
+  assert.deepStrictEqual([bad.abnormal, bad.summary], [true, "Diagnose (unerwarteter Neustart)"]);
+  assert.ok(read("js/serial.js").includes("Dactyl.summarizeDiag("));
+});
+
+test("Diagnose: Firmware kennt GET_DIAG in beiden Bauarten und misst loop_max_us", () => {
+  assert.ok(logic.includes('cmd == "GET_DIAG"'));
+  for (const ino of [rightIno, leftIno]) {
+    assert.ok(ino.includes("diagBootReason = resetReason;"));
+    assert.ok(ino.includes("diagNoteLoopUs(micros() - diagLoopStartUs);"));
+    // Kein frühes return in loop(): die Messung läuft in jedem Durchlauf
+    const body = ino.slice(ino.indexOf("void loop() {"));
+    assert.ok(!/\breturn;/.test(body.slice(0, body.indexOf("\n}\n"))));
+  }
+});
+
 test("Split-Link: SPLIT_LINK kommt nur vom Master und wird auf Feldtypen geprüft", () => {
   // JSON-Vergleich: die Module laufen in einem eigenen Kontext, deepStrictEqual prüft den Prototyp
   assert.deepStrictEqual(JSON.parse(JSON.stringify(D.parseSplitLinkLine(LINK_LINE, "R"))),

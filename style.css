@@ -1847,6 +1847,22 @@ body {
   margin-top: 0.4rem;
 }
 
+/* Diagnose (GET_DIAG) */
+.diag-panel {
+  margin: 0 0 1rem;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--border-color, #334155);
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+.diag-panel summary { cursor: pointer; font-weight: 600; }
+.diag-panel.diag-abnormal { border-color: var(--warning); }
+.diag-panel.diag-abnormal summary { color: var(--warning); }
+.diag-list { margin: 0.5rem 0 0; padding: 0; list-style: none; }
+.diag-list li { margin-bottom: 0.3rem; }
+.diag-empty { color: var(--text-muted); }
+.diag-flag { color: var(--warning); font-weight: 600; }
+
 /* Layout-Prüfung (Matrix-Tab und Layout-Diff) */
 .layout-lint {
   margin-bottom: 1rem;

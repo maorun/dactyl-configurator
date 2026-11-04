@@ -1457,7 +1457,8 @@ TEST(test_flash_with_new_defaults_overwrites_keymap) {
   loadKeymapFromNVS();
   handleConfigCommand("SET_KEY 0 1 1 98 0", false);
 
-  // "Auf Dactyl flashen": App-Belegung wird als neue Defaults einkompiliert
+  // "Auf Dactyl flashen": App-Belegung wird als neue Defaults mit neuer ID einkompiliert
+  testDefaultsId = 0xBEEF;
   KEYMAP[0][1][1] = 'x';
   HOLDMAP[0][1][1] = KEY_LEFT_ALT;
   loadKeymapFromNVS();
@@ -1465,11 +1466,148 @@ TEST(test_flash_with_new_defaults_overwrites_keymap) {
   assert(HOLDMAP[0][1][1] == KEY_LEFT_ALT);
   uint32_t fp = keymapDefaultsFingerprint();
   assert(Preferences::uintStore["defaults_fp"] == fp);
+  assert(Preferences::uintStore["applied_id"] == 0xBEEF);
   // NVS enthält jetzt die neue Belegung (nächster Start ohne Änderung lädt sie)
   KEYMAP[0][1][1] = 'x';
   HOLDMAP[0][1][1] = KEY_LEFT_ALT;
   loadKeymapFromNVS();
   assert(KEYMAP[0][1][1] == 'x' && HOLDMAP[0][1][1] == KEY_LEFT_ALT);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26a: Flash aus dem Repository (ID 0) ersetzt nie eine App-Belegung, auch nicht bei anderen Defaults
+// -----------------------------------------------------------------------------
+TEST(test_repository_flash_id_zero_keeps_app_layout) {
+  resetState();
+  testDefaultsId = 0xBEEF;                    // Zustand nach "Auf Dactyl flashen"
+  KEYMAP[0][1][1] = 'x';
+  HOLDMAP[0][1][1] = KEY_LEFT_ALT;
+  loadKeymapFromNVS();
+  handleConfigCommand("ADD_PAIR 129 46", false);
+  handleConfigCommand("SAVE_PAIRS", false);
+  assert(Preferences::uintStore["applied_id"] == 0xBEEF);
+
+  // Flash aus dem Repository: ID 0 und andere Defaults
+  testDefaultsId = 0;
+  KEYMAP[0][1][1] = 'r';
+  HOLDMAP[0][1][1] = 0;
+  numKeyPairs = 0;
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'x');
+  assert(HOLDMAP[0][1][1] == KEY_LEFT_ALT);
+  assert(preferences.isKey("num_pairs"));
+  assert(Preferences::uintStore["applied_id"] == 0xBEEF);
+  assert(numKeyPairs == 1);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26a2: Neue Nicht-Null-ID wirkt einmal; ein BLE-Edit bleibt beim zweiten Start mit gleicher ID
+// -----------------------------------------------------------------------------
+TEST(test_new_nonzero_id_applies_once) {
+  resetState();
+  testDefaultsId = 0xBEEF;
+  KEYMAP[0][1][1] = 'x';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'x');
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);   // Edit nach dem Flash
+  KEYMAP[0][1][1] = 'x';                              // Neustart, gleiche ID
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'b');
+  testDefaultsId = 0xCAFE;                            // nächster App-Flash
+  KEYMAP[0][1][1] = 'y';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'y');
+  assert(Preferences::uintStore["applied_id"] == 0xCAFE);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26a3: Gerät aus der Firmware vor "applied_id" (defaults_fp ohne applied_id)
+// -----------------------------------------------------------------------------
+TEST(test_legacy_device_without_applied_id) {
+  // ID 0: Keymap bleibt, auch bei anderen Defaults; applied_id wird nicht angelegt
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  preferences.begin("dactyl", false);
+  preferences.remove("applied_id");
+  preferences.end();
+  KEYMAP[0][1][1] = 'r';                       // andere Repository-Defaults
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'b');
+  assert(!preferences.isKey("applied_id"));
+
+  // Gleiche Nicht-Null-ID wie der gespeicherte Fingerprint: Keymap bleibt, applied_id wird nachgetragen
+  resetState();
+  testDefaultsId = 0xBEEF;
+  KEYMAP[0][1][1] = 'x';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  preferences.begin("dactyl", false);
+  preferences.remove("applied_id");
+  preferences.end();
+  KEYMAP[0][1][1] = 'x';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'b');
+  assert(Preferences::uintStore["applied_id"] == 0xBEEF);
+
+  // Andere Nicht-Null-ID: neue Defaults gelten einmal
+  preferences.begin("dactyl", false);
+  preferences.remove("applied_id");
+  preferences.end();
+  testDefaultsId = 0xCAFE;
+  KEYMAP[0][1][1] = 'y';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'y');
+  assert(Preferences::uintStore["applied_id"] == 0xCAFE);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26a4: RESET_CONFIG entfernt applied_id; ein fehlgeschlagenes Schreiben wird beim nächsten Start wiederholt
+// -----------------------------------------------------------------------------
+TEST(test_reset_config_clears_applied_id_and_failed_write_retries) {
+  resetState();
+  testDefaultsId = 0xBEEF;
+  KEYMAP[0][1][1] = 'x';
+  loadKeymapFromNVS();
+  assert(Preferences::uintStore["applied_id"] == 0xBEEF);
+  handleConfigCommand("RESET_CONFIG", false);
+  assert(!preferences.isKey("applied_id"));
+  KEYMAP[0][1][1] = 'x';
+  loadKeymapFromNVS();                         // erster Start nach RESET: Defaults, ID wird gespeichert
+  assert(Preferences::uintStore["applied_id"] == 0xBEEF);
+
+  // Neue ID, Schreiben schlägt fehl: applied_id bleibt alt, Wiederholung beim nächsten Start
+  testDefaultsId = 0xCAFE;
+  KEYMAP[0][1][1] = 'y';
+  Preferences::failWrites = true;
+  loadKeymapFromNVS();
+  Preferences::failWrites = false;
+  assert(Preferences::uintStore["applied_id"] == 0xBEEF);
+  KEYMAP[0][1][1] = 'y';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'y');
+  assert(Preferences::uintStore["applied_id"] == 0xCAFE);
+}
+
+// Test 26a5: Schlägt nur das Schreiben von applied_id fehl, bleibt defaults_fp alt und der nächste Start wiederholt
+TEST(test_failed_applied_id_write_is_retried) {
+  resetState();
+  testDefaultsId = 0xBEEF;
+  KEYMAP[0][1][1] = 'x';
+  loadKeymapFromNVS();
+  uint32_t oldFp = Preferences::uintStore["defaults_fp"];
+  testDefaultsId = 0xCAFE;
+  KEYMAP[0][1][1] = 'y';
+  Preferences::failUIntKey = "applied_id";
+  loadKeymapFromNVS();
+  Preferences::failUIntKey.clear();
+  assert(Preferences::uintStore["defaults_fp"] == oldFp);
+  assert(Preferences::uintStore["applied_id"] == 0xBEEF);
+  KEYMAP[0][1][1] = 'y';
+  loadKeymapFromNVS();
+  assert(Preferences::uintStore["applied_id"] == 0xCAFE);
+  assert(Preferences::uintStore["defaults_fp"] == keymapDefaultsFingerprint());
 }
 
 // -----------------------------------------------------------------------------

@@ -1729,11 +1729,17 @@ class TestFlashScript(unittest.TestCase):
             return dict(result, side=side)
         server.flash_firmware = fake
 
-    def run_main(self, argv):
+    def run_main(self, argv, boot_log=""):
         import io
         out, err = io.StringIO(), io.StringIO()
+        self.boot_ports = []
+
+        def reader(port):
+            self.boot_ports.append(port)
+            return boot_log
+
         with mock.patch("sys.stderr", err):
-            code = self.flash.main(argv, environ=self.env, out=out)
+            code = self.flash.main(argv, environ=self.env, out=out, read_boot_log=reader)
         return code, out.getvalue(), err.getvalue()
 
     def test_package_json_runs_flash_script_after_key_check(self):
@@ -1798,6 +1804,89 @@ class TestFlashScript(unittest.TestCase):
         with open(os.path.join(folder, names[0]), "rb") as f:
             self.assertEqual(f.read(), image)
         self.assertIn(os.path.join(folder, names[0]), out)
+
+    def test_flash_prints_backup_path_and_restore_way_on_new_defaults(self):
+        self.fake_flash({"success": True, "port": "/dev/cu.usbserial-a", "nvsBackup": "nvs-000001-x.bin",
+                         "message": "ok"})
+        log = "boot\nNVS: Neue Default-Belegung (0x12345678). Synchronisiere NVS mit Firmware-Defaults.\n"
+        code, out, _ = self.run_main(["R"], boot_log=log)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.boot_ports, ["/dev/cu.usbserial-a"])
+        backups = os.path.join(self.tmp.name, "config_backups", "right")
+        self.assertIn(os.path.join(backups, "nvs-000001-x.bin"), out.split("Die vorherige Belegung")[1])
+        self.assertIn("/api/nvs_restore?side=R", out)
+
+    def test_flash_prints_no_restore_hint_when_keymap_is_kept(self):
+        self.fake_flash({"success": True, "port": "/dev/cu.usbserial-a", "nvsBackup": "nvs-000001-x.bin",
+                         "message": "ok"})
+        code, out, _ = self.run_main(["L"], boot_log="NVS: Gespeicherte Keymap geladen.\n")
+        self.assertEqual(code, 0)
+        self.assertIn("Keymap blieb erhalten", out)
+        self.assertNotIn("nvs_restore", out)
+
+    def test_flash_says_when_the_boot_log_has_no_marker(self):
+        self.fake_flash({"success": True, "port": "/dev/cu.usbserial-a", "nvsBackup": "nvs-000001-x.bin",
+                         "message": "ok"})
+        code, out, _ = self.run_main(["R"], boot_log="")
+        self.assertEqual(code, 0)
+        self.assertIn("Start-Log nicht gelesen", out)
+        self.assertNotIn("nvs_restore", out)
+
+    def test_flash_reports_nvs_write_error_from_the_boot_log(self):
+        self.fake_flash({"success": True, "port": "/dev/cu.usbserial-a", "nvsBackup": None, "message": "ok"})
+        code, out, _ = self.run_main(["R"], boot_log="NVS: FEHLER beim Schreiben der Defaults, Wiederholung\n")
+        self.assertEqual(code, 0)
+        self.assertIn("NVS-Fehler", out)
+
+    def test_flash_new_defaults_without_backup_names_the_gap(self):
+        self.fake_flash({"success": True, "port": "/dev/cu.usbserial-a", "nvsBackup": None, "message": "ok"})
+        log = "NVS: Neue Default-Belegung (0x1).\n"
+        code, out, _ = self.run_main(["L"], boot_log=log)
+        self.assertEqual(code, 0)
+        self.assertIn("keine NVS-Sicherung dieses Flashs", out)
+        self.assertIn("/api/nvs_restore?side=L", out)
+
+    def test_read_boot_log_returns_empty_text_for_an_unopenable_port(self):
+        self.assertEqual(server.read_boot_log(os.path.join(self.tmp.name, "missing"), timeout_s=0.1), "")
+
+    def test_read_boot_log_stops_at_the_marker_line(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            os.write(write_fd, b"boot\nNVS: Neue Default-Belegung (0x1).\n")
+            started = time.monotonic()
+            with mock.patch.object(server, "open_raw_port", lambda port: read_fd):
+                text = server.read_boot_log("/dev/cu.usbserial-a", timeout_s=5.0,
+                                            markers=(self.flash.NEW_DEFAULTS_MARKER,))
+        finally:
+            os.close(write_fd)
+        self.assertIn(self.flash.NEW_DEFAULTS_MARKER, text)
+        self.assertLess(time.monotonic() - started, 4.0)
+
+    def test_read_boot_log_stops_at_the_kept_keymap_line(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            os.write(write_fd, b"NVS: Gespeicherte Keymap geladen.\n")
+            started = time.monotonic()
+            with mock.patch.object(server, "open_raw_port", lambda port: read_fd):
+                text = server.read_boot_log("/dev/cu.usbserial-a", timeout_s=5.0,
+                                            markers=(self.flash.NEW_DEFAULTS_MARKER, self.flash.KEPT_KEYMAP_MARKER))
+        finally:
+            os.close(write_fd)
+        self.assertIn("Keymap geladen", text)
+        self.assertLess(time.monotonic() - started, 4.0)
+
+    def test_read_boot_log_with_reset_pulses_rts_and_flushes(self):
+        read_fd, write_fd = os.pipe()
+        calls = []
+        try:
+            with mock.patch.object(server, "open_raw_port", lambda port: read_fd), \
+                    mock.patch.object(server.fcntl, "ioctl", lambda fd, req, arg: calls.append(req)), \
+                    mock.patch.object(server.termios, "tcflush", lambda fd, q: calls.append("flush")), \
+                    mock.patch.object(server.time, "sleep", lambda s: None):
+                server.read_boot_log("/dev/cu.usbserial-a", timeout_s=0.1, reset=True)
+        finally:
+            os.close(write_fd)
+        self.assertEqual(calls, [server.termios.TIOCMBIS, server.termios.TIOCMBIC, "flush"])
 
     def test_flash_refuses_rendered_ino_with_nonzero_defaults_id(self):
         self.fake_flash({"success": True, "port": "/dev/cu.usbserial-a", "nvsBackup": None, "message": "ok"})

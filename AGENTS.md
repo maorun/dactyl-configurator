@@ -329,9 +329,11 @@ python3 server.py
 
 3. **NVS Synchronization upon Flashing:**
    - A persisted combo count of `0` (after `CLEAR_COMBOS` + `SAVE_COMBOS`) overrides the compiled-in combos at boot.
-   - `loadKeymapFromNVS()` compares an FNV-1a fingerprint (`defaults_fp`) of the compiled-in `KEYMAP` + `HOLDMAP` defaults and `KEYMAP_DEFAULTS_ID` with the value stored in NVS. The repository keeps `KEYMAP_DEFAULTS_ID 0UL`; "Auf Dactyl flashen" (`/api/save_and_flash`) writes a new random non-zero ID, so a flash from the app always overwrites `keymap`/`holdmap` with the app layout. A plain re-flash from the repository (e.g. `arduino-cli upload`, same defaults and ID 0) keeps the user's on-device key assignment.
+   - `loadKeymapFromNVS()` replaces an existing keymap only with a new non-zero `KEYMAP_DEFAULTS_ID`. The applied ID is stored in the NVS key `applied_id`; the firmware compares the ID, not the defaults. The repository keeps `KEYMAP_DEFAULTS_ID 0UL`, and a firmware with ID `0` never replaces an existing keymap, also not after a change of the repository defaults. "Auf Dactyl flashen" (`/api/save_and_flash`) writes a new random non-zero ID, so a flash from the app overwrites `keymap`/`holdmap`/`dtapmap` once with the app layout; a second boot with the same ID keeps a later edit. The first start and `RESET_CONFIG` (no keymap) always apply the compiled-in defaults.
+   - `defaults_fp` (FNV-1a fingerprint of the compiled-in defaults) stays in NVS for the migration of devices from before `applied_id`: without `applied_id`, a firmware with a non-zero ID compares the fingerprint.
    - `defaults_fp` is written last and only after both `keymap` and `holdmap` were written completely, so a failed write is retried at the next boot. After `RESET_CONFIG` the next boot restores the compiled-in defaults.
    - Devices with the old `fw_build` key keep their keymap on a repository flash; a migration flash from the app (ID != 0) applies the app layout.
+   - `npm run flash` reads the boot log after the upload. On `NVS: Neue Default-Belegung` it prints the NVS backup path and the restore way (`/api/nvs_restore?side=L|R`).
    - Never flash from the repository to "sync" a layout: use the app (BLE sync or "Auf Dactyl flashen").
 
 3a. **User Config Is Local State:**

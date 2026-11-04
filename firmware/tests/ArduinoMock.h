@@ -148,6 +148,7 @@ public:
   static std::map<std::string, uint32_t> uintStore;
   static std::map<std::string, std::vector<uint8_t>> bytesStore;
   static bool failWrites; // Simuliert volle/defekte NVS-Partition
+  static std::string failUIntKey;  // Simuliert einen fehlschlagenden putUInt für genau diesen Key
   static std::string failBytesKey; // Simuliert einen fehlschlagenden putBytes für genau diesen Key
 
   bool begin(const char*, bool) { return true; }
@@ -176,7 +177,7 @@ public:
     return def;
   }
 
-  size_t putUInt(const char* key, uint32_t val) { if (failWrites) return 0; uintStore[key] = val; return 4; }
+  size_t putUInt(const char* key, uint32_t val) { if (failWrites || failUIntKey == key) return 0; uintStore[key] = val; return 4; }
   uint32_t getUInt(const char* key, uint32_t def = 0) {
     if (uintStore.count(key)) return uintStore[key];
     return def;
@@ -216,6 +217,7 @@ std::map<std::string, std::string> Preferences::strStore;
 std::map<std::string, uint32_t> Preferences::uintStore;
 std::map<std::string, std::vector<uint8_t>> Preferences::bytesStore;
 bool Preferences::failWrites = false;
+std::string Preferences::failUIntKey;
 std::string Preferences::failBytesKey;
 
 // Werte wie im ESP-IDF (esp_system.h)

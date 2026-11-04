@@ -41,6 +41,8 @@ static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
 static uint16_t tappingTermMs = 200;
 static uint8_t holdTapMode = 0;
+static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
+static uint8_t numTriLayers = 0;
 static uint32_t standbyTimeoutMinutes = 5;
 static uint32_t deepSleepTimeoutMinutes = 60;
 
@@ -163,6 +165,8 @@ void resetState() {
   comboTimeoutMs = 40;
   tappingTermMs = 200;
   holdTapMode = 0;
+  numTriLayers = 0;
+  memset(triLayerRules, 0, sizeof(triLayerRules));
   debounceMs = 5;
   standbyTimeoutMinutes = 5;
   deepSleepTimeoutMinutes = 60;
@@ -177,6 +181,7 @@ void resetState() {
   testDefaultsId = 0;
   Preferences::failWrites = false;
   Preferences::failBytesKey.clear();
+  Preferences::failUCharKey.clear();
   _mock_mutex_busy = false;
   bleKeyboard.connected = true;
   bleKeyboard.writtenKeys.clear();
@@ -4309,6 +4314,107 @@ TEST(test_hold_tap_mode_commands_and_nvs) {
   Preferences::uintStore["hold_mode"] = 1;
   loadKeymapFromNVS();
   assert(holdTapMode == 1);
+}
+
+// Tri-Layer: sind die Ebenen a und b aktiv, gilt die Ebene target
+TEST(test_tri_layer_local_and_remote) {
+  resetState();
+  handleConfigCommand("SET_TRI_LAYER 1 2 3", false);
+  assert(mockChar.value == "OK SET_TRI_LAYER 1");
+  assert(numTriLayers == 1);
+  // MO_1 rechts und MO_2 von der linken Hälfte -> Ebene 3
+  momentaryLayers[1] = true;
+  assert(getActiveLayer() == 1);
+  assert(applyRemoteLayerState(0x04, false, 0));
+  assert(getActiveLayer() == 3);
+  // Beide lokal
+  applyRemoteLayerState(0, false, 0);
+  momentaryLayers[2] = true;
+  assert(getActiveLayer() == 3);
+  // Eine Ebene losgelassen -> Regel inaktiv
+  momentaryLayers[1] = false;
+  assert(getActiveLayer() == 2);
+  momentaryLayers[2] = false;
+  // Mit eingerasteter Ebene und MO der anderen Hälfte
+  toggleLayers[1] = true;
+  applyRemoteLayerState(0x04, false, 0);
+  assert(getActiveLayer() == 3);
+  toggleLayers[1] = false;
+  applyRemoteLayerState(0, false, 0);
+  // MO_0 zwingt weiterhin Ebene 0
+  momentaryLayers[1] = momentaryLayers[2] = momentaryLayers[0] = true;
+  assert(getActiveLayer() == 0);
+  momentaryLayers[0] = momentaryLayers[1] = momentaryLayers[2] = false;
+  // Ohne Regel bleibt es bei der höchsten Ebene
+  handleConfigCommand("SET_TRI_LAYER -", false);
+  assert(mockChar.value == "OK SET_TRI_LAYER 0");
+  momentaryLayers[1] = momentaryLayers[2] = true;
+  assert(getActiveLayer() == 2);
+  momentaryLayers[1] = momentaryLayers[2] = false;
+}
+
+TEST(test_tri_layer_two_rules_and_no_cascade) {
+  resetState();
+  handleConfigCommand("SET_TRI_LAYER 1 2 3 4 5 6", false);
+  assert(mockChar.value == "OK SET_TRI_LAYER 2");
+  momentaryLayers[4] = momentaryLayers[5] = true;
+  assert(getActiveLayer() == 6);
+  momentaryLayers[4] = momentaryLayers[5] = false;
+  // Keine Kaskade: Ziel 3 von Regel 1 löst Regel 2 (3 + 5) nicht aus
+  handleConfigCommand("SET_TRI_LAYER 1 2 3 3 5 6", false);
+  momentaryLayers[1] = momentaryLayers[2] = momentaryLayers[5] = true;
+  assert(getActiveLayer() == 5);
+  momentaryLayers[1] = momentaryLayers[2] = momentaryLayers[5] = false;
+}
+
+TEST(test_tri_layer_command_validation_and_nvs) {
+  resetState();
+  const char* bad[] = {"SET_TRI_LAYER 1 2", "SET_TRI_LAYER 1 1 3", "SET_TRI_LAYER 1 2 1",
+                       "SET_TRI_LAYER 0 2 3", "SET_TRI_LAYER 1 2 8", "SET_TRI_LAYER 1 2 3 4 5 6 7 1 2",
+                       "SET_TRI_LAYER a b c", "SET_TRI_LAYER 1 2 3 4"};
+  for (const char* c : bad) {
+    handleConfigCommand(c, false);
+    assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+    assert(numTriLayers == 0);
+  }
+  handleConfigCommand("SET_TRI_LAYER 1 2 3", false);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"tri_layer\":[[1,2,3]]") != std::string::npos);
+  // Neustart: NVS-Werte werden geladen
+  numTriLayers = 0;
+  memset(triLayerRules, 0, sizeof(triLayerRules));
+  loadKeymapFromNVS();
+  assert(numTriLayers == 1 && triLayerRules[0] == 1 && triLayerRules[1] == 2 && triLayerRules[2] == 3);
+  // Ungültige gespeicherte Regel wird ignoriert
+  numTriLayers = 0;
+  Preferences::uintStore["tri_n"] = 1;
+  uint8_t badRule[3] = {2, 2, 3};
+  preferences.putBytes("tri_data", badRule, 3);
+  loadKeymapFromNVS();
+  assert(numTriLayers == 0);
+  // Gespeicherte leere Liste überschreibt die einkompilierte
+  numTriLayers = 1;
+  Preferences::uintStore["tri_n"] = 0;
+  loadKeymapFromNVS();
+  assert(numTriLayers == 0);
+  // Schreibfehler: RAM bleibt unverändert
+  Preferences::failBytesKey = "tri_data";
+  handleConfigCommand("SET_TRI_LAYER 2 3 4", false);
+  Preferences::failBytesKey = "";
+  assert(mockChar.value == "ERR NVS SET_TRI_LAYER");
+  assert(numTriLayers == 0);
+  // Schlägt nur das Schreiben von tri_n fehl, bleibt der alte NVS-Stand gültig (kein stiller Rückfall)
+  handleConfigCommand("SET_TRI_LAYER 1 2 3", false);
+  assert(numTriLayers == 1);
+  Preferences::failUCharKey = "tri_n";
+  handleConfigCommand("SET_TRI_LAYER 4 5 6 1 2 3", false);
+  Preferences::failUCharKey = "";
+  assert(mockChar.value == "ERR NVS SET_TRI_LAYER");
+  assert(numTriLayers == 1 && triLayerRules[0] == 1);
+  numTriLayers = 0;
+  memset(triLayerRules, 0, sizeof(triLayerRules));
+  loadKeymapFromNVS();
+  assert(numTriLayers == 1 && triLayerRules[0] == 1 && triLayerRules[1] == 2 && triLayerRules[2] == 3);
 }
 
 // =============================================================================

@@ -112,6 +112,8 @@ uint8_t debounceMs = 5;
 uint16_t comboTimeoutMs = 40;
 uint16_t tappingTermMs = 200;
 uint8_t holdTapMode = 0;
+uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
+uint8_t numTriLayers = 0;
 uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, gedrosselter Scan, BLE bleibt an)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
 // [[[END_SETTINGS]]]

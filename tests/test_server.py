@@ -118,6 +118,30 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("uint32_t standbyTimeoutMinutes = 15;", cpp)
         self.assertIn("uint32_t deepSleepTimeoutMinutes = 90;", cpp)
 
+    def test_tri_layer_settings(self):
+        cpp = server.generate_settings_cpp({})
+        self.assertIn("uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };", cpp)
+        self.assertIn("uint8_t numTriLayers = 0;", cpp)
+        cpp = server.generate_settings_cpp({"triLayers": [{"a": 1, "b": 2, "target": 3}, {"a": 4, "b": 5, "target": 6}]})
+        self.assertIn("uint8_t triLayerRules[6] = { 1, 2, 3, 4, 5, 6 };", cpp)
+        self.assertIn("uint8_t numTriLayers = 2;", cpp)
+        cpp = server.generate_settings_cpp({"triLayers": [{"a": 1, "b": 2, "target": 7}]})
+        self.assertIn("uint8_t triLayerRules[6] = { 1, 2, 7, 0, 0, 0 };", cpp)
+        self.assertIn("uint8_t numTriLayers = 1;", cpp)
+        bad = [
+            "x", {"a": 1}, [1], [{"a": 1, "b": 2}], [{"a": 0, "b": 2, "target": 3}], [{"a": 1, "b": 2, "target": 8}],
+            [{"a": 1, "b": 1, "target": 3}], [{"a": 1, "b": 2, "target": 2}], [{"a": 1, "b": 2, "target": 1}],
+            [{"a": "1", "b": 2, "target": 3}], [{"a": True, "b": 2, "target": 3}],
+            [{"a": 1, "b": 2, "target": 3}] * 3,
+        ]
+        for value in bad:
+            with self.assertRaises(ValueError, msg=repr(value)):
+                server.generate_settings_cpp({"triLayers": value})
+        # Der Marker-Block bleibt in der gerenderten .ino erhalten
+        content = "x\n// [[[START_SETTINGS]]]\nold\n// [[[END_SETTINGS]]]\ny"
+        out = server.replace_marked_block(content, "SETTINGS", server.generate_settings_cpp({"triLayers": [{"a": 1, "b": 2, "target": 3}]}))
+        self.assertIn("numTriLayers = 1;", out)
+
     def test_code_to_cpp_backslash_survives_ino_substitution(self):
         # Regression: re.sub-Ersatztext darf '\\\\' nicht zu '\\' (ungültiges C++ '\') machen
         layers = [[[{"tap": "KEY_BACKSLASH", "hold": "NONE"}]]]

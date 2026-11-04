@@ -20,6 +20,7 @@
  *   keyPressTime[][], keySentToHost[][],
  *   isConfigMode, enterConfigRequested, exitConfigRequested, lastActivityTime,
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
+ *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
@@ -164,11 +165,34 @@ void processOtaTimeout() {
 // Hälfte aktiviert die Ebene auf beiden; die TG-Ebenen gleichen die Hälften direkt in toggleLayers[] ab.
 uint8_t remoteMomentaryLayers = 0;
 
+// Tri-Layer: bis zu TRI_LAYER_MAX_RULES Regeln {a, b, target} (je drei Bytes in triLayerRules[]).
+// Sind die Ebenen a und b aktiv (MO lokal, MO der anderen Hälfte oder TG), gilt auch die Ebene target.
+#define TRI_LAYER_MAX_RULES 2
+#define TRI_LAYER_RULE_BYTES 3
+
+// Eine Regel ist gültig, wenn a, b und target Ebenen 1..7 sind, a != b und target weder a noch b ist
+bool isValidTriLayerRule(int a, int b, int t) {
+  if (a < 1 || b < 1 || t < 1 || a >= NUM_LAYERS || b >= NUM_LAYERS || t >= NUM_LAYERS) return false;
+  if (a > 7 || b > 7 || t > 7) return false;
+  return a != b && t != a && t != b;
+}
+
 uint8_t getActiveLayer() {
   // Momentary Layer 0 zwingt temporär Base-Layer, auch von der anderen Hälfte
   if (momentaryLayers[0] || (remoteMomentaryLayers & 1)) return 0;
+  uint8_t active = 0;
+  for (int l = 1; l < NUM_LAYERS && l < 8; l++) {
+    if (momentaryLayers[l] || toggleLayers[l] || (remoteMomentaryLayers & (1u << l))) active |= (uint8_t)(1u << l);
+  }
+  // Tri-Layer-Regeln einmal auswerten (keine Kaskade): das Ziel gilt zusätzlich zu a und b
+  uint8_t withTri = active;
+  for (int i = 0; i < numTriLayers && i < TRI_LAYER_MAX_RULES; i++) {
+    uint8_t a = triLayerRules[i * TRI_LAYER_RULE_BYTES], b = triLayerRules[i * TRI_LAYER_RULE_BYTES + 1];
+    uint8_t t = triLayerRules[i * TRI_LAYER_RULE_BYTES + 2];
+    if (isValidTriLayerRule(a, b, t) && (active & (1u << a)) && (active & (1u << b))) withTri |= (uint8_t)(1u << t);
+  }
   for (int l = NUM_LAYERS - 1; l > 0; l--) {
-    if (momentaryLayers[l] || toggleLayers[l] || (remoteMomentaryLayers & (1u << l))) return l;
+    if (l < 8 && (withTri & (1u << l))) return l;
   }
   return 0;
 }
@@ -1730,6 +1754,25 @@ void loadKeymapFromNVS() {
     uint8_t hm = preferences.getUChar("hold_mode", 0);
     if (hm <= HOLD_MODE_TAP_PREFERRED) holdTapMode = hm;
   }
+  // Tri-Layer: gespeicherte Regeln (auch leer nach SET_TRI_LAYER -) überschreiben die einkompilierten
+  if (preferences.isKey("tri_n")) {
+    uint8_t n = preferences.getUChar("tri_n", 0);
+    size_t want = (size_t)n * TRI_LAYER_RULE_BYTES;
+    if (n == 0) {
+      numTriLayers = 0;
+    } else if (n <= TRI_LAYER_MAX_RULES && preferences.getBytesLength("tri_data") == want) {
+      uint8_t tmp[TRI_LAYER_MAX_RULES * TRI_LAYER_RULE_BYTES];
+      preferences.getBytes("tri_data", tmp, want);
+      bool valid = true;
+      for (int i = 0; i < n; i++) {
+        if (!isValidTriLayerRule(tmp[i * 3], tmp[i * 3 + 1], tmp[i * 3 + 2])) valid = false;
+      }
+      if (valid) {
+        memcpy(triLayerRules, tmp, want);
+        numTriLayers = n;
+      }
+    }
+  }
   // Tastenpaare: gespeicherte Liste (auch leer nach CLEAR_PAIRS + SAVE_PAIRS) überschreibt die einkompilierte
   if (preferences.isKey("num_pairs")) {
     uint8_t n = preferences.getUChar("num_pairs", 0);
@@ -1881,6 +1924,30 @@ bool saveTappingTermToNVS(uint16_t ms) {
   preferences.end();
   if (ok) tappingTermMs = ms;
   Serial.printf("NVS: Tapping-Term %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
+  return ok;
+}
+
+// Schreibt die Tri-Layer-Regeln; die RAM-Werte ändern sich nur nach erfolgreichem Schreiben
+bool saveTriLayerToNVS(const uint8_t* rules, uint8_t n) {
+  if (n > TRI_LAYER_MAX_RULES) return false;
+  if (!preferences.begin("dactyl", false)) return false;
+  // Vorherigen Stand merken: schlägt der zweite Schreibvorgang fehl, stellt der Rückbau ihn wieder her
+  bool hadN = preferences.isKey("tri_n");
+  uint8_t oldData[TRI_LAYER_MAX_RULES * TRI_LAYER_RULE_BYTES];
+  size_t oldLen = preferences.getBytesLength("tri_data");
+  if (oldLen > sizeof(oldData)) oldLen = 0;
+  if (oldLen > 0) preferences.getBytes("tri_data", oldData, oldLen);
+  bool ok = true;
+  if (n > 0) ok = preferences.putBytes("tri_data", rules, (size_t)n * TRI_LAYER_RULE_BYTES) > 0;
+  if (ok) ok = preferences.putUChar("tri_n", n) > 0;
+  if (!ok && n > 0 && oldLen > 0) preferences.putBytes("tri_data", oldData, oldLen);
+  if (!ok && !hadN) preferences.remove("tri_data");
+  preferences.end();
+  if (ok) {
+    memcpy(triLayerRules, rules, (size_t)n * TRI_LAYER_RULE_BYTES);
+    numTriLayers = n;
+  }
+  Serial.printf("NVS: Tri-Layer %s: %u Regeln\n", ok ? "gespeichert" : "FEHLER", n);
   return ok;
 }
 
@@ -2332,6 +2399,44 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_TRI_LAYER ")) {
+    // "SET_TRI_LAYER -" löscht alle Regeln; sonst ein oder zwei Regeln "a b target" (Ebenen 1..7)
+    String arg = cmd.substring(14);
+    arg.trim();
+    uint8_t rules[TRI_LAYER_MAX_RULES * TRI_LAYER_RULE_BYTES];
+    int count = 0;
+    bool valid = true;
+    if (arg != "-") {
+      int vals[TRI_LAYER_MAX_RULES * TRI_LAYER_RULE_BYTES + 1];
+      int nv = 0;
+      int pos = 0;
+      while (valid && pos < (int)arg.length()) {
+        while (pos < (int)arg.length() && arg.charAt(pos) == ' ') pos++;
+        if (pos >= (int)arg.length()) break;
+        int end = pos;
+        while (end < (int)arg.length() && arg.charAt(end) != ' ') end++;
+        String tok = arg.substring(pos, end);
+        if (nv >= TRI_LAYER_MAX_RULES * TRI_LAYER_RULE_BYTES || tok.length() != 1 || tok.charAt(0) < '0' || tok.charAt(0) > '9') {
+          valid = false;
+        } else {
+          vals[nv++] = tok.charAt(0) - '0';
+        }
+        pos = end;
+      }
+      if (nv == 0 || nv % TRI_LAYER_RULE_BYTES != 0) valid = false;
+      for (int i = 0; valid && i + 2 < nv; i += 3) {
+        if (!isValidTriLayerRule(vals[i], vals[i + 1], vals[i + 2])) valid = false;
+        rules[count * 3] = (uint8_t)vals[i];
+        rules[count * 3 + 1] = (uint8_t)vals[i + 1];
+        rules[count * 3 + 2] = (uint8_t)vals[i + 2];
+        count++;
+      }
+    }
+    if (valid) {
+      sendConfigNotification(saveTriLayerToNVS(rules, (uint8_t)count) ? "OK SET_TRI_LAYER " + String(count) : String("ERR NVS SET_TRI_LAYER"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd.startsWith("SET_HOLD_MODE ")) {
     int hm = cmd.substring(14).toInt();
     if (hm >= 0 && hm <= 2) {
@@ -2458,13 +2563,22 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd == "GET_INFO") {
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
-    char buf[512];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"config_mode\":%s",
+    // Tri-Layer-Regeln als Liste [[a,b,target],...]
+    char triJson[48] = "[";
+    {
+      size_t tn = 1;
+      for (int i = 0; i < numTriLayers && i < TRI_LAYER_MAX_RULES; i++) {
+        tn += snprintf(triJson + tn, sizeof(triJson) - tn, "%s[%u,%u,%u]", i ? "," : "", (unsigned)triLayerRules[i * 3], (unsigned)triLayerRules[i * 3 + 1], (unsigned)triLayerRules[i * 3 + 2]);
+      }
+      snprintf(triJson + tn, sizeof(triJson) - tn, "]");
+    }
+    char buf[640];
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"tri_layer\":%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode,
+      (unsigned)holdTapMode, triJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

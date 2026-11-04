@@ -640,6 +640,27 @@
           <small class="form-hint">Legt fest, wie eine Mod-Tap- oder Layer-Tap-Taste reagiert, wenn eine andere Taste gedrückt wird, bevor der Tapping-Term abläuft.</small>
         </div>
 
+        <div class="form-group" id="triLayerGroup">
+          <label>Tri-Layer (bedingte Ebene):</label>
+          <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+            <span>Regel 1: Ebene</span>
+            <select id="triLayerA0" class="form-control" style="width:auto;" aria-label="Tri-Layer Regel 1 Ebene a"><option value="">–</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option></select>
+            <span>und</span>
+            <select id="triLayerB0" class="form-control" style="width:auto;" aria-label="Tri-Layer Regel 1 Ebene b"><option value="">–</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option></select>
+            <span>ergibt Ebene</span>
+            <select id="triLayerT0" class="form-control" style="width:auto;" aria-label="Tri-Layer Regel 1 Zielebene"><option value="">–</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option></select>
+          </div>
+          <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
+            <span>Regel 2: Ebene</span>
+            <select id="triLayerA1" class="form-control" style="width:auto;" aria-label="Tri-Layer Regel 2 Ebene a"><option value="">–</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option></select>
+            <span>und</span>
+            <select id="triLayerB1" class="form-control" style="width:auto;" aria-label="Tri-Layer Regel 2 Ebene b"><option value="">–</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option></select>
+            <span>ergibt Ebene</span>
+            <select id="triLayerT1" class="form-control" style="width:auto;" aria-label="Tri-Layer Regel 2 Zielebene"><option value="">–</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option></select>
+          </div>
+          <small class="form-hint">Sind die Ebenen a und b aktiv, auch wenn jede Hälfte eine hält, wird zusätzlich die Zielebene aktiv. Das Ziel muss sich von a und b unterscheiden. Erfordert Firmware-Version 14 oder neuer.</small>
+        </div>
+
         <div class="form-group">
           <label for="standbyTimeoutSelect">Stufe 1: Standby-Timeout (Light Sleep, Verbindung bleibt aktiv):</label>
           <select id="standbyTimeoutSelect" class="form-control">

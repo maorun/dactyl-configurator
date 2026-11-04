@@ -696,6 +696,32 @@ def generate_macros_cpp(macros):
     ]
     return "\n".join(lines)
 
+TRI_LAYER_MAX_RULES = 2
+
+
+def validate_tri_layers(value):
+    """Prüft die Tri-Layer-Regeln {a, b, target}: höchstens 2, Ebenen 1..7, a != b, target weder a noch b."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("Ungültiger Wert für 'triLayers': Liste erwartet.")
+    if len(value) > TRI_LAYER_MAX_RULES:
+        raise ValueError(f"Zu viele Tri-Layer-Regeln: höchstens {TRI_LAYER_MAX_RULES}.")
+    rules = []
+    for i, rule in enumerate(value):
+        if not isinstance(rule, dict):
+            raise ValueError(f"Tri-Layer-Regel {i + 1}: Objekt erwartet.")
+        a = validate_int(rule.get("a"), 1, 7, f"triLayers[{i}].a")
+        b = validate_int(rule.get("b"), 1, 7, f"triLayers[{i}].b")
+        t = validate_int(rule.get("target"), 1, 7, f"triLayers[{i}].target")
+        if a == b:
+            raise ValueError(f"Tri-Layer-Regel {i + 1}: a und b müssen verschiedene Ebenen sein.")
+        if t in (a, b):
+            raise ValueError(f"Tri-Layer-Regel {i + 1}: Das Ziel darf weder a noch b sein.")
+        rules.append((a, b, t))
+    return rules
+
+
 def generate_settings_cpp(settings, side="R"):
     if settings is None:
         settings = {}
@@ -706,6 +732,9 @@ def generate_settings_cpp(settings, side="R"):
     values = {}
     for field, (lo, hi, default) in SETTINGS_RANGES.items():
         values[field] = validate_int(settings.get(field, default), lo, hi, field)
+    tri_rules = validate_tri_layers(settings.get("triLayers"))
+    tri_flat = [str(v) for rule in tri_rules for v in rule]
+    tri_flat += ["0"] * (TRI_LAYER_MAX_RULES * 3 - len(tri_flat))
     lines = [
         "// [[[START_SETTINGS]]]",
         f'String deviceName = "{dev_name}";',
@@ -713,6 +742,8 @@ def generate_settings_cpp(settings, side="R"):
         f'uint16_t comboTimeoutMs = {values["comboTimeoutMs"]};',
         f'uint16_t tappingTermMs = {values["tappingTermMs"]};',
         f'uint8_t holdTapMode = {values["holdTapMode"]};',
+        f'uint8_t triLayerRules[{TRI_LAYER_MAX_RULES * 3}] = {{ {", ".join(tri_flat)} }};',
+        f"uint8_t numTriLayers = {len(tri_rules)};",
         f'uint32_t standbyTimeoutMinutes = {values["standbyTimeoutMinutes"]};',
         f'uint32_t deepSleepTimeoutMinutes = {values["sleepTimeoutMinutes"]};',
         "// [[[END_SETTINGS]]]"

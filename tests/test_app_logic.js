@@ -29,7 +29,7 @@ const code = [
 const ctx = { TextDecoder };
 vm.createContext(ctx);
 vm.runInContext(`${code}
-this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateConfigShape,
+this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTriLayers, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
@@ -926,9 +926,9 @@ test("Layout-Diff: nicht vorhandene Tasten zählen nicht, unvollständige Snapsh
 // handleSerialLine aus js/serial.js in einem eigenen Kontext mit Stubs für DOM, Anzeige und Verbindungen.
 // conn: Verbindungszustand (bleUp, bleSide, serialUp, serialSide), wie connectionState() in js/ble.js.
 function serialLineHarness(conn = {}) {
-  const calls = { press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [], layers: [] };
+  const calls = { press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [], layers: [], tri: [], warns: [] };
   const s = {
-    calls, console: { log() {}, warn() {} },
+    calls, console: { log() {}, warn(...a) { calls.warns.push(a.map(String).join(' ')); } },
     document: { getElementById: () => null },
     conn: { bleUp: false, bleSide: null, serialUp: true, serialSide: "R", ...conn },
     snapshotActive: false,
@@ -957,19 +957,24 @@ function switchLayerUI(l) { calls.layers.push(l); }
 function renderMatrix() { calls.applied++; }
 function renderMatrixTest() { calls.rendered++; }
 function renderLayerButtons() {}
+const firmwareVersions = { noteDeviceInfo() {} };
+const splitLinkStatus = { noteDeviceInfo() {} };
+function updateFirmwareVersionUI() {}
+function updateSplitLinkUI() {}
+function applyTriLayersToInputs(rules) { calls.tri.push(JSON.stringify(rules)); }
 function saveConfigToServer() {}
 function clearPendingSync() {}
 function onTypingStatsChanged(side) { calls.stats.push(side); }
 function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + c); }
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
 ${section("js/serial.js", "// Gedrückte SPLIT_KEY-Tasten", "function switchLayerUI")}
-this.handle = handleSerialLine; this.tested = side => [...tests[side].tested];
+this.handle = handleSerialLine; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
 this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);
 this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
   // Arrays aus dem VM-Kontext haben einen anderen Prototyp: für deepStrictEqual in einfache Werte kopieren
   const plain = v => JSON.parse(JSON.stringify(v));
   return {
-    handle: (...a) => s.handle(...a), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
+    warns: calls.warns, handle: (...a) => s.handle(...a), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
     layerCounts: (side, l) => plain(s.layerCounts(side, l)),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
     set snapshotActive(v) { s.snapshotActive = v; }
@@ -1044,6 +1049,20 @@ test("serial.js: DEVICE_INFO und MODE: vergessen die Loslass-Zeiten, die Treffer
   s.handle("MODE:KEYBOARD", "R", "usb");
   s.handle('MATRIX:{"r":1,"c":1,"pressed":1,"t":505}', "L", "usb");
   assert.deepStrictEqual(s.bounces("L"), ["1_1:1"]);
+});
+
+test("serial.js: DEVICE_INFO der nicht bearbeiteten Hälfte ändert die Tri-Layer-Felder nicht", () => {
+  const s = serialLineHarness();
+  s.warns.length = 0;
+  const info = side => `DEVICE_INFO:{"side":"${side}","fw":14,"tri_layer":[[1,2,3]]}`;
+  s.handle(info("L"), "L", "usb");
+  assert.deepStrictEqual(s.calls.tri, []);
+  assert.deepStrictEqual([...s.warns], [], s.warns.join('|'));
+  assert.strictEqual(s.triOf("L"), '[{"a":1,"b":2,"target":3}]');
+  assert.strictEqual(s.triOf("R"), "[]");
+  s.handle(info("R"), "R", "usb");
+  assert.deepStrictEqual(s.calls.tri, ['[{"a":1,"b":2,"target":3}]']);
+  assert.strictEqual(s.triOf("R"), '[{"a":1,"b":2,"target":3}]');
 });
 
 test("serial.js: SPLIT_KEY drückt und löst die Taste der linken Hälfte", () => {
@@ -1793,7 +1812,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE) /.test(c)).length;
+  const settings = sent.filter(c => /^SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|TRI_LAYER) /.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -1809,7 +1828,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
 }]);
 
 test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () => {
-  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, sanitizeCommandText: api.sanitizeCommandText };
+  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText };
   vm.createContext(ctx);
   vm.runInContext(`${section("js/config-sync.js", "// Einstellungs-Befehle des vollen Syncs", "// One-Shot-Auto-Sync")}
     this.count = countSyncSteps; this.build = buildSettingCommands;`, ctx);
@@ -1822,8 +1841,11 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 7);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE"]);
+  assert.strictEqual(cmds.length, 8);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_TRI_LAYER"]);
+  assert.strictEqual(cmds[7].cmd, "SET_TRI_LAYER -");
+  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 2, target: 3 }, { a: 4, b: 5, target: 6 }] }, R)[7].cmd, "SET_TRI_LAYER 1 2 3 4 5 6");
+  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 1, target: 3 }] }, R)[7].cmd, "SET_TRI_LAYER -");
 });
 
 asyncTests.push(["Sync: Text über dem Balken zählt die übertragenen Schritte", async () => {
@@ -1887,6 +1909,16 @@ asyncTests.push(["Sync: Firmware ohne SET_TAPPING_TERM bricht den Sync nicht ab"
   await strict.w.write();
   assert.ok(!strict.sent.some(c => c.startsWith("SET_K ")));
   assert.ok(strict.toasts.some(t => t.includes("Fehler beim Übertragen")));
+}]);
+
+asyncTests.push(["Sync: Firmware ohne SET_TRI_LAYER bricht den Sync nicht ab", async () => {
+  const { w, toasts, sent } = fullSyncHarness(cmd =>
+    cmd.startsWith("SET_TRI_LAYER") ? `ERR UNKNOWN ${cmd}` : okReply(cmd));
+  await w.write();
+  assert.ok(sent.some(c => c.startsWith("SET_TRI_LAYER")));
+  assert.ok(sent.some(c => c.startsWith("SET_K ")));
+  assert.ok(toasts.some(t => t.includes("SET_TRI_LAYER") && t.includes("flashen")));
+  assert.ok(toasts.some(t => t.includes("Vollständige Konfiguration")));
 }]);
 
 asyncTests.push(["Sync: Firmware ohne SET_HOLD_MODE bricht den Sync nicht ab", async () => {
@@ -3385,6 +3417,37 @@ test("Layout-Prüfung: nur eine Halte- oder Doppel-Tipp-Aktion auf einer fehlend
   const zero = lintCfg();
   zero.layers[0][5][5] = { tap: "0", hold: "", dtap: "NONE" };
   assert.strictEqual(lintCodes(lintBoth(zero), "absent-key-action").length, 0);
+});
+
+test("Tri-Layer: Einstellung wird bereinigt (Normalisierung)", () => {
+  const n = rules => JSON.parse(JSON.stringify(api.normalizeConfig({ layers: [[]], settings: { triLayers: rules } }, R).settings.triLayers));
+  assert.deepStrictEqual(n(undefined), []);
+  assert.deepStrictEqual(n("x"), []);
+  assert.deepStrictEqual(n([{ a: 1, b: 2, target: 3 }]), [{ a: 1, b: 2, target: 3 }]);
+  assert.deepStrictEqual(n([{ a: 1, b: 1, target: 3 }, { a: 1, b: 2, target: 2 }, { a: 0, b: 2, target: 3 }, { a: 1, b: 2, target: 8 }, null]), []);
+  assert.strictEqual(n([{ a: 1, b: 2, target: 3 }, { a: 4, b: 5, target: 6 }, { a: 1, b: 3, target: 7 }]).length, 2);
+});
+
+test("Layout-Prüfung: Tri-Layer-Ziel ist erreichbar", () => {
+  // Ebene 3 hat eigene Belegung; MO_1 rechts und MO_2 links führen mit der Regel (1, 2) -> 3 dorthin
+  const right = lintCfg();
+  lintSet(right, 3, 1, 1, "KEY_A");
+  lintSet(right, 0, 5, 0, "MO_1");
+  const left = lintCfg();
+  lintSet(left, 0, 5, 1, "MO_2");
+  assert.strictEqual(lintCodes(lintBoth(right, left), "layer-unreachable").length, 1);
+  right.settings = { triLayers: [{ a: 1, b: 2, target: 3 }] };
+  assert.deepStrictEqual(lintCodes(lintBoth(right, left), "layer-unreachable"), []);
+  // Die Regel der linken Hälfte zählt ebenso
+  right.settings = {};
+  left.settings = { triLayers: [{ a: 1, b: 2, target: 3 }] };
+  assert.deepStrictEqual(lintCodes(lintBoth(right, left), "layer-unreachable"), []);
+  // a unerreichbar: Ziel bleibt unerreichbar
+  const noA = lintCfg();
+  lintSet(noA, 3, 1, 1, "KEY_A");
+  lintSet(noA, 0, 5, 0, "MO_2");
+  noA.settings = { triLayers: [{ a: 1, b: 2, target: 3 }] };
+  assert.strictEqual(lintCodes(lintBoth(noA), "layer-unreachable").length, 1);
 });
 
 test("Layout-Prüfung: Ebene ohne Weg hinein ist unerreichbar, mit MO, TG, Combo oder der anderen Hälfte nicht", () => {

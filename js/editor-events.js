@@ -305,6 +305,8 @@ function setupEventListeners() {
       setVal("tappingTermInput", tappingTerm);
       setVal("holdTapModeSelect", holdTapMode);
 
+      const triLayers = readTriLayersFromInputs();
+      applyTriLayersToInputs(triLayers);
       const oldSettings = JSON.parse(JSON.stringify(currentConfig.settings || {}));
 
       currentConfig.settings = {
@@ -313,6 +315,7 @@ function setupEventListeners() {
         comboTimeoutMs: comboTimeout,
         tappingTermMs: tappingTerm,
         holdTapMode: holdTapMode,
+        triLayers: triLayers,
         standbyTimeoutMinutes: standbyMinutes,
         sleepTimeoutMinutes: sleepMinutes
       };
@@ -484,4 +487,31 @@ function populateComboKeyDropdowns() {
 
   s1.value = "2,1"; // J
   s2.value = "2,2"; // K
+}
+
+// Tri-Layer-Felder (Einstellungen): je Regel drei Auswahlfelder a, b, Ziel; leer = Regel aus
+function readTriLayersFromInputs() {
+  const val = id => parseInt(document.getElementById(id)?.value, 10);
+  const raw = [];
+  for (let i = 0; i < MAX_TRI_LAYER_RULES; i++) {
+    const a = val(`triLayerA${i}`), b = val(`triLayerB${i}`), target = val(`triLayerT${i}`);
+    if (Number.isNaN(a) && Number.isNaN(b) && Number.isNaN(target)) continue;
+    raw.push({ a, b, target });
+  }
+  const rules = normalizeTriLayers(raw);
+  if (rules.length < raw.length) {
+    showToast("Tri-Layer: Eine Regel braucht drei Ebenen 1 bis 7; a und b müssen verschieden sein und das Ziel darf weder a noch b sein. Ungültige Regeln wurden entfernt.", 6000);
+  }
+  return rules;
+}
+
+function applyTriLayersToInputs(rules) {
+  const list = normalizeTriLayers(rules);
+  for (let i = 0; i < MAX_TRI_LAYER_RULES; i++) {
+    const r = list[i];
+    for (const [id, v] of [[`triLayerA${i}`, r && r.a], [`triLayerB${i}`, r && r.b], [`triLayerT${i}`, r && r.target]]) {
+      const el = document.getElementById(id);
+      if (el) el.value = r ? String(v) : "";
+    }
+  }
 }

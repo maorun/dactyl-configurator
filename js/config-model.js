@@ -1353,3 +1353,48 @@ function buildLayerOverview(cfg, profile) {
 
   return result;
 }
+
+// =============================================================================
+// Spickzettel (DOM-frei): benutzte Ebenen beider Hälften mit Tipp-, Halte- und Doppel-Tipp-Beschriftung
+// =============================================================================
+
+// configs: { <Hälfte>: Config }, profiles: { <Hälfte>: Profil }, labelFor: Code -> Beschriftung,
+// sideOrder: Reihenfolge der Hälften auf dem Blatt (Standard: Reihenfolge von configs).
+// Eine Ebene ohne eigene Taste auf jeder Hälfte fehlt; Ebene 0 zählt wie jede andere.
+// name: Ebenenname der ersten Hälfte in sideOrder (beide Hälften teilen die Ebene).
+// Auf einer Ebene > 0 trägt eine Taste ohne eigene Aktion transparent: true und die Beschriftung von Ebene 0.
+function buildLayerSheet(configs, profiles, labelFor, sideOrder) {
+  const label = typeof labelFor === "function" ? labelFor : (code => code);
+  const nice = code => (code && code !== "NONE") ? String(label(code)) : "";
+  const sides = (Array.isArray(sideOrder) ? sideOrder : Object.keys(configs || {}))
+    .filter(side => configs && configs[side] && profiles && profiles[side]);
+  const overviews = {};
+  for (const side of sides) overviews[side] = buildLayerOverview(configs[side], profiles[side]);
+
+  const sheetKey = key => {
+    if (!key.exists) return { r: key.r, c: key.c, isThumb: key.isThumb, exists: false, transparent: false, tap: "", hold: "", dtap: "" };
+    if (key.transparent) {
+      return { r: key.r, c: key.c, isThumb: key.isThumb, exists: true, transparent: true, tap: (key.inheritedLabel === "---" || key.inheritedLabel === "•") ? "" : key.inheritedLabel, hold: "", dtap: "" };
+    }
+    // Eigene Beschriftung der Taste gewinnt; sonst die Beschriftung des Codes wie bei Halten und Doppel-Tipp
+    const custom = key.ownLabel && key.ownLabel !== String(key.tap).replace(/^KEY_/, "");
+    return {
+      r: key.r, c: key.c, isThumb: key.isThumb, exists: true, transparent: false,
+      tap: custom ? key.ownLabel : nice(key.tap), hold: nice(key.hold), dtap: nice(key.dtap)
+    };
+  };
+
+  const layers = [];
+  for (let l = 0; l < NUM_LAYERS; l++) {
+    const halves = [];
+    let own = 0;
+    for (const side of sides) {
+      const data = overviews[side][l];
+      own += data.ownCount;
+      halves.push({ side, label: profiles[side].label, rows: data.rows.map(row => row.map(sheetKey)), thumbs: data.thumbs.map(sheetKey), ownCount: data.ownCount });
+    }
+    if (own === 0) continue;
+    layers.push({ layer: l, name: overviews[sides[0]][l].name, halves });
+  }
+  return { sides, layers };
+}

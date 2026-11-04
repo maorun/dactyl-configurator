@@ -54,7 +54,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, validateCon
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
              moveKeySelection, ARROW_KEY_DIRECTIONS,
              createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES,
-             buildLayerOverview,
+             buildLayerOverview, buildLayerSheet,
              ON_SCREEN_KEYBOARD_ROWS: typeof ON_SCREEN_KEYBOARD_ROWS !== "undefined" ? ON_SCREEN_KEYBOARD_ROWS : undefined,
              KEYCODE_OPTIONS: typeof KEYCODE_OPTIONS !== "undefined" ? KEYCODE_OPTIONS : undefined,
              pickActionFromOnScreenKey: typeof pickActionFromOnScreenKey !== "undefined" ? pickActionFromOnScreenKey : undefined };`, ctx);
@@ -4603,6 +4603,75 @@ test("Text als Makro: index.html und macros-ui.js nutzen dieselben Element-IDs",
     assert.ok(html.includes(`id="${id}"`), `index.html ohne ${id}`);
     assert.ok(ui.includes(`"${id}"`), `macros-ui.js ohne ${id}`);
   }
+});
+
+test("Spickzettel: buildLayerSheet listet nur Ebenen mit eigenem Inhalt, mit Halten, Doppel-Tipp und Transparenz", () => {
+  const cfgs = {};
+  for (const side of ["R", "L"]) {
+    const cfg = JSON.parse(JSON.stringify(api.SIDE_PROFILES[side].defaultConfig));
+    for (let l = 1; l < 8; l++) for (const row of cfg.layers[l]) for (let c = 0; c < row.length; c++) row[c] = { tap: "NONE", hold: "NONE", dtap: "NONE", label: "" };
+    cfgs[side] = cfg;
+  }
+  cfgs.R.layers[0][0][1] = { tap: "KEY_A", hold: "KEY_LEFT_SHIFT", dtap: "KEY_B", label: "" };
+  cfgs.R.layers[3][0][2] = { tap: "KEY_F1", hold: "NONE", dtap: "NONE", label: "" };
+  cfgs.L.layers[5][1][1] = { tap: "KEY_C", hold: "NONE", dtap: "NONE", label: "" };
+  const sheet = api.buildLayerSheet(cfgs, api.SIDE_PROFILES, code => `<${code}>`, ["L", "R"]);
+  assert.deepStrictEqual(Array.from(sheet.layers.map(x => x.layer)), [0, 3, 5], "nur Ebenen mit eigenem Inhalt, auch nur einer Hälfte");
+  assert.deepStrictEqual(Array.from(sheet.sides), ["L", "R"]);
+  const l0 = sheet.layers[0].halves.find(h => h.side === "R");
+  const key = l0.rows[0][1];
+  assert.strictEqual(key.tap, "<KEY_A>");
+  assert.strictEqual(key.hold, "<KEY_LEFT_SHIFT>", "Halten-Beschriftung");
+  assert.strictEqual(key.dtap, "<KEY_B>", "Doppel-Tipp-Beschriftung");
+  assert.strictEqual(key.transparent, false);
+  const l3 = sheet.layers[1].halves.find(h => h.side === "R");
+  assert.strictEqual(l3.rows[0][2].tap, "<KEY_F1>");
+  assert.strictEqual(l3.rows[0][1].transparent, true, "Taste ohne eigene Aktion ist transparent");
+  assert.strictEqual(l3.rows[0][1].hold, "", "transparente Taste trägt kein Halten");
+  const l5L = sheet.layers[2].halves.find(h => h.side === "L");
+  assert.strictEqual(l5L.rows[1][1].tap, "<KEY_C>");
+  assert.doesNotThrow(() => api.buildLayerSheet(null, null));
+  assert.strictEqual(api.buildLayerSheet({}, {}).layers.length, 0);
+});
+
+test("Spickzettel: Kanten (fehlende Config, Daumen, Platzhalter, Code-Beschriftung, eigenes Label)", () => {
+  const cfg = JSON.parse(JSON.stringify(api.SIDE_PROFILES.R.defaultConfig));
+  for (let l = 1; l < 8; l++) for (const row of cfg.layers[l]) for (let c = 0; c < row.length; c++) row[c] = { tap: "NONE", hold: "NONE", dtap: "NONE", label: "" };
+  cfg.layers[2][0][1] = { tap: "MO_1", hold: "NONE", dtap: "NONE", label: "" };
+  cfg.layers[2][0][2] = { tap: "KEY_A", hold: "NONE", dtap: "NONE", label: "Mein" };
+  const sheet = api.buildLayerSheet({ R: cfg, L: null }, api.SIDE_PROFILES, code => `<${code}>`, ["L", "R"]);
+  assert.strictEqual(Array.from(sheet.sides).join(), "R", "Hälfte ohne Config fehlt");
+  const half = sheet.layers.find(x => x.layer === 2).halves[0];
+  assert.strictEqual(half.rows[0][1].tap, "<MO_1>", "Code-Beschriftung wie bei Halten");
+  assert.strictEqual(half.rows[0][2].tap, "Mein", "eigenes Label gewinnt");
+  assert.ok(half.thumbs.length > 0 && half.thumbs.every(k => k.exists), "Daumentasten vorhanden");
+  const spacer = half.rows.flat().find(k => !k.exists);
+  assert.ok(spacer, "R4C0 fehlt physisch und ist ein Platzhalter");
+});
+
+test("Spickzettel: Druck-CSS gilt nur bei geöffnetem Dialog", () => {
+  const css = read("style.css");
+  const printPart = css.slice(css.lastIndexOf("@media print"));
+  assert.ok(printPart.includes("body.layer-sheet-open"));
+  assert.ok(printPart.includes("body.layer-sheet-open .app-container > :not(#layerSheetModal)"), "Rest der App im Druck ausblenden");
+  const html = read("index.html");
+  const container = html.indexOf('<div class="app-container">');
+  assert.ok(container >= 0 && html.indexOf('id="layerSheetModal"') > container, "Dialog liegt im .app-container");
+  assert.ok(!/body \*\s*\{\s*visibility/.test(printPart), "kein globales Ausblenden ohne offenen Dialog");
+  const ui = read("js/layer-sheet-ui.js");
+  assert.ok(ui.includes('classList.add("layer-sheet-open")') && ui.includes('classList.remove("layer-sheet-open")'));
+});
+
+test("Spickzettel: Knopf, Dialog, Skript-Tag, APP_MODULES und Druck-CSS sind verdrahtet", () => {
+  const html = read("index.html");
+  assert.ok(html.includes('id="btnLayerSheet"') && html.includes('id="layerSheetModal"') && html.includes('id="layerSheetContent"'));
+  assert.ok(html.indexOf("js/layer-sheet-ui.js") > html.indexOf("js/config-model.js") && html.indexOf("js/layer-sheet-ui.js") < html.indexOf('src="app.js'));
+  assert.ok(read("server.py").includes('"layer-sheet-ui"'), "APP_MODULES braucht layer-sheet-ui");
+  assert.ok(read("app.js").includes("initLayerSheetUI()"));
+  const ui = read("js/layer-sheet-ui.js");
+  assert.ok(ui.includes("window.print()") && ui.includes("buildLayerSheet("));
+  assert.ok(!/["']R["']|["']L["']/.test(ui), "keine Seitenliterale im Modul");
+  assert.ok(/@media print[\s\S]*#layerSheetModal/.test(read("style.css")), "@media print für den Spickzettel");
 });
 
 (async () => {

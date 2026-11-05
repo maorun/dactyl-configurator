@@ -771,6 +771,22 @@ void repeatStopAt(uint8_t r, uint8_t c) {
 // -----------------------------------------------------------------------------
 // Aktionen ausführen (Tastendruck / Loslassen einer aufgelösten Aktion)
 // -----------------------------------------------------------------------------
+// Layer lock (ACT_LAYER_LOCK): die höchste gehaltene MO-Ebene (lokal oder von der anderen Hälfte) wird zur
+// TG-Ebene; ist sie schon eingerastet, löst der Druck sie. Ohne gehaltene MO-Ebene löst der Druck alle
+// eingerasteten Ebenen. Gibt die neue aktive Ebene zurück. Die TG-Ebenen gleicht der Layer-Abgleich ab.
+uint8_t applyLayerLock() {
+  int held = 0;
+  for (int l = NUM_LAYERS - 1; l > 0; l--) {
+    if (l < 8 && (momentaryLayers[l] || (remoteMomentaryLayers & (1u << l)))) { held = l; break; }
+  }
+  if (held > 0) {
+    toggleLayers[held] = !toggleLayers[held];
+  } else {
+    for (int i = 1; i < NUM_LAYERS; i++) toggleLayers[i] = false;
+  }
+  return getActiveLayer();
+}
+
 void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) {
   pressedAction[r][c] = action;
   // Ein Combo-Kandidat zählt erst, wenn seine Aktion gesendet wird (Release, Combo-Fenster, Halte-Entscheidung):
@@ -813,6 +829,12 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, actName, action, currentLayer, newL);
     sendConfigNotification(String(buf));
     Serial.printf("LAYER: %s -> Layer %d\n", actName, newL);
+  } else if (action == ACT_LAYER_LOCK) {
+    uint8_t newL = applyLayerLock();
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"LAYER_LOCK\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, action, currentLayer, newL);
+    sendConfigNotification(String(buf));
+    Serial.printf("LAYER: LAYER_LOCK -> Layer %d\n", newL);
   } else if (action >= 0x120 && action <= 0x127) {
     const char* mediaName = "MEDIA";
     if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -2511,7 +2533,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) &&
         !isMouseMoveAction((uint16_t)act) &&
-        !(beh != 0 && act == ACT_REPEAT)) {
+        !(beh != 0 && (act == ACT_REPEAT || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;
       userCombos[numCombos].r2 = (uint8_t)r2;
@@ -2739,7 +2761,10 @@ void checkUserCombos() {
         }
         uint16_t act = userCombos[i].action;
         if (userCombos[i].behavior != 2) recordRepeatAction(act);
-        if (userCombos[i].behavior == 0) { // KEY_PRESS
+        if (userCombos[i].behavior == 0 && act == ACT_LAYER_LOCK) { // KEY_PRESS: Layer lock braucht keinen Host
+          applyLayerLock();
+          sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
+        } else if (userCombos[i].behavior == 0) { // KEY_PRESS
           if (!isConfigMode && bleKeyboard.isConnected()) {
             if (act >= 0x120 && act <= 0x127) {
               if (act == 0x120) bleKeyboard.write(KEY_MEDIA_PLAY_PAUSE);

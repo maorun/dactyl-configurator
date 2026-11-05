@@ -49,16 +49,6 @@ Rules for this file:
 - **Goal:** Read the LED bits (Num Lock, Caps Lock, Scroll Lock) in `onWrite`. Print each change on USB serial as `HOST_LEDS:{"caps":0|1,...}` and add the field to `DEVICE_INFO`. Add a setting (default off) that lights the onboard LED while Caps Lock is on. The app shows a Caps Lock pill in the header.
 - **Acceptance test:** A firmware test feeds an output report to the callback and checks the stored state and the serial line. An app test parses the line.
 
-### Layer lock (`LAYER_LOCK`)
-
-- **Rank:** Feature model. Total 23/40 (typing 6, configuration 2, harmony 8, safety 7). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h` (new action code), `firmware/dactyl_right/DactylLogic.h` (`momentaryLayers`, `toggleLayers`), `firmware/dactyl_right/DactylSplitHid.h` (layer sync), `js/keycodes.js`, `server.py`, `js/config-model.js` (`lintLayouts`).
-- **Problem:** A user who works for a longer time on a momentary layer, for example the number layer, must hold `MO_n` all the time or must add a second key with `TG_n`.
-- **Goal:** Add the action `LAYER_LOCK`. It locks the highest held momentary layer as a toggle layer. A second press, or a press without a held momentary layer, releases the lock. The lock goes to the other half through `SPLIT_OP_LAYER_STATE`. The action works as tap, hold, double-tap and combo action with `KEY_PRESS`.
-- **Acceptance test:** A firmware test holds `MO_3`, presses `LAYER_LOCK`, releases `MO_3` and expects layer 3; a second `LAYER_LOCK` returns to layer 0. An app test checks that `lintLayouts` treats `LAYER_LOCK` as a way back.
-
-
 ### Hold only after a typing pause
 
 - **Rank:** Feature model. Total 22/40 (typing 7, configuration 2, harmony 7, safety 6). Effort S. Estimate.

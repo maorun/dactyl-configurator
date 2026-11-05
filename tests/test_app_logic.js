@@ -3899,6 +3899,30 @@ test("Layout-Prüfung: LAYER_DOWN von Ebene 0 rastet Ebene 7 ein (Umlauf) und br
   assert.deepStrictEqual(lintCodes(lintBoth(cfg), "layer-trap"), []);
 });
 
+test("Layout-Prüfung: LAYER_LOCK zählt als Rückweg und rastet die Ebene ein", () => {
+  // Ebene 1 lässt sich per TG_1 einrasten, hat aber keine Taste zurück: Befund
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 0, 0, "TG_1");
+  lintSet(cfg, 1, 0, 0, "KEY_B");
+  lintSet(cfg, 1, 1, 1, "KEY_A");
+  const trap = lintCodes(lintBoth(cfg), "layer-trap");
+  assert.strictEqual(trap.length, 1);
+  assert.ok(trap[0].message.startsWith("Ebene 1 lässt sich einrasten"), trap[0].message);
+  // LAYER_LOCK auf Ebene 1 löst die Einrastung ohne gehaltene MO-Ebene: das ist der Weg zurück
+  lintSet(cfg, 1, 2, 2, "LAYER_LOCK");
+  assert.deepStrictEqual(lintCodes(lintBoth(cfg), "layer-trap"), []);
+  // LAYER_LOCK mit einer MO-Ebene rastet sie ein, die Ebene bleibt erreichbar
+  const mo = lintCfg();
+  lintSet(mo, 0, 0, 0, "MO_2");
+  lintSet(mo, 2, 1, 1, "LAYER_LOCK");
+  lintSet(mo, 2, 2, 2, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(mo), "layer-trap"), []);
+  assert.deepStrictEqual(lintCodes(lintBoth(mo), "layer-unreachable"), []);
+  const common = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylCommon.h"), "utf8");
+  assert.match(common, /#define ACT_LAYER_LOCK\s+0x16A/);
+  assert.strictEqual(api.keyToNumericActions({ tap: "LAYER_LOCK" }).tapCode, 0x16A);
+});
+
 test("Layout-Prüfung (Anzeige): ein Fehler in der Prüfung gibt keinen Befund und stoppt nichts", () => {
   const { w, dom } = lintUiHarness(lintCfg(), lintCfg());
   // configFor liefert für eine Hälfte eine Konfiguration, die lintLayouts zum Absturz bringt

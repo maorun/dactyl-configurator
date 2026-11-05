@@ -459,6 +459,112 @@ TEST(test_layer_navigation_and_combo_toggle_change_toggle_mask) {
   checkUserCombos();
 }
 
+static void pressKey(int r, int c, bool down) {
+  keyState[r][c] = down;
+  onMatrixKeyChange(r, c, down);
+}
+
+TEST(test_layer_lock_locks_held_mo_layer_and_second_press_releases) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_MO_3;
+  KEYMAP[3][5][1] = ACT_LAYER_LOCK;
+  pressKey(5, 0, true);
+  assert(getActiveLayer() == 3);
+  pressKey(5, 1, true);
+  pressKey(5, 1, false);
+  pressKey(5, 0, false);
+  // MO_3 ist gelöst, die Ebene bleibt eingerastet und geht in den Abgleich
+  assert(getActiveLayer() == 3 && toggleLayers[3] && toggleLayerMask() == (1 << 3));
+  // Zweiter Druck ohne gehaltene MO-Ebene gibt die Ebene frei
+  pressKey(5, 1, true);
+  pressKey(5, 1, false);
+  assert(getActiveLayer() == 0 && toggleLayerMask() == 0);
+}
+
+TEST(test_layer_lock_without_mo_clears_locked_layers_and_locks_highest_mo) {
+  resetState();
+  toggleLayers[2] = true;
+  momentaryLayers[1] = true;
+  momentaryLayers[4] = true;
+  dispatchPress(0, 0, ACT_LAYER_LOCK, getActiveLayer());
+  // Höchste gehaltene MO-Ebene (4) rastet ein, Ebene 2 bleibt
+  assert(toggleLayers[4] && toggleLayers[2] && !toggleLayers[1]);
+  momentaryLayers[1] = momentaryLayers[4] = false;
+  dispatchPress(0, 0, ACT_LAYER_LOCK, getActiveLayer());
+  assert(toggleLayerMask() == 0 && getActiveLayer() == 0);
+}
+
+TEST(test_layer_lock_uses_mo_layer_of_other_half) {
+  resetState();
+  applyRemoteLayerState(1 << 2, false, 0);
+  dispatchPress(0, 0, ACT_LAYER_LOCK, getActiveLayer());
+  applyRemoteLayerState(0, false, 0);
+  assert(toggleLayerMask() == (1 << 2) && getActiveLayer() == 2);
+}
+
+TEST(test_layer_lock_as_hold_action_and_combo_action) {
+  resetState();
+  // Combo mit Verhalten KEY_PRESS und der Aktion LAYER_LOCK
+  momentaryLayers[3] = true;
+  numCombos = 1;
+  userCombos[0] = { 2, 1, 2, 2, 0, (uint16_t)ACT_LAYER_LOCK };
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  pressKey(2, 1, true);
+  pressKey(2, 2, true);
+  checkUserCombos();
+  assert(toggleLayers[3]);
+  pressKey(2, 1, false);
+  pressKey(2, 2, false);
+  checkUserCombos();
+  momentaryLayers[3] = false;
+  assert(getActiveLayer() == 3);
+}
+
+TEST(test_layer_lock_as_hold_and_double_tap_action) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_MO_3;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = ACT_LAYER_LOCK;
+  setMillis(1000);
+  pressKey(5, 0, true);
+  pressKey(2, 1, true);
+  setMillis(1000 + TAPPING_TERM_MS + 10);
+  processDeferredKeys(millis());           // Halten: LAYER_LOCK rastet die gehaltene MO-Ebene 3 ein
+  pressKey(2, 1, false);
+  pressKey(5, 0, false);
+  assert(toggleLayerMask() == (1 << 3) && getActiveLayer() == 3);
+  HOLDMAP[0][2][1] = 0;
+  resetState();
+  KEYMAP[0][5][0] = ACT_MO_3;
+  KEYMAP[3][2][2] = 'x';
+  DTAPMAP[3][2][2] = ACT_LAYER_LOCK;
+  pressKey(5, 0, true);
+  setMillis(1000);
+  pressKey(2, 2, true);
+  setMillis(1020);
+  pressKey(2, 2, false);
+  setMillis(1050);
+  pressKey(2, 2, true);                    // zweiter Tipp: Doppel-Tipp-Aktion
+  pressKey(2, 2, false);
+  pressKey(5, 0, false);
+  assert(toggleLayerMask() == (1 << 3));
+  DTAPMAP[3][2][2] = 0;
+}
+
+TEST(test_add_combo_accepts_layer_lock_only_as_key_press) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 362", false);
+  assert(numCombos == 1);
+  handleConfigCommand("ADD_COMBO 2 0 2 1 1 362", false);
+  handleConfigCommand("ADD_COMBO 2 0 2 1 2 362", false);
+  assert(numCombos == 1);
+}
+
+TEST(test_layer_lock_is_not_repeatable) {
+  assert(!isRepeatableAction(ACT_LAYER_LOCK));
+}
+
 TEST(test_layer_up_steps_from_shared_layer_with_remote_mo) {
   resetState();
   KEYMAP[2][5][0] = ACT_LAYER_UP;

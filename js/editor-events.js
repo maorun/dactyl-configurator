@@ -174,8 +174,12 @@ function setupEventListeners() {
       alert("Combos unterstützen keine Mausbewegung. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
+    if (behavior !== "KEY_PRESS" && action === "LAYER_LOCK") {
+      alert("Layer Lock funktioniert nur mit dem Verhalten \"Einzeltaste senden\".");
+      return;
+    }
     if (behavior === "MODIFIER_HOLD" && isOneShotOrCapsWordCode(action)) {
-      alert("Modifier Hold unterstützt keine One-Shot-, Caps-Word- oder Repeat-Aktion. Bitte \"Einzeltaste senden\" wählen.");
+      alert("Modifier Hold unterstützt keine One-Shot-, Caps-Word-, Repeat- oder Layer-Lock-Aktion. Bitte \"Einzeltaste senden\" wählen.");
       return;
     }
 

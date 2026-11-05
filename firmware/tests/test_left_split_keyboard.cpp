@@ -638,6 +638,23 @@ static void queueLayerState() {
                       [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); });
 }
 
+TEST(test_left_layer_lock_reaches_master_through_layer_state) {
+  KEYMAP[0][5][1] = ACT_MO_3;
+  KEYMAP[3][2][2] = ACT_LAYER_LOCK;
+  queueLayerState();              // Ausgangszustand melden, damit die Änderung als SET geht
+  drain();
+  keyState[5][1] = true;
+  onMatrixKeyChange(5, 1, true);
+  tap(2, 2);
+  keyState[5][1] = false;
+  onMatrixKeyChange(5, 1, false);
+  queueLayerState();
+  std::vector<SplitHidEvent> ev = drain();
+  assert(!ev.empty() && ev.back().op == SPLIT_OP_LAYER_STATE);
+  assert(splitLayerMomentary(ev.back()) == 0 && splitLayerIsSet(ev.back()) && (splitLayerToggles(ev.back()) & (1 << 3)));
+  assert(getActiveLayer() == 3);
+}
+
 TEST(test_left_reports_open_mod_tap_key_and_zero_after_decision) {
   KEYMAP[0][5][1] = KEY_DELETE;
   HOLDMAP[0][5][1] = ACT_MO_1;

@@ -223,6 +223,10 @@ Keys in the matrix use `uint16_t` action codes:
 ### One-Shot Modifiers and Caps Word (`DactylOneShot.h`)
 - Details: `FEATURES.md`, section "One-Shot Modifiers and Caps Word". Read it only before you change this feature.
 
+### Host LED state (`DactylHostLeds.h`)
+- Details: `FEATURES.md`, section "Host LED state and Caps Lock indicator". Read it only before you change this feature.
+- `HOST_LEDS:` goes only over USB serial, never over BLE. The left half has no host: it sends no `host_leds` field.
+
 ### Repeat the last action (`ACT_REPEAT`)
 - Details: `FEATURES.md`, section "Repeat the last action". Read it only before you change this feature.
 - Each half runs its own repeat. The master sends `REPEAT_RUN` to the left half only when the left half acted last.

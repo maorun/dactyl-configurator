@@ -181,6 +181,16 @@ Rules for this file:
 - Mixed firmware: both halves need a firmware with `LAYER_STATE`. An older half rejects op 17 as invalid; each half then keeps its own layers, as before the sync. Flash both halves.
 - Known limit: a key that is held while the layer changes keeps its action (the release uses `pressedAction`). A combo `LAYER_TOGGLE` also syncs, because it changes `toggleLayers[]`.
 
+### Host LED state and Caps Lock indicator (`DactylHostLeds.h`)
+
+- The host (Mac) writes the keyboard output report (report ID 1, one byte): bit 0 Num Lock, bit 1 Caps Lock, bit 2 Scroll Lock. `DactylBleComposite::onWrite` passes the bytes to `hostLedsOnReport()` (`DactylHostLeds.h`, no Arduino or BLE dependency, host-testable). It only stores the bits and a change counter, because `onWrite` runs in the BLE task. Upper bits are ignored; an empty report changes nothing. `onDisconnect` calls `hostLedsReset()`.
+- `loop()` calls `hostLedsService()` (`DactylLogic.h`). It prints each change as `HOST_LEDS:{"num":0|1,"caps":0|1,"scroll":0|1}` on USB serial only, never over BLE. Two changes between two loops print one line with the latest state.
+- `DEVICE_INFO` of the master carries `"host_leds":{...}` and `"caps_led":0|1`. The left half has no host and sends neither field (`DEVICE_INFO_HOST_LEDS_BITS` exists only in `dactyl_right.ino`).
+- Setting `capsLed` (0|1, default 0, master only). Command `SET_CAPS_LED 0|1` answers `OK SET_CAPS_LED <v>`, `ERR ARGS` for other values, `ERR NVS` when the write fails (the RAM state stays). NVS key `caps_led`. When on, the onboard LED (GPIO 22, active low) lights while Caps Lock is on. When off, the firmware never touches the pin; switching the setting off while the LED is on switches it off once.
+- App: pill `#capsLockPill` in the header, visible only while Caps Lock is on. The state comes from `HOST_LEDS` and `DEVICE_INFO.host_leds` over USB from the master and is dropped on disconnect (`forgetHostLeds`). Checkbox `#capsLedCheckbox` in the settings card (master only). The full sync sends `SET_CAPS_LED` as an optional step for the master (`buildSettingCommands`); firmware without it answers `ERR UNKNOWN`.
+- `GET_INFO` over BLE in keyboard mode omits `host_leds` and `caps_led` (a nearby BLE client reads only `GET_INFO`); USB and config mode include them. The left half answers `SET_CAPS_LED` with `ERR UNKNOWN`. A BLE disconnect keeps the pill while USB to the master stays up (`forgetHostLeds`).
+- Hardware check: GPIO 22 is not in the deep-sleep hold lists; check that the LED is off in deep sleep and that it follows Caps Lock again after the wakeup. Caps Lock on the Mac changes the pill and the LED (GPIO 22); the macOS Caps Lock key press must reach the master as an output report after a reconnect.
+
 ### Tri-layer (conditional layer)
 
 - Setting `triLayers` per half: up to two rules `{ a, b, target }` (layers 1..7). When layers `a` and `b` are both active, layer `target` becomes active too. The highest active layer still wins, so the target applies when it is higher than every other active layer.

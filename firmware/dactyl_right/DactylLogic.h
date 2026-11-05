@@ -21,6 +21,7 @@
  *   isConfigMode, enterConfigRequested, exitConfigRequested, lastActivityTime,
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
+ *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
  *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
@@ -51,6 +52,7 @@
 // (splitLeftFwStatus: > 0 Stand, 0 unbekannt, -1 linke Firmware ohne Version); nur dann enthält DEVICE_INFO
 // "left_fw".
 #include "DactylVersion.h"
+#include "DactylHostLeds.h"
 #ifdef ARDUINO
 #include <Update.h>
 #include <esp_ota_ops.h>
@@ -1890,6 +1892,11 @@ void loadKeymapFromNVS() {
       }
     }
   }
+  // Caps-Lock-LED: gespeicherter Wert überschreibt den einkompilierten
+  if (preferences.isKey("caps_led")) {
+    uint8_t cl = preferences.getUChar("caps_led", 0);
+    if (cl <= 1) capsLedEnabled = cl;
+  }
   // Tastenpaare: gespeicherte Liste (auch leer nach CLEAR_PAIRS + SAVE_PAIRS) überschreibt die einkompilierte
   if (preferences.isKey("num_pairs")) {
     uint8_t n = preferences.getUChar("num_pairs", 0);
@@ -2074,6 +2081,34 @@ bool saveQuickTapToNVS(uint16_t ms) {
   preferences.end();
   if (ok) quickTapMs = ms;
   Serial.printf("NVS: Quick-Tap %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
+  return ok;
+}
+
+// Host-LEDs im Hauptdurchlauf: neue Zeile "HOST_LEDS:{...}" auf USB-Serial (nie über BLE) und Onboard-LED
+// (GPIO 22) nach Setting. Ohne Setting bleibt der Pin unberührt.
+inline void hostLedsService(HostLedsState &st) {
+  static int8_t lastLevel = -1;
+  char line[64];
+  const uint8_t bits = st.bits;  // einmal lesen: Zeile und LED zeigen denselben Stand
+  if (hostLedsTakeLine(st, bits, line, sizeof(line))) Serial.println(line);
+  uint8_t level = hostLedPinLevel(bits, capsLedEnabled != 0);
+  if (!capsLedEnabled) {
+    if (lastLevel == 0) { digitalWrite(HOST_LED_PIN, 1); lastLevel = 1; }  // Setting aus: LED löschen
+    return;
+  }
+  if (lastLevel != (int8_t)level) {
+    pinMode(HOST_LED_PIN, OUTPUT);
+    digitalWrite(HOST_LED_PIN, level);
+    lastLevel = (int8_t)level;
+  }
+}
+
+bool saveCapsLedToNVS(uint8_t on) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("caps_led", on) > 0;
+  preferences.end();
+  if (ok) capsLedEnabled = on;
+  Serial.printf("NVS: Caps-Lock-LED %s: %u\n", ok ? "gespeichert" : "FEHLER", on);
   return ok;
 }
 
@@ -2589,6 +2624,16 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+#ifdef DEVICE_INFO_HOST_LEDS_BITS
+  } else if (cmd.startsWith("SET_CAPS_LED ")) {
+    String arg = cmd.substring(13);
+    arg.trim();
+    if (arg == "0" || arg == "1") {
+      sendConfigNotification(saveCapsLedToNVS(arg == "1" ? 1 : 0) ? "OK SET_CAPS_LED " + arg : String("ERR NVS SET_CAPS_LED"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+#endif
   } else if (cmd.startsWith("SET_HOLD_MODE ")) {
     int hm = cmd.substring(14).toInt();
     if (hm >= 0 && hm <= 2) {
@@ -2726,13 +2771,23 @@ void handleConfigCommand(String cmd, bool fromBle) {
       }
       snprintf(triJson + tn, sizeof(triJson) - tn, "]");
     }
-    char buf[640];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"tri_layer\":%s,\"config_mode\":%s",
+    // Nur der Master hat einen Host: LED-Zustand ("host_leds") und Setting der Onboard-LED ("caps_led")
+    char hostJson[96] = "";
+#ifdef DEVICE_INFO_HOST_LEDS_BITS
+    // Im Tastaturmodus liest ein naher BLE-Client nur GET_INFO: den Zustand der Host-LEDs nicht preisgeben
+    if (!fromBle || isConfigMode) {
+      size_t hn = (size_t)snprintf(hostJson, sizeof(hostJson), ",\"host_leds\":");
+      hn += (size_t)hostLedsJson(hostJson + hn, sizeof(hostJson) - hn, (uint8_t)DEVICE_INFO_HOST_LEDS_BITS());
+      snprintf(hostJson + hn, sizeof(hostJson) - hn, ",\"caps_led\":%u", (unsigned)capsLedEnabled);
+    }
+#endif
+    char buf[768];
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, (unsigned)quickTapMs, triJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, triJson, hostJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

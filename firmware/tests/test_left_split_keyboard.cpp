@@ -56,6 +56,7 @@ static uint16_t quickTapMs = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t numTriLayers = 0;
+static uint8_t capsLedEnabled = 0;
 static uint32_t standbyTimeoutMinutes = 5;
 static uint32_t deepSleepTimeoutMinutes = 60;
 
@@ -386,6 +387,14 @@ TEST(test_zero_codes_are_not_sent) {
   assert(drain().empty());
 }
 
+TEST(test_left_rejects_caps_led_command) {
+  Serial.clear();
+  mockChar.value.clear();
+  handleConfigCommand("SET_CAPS_LED 1", false);
+  assert(mockChar.value.rfind("ERR UNKNOWN", 0) == 0);
+  assert(capsLedEnabled == 0);
+}
+
 TEST(test_get_info_reports_left_names) {
   handleConfigCommand("GET_INFO", false);
   bool found = false;
@@ -396,6 +405,8 @@ TEST(test_get_info_reports_left_names) {
       assert(l.find("\"side\":\"L\"") != std::string::npos);
       assert(l.find("\"fw\":" + std::to_string(DACTYL_FW_VERSION) + ",") != std::string::npos);
       assert(l.find("left_fw") == std::string::npos);
+      // Die linke Hälfte hat keinen Host: weder Zustand noch Setting
+      assert(l.find("host_leds") == std::string::npos && l.find("caps_led") == std::string::npos);
     }
   }
   assert(found);

@@ -124,6 +124,7 @@ async function disconnectSerialNow() {
   serialSide = null;
   serialReader = null;
   forgetSplitLink();
+  forgetHostLeds();
   abortDeviceSnapshotReadIfDisconnected();
   updateConnectionUI(false, "Nicht verbunden");
   showToast("ESP32 getrennt.");
@@ -304,6 +305,28 @@ function forgetSplitLink() {
   updateSplitLinkUI();
 }
 
+// LED-Zustand des Hosts: Pill "Caps Lock" im Kopf, sichtbar nur bei aktivem Caps Lock.
+// Der Stand stammt vom Master (HOST_LEDS, DEVICE_INFO.host_leds) und nur über USB; endet die Verbindung, gilt er nicht mehr.
+let hostLedsState = null;
+function noteHostLeds(leds) {
+  if (!leds) return;
+  hostLedsState = leds;
+  updateHostLedsUI();
+}
+function updateHostLedsUI() {
+  const pill = document.getElementById("capsLockPill");
+  if (!pill) return;
+  const view = Dactyl.describeHostLeds(hostLedsState);
+  pill.hidden = !view.capsOn;
+  pill.title = view.title;
+}
+function forgetHostLeds() {
+  // Der Stand kommt nur über USB vom Master: er bleibt gültig, solange diese Verbindung besteht
+  if (Dactyl.splitLinkStaysValid(connectionState())) return;
+  hostLedsState = null;
+  updateHostLedsUI();
+}
+
 // Gedrückte SPLIT_KEY-Tasten; ein verlorenes Release löst die Taste nach Dactyl.SPLIT_KEY_STALE_MS
 const splitKeyTracker = Dactyl.createSplitKeyTracker(id => {
   const [side, r, c] = id.split("_");
@@ -430,6 +453,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
         if (isEditSide) applyTriLayersToInputs(rules);
         if (cfg.settings) cfg.settings.triLayers = rules;
       }
+      if (info.caps_led === 0 || info.caps_led === 1) {
+        if (isEditSide) { const el = document.getElementById("capsLedCheckbox"); if (el) el.checked = info.caps_led === 1; }
+        if (cfg.settings) cfg.settings.capsLed = info.caps_led;
+      }
+      if (info.host_leds !== undefined && transport === "usb" && lineSide === Dactyl.getMasterSide()) noteHostLeds(Dactyl.parseHostLeds(info.host_leds));
       if (info.name && !info.name.includes("Config")) {
         setInput("deviceNameInput", info.name);
         if (cfg.settings) cfg.settings.deviceName = info.name;
@@ -485,6 +513,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
   else if (line.startsWith("SPLIT_FW:")) {
     firmwareVersions.noteSenderFw(Dactyl.parseSplitFwLine(line, lineSide));
     updateFirmwareVersionUI();
+  }
+
+  // 2a''. LED-Zustand des Hosts (Num/Caps/Scroll Lock), nur vom Master und nur über USB-Serial
+  else if (line.startsWith("HOST_LEDS:")) {
+    if (transport === "usb") noteHostLeds(Dactyl.parseHostLedsLine(line, lineSide));
   }
 
   // 2a'. Funkverbindung zur Sender-Hälfte, vom Master gemeldet (SPLIT_LINK, nur USB)

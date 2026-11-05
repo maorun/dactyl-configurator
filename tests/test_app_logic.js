@@ -971,7 +971,8 @@ function clearPendingSync() {}
 function onTypingStatsChanged(side) { calls.stats.push(side); }
 function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + c); }
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
-${section("js/serial.js", "// Gedrückte SPLIT_KEY-Tasten", "function switchLayerUI")}
+${section("js/serial.js", "// LED-Zustand des Hosts:", "function switchLayerUI")}
+this.hostCaps = () => hostLedsState && hostLedsState.caps;
 this.handle = handleSerialLine; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
 this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);
 this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
@@ -979,7 +980,7 @@ this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
   const plain = v => JSON.parse(JSON.stringify(v));
   return {
     warns: calls.warns, handle: (...a) => s.handle(...a), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
-    layerCounts: (side, l) => plain(s.layerCounts(side, l)),
+    layerCounts: (side, l) => plain(s.layerCounts(side, l)), hostCaps: () => s.hostCaps(),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
     set snapshotActive(v) { s.snapshotActive = v; }
   };
@@ -1067,6 +1068,54 @@ test("serial.js: DEVICE_INFO der nicht bearbeiteten Hälfte ändert die Tri-Laye
   s.handle(info("R"), "R", "usb");
   assert.deepStrictEqual(s.calls.tri, ['[{"a":1,"b":2,"target":3}]']);
   assert.strictEqual(s.triOf("R"), '[{"a":1,"b":2,"target":3}]');
+});
+
+test("serial.js: host_leds in DEVICE_INFO der linken Hälfte ändert den Stand nicht", () => {
+  const s = serialLineHarness();
+  s.handle('DEVICE_INFO:{"side":"L","fw":15,"host_leds":{"num":0,"caps":1,"scroll":0}}', "L", "usb");
+  assert.strictEqual(!!s.hostCaps(), false);
+});
+
+test("serial.js: HOST_LEDS zeigt Caps Lock nur vom Master über USB", () => {
+  const s = serialLineHarness();
+  s.handle('HOST_LEDS:{"num":0,"caps":1,"scroll":0}', "R", "usb");
+  assert.strictEqual(s.hostCaps(), true);
+  s.handle('HOST_LEDS:{"num":0,"caps":0,"scroll":0}', "R", "usb");
+  assert.strictEqual(s.hostCaps(), false);
+  // Linke Hälfte, BLE, kaputte Zeile und falsche Typen ändern den Stand nicht
+  s.handle('HOST_LEDS:{"num":0,"caps":1,"scroll":0}', "L", "usb");
+  s.handle('HOST_LEDS:{"num":0,"caps":1,"scroll":0}', "R", "ble");
+  s.handle('HOST_LEDS:{"num":0,"caps":2,"scroll":0}', "R", "usb");
+  s.handle('HOST_LEDS:kaputt', "R", "usb");
+  assert.strictEqual(s.hostCaps(), false);
+  // DEVICE_INFO trägt denselben Stand
+  s.handle('DEVICE_INFO:{"side":"R","fw":15,"host_leds":{"num":0,"caps":1,"scroll":0},"caps_led":1}', "R", "usb");
+  assert.strictEqual(s.hostCaps(), true);
+});
+
+test("Host-LEDs: Parser, Anzeige, Kopfzeile und Setting", () => {
+  const ctx = { console };
+  vm.createContext(ctx);
+  vm.runInContext(`${read("js/matrix-constants.js")}\n${read("js/side-profiles.js")}\n${read("js/side-right.js")}\n${read("js/side-left.js")}\n${read("js/side-routing.js")}`, ctx);
+  const D = ctx.Dactyl || vm.runInContext("Dactyl", ctx);
+  const plain = v => JSON.parse(JSON.stringify(v));
+  assert.deepStrictEqual(plain(D.parseHostLeds({ num: 1, caps: 0, scroll: 1 })), { num: true, caps: false, scroll: true });
+  assert.strictEqual(D.parseHostLeds({ num: 1, caps: 0 }), undefined);
+  assert.strictEqual(D.parseHostLeds(null), undefined);
+  assert.strictEqual(D.describeHostLeds(null).capsOn, false);
+  assert.strictEqual(D.describeHostLeds({ num: false, caps: true, scroll: false }).capsOn, true);
+  assert.strictEqual(D.describeHostLeds({ num: true, caps: false, scroll: false }).capsOn, false);
+  const html = read("index.html");
+  assert.ok(/id="capsLockPill"[^>]*\bhidden\b/.test(html) && html.includes('id="capsLedCheckbox"'));
+  assert.strictEqual(api.clampSetting("capsLed", 7), 1);
+  assert.strictEqual(api.clampSetting("capsLed", "x"), 0);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]] }, R).settings.capsLed, 0);
+  assert.ok(read("js/ble.js").slice(read("js/ble.js").indexOf("function onBleDisconnected")).includes("forgetHostLeds();"));
+  // Eine BLE-Trennung löscht den USB-Stand nicht, solange USB zum Master besteht
+  const fh = read("js/serial.js");
+  const body = fh.slice(fh.indexOf("function forgetHostLeds"), fh.indexOf("// Gedrückte SPLIT_KEY-Tasten"));
+  assert.ok(body.includes("Dactyl.splitLinkStaysValid(connectionState())"));
+  assert.ok(read("js/serial.js").slice(read("js/serial.js").indexOf("async function disconnectSerialNow")).includes("forgetHostLeds();"));
 });
 
 test("serial.js: SPLIT_KEY drückt und löst die Taste der linken Hälfte", () => {
@@ -1847,7 +1896,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|TRI_LAYER) |CLEAR_TAP_TERMS$)/.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|TRI_LAYER|CAPS_LED) |CLEAR_TAP_TERMS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -1926,14 +1975,18 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 10);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_TRI_LAYER", "CLEAR_TAP_TERMS"]);
+  assert.strictEqual(cmds.length, 11);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_TRI_LAYER", "SET_CAPS_LED", "CLEAR_TAP_TERMS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
   assert.strictEqual(cmds[8].cmd, "SET_TRI_LAYER -");
   assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 2, target: 3 }, { a: 4, b: 5, target: 6 }] }, R)[8].cmd, "SET_TRI_LAYER 1 2 3 4 5 6");
   assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 1, target: 3 }] }, R)[8].cmd, "SET_TRI_LAYER -");
+  assert.strictEqual(cmds[9].cmd, "SET_CAPS_LED 0");
+  assert.strictEqual(ctx.build({ capsLed: 1 }, R)[9].cmd, "SET_CAPS_LED 1");
+  // Die linke Hälfte hat keinen Host: kein Befehl
+  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 10);
 });
 
 asyncTests.push(["Sync: Text über dem Balken zählt die übertragenen Schritte", async () => {

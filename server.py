@@ -390,6 +390,7 @@ SETTINGS_RANGES = {
     "tappingTermMs": (100, 500, 200),
     "holdTapMode": (0, 2, 0),
     "quickTapMs": (0, 500, 0),
+    "capsLed": (0, 1, 0),
     "standbyTimeoutMinutes": (0, 120, 5),
     "sleepTimeoutMinutes": (0, 240, 60),
 }
@@ -768,6 +769,7 @@ def generate_settings_cpp(settings, side="R"):
         f'uint8_t holdTapMode = {values["holdTapMode"]};',
         f'uint8_t triLayerRules[{TRI_LAYER_MAX_RULES * 3}] = {{ {", ".join(tri_flat)} }};',
         f"uint8_t numTriLayers = {len(tri_rules)};",
+        f'uint8_t capsLedEnabled = {values["capsLed"]};',
         f'uint32_t standbyTimeoutMinutes = {values["standbyTimeoutMinutes"]};',
         f'uint32_t deepSleepTimeoutMinutes = {values["sleepTimeoutMinutes"]};',
         "// [[[END_SETTINGS]]]"

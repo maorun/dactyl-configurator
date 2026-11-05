@@ -31,15 +31,6 @@ Rules for this file:
 - **Dependency:** "Three-key combos with their own window" also changes the combo format. Define one new NVS format for both entries.
 - **Acceptance test:** A firmware test shows that a combo with the mask of layer 0 triggers on layer 0 and that its keys send without delay on layer 2. A test loads the old NVS format with the mask of all layers.
 
-### Host LED state and Caps Lock indicator
-
-- **Rank:** Feature model. Total 23/40 (typing 5, configuration 4, harmony 6, safety 8). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylBleComposite.h` (`onWrite`, output report `KEYBOARD_ID`), `firmware/dactyl_right/dactyl_right.ino` (GPIO 22, onboard LED), `firmware/dactyl_right/DactylLogic.h` (`DEVICE_INFO`), `js/serial.js`, `index.html`.
-- **Problem:** The HID descriptor declares the keyboard LED output report, but `onWrite` ignores it. The user cannot see the Caps Lock state on the keyboard or in the app.
-- **Goal:** Read the LED bits (Num Lock, Caps Lock, Scroll Lock) in `onWrite`. Print each change on USB serial as `HOST_LEDS:{"caps":0|1,...}` and add the field to `DEVICE_INFO`. Add a setting (default off) that lights the onboard LED while Caps Lock is on. The app shows a Caps Lock pill in the header.
-- **Acceptance test:** A firmware test feeds an output report to the callback and checks the stored state and the serial line. An app test parses the line.
-
 ### Hold only after a typing pause
 
 - **Rank:** Feature model. Total 22/40 (typing 7, configuration 2, harmony 7, safety 6). Effort S. Estimate.

@@ -13,6 +13,7 @@
 #include "DactylKeycodes.h" // Keycodes & Report-Typen (keine externe BleKeyboard-Bibliothek nötig)
 
 #include "DactylHidDescriptor.h" // Report-IDs, Maus-Buttons & Composite-Report-Descriptor
+#include "DactylHostLeds.h"       // LED-Zustand des Hosts (Output-Report)
 
 #define BLE_HID_TX_POWER ESP_PWR_LVL_N0
 
@@ -61,6 +62,8 @@ protected:
   virtual void onStarted(BLEServer *pServer) {}
 
 public:
+  HostLedsState hostLeds;  // zuletzt gemeldete LED-Bits des Hosts (onWrite)
+
   DactylBleComposite(std::string name = "Dactyl Keyboard", std::string mfr = "Dactyl DIY", uint8_t batt = 100)
     : hid(nullptr)
     , inputKeyboard(nullptr)
@@ -375,6 +378,7 @@ public:
 
   void onDisconnect(BLEServer* pServer) override {
     this->connected = false;
+    hostLedsReset(hostLeds);  // ohne Host gilt keine LED
     bleConnTrackDisconnect(connTracker);
     if (inputKeyboard != nullptr) {
       BLE2902* desc = (BLE2902*)inputKeyboard->getDescriptorByUUID(BLEUUID((uint16_t)0x2902));
@@ -407,5 +411,9 @@ public:
     }
   }
 
-  void onWrite(BLECharacteristic* me) override {}
+  // Output-Report der Tastatur: der Host meldet Num/Caps/Scroll Lock. Nur speichern (BLE-Task); loop() gibt aus.
+  void onWrite(BLECharacteristic* me) override {
+    if (me == nullptr) return;
+    hostLedsOnReport(hostLeds, me->getData(), me->getLength());
+  }
 };

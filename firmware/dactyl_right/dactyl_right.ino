@@ -115,6 +115,7 @@ uint16_t quickTapMs = 0;
 uint8_t holdTapMode = 0;
 uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
 uint8_t numTriLayers = 0;
+uint8_t capsLedEnabled = 0;
 uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (80 MHz, gedrosselter Scan, BLE bleibt an)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
 // [[[END_SETTINGS]]]
@@ -460,6 +461,8 @@ bool toggleLayers[NUM_LAYERS] = {false};
 
 // DEVICE_INFO enthält auf dem Master auch den Firmwarestand der linken Hälfte (splitLeftFwStatus)
 #define DEVICE_INFO_LEFT_FW() splitLeftFwStatus(bleKeyboard.splitLeft, millis())
+// ... und den LED-Zustand des Hosts ("host_leds", "caps_led"; nur der Master hat einen Host)
+#define DEVICE_INFO_HOST_LEDS_BITS() bleKeyboard.hostLeds.bits
 // ... und die Link-Statistik der linken Hälfte ("left_link", splitLeftLinkJson)
 int deviceInfoLeftLink(char *buf, size_t size);
 #define DEVICE_INFO_LEFT_LINK(buf, size) deviceInfoLeftLink(buf, size)
@@ -903,6 +906,7 @@ void setup() {
 }
 
 void loop() {
+  hostLedsService(bleKeyboard.hostLeds);
   // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende
   const uint32_t diagLoopStartUs = micros();
   static unsigned long lastHeartbeat = 0;

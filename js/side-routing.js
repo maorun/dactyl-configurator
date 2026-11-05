@@ -270,6 +270,32 @@
     return { note, noteDeviceInfo, forget, status };
   }
 
+  // LED-Zustand des Hosts: {"num":0|1,"caps":0|1,"scroll":0|1}. Rückgabe: bereinigte Flags oder undefined.
+  function parseHostLeds(raw) {
+    if (!raw || typeof raw !== "object") return undefined;
+    if (!isFlag(raw.num) || !isFlag(raw.caps) || !isFlag(raw.scroll)) return undefined;
+    return { num: raw.num === 1, caps: raw.caps === 1, scroll: raw.scroll === 1 };
+  }
+
+  // HOST_LEDS-Zeile; nur der Master hat einen Host
+  function parseHostLedsLine(line, lineSide) {
+    const D = root.Dactyl;
+    if (typeof line !== "string" || !line.startsWith("HOST_LEDS:")) return undefined;
+    if (lineSide !== D.getMasterSide()) return undefined;
+    try {
+      return parseHostLeds(JSON.parse(line.substring(10)));
+    } catch (_) {
+      return undefined;
+    }
+  }
+
+  // Anzeige: Pill nur bei aktivem Caps Lock
+  function describeHostLeds(leds) {
+    if (!leds) return { capsOn: false, title: "" };
+    const on = [leds.num && "Num Lock", leds.caps && "Caps Lock", leds.scroll && "Scroll Lock"].filter(Boolean);
+    return { capsOn: !!leds.caps, title: `LED-Zustand des Mac: ${on.length ? on.join(", ") : "alle aus"}` };
+  }
+
   // USB schiebt jede Änderung des Links nach (SPLIT_LINK), BLE liefert nur den Schnappschuss von GET_INFO.
   // Der Stand bleibt nur gültig, solange USB zum Master besteht.
   function splitLinkStaysValid(conn) {
@@ -328,7 +354,7 @@
 
   root.Dactyl = Object.assign(root.Dactyl || {}, {
     parseDiagLine, describeDiag, summarizeDiag, NORMAL_RESET_REASONS,
-    parseSplitFwLine, createFirmwareVersions, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
+    parseSplitFwLine, createFirmwareVersions, parseHostLeds, parseHostLedsLine, describeHostLeds, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
     parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil
   });

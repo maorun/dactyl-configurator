@@ -51,6 +51,7 @@ static String deviceName = DEFAULT_DEVICE_NAME;
 static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
 static uint16_t tappingTermMs = 200;
+static uint16_t quickTapMs = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t numTriLayers = 0;

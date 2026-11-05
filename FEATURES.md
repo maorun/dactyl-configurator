@@ -124,6 +124,10 @@ Rules for this file:
   - Mode 0 (`HOLD_MODE_OTHER_KEY_PRESS`): any other key press while the mod-tap key is pending immediately resolves it as hold.
   - Mode 1 (`HOLD_MODE_PERMISSIVE`): a rolled key press remains pending; if the second key is both pressed and released within the tapping term (nested press-release pair), the mod-tap key resolves as hold. If the second key stays held or rolls, the mod-tap key resolves as tap upon its release.
   - Mode 2 (`HOLD_MODE_TAP_PREFERRED`): other key presses never force a hold resolution. The mod-tap key resolves as hold only when held past `tappingTermMs`.
+- Quick tap is a setting per half: `quickTapMs` (0..500 ms, default 0 = off), command `SET_QUICK_TAP <ms>` (answers `OK SET_QUICK_TAP <ms>`, `ERR ARGS` for a non-number or a value outside 0..500, `ERR NVS` when the write fails), NVS key `quick_tap`, `DEVICE_INFO` field `quick_tap_ms`, config field `settings.quickTapMs`, rendered by `server.py` in `[[[START_SETTINGS]]]`. The full sync sends it as an optional step (older firmware answers `ERR UNKNOWN`).
+  - Rule: when the user presses a Mod-Tap key again less than `quickTapMs` after its tap (release), the key resolves as tap at once and stays held, so the host repeats the character. No hold action runs, even when the key is held past the tapping term. The window starts at the release of the tap. A held quick tap that ends also starts a new window.
+  - Only an uninterrupted tap counts: a press of any other key clears the stored tap time of all keys (`quickTapValid[][]`, `quickTapAt[][]`, `quickTapHeld[][]` in `DactylLogic.h`). A key with a double-tap action keeps the Tap-Dance behavior. A key without tap or hold action is not affected. `0` changes nothing.
+  - Mixed firmware: needs `DACTYL_FW_VERSION` 15 or newer on the half that holds the key.
 
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 

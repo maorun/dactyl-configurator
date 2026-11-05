@@ -40,6 +40,7 @@ static String deviceName = "Dactyl Keyboard";
 static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
 static uint16_t tappingTermMs = 200;
+static uint16_t quickTapMs = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t numTriLayers = 0;
@@ -164,6 +165,7 @@ void resetState() {
   // Globale Settings und NVS-Mock zurücksetzen, damit Tests unabhängig von ihrer Reihenfolge sind
   comboTimeoutMs = 40;
   tappingTermMs = 200;
+  quickTapMs = 0;
   holdTapMode = 0;
   numTriLayers = 0;
   memset(triLayerRules, 0, sizeof(triLayerRules));
@@ -4314,6 +4316,185 @@ TEST(test_hold_tap_mode_commands_and_nvs) {
   Preferences::uintStore["hold_mode"] = 1;
   loadKeymapFromNVS();
   assert(holdTapMode == 1);
+}
+
+// Quick-Tap: erneuter Druck derselben Mod-Tap-Taste kurz nach ihrem Tipp gilt als gehaltener Tipp
+TEST(test_quick_tap_holds_tap_action) {
+  resetState();
+  quickTapMs = 150;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 1, 1000, 1040);                 // Tipp: 'a'
+  assert(countPresses('a') == 1);
+  setMillis(1100);                            // 60 ms nach dem Tipp (< quickTapMs)
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(countPresses('a') == 2);             // sofort gedrückt, ohne Wartezeit
+  setMillis(1500);                            // Halten über den Tapping-Term: keine Halte-Aktion
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 0);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'a');
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_quick_tap_after_window_gives_hold) {
+  resetState();
+  quickTapMs = 150;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 1, 1000, 1040);
+  setMillis(1300);                            // 260 ms nach dem Tipp (>= quickTapMs)
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(countPresses('a') == 1);             // noch unentschieden
+  setMillis(1550);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 1);
+  assert(countPresses('a') == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+}
+
+TEST(test_quick_tap_zero_keeps_old_behavior) {
+  resetState();
+  quickTapMs = 0;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 1, 1000, 1040);
+  setMillis(1100);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(countPresses('a') == 1);             // wartet auf die Entscheidung
+  setMillis(1400);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+}
+
+TEST(test_quick_tap_other_key_in_between_cancels) {
+  resetState();
+  quickTapMs = 300;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+  tapKeyAt(2, 1, 1000, 1040);
+  tapKeyAt(2, 2, 1060, 1080);                 // andere Taste dazwischen
+  setMillis(1120);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(countPresses('a') == 1);             // kein Quick-Tap
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+}
+
+TEST(test_quick_tap_window_boundary) {
+  resetState();
+  quickTapMs = 150;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 1, 1000, 1040);
+  setMillis(1189);                            // 149 ms nach dem Tipp: noch im Fenster
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(countPresses('a') == 2);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  // Das Loslassen des gehaltenen Tipps startet ein neues Fenster; genau quickTapMs danach gilt es nicht mehr
+  setMillis(1189);
+  setMillis(1339);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(countPresses('a') == 2);             // wartet wieder auf die Entscheidung
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+}
+
+TEST(test_quick_tap_ignores_double_tap_and_plain_keys) {
+  resetState();
+  quickTapMs = 300;
+  // Taste mit Doppel-Tipp-Aktion: Tap-Dance bleibt
+  handleConfigCommand("SET_K 0 2 1 106 17 177", false); // Tap j, Hold Ctrl, Doppel-Tipp Esc
+  bleKeyboard.pressHistory.clear();
+  tapKeyAt(2, 1, 1000, 1040);
+  tapKeyAt(2, 1, 1100, 1140);
+  assert(countPresses(KEY_ESC) == 1);
+  assert(countPresses('j') == 0);
+  // Taste ohne Halte-Aktion: normales Verhalten
+  KEYMAP[0][2][2] = 'b';
+  HOLDMAP[0][2][2] = 0;
+  bleKeyboard.pressHistory.clear();
+  tapKeyAt(2, 2, 2000, 2040);
+  tapKeyAt(2, 2, 2100, 2140);
+  assert(countPresses('b') == 2);
+}
+
+TEST(test_quick_tap_reset_and_layer_change_while_held) {
+  resetState();
+  quickTapMs = 200;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 1, 1000, 1040);
+  setMillis(1100);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(quickTapHeld[2][1]);
+  resetTapHold();                              // Reset während des Haltens
+  assert(!quickTapHeld[2][1] && !quickTapValid[2][1]);
+  setMillis(1200);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  assert(!quickTapHeld[2][1]);
+  // Ebenenwechsel vor dem Loslassen: das Loslassen gibt die gedrückte Aktion frei
+  resetState();
+  quickTapMs = 200;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 1, 1000, 1040);
+  setMillis(1100);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  toggleLayers[1] = true;
+  setMillis(1200);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  toggleLayers[1] = false;
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_quick_tap_with_pending_mod_tap_in_tap_preferred_mode) {
+  resetState();
+  quickTapMs = 300;
+  holdTapMode = 2; // HOLD_MODE_TAP_PREFERRED: Druck wird gepuffert, solange eine andere Mod-Tap-Taste wartet
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+  HOLDMAP[0][2][2] = KEY_LEFT_SHIFT;
+  tapKeyAt(2, 1, 1000, 1040);
+  setMillis(1100);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1100);   // B wartet
+  setMillis(1120);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1120);   // A erneut: gepuffert
+  setMillis(1140);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1140); // B Tipp
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1160);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 0);
+  assert(countPresses('b') == 1);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_quick_tap_command_nvs_and_info) {
+  resetState();
+  handleConfigCommand("SET_QUICK_TAP 501", false);
+  assert(mockChar.value == "ERR ARGS SET_QUICK_TAP 501");
+  handleConfigCommand("SET_QUICK_TAP -1", false);
+  assert(mockChar.value == "ERR ARGS SET_QUICK_TAP -1");
+  handleConfigCommand("SET_QUICK_TAP abc", false);
+  assert(mockChar.value == "ERR ARGS SET_QUICK_TAP abc");
+  assert(quickTapMs == 0);
+  handleConfigCommand("SET_QUICK_TAP 500", false);
+  assert(mockChar.value == "OK SET_QUICK_TAP 500");
+  handleConfigCommand("SET_QUICK_TAP 120", false);
+  assert(mockChar.value == "OK SET_QUICK_TAP 120");
+  assert(quickTapMs == 120);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"quick_tap_ms\":120") != std::string::npos);
+  quickTapMs = 0;
+  loadKeymapFromNVS();
+  assert(quickTapMs == 120);
+  Preferences::uintStore["quick_tap"] = 900;  // außerhalb des Bereichs
+  quickTapMs = 0;
+  loadKeymapFromNVS();
+  assert(quickTapMs == 0);
+  handleConfigCommand("SET_QUICK_TAP 0", false);
+  assert(mockChar.value == "OK SET_QUICK_TAP 0");
 }
 
 // Tri-Layer: sind die Ebenen a und b aktiv, gilt die Ebene target

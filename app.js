@@ -446,6 +446,7 @@ function applySettingsToInputs(settings) {
   setVal("comboTimeoutInput", settings.comboTimeoutMs);
   setVal("tappingTermInput", settings.tappingTermMs);
   setVal("holdTapModeSelect", settings.holdTapMode ?? 0);
+  setVal("quickTapInput", settings.quickTapMs ?? 0);
   applyTriLayersToInputs(settings.triLayers);
   setVal("standbyTimeoutSelect", settings.standbyTimeoutMinutes);
   setVal("sleepTimeoutSelect", settings.sleepTimeoutMinutes);

@@ -21,7 +21,7 @@
  *   isConfigMode, enterConfigRequested, exitConfigRequested, lastActivityTime,
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -157,6 +157,9 @@ void processOtaTimeout() {
 #endif
 #define TAPPING_TERM_MIN_MS 100
 #define TAPPING_TERM_MAX_MS 500
+// Quick-Tap-Term (Mod-Tap): 0 = aus; sonst gilt ein erneuter Druck derselben Mod-Tap-Taste innerhalb dieser Zeit
+// nach ihrem Tipp sofort als gehaltener Tipp (der Host wiederholt das Zeichen)
+#define QUICK_TAP_MAX_MS 500
 
 // -----------------------------------------------------------------------------
 // Layer-Auflösung
@@ -1148,11 +1151,18 @@ struct TapHoldKey {
   unsigned long pressTime;
 };
 TapHoldKey tapHold[NUM_ROWS][NUM_COLS];
+// Quick-Tap: Zeitpunkt des letzten Tipps (Loslassen) je Mod-Tap-Taste; nur der Tipp der zuletzt gedrückten Taste zählt
+bool quickTapValid[NUM_ROWS][NUM_COLS];
+unsigned long quickTapAt[NUM_ROWS][NUM_COLS];
+bool quickTapHeld[NUM_ROWS][NUM_COLS];   // Der laufende Druck gilt als gehaltener Tipp
 
 void resetTapHold() {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
       tapHold[r][c] = { false, false, 0, 0, 0, 0 };
+      quickTapValid[r][c] = false;
+      quickTapAt[r][c] = 0;
+      quickTapHeld[r][c] = false;
     }
   }
   resetDeferredQueue();
@@ -1418,6 +1428,10 @@ bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct 
     }
     dispatchPress(r, c, k.tapAction, k.layer);
     dispatchRelease(r, c, k.tapAction);
+    if (quickTapMs > 0) {
+      quickTapValid[r][c] = true;
+      quickTapAt[r][c] = now;
+    }
     if (!anyTapHoldPending() && deferredQueue.count > 0) replayDeferredQueue();
     return true;
   }
@@ -1480,6 +1494,20 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     }
     uint16_t tapAct, holdAct, dtapAct;
     resolveKeyActions(layer, r, c, tapAct, holdAct, dtapAct);
+    // Quick-Tap: derselbe Mod-Tap-Druck kurz nach seinem Tipp gilt sofort als gehaltener Tipp.
+    // Ein Druck einer anderen Taste verwirft den Merker (nur ein ununterbrochener Tipp-Druck zählt).
+    bool quickTap = quickTapMs > 0 && quickTapValid[r][c] && holdAct != 0 && dtapAct == 0 && tapAct != 0 &&
+                    (unsigned long)(now - quickTapAt[r][c]) < quickTapMs;
+    for (int qr = 0; qr < NUM_ROWS; qr++)
+      for (int qc = 0; qc < NUM_COLS; qc++)
+        if (qr != r || qc != c) quickTapValid[qr][qc] = false;
+    quickTapValid[r][c] = false;
+    if (quickTap) {
+      quickTapHeld[r][c] = true;
+      tapHoldDtap[r][c] = 0;
+      dispatchPress(r, c, tapAct, layer);
+      return;
+    }
     if (holdAct != 0 || dtapAct != 0) {
       tapHoldOnPress(r, c, tapAct, holdAct, layer, now);
       tapHoldDtap[r][c] = dtapAct;
@@ -1507,7 +1535,12 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
       }
     }
     DoubleTapKey &d = doubleTap[r][c];
-    if (d.active) {
+    if (quickTapHeld[r][c]) {
+      // Gehaltener Quick-Tap endet: der nächste Druck kann wieder ein Quick-Tap sein
+      quickTapHeld[r][c] = false;
+      if (quickTapMs > 0) { quickTapValid[r][c] = true; quickTapAt[r][c] = now; }
+      dispatchRelease(r, c, pressedAction[r][c]);
+    } else if (d.active) {
       d.active = false;
       dispatchRelease(r, c, d.dtapAction);
     } else if (!tapHoldOnRelease(r, c, now, tapHoldDtap[r][c])) {
@@ -1750,6 +1783,10 @@ void loadKeymapFromNVS() {
     uint16_t tt = preferences.getUShort("tap_term", TAPPING_TERM_MS);
     if (tt >= TAPPING_TERM_MIN_MS && tt <= TAPPING_TERM_MAX_MS) tappingTermMs = tt;
   }
+  if (preferences.isKey("quick_tap")) {
+    uint16_t qt = preferences.getUShort("quick_tap", 0);
+    if (qt <= QUICK_TAP_MAX_MS) quickTapMs = qt;
+  }
   if (preferences.isKey("hold_mode")) {
     uint8_t hm = preferences.getUChar("hold_mode", 0);
     if (hm <= HOLD_MODE_TAP_PREFERRED) holdTapMode = hm;
@@ -1948,6 +1985,15 @@ bool saveTriLayerToNVS(const uint8_t* rules, uint8_t n) {
     numTriLayers = n;
   }
   Serial.printf("NVS: Tri-Layer %s: %u Regeln\n", ok ? "gespeichert" : "FEHLER", n);
+  return ok;
+}
+
+bool saveQuickTapToNVS(uint16_t ms) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUShort("quick_tap", ms) > 0;
+  preferences.end();
+  if (ok) quickTapMs = ms;
+  Serial.printf("NVS: Quick-Tap %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
   return ok;
 }
 
@@ -2437,6 +2483,17 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_QUICK_TAP ")) {
+    int qt = cmd.substring(14).toInt();
+    String arg = cmd.substring(14);
+    arg.trim();
+    bool digits = arg.length() > 0 && arg.length() <= 3;
+    for (unsigned i = 0; digits && i < arg.length(); i++) digits = arg.charAt(i) >= '0' && arg.charAt(i) <= '9';
+    if (digits && qt >= 0 && qt <= QUICK_TAP_MAX_MS) {
+      sendConfigNotification(saveQuickTapToNVS((uint16_t)qt) ? "OK SET_QUICK_TAP " + String(qt) : String("ERR NVS SET_QUICK_TAP"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd.startsWith("SET_HOLD_MODE ")) {
     int hm = cmd.substring(14).toInt();
     if (hm >= 0 && hm <= 2) {
@@ -2573,12 +2630,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
       snprintf(triJson + tn, sizeof(triJson) - tn, "]");
     }
     char buf[640];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"tri_layer\":%s,\"config_mode\":%s",
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"tri_layer\":%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, triJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, triJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

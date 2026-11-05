@@ -58,14 +58,6 @@ Rules for this file:
 - **Goal:** Add the action `LAYER_LOCK`. It locks the highest held momentary layer as a toggle layer. A second press, or a press without a held momentary layer, releases the lock. The lock goes to the other half through `SPLIT_OP_LAYER_STATE`. The action works as tap, hold, double-tap and combo action with `KEY_PRESS`.
 - **Acceptance test:** A firmware test holds `MO_3`, presses `LAYER_LOCK`, releases `MO_3` and expects layer 3; a second `LAYER_LOCK` returns to layer 0. An app test checks that `lintLayouts` treats `LAYER_LOCK` as a way back.
 
-### Quick tap term for Mod-Tap
-
-- **Rank:** Feature model. Total 23/40 (typing 6, configuration 2, harmony 8, safety 7). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (tap/hold resolution), `firmware/dactyl_right/DactylVersion.h`, `server.py` (`[[[START_SETTINGS]]]`), `js/editor.js`.
-- **Problem:** A Mod-Tap key cannot repeat its tap. A user who taps `Space` with a hold action and then holds it gets the hold action, not a repeated space.
-- **Goal:** Add a setting per half `quickTapMs` (0..500 ms, default 0 = off). When the user presses the same Mod-Tap key again within `quickTapMs` after its tap, the key resolves as tap at once and stays held, so the host repeats the character. Add a command, an NVS key and a `DEVICE_INFO` field.
-- **Acceptance test:** A firmware test checks a tap, then a hold within `quickTapMs` (held tap action), a hold after `quickTapMs` (hold action) and the value `0` (no change).
 
 ### Hold only after a typing pause
 

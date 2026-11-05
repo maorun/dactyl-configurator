@@ -296,6 +296,7 @@ function setupEventListeners() {
       const comboTimeout = clampSetting("comboTimeoutMs", parseInt(document.getElementById("comboTimeoutInput")?.value, 10));
       const tappingTerm = clampSetting("tappingTermMs", parseInt(document.getElementById("tappingTermInput")?.value, 10));
       const holdTapMode = clampSetting("holdTapMode", parseInt(document.getElementById("holdTapModeSelect")?.value, 10));
+      const quickTap = clampSetting("quickTapMs", parseInt(document.getElementById("quickTapInput")?.value, 10));
       const standbyMinutes = clampSetting("standbyTimeoutMinutes", parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10));
       const sleepMinutes = clampSetting("sleepTimeoutMinutes", parseInt(document.getElementById("sleepTimeoutSelect")?.value, 10));
       const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = String(v); };
@@ -304,6 +305,7 @@ function setupEventListeners() {
       setVal("comboTimeoutInput", comboTimeout);
       setVal("tappingTermInput", tappingTerm);
       setVal("holdTapModeSelect", holdTapMode);
+      setVal("quickTapInput", quickTap);
 
       const triLayers = readTriLayersFromInputs();
       applyTriLayersToInputs(triLayers);
@@ -315,6 +317,7 @@ function setupEventListeners() {
         comboTimeoutMs: comboTimeout,
         tappingTermMs: tappingTerm,
         holdTapMode: holdTapMode,
+        quickTapMs: quickTap,
         triLayers: triLayers,
         standbyTimeoutMinutes: standbyMinutes,
         sleepTimeoutMinutes: sleepMinutes

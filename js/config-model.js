@@ -15,6 +15,7 @@ const SETTINGS_RANGES = {
   comboTimeoutMs: [10, 200, 40],
   tappingTermMs: [100, 500, 200],
   holdTapMode: [0, 2, 0],
+  quickTapMs: [0, 500, 0],
   standbyTimeoutMinutes: [0, 120, 5],
   sleepTimeoutMinutes: [0, 240, 60]
 };
@@ -625,6 +626,7 @@ function normalizeConfig(cfg, profile) {
     comboTimeoutMs: clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40),
     tappingTermMs: clampSetting("tappingTermMs", s.tappingTermMs ?? 200),
     holdTapMode: clampSetting("holdTapMode", s.holdTapMode ?? 0),
+    quickTapMs: clampSetting("quickTapMs", s.quickTapMs ?? 0),
     triLayers: normalizeTriLayers(s.triLayers),
     standbyTimeoutMinutes: clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5),
     sleepTimeoutMinutes: clampSetting("sleepTimeoutMinutes", s.sleepTimeoutMinutes ?? 60)

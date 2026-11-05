@@ -180,6 +180,10 @@ test("Config-Normalisierung: Namen, Einstellungen und Zellen werden bereinigt", 
   assert.strictEqual(n.settings.debounceMs, 1);
   assert.strictEqual(n.settings.tappingTermMs, 200);
   assert.strictEqual(n.settings.holdTapMode, 0);
+  assert.strictEqual(n.settings.quickTapMs, 0);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { quickTapMs: 120 } }, R).settings.quickTapMs, 120);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { quickTapMs: 900 } }, R).settings.quickTapMs, 500);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { quickTapMs: -5 } }, R).settings.quickTapMs, 0);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 1 } }, R).settings.holdTapMode, 1);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 2 } }, R).settings.holdTapMode, 2);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 99 } }, R).settings.holdTapMode, 2);
@@ -1812,7 +1816,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|TRI_LAYER) /.test(c)).length;
+  const settings = sent.filter(c => /^SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|TRI_LAYER) /.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -1841,11 +1845,14 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 8);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_TRI_LAYER"]);
-  assert.strictEqual(cmds[7].cmd, "SET_TRI_LAYER -");
-  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 2, target: 3 }, { a: 4, b: 5, target: 6 }] }, R)[7].cmd, "SET_TRI_LAYER 1 2 3 4 5 6");
-  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 1, target: 3 }] }, R)[7].cmd, "SET_TRI_LAYER -");
+  assert.strictEqual(cmds.length, 9);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_TRI_LAYER"]);
+  assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
+  assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
+  assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
+  assert.strictEqual(cmds[8].cmd, "SET_TRI_LAYER -");
+  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 2, target: 3 }, { a: 4, b: 5, target: 6 }] }, R)[8].cmd, "SET_TRI_LAYER 1 2 3 4 5 6");
+  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 1, target: 3 }] }, R)[8].cmd, "SET_TRI_LAYER -");
 });
 
 asyncTests.push(["Sync: Text über dem Balken zählt die übertragenen Schritte", async () => {

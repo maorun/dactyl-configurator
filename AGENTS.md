@@ -228,6 +228,7 @@ Keys in the matrix use `uint16_t` action codes:
 
 ### Mod-Tap / Layer-Tap (`HOLDMAP`)
 - Details: `FEATURES.md`, section "Mod-Tap / Layer-Tap". Read it only before you change this feature.
+- Setting `quickTapMs` (0 = off): the same Mod-Tap key pressed within this time after its tap is a held tap (`SET_QUICK_TAP`, NVS `quick_tap`). Another key press clears the window.
 
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 - Details: `FEATURES.md`, section "Tap-Dance / Double-Tap". Read it only before you change this feature.

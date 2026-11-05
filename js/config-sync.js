@@ -290,6 +290,7 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_COMBO_TIMEOUT ${clampSetting("comboTimeoutMs", s.comboTimeoutMs ?? 40)}`, ack: "SET_COMBO_TIMEOUT" },
     { cmd: `SET_TAPPING_TERM ${clampSetting("tappingTermMs", s.tappingTermMs ?? 200)}`, ack: "SET_TAPPING_TERM", optional: true },
     { cmd: `SET_HOLD_MODE ${clampSetting("holdTapMode", s.holdTapMode ?? 0)}`, ack: "SET_HOLD_MODE", optional: true },
+    { cmd: `SET_QUICK_TAP ${clampSetting("quickTapMs", s.quickTapMs ?? 0)}`, ack: "SET_QUICK_TAP", optional: true },
     { cmd: `SET_TRI_LAYER ${triLayerArgs(s.triLayers)}`, ack: "SET_TRI_LAYER", optional: true }
   ];
 }

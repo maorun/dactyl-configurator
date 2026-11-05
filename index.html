@@ -640,6 +640,12 @@
           <small class="form-hint">Legt fest, wie eine Mod-Tap- oder Layer-Tap-Taste reagiert, wenn eine andere Taste gedrückt wird, bevor der Tapping-Term abläuft.</small>
         </div>
 
+        <div class="form-group">
+          <label for="quickTapInput">Quick-Tap (Millisekunden, 0 = aus):</label>
+          <input type="number" id="quickTapInput" class="form-control" value="0" min="0" max="500">
+          <small class="form-hint">Drückst du eine Mod-Tap-Taste innerhalb dieser Zeit nach ihrem Tipp erneut, gilt sie sofort als gehaltener Tipp. Der Host wiederholt das Zeichen. Erfordert Firmware-Version 15 oder neuer.</small>
+        </div>
+
         <div class="form-group" id="triLayerGroup">
           <label>Tri-Layer (bedingte Ebene):</label>
           <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">

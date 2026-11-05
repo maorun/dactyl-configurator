@@ -108,6 +108,12 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("uint16_t tappingTermMs = 200;", server.generate_settings_cpp({}))
         with self.assertRaises(ValueError):
             server.generate_settings_cpp({"tappingTermMs": 99})
+        self.assertIn("uint16_t quickTapMs = 0;", server.generate_settings_cpp({}))
+        self.assertIn("uint16_t quickTapMs = 120;", server.generate_settings_cpp({"quickTapMs": 120}))
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"quickTapMs": 501})
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"quickTapMs": -1})
         self.assertIn("uint8_t holdTapMode = 1;", server.generate_settings_cpp({"holdTapMode": 1}))
         self.assertIn("uint8_t holdTapMode = 2;", server.generate_settings_cpp({"holdTapMode": 2}))
         self.assertIn("uint8_t holdTapMode = 0;", server.generate_settings_cpp({}))

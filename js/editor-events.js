@@ -71,6 +71,13 @@ function setupEventListeners() {
       showToast(`R${r}C${c} existiert physisch nicht.`);
       return;
     }
+    // Eigener Tapping-Term: leer = Wert der Hälfte; außerhalb 100..500 wird abgelehnt (kein stilles Kürzen)
+    const termRaw = (document.getElementById("keyTapTermInput")?.value ?? "").trim();
+    const termValue = termRaw === "" ? 0 : Number(termRaw);
+    if (termRaw !== "" && !(Number.isInteger(termValue) && termValue >= 100 && termValue <= 500)) {
+      showToast("Der Tapping-Term einer Taste muss eine ganze Zahl von 100 bis 500 ms sein, oder leer.");
+      return;
+    }
     // Option-Zeichen (CHAR_PAIR_<i>) als Tastenpaar auflösen: gleiches Paar wiederverwenden, sonst anhängen
     const resolved = resolveCharPairActions({
       tap: primarySelect.value,
@@ -91,7 +98,9 @@ function setupEventListeners() {
     const oldDesc = oldKey.label || (oldKey.tap && oldKey.tap !== "NONE" ? oldKey.tap : "---");
     const newDesc = label || (tap && tap !== "NONE" ? tap : (hold || "---"));
 
-    layer[r][c] = { label, tap, hold, dtap };
+    const newKey = { label, tap, hold, dtap };
+    if (termValue > 0) newKey.tapTerm = termValue;
+    layer[r][c] = newKey;
     renderMatrix();
 
     const changeRecord = {

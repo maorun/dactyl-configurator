@@ -217,7 +217,9 @@ function normalizeKeyCell(cell) {
     label: typeof cell.label === "string" ? cell.label.slice(0, 16) : "",
     tap: typeof cell.tap === "string" ? cell.tap : "NONE",
     hold: typeof cell.hold === "string" ? cell.hold : "NONE",
-    dtap: typeof cell.dtap === "string" ? cell.dtap : "NONE"
+    dtap: typeof cell.dtap === "string" ? cell.dtap : "NONE",
+    // Eigener Tapping-Term in ms (100..500); ohne gültigen Wert fehlt das Feld (= Wert der Hälfte)
+    ...(Number.isInteger(cell.tapTerm) && cell.tapTerm >= 100 && cell.tapTerm <= 500 ? { tapTerm: cell.tapTerm } : {})
   };
 }
 
@@ -735,7 +737,7 @@ function maxKeyCount(stats, layer = null) {
 
 function createDeviceSnapshot() {
   return {
-    names: null, tap: [], hold: [], dtap: [],
+    names: null, tap: [], hold: [], dtap: [], term: [],
     counts: { combos: null, pairs: null, macros: null, overrides: null }, combos: [], pairs: [], macros: [], overrides: [], macroLens: [], listsBroken: false
   };
 }
@@ -853,7 +855,7 @@ function describeMacroSteps(steps) {
 
 // Speichert eine Matrix aus GET_CONFIG als Zahlencodes. Gibt true zurück, wenn übernommen.
 function captureMatrixData(snapshot, field, data) {
-  if (!snapshot || !["tap", "hold", "dtap"].includes(field)) return false;
+  if (!snapshot || !["tap", "hold", "dtap", "term"].includes(field)) return false;
   if (!data || !isValidIndex(data.l, NUM_LAYERS) || !Array.isArray(data.k)) return false;
   const matrix = [];
   for (let r = 0; r < NUM_ROWS; r++) {
@@ -893,7 +895,13 @@ function diffKeymap(cfg, snapshot, profile) {
         if (!isPhysicalKey(r, c, profile)) continue;
         const local = keyToNumericActions((layer[r] || [])[c]);
         const device = normalizeDeviceActions(snapshot.tap[l][r][c], snapshot.hold[l][r][c], snapshot.dtap[l][r][c]);
-        if (local.tapCode !== device.tapCode || local.holdCode !== device.holdCode || local.dtapCode !== device.dtapCode) {
+        // Eigener Tapping-Term: nur vergleichen, wenn das Gerät TERM_DATA meldet (Firmware davor kennt ihn nicht)
+        if (snapshot.term && snapshot.term[l]) {
+          local.tapTerm = keyTapTerm((layer[r] || [])[c]);
+          device.tapTerm = device.holdCode || device.dtapCode ? (snapshot.term[l][r][c] || 0) : 0;
+        }
+        if (local.tapCode !== device.tapCode || local.holdCode !== device.holdCode || local.dtapCode !== device.dtapCode ||
+            (local.tapTerm || 0) !== (device.tapTerm || 0)) {
           keys.push({ l, r, c, device, local });
         }
       }
@@ -935,6 +943,7 @@ function describeKeyActions(actions) {
   let text = findDefinitionByCode(actions.tapCode).label;
   if (actions.holdCode) text += ` · Halten: ${findDefinitionByCode(actions.holdCode).label}`;
   if (actions.dtapCode) text += ` · 2×: ${findDefinitionByCode(actions.dtapCode).label}`;
+  if (actions.tapTerm) text += ` · Term: ${actions.tapTerm} ms`;
   return text;
 }
 

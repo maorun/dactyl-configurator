@@ -172,6 +172,38 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("ACT_MO_1", keymap)
         self.assertNotIn("ACT_MO_1", holdmap)
 
+    def test_tapterm_codegen_and_range(self):
+        layers = [[[{"tap": "KEY_J", "hold": "MOD_LCTRL", "tapTerm": 300},
+                    {"tap": "KEY_K", "dtap": "KEY_ESC", "tapTerm": 100},
+                    {"tap": "KEY_L", "hold": "NONE", "tapTerm": 250},   # ohne Halten/Doppel-Tipp ohne Wirkung
+                    {"tap": "KEY_M", "hold": "MOD_LSHIFT"},
+                    {"tap": "NONE", "hold": "MO_1", "tapTerm": 400},    # Hold ohne Tap wird zur Taste
+                    "KEY_N"]]]
+        block = server.generate_tapterm_cpp(layers)
+        self.assertIn("uint16_t TAPTERMMAP[NUM_LAYERS][6][7]", block)
+        self.assertIn("// [[[START_TAPTERMMAP]]]", block)
+        first_row = block.split("{ ", 2)[1].split(" }")[0]
+        values = [v.strip() for v in first_row.split(",")]
+        self.assertEqual(values[:6], ["300", "100", "0", "0", "0", "0"])
+        # Rendering in die Vorlage; eine Vorlage ohne Block bleibt gültig
+        content = ("// [[[START_KEYMAP]]]\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n"
+                   "// [[[START_DTAPMAP]]]\n// [[[END_DTAPMAP]]]\n// [[[START_TAPTERMMAP]]]\nold\n// [[[END_TAPTERMMAP]]]\n")
+        out = server.render_ino_content(content, {"layers": layers})
+        self.assertIn("300", out.split("START_TAPTERMMAP")[1])
+        self.assertNotIn("old", out)
+        out = server.render_ino_content(content.split("// [[[START_TAPTERMMAP]]]")[0], {"layers": layers})
+        self.assertNotIn("TAPTERMMAP", out)
+        # Wertebereich: 0 oder 100..500, nur ganze Zahlen
+        for bad in (99, 501, -1, 1000, "300", 300.5, True):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.validate_config({"layers": [[[{"tap": "KEY_J", "hold": "KEY_B", "tapTerm": bad}]]]})
+        for good in (0, 100, 500, None):
+            server.validate_config({"layers": [[[{"tap": "KEY_J", "hold": "KEY_B", "tapTerm": good}]]]})
+        # Dateien der Firmware tragen den Block (rechts und links)
+        for ino in ("firmware/dactyl_right/dactyl_right.ino", "firmware/dactyl_left/dactyl_left.ino"):
+            with open(os.path.join(os.path.dirname(os.path.abspath(server.__file__)), ino), encoding="utf-8") as f:
+                self.assertIn("// [[[START_TAPTERMMAP]]]", f.read())
+
     def test_dtapmap_codegen(self):
         layers = [[[{"tap": "KEY_J", "hold": "MOD_LCTRL", "dtap": "KEY_ESC"},
                     {"tap": "NONE", "hold": "NONE", "dtap": "KEY_TAB"},

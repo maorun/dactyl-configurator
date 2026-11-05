@@ -532,7 +532,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
   }
 
   // 5. Layer-Daten (Tastenbelegung) von Firmware synchronisieren (GET_CONFIG)
-  else if (line.startsWith("LAYER_DATA:") || line.startsWith("HOLD_DATA:") || line.startsWith("DTAP_DATA:")) {
+  else if (line.startsWith("LAYER_DATA:") || line.startsWith("HOLD_DATA:") || line.startsWith("DTAP_DATA:") || line.startsWith("TERM_DATA:")) {
     const prefix = line.substring(0, line.indexOf(":") + 1);
     try {
       const data = JSON.parse(line.substring(prefix.length));

@@ -292,6 +292,11 @@ uint16_t KEYMAP[NUM_LAYERS][6][7] = {
 uint16_t HOLDMAP[NUM_LAYERS][6][7] = {};
 // [[[END_HOLDMAP]]]
 
+// Eigener Tapping-Term je Taste in ms (0 = Wert der Hälfte, sonst 100..500)
+// [[[START_TAPTERMMAP]]]
+uint16_t TAPTERMMAP[NUM_LAYERS][6][7] = {};
+// [[[END_TAPTERMMAP]]]
+
 // Doppel-Tipp-Aktionen (Tap-Dance): 0 = keine
 // [[[START_DTAPMAP]]]
 uint16_t DTAPMAP[NUM_LAYERS][6][7] = {};

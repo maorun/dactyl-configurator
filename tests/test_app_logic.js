@@ -38,7 +38,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
-             applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell,
+             applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell, keyTapTerm,
              createDeviceSnapshot, captureListLine, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
@@ -1748,6 +1748,37 @@ this.setBle = (char, disconnect) => { bleConfigChar = char; disconnectBle = disc
 
 const okReply = cmd => cmd.startsWith("SET_K ") ? null : `OK ${cmd}`;
 
+asyncTests.push(["Sync: eigene Tapping-Terme gehen als SET_KT nach den Tasten, alte Firmware wird übersprungen", async () => {
+  const setTerm = w => { w.cfgRef.layers[0][2][1] = { label: "J", tap: "KEY_J", hold: "KEY_LEFT_CTRL", dtap: "NONE", tapTerm: 300 }; };
+  const a = fullSyncHarness(okReply);
+  setTerm(a.w);
+  await a.w.write();
+  const kt = a.sent.filter(c => c.startsWith("SET_KT "));
+  assert.deepStrictEqual(kt, ["SET_KT 0 2 1 300"]);
+  assert.ok(a.sent.indexOf("CLEAR_TAP_TERMS") < a.sent.indexOf("SET_KT 0 2 1 300"));
+  assert.ok(a.sent.indexOf("SET_KT 0 2 1 300") < a.sent.indexOf("SAVE_NVS"));
+  assert.ok(a.sent.indexOf("SET_K 0 2 1 106 128 0") < a.sent.indexOf("SET_KT 0 2 1 300"));
+
+  // Ohne eigene Werte: CLEAR_TAP_TERMS (löscht alte Werte des Geräts), kein SET_KT
+  const b = fullSyncHarness(okReply);
+  await b.w.write();
+  assert.ok(b.sent.includes("CLEAR_TAP_TERMS"));
+  assert.strictEqual(b.sent.filter(c => c.startsWith("SET_KT ")).length, 0);
+
+  // Firmware davor: ERR UNKNOWN. Mit Werten erscheint der Flash-Hinweis, ohne Werte bleibt der Sync still.
+  const oldFw = cmd => cmd.startsWith("SET_K ") ? null : (cmd === "CLEAR_TAP_TERMS" ? `ERR UNKNOWN ${cmd}` : `OK ${cmd}`);
+  const c = fullSyncHarness(oldFw);
+  setTerm(c.w);
+  await c.w.write();
+  assert.strictEqual(c.sent.filter(x => x.startsWith("SET_KT ")).length, 0);
+  assert.ok(c.toasts.some(t => t.includes("CLEAR_TAP_TERMS")));
+  assert.ok(c.sent.includes("SAVE_MACROS"));
+  const d = fullSyncHarness(oldFw);
+  await d.w.write();
+  assert.ok(!d.toasts.some(t => t.includes("CLEAR_TAP_TERMS")));
+  assert.ok(d.sent.includes("SAVE_MACROS"));
+}]);
+
 asyncTests.push(["Sync: legt vor dem ersten Befehl ein Backup an, ein Fehler hält den Sync nicht auf", async () => {
   for (const failure of [null, "http", "network"]) {
     const { w, sent, toasts } = fullSyncHarness(okReply);
@@ -1816,7 +1847,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|TRI_LAYER) /.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|TRI_LAYER) |CLEAR_TAP_TERMS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -1830,6 +1861,56 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(steps.at(-1), 100);
   assert.ok(steps.every(p => p <= 100), `Fortschritt über 100 %: ${Math.max(...steps)}`);
 }]);
+
+test("Tapping-Term je Taste: keyTapTerm, normalizeKeyCell, GET_CONFIG-Zeile und Diff", () => {
+  // Nur mit Halte- oder Doppel-Tipp-Aktion (mit Tap) und im Bereich 100..500 wirksam
+  assert.strictEqual(api.keyTapTerm({ tap: "KEY_J", hold: "KEY_LEFT_CTRL", tapTerm: 300 }), 300);
+  assert.strictEqual(api.keyTapTerm({ tap: "KEY_J", dtap: "KEY_ESC", tapTerm: 100 }), 100);
+  assert.strictEqual(api.keyTapTerm({ tap: "KEY_J", tapTerm: 300 }), 0);
+  assert.strictEqual(api.keyTapTerm({ tap: "KEY_J", hold: "KEY_LEFT_CTRL", tapTerm: 99 }), 0);
+  assert.strictEqual(api.keyTapTerm({ tap: "KEY_J", hold: "KEY_LEFT_CTRL", tapTerm: 501 }), 0);
+  assert.strictEqual(api.keyTapTerm({ tap: "KEY_J", hold: "KEY_LEFT_CTRL", tapTerm: "300" }), 0);
+  assert.strictEqual(api.keyTapTerm("KEY_J"), 0);
+  assert.strictEqual(api.normalizeKeyCell({ label: "J", tap: "KEY_J", hold: "KEY_LEFT_CTRL", tapTerm: 300 }).tapTerm, 300);
+  assert.ok(!("tapTerm" in api.normalizeKeyCell({ label: "J", tap: "KEY_J", tapTerm: 5000 })));
+  assert.ok(!("tapTerm" in api.normalizeKeyCell({ label: "J", tap: "KEY_J" })));
+
+  // TERM_DATA setzt das Feld und löscht es bei 0 oder ungültigem Wert
+  assert.strictEqual(api.MATRIX_DATA_FIELDS["TERM_DATA:"], "term");
+  const layers = [[[{ label: "J", tap: "KEY_J", hold: "KEY_LEFT_CTRL", dtap: "NONE" }, { label: "K", tap: "KEY_K", hold: "NONE", dtap: "NONE", tapTerm: 400 }]]];
+  assert.ok(api.applyMatrixData(layers, "term", { l: 0, k: [[250, 0]] }));
+  assert.strictEqual(layers[0][0][0].tapTerm, 250);
+  assert.ok(!("tapTerm" in layers[0][0][1]));
+
+  // Diff: gleiche Belegung, nur der Term unterscheidet sich
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.layers[0][2][1] = { label: "J", tap: "KEY_J", hold: "KEY_LEFT_CTRL", dtap: "NONE", tapTerm: 300 };
+  const snap = snapshotOf(cfg);
+  assert.strictEqual(api.diffKeymap(cfg, snap, R).keys.length, 0);   // ohne TERM_DATA kein Vergleich (Firmware davor)
+  const zero = Array.from({ length: 6 }, () => Array(7).fill(0));
+  for (let l = 0; l < 8; l++) assert.ok(api.captureMatrixData(snap, "term", { l, k: zero }));
+  const diff = api.diffKeymap(cfg, snap, R);
+  assert.strictEqual(diff.keys.length, 1);
+  assert.deepStrictEqual([diff.keys[0].l, diff.keys[0].r, diff.keys[0].c], [0, 2, 1]);
+  assert.ok(api.describeKeyActions(diff.keys[0].local).endsWith("· Term: 300 ms"));
+  const same = zero.map(row => row.slice());
+  same[2][1] = 300;
+  assert.ok(api.captureMatrixData(snap, "term", { l: 0, k: same }));
+  assert.strictEqual(api.diffKeymap(cfg, snap, R).keys.length, 0);
+});
+
+test("Sync: CLEAR_TAP_TERMS ist optional, hasKeyTapTerms erkennt eigene Werte", () => {
+  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText, keyTapTerm: api.keyTapTerm };
+  vm.createContext(ctx);
+  vm.runInContext(`${section("js/config-sync.js", "// Einstellungs-Befehle des vollen Syncs", "// One-Shot-Auto-Sync")}
+    this.build = buildSettingCommands; this.has = hasKeyTapTerms;`, ctx);
+  const last = ctx.build({}, R).at(-1);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(last)), { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true });
+  assert.strictEqual(ctx.has([[[{ tap: "KEY_J", hold: "KEY_B", tapTerm: 300 }]]]), true);
+  assert.strictEqual(ctx.has([[[{ tap: "KEY_J", hold: "KEY_B" }]]]), false);
+  assert.strictEqual(ctx.has([[[{ tap: "KEY_J", tapTerm: 300 }]]]), false);
+  assert.strictEqual(ctx.has(undefined), false);
+});
 
 test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () => {
   const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText };
@@ -1845,8 +1926,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 9);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_TRI_LAYER"]);
+  assert.strictEqual(cmds.length, 10);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_TRI_LAYER", "CLEAR_TAP_TERMS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");

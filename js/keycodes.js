@@ -481,8 +481,18 @@ function keyToNumericActions(k) {
   return { tapCode: actionCodeToNumeric(tap), holdCode: actionCodeToNumeric(hold), dtapCode: actionCodeToNumeric(dtap) };
 }
 
-// GET_CONFIG sendet pro Ebene LAYER_DATA (Tap), HOLD_DATA (Halten) und DTAP_DATA (Doppel-Tipp)
-const MATRIX_DATA_FIELDS = { "LAYER_DATA:": "tap", "HOLD_DATA:": "hold", "DTAP_DATA:": "dtap" };
+// Eigener Tapping-Term einer Taste in ms: 0 = Wert der Hälfte. Wirkt nur bei einer Halte- oder Doppel-Tipp-Aktion
+// mit Tap (wie in Firmware und server.py): sonst 0.
+function keyTapTerm(k) {
+  const a = keyToNumericActions(k);
+  if (!a.holdCode && !a.dtapCode) return 0;
+  const v = k && typeof k === "object" ? k.tapTerm : 0;
+  return Number.isInteger(v) && v >= 100 && v <= 500 ? v : 0;
+}
+
+// GET_CONFIG sendet pro Ebene LAYER_DATA (Tap), HOLD_DATA (Halten), DTAP_DATA (Doppel-Tipp) und
+// TERM_DATA (eigener Tapping-Term in ms)
+const MATRIX_DATA_FIELDS = { "LAYER_DATA:": "tap", "HOLD_DATA:": "hold", "DTAP_DATA:": "dtap", "TERM_DATA:": "term" };
 
 // Übernimmt eine Matrix aus GET_CONFIG in layers. LAYER_DATA setzt die Taste neu (Halten und
 // Doppel-Tipp folgen danach), HOLD_DATA/DTAP_DATA setzen nur ihr Feld. Gerätedaten nur innerhalb der
@@ -497,6 +507,12 @@ function applyMatrixData(layers, field, data) {
     for (let c = 0; c < Math.min(data.k[r].length, NUM_COLS); c++) {
       const code = data.k[r][c];
       if (!Number.isInteger(code) || code < 0 || code > 0xFFFF) continue;
+      if (field === "term") {
+        if (!layer[r][c]) layer[r][c] = { label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" };
+        if (code >= 100 && code <= 500) layer[r][c].tapTerm = code;
+        else delete layer[r][c].tapTerm;
+        continue;
+      }
       const def = findDefinitionByCode(code);
       if (field === "tap") {
         layer[r][c] = { label: def.label, tap: def.tap, hold: "NONE", dtap: "NONE" };

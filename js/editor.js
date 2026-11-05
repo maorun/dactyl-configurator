@@ -1191,6 +1191,12 @@ function setOptionalActionSelect(select, code) {
   }
 }
 
+// Spalte "Ebenen" der Combo-Tabelle: "Alle" oder die Liste der Ebenen der Maske
+function comboLayersText(combo) {
+  const mask = comboLayerMask(combo);
+  return mask === COMBO_ALL_LAYERS ? "Alle" : comboMaskLayers(mask).join(", ");
+}
+
 function renderCombosTable() {
   // Tastenpaare, Überschreibungen und Makros liegen im selben Tab und ändern sich bei Laden, Import und Undo zusammen mit den Combos
   renderKeyPairs();
@@ -1244,6 +1250,10 @@ function renderCombosTable() {
     behSpan.textContent = String(behaviorName);
     tdBehavior.appendChild(behSpan);
 
+    const tdLayers = document.createElement("td");
+    tdLayers.className = "combo-layers-cell";
+    tdLayers.textContent = comboLayersText(combo);
+
     const tdDel = document.createElement("td");
     const delBtn = document.createElement("button");
     delBtn.className = "btn btn-danger btn-sm";
@@ -1256,6 +1266,7 @@ function renderCombosTable() {
     tr.appendChild(td2);
     tr.appendChild(tdAction);
     tr.appendChild(tdBehavior);
+    tr.appendChild(tdLayers);
     tr.appendChild(tdDel);
     tbody.appendChild(tr);
   });

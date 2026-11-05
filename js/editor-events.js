@@ -153,6 +153,7 @@ function setupEventListeners() {
   const comboModal = document.getElementById("comboModal");
   document.getElementById("btnOpenAddComboModal").addEventListener("click", () => {
     populateComboKeyDropdowns();
+    document.querySelectorAll(".combo-layer-check").forEach(cb => { cb.checked = true; });
     clearSelectFilter("comboActionSelect");
     comboModal.style.display = "flex";
   });
@@ -192,6 +193,13 @@ function setupEventListeners() {
       return;
     }
 
+    let layerMask = 0;
+    document.querySelectorAll(".combo-layer-check").forEach(cb => { if (cb.checked) layerMask |= 1 << parseInt(cb.value, 10); });
+    if (layerMask === 0) {
+      alert("Wähle mindestens eine Ebene, auf der die Combo gilt.");
+      return;
+    }
+
     const r1 = parseInt(k1Val[0], 10), c1 = parseInt(k1Val[1], 10);
     const r2 = parseInt(k2Val[0], 10), c2 = parseInt(k2Val[1], 10);
 
@@ -208,6 +216,8 @@ function setupEventListeners() {
       action,
       actionLabel
     };
+    // Die Maske für alle Ebenen steht nicht in der Datei (Standard)
+    if (layerMask !== COMBO_ALL_LAYERS) newCombo.layerMask = layerMask;
 
     currentConfig.combos.push(newCombo);
     comboModal.style.display = "none";

@@ -235,6 +235,10 @@ Keys in the matrix use `uint16_t` action codes:
 - Details: `FEATURES.md`, section "Mod-Tap / Layer-Tap". Read it only before you change this feature.
 - Setting `quickTapMs` (0 = off): the same Mod-Tap key pressed within this time after its tap is a held tap (`SET_QUICK_TAP`, NVS `quick_tap`). Another key press clears the window.
 
+### Combos per layer (`KeyCombo.layerMask`)
+- Details: `FEATURES.md`, section "Combos per layer". Read it only before you change this feature.
+- Each combo has a layer mask (default `0xFF`). `ADD_COMBO` and `COMBO_DATA` carry it as optional last value. NVS key `combos_v2` replaces `combos_data`; the old 8-byte format stays readable. Keep the reserved bytes of `combos_v2` for the three-key combo.
+
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 - Details: `FEATURES.md`, section "Tap-Dance / Double-Tap". Read it only before you change this feature.
 

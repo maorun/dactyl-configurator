@@ -155,6 +155,7 @@ void resetState() {
   resetDoubleTap();
   for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) capsWordBuffered[r][c] = false;
   numCombos = 0;
+  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) comboPressLayer1[r][c] = 0;
   numKeyPairs = 0;
   for (int i = 0; i < MAX_KEY_PAIRS; i++) userKeyPairs[i] = { 0, 0 };
   numKeyOverrides = 0;
@@ -1151,7 +1152,7 @@ TEST(test_get_config_sends_combos_pairs_macros) {
   bool cc = false, combo = false, pc = false, pair = false, count = false, macro0 = false, macro1 = false;
   for (const auto& n : mockChar.notifications) {
     if (n == "COMBO_COUNT:1") cc = true;
-    if (n == "COMBO_DATA:{\"o\":0,\"e\":[[2,1,2,2,0,177]]}") combo = true;
+    if (n == "COMBO_DATA:{\"o\":0,\"e\":[[2,1,2,2,0,177,255]]}") combo = true;
     if (n == "PAIR_COUNT:1") pc = true;
     if (n == "PAIR_DATA:{\"o\":0,\"e\":[[130,46]]}") pair = true;
     if (n == "MACRO_COUNT:2") count = true;
@@ -1987,9 +1988,10 @@ TEST(test_key_pair_nvs_legacy_migration) {
   preferences.putUChar("num_pairs", 2);
   preferences.putBytes("pairs_data", legacy, sizeof(legacy));
 
-  KeyCombo testCombo = { 2, 1, 2, 2, 0, 'x' };
+  // Altes NVS-Format: 8 Bytes je Combo (r1, c1, r2, c2, behavior, Padding, action als 16 Bit little endian)
+  const uint8_t testCombo[8] = { 2, 1, 2, 2, 0, 0, 'x', 0 };
   preferences.putUChar("num_combos", 1);
-  preferences.putBytes("combos_data", &testCombo, sizeof(KeyCombo));
+  preferences.putBytes("combos_data", testCombo, sizeof(testCombo));
 
   numKeyPairs = 0;
   numCombos = 0;
@@ -5295,6 +5297,296 @@ TEST(test_host_leds_ble_composite_wired_to_core) {
   assert(src.find("hostLedsOnReport(hostLeds, me->getData(), me->getLength());") != std::string::npos);
   assert(src.find("hostLedsReset(hostLeds);") != std::string::npos);
   assert(src.find("void onWrite(BLECharacteristic* me) override {}") == std::string::npos);
+}
+
+// -----------------------------------------------------------------------------
+// Combos je Ebene: Ebenenmaske (ADD_COMBO, NVS, GET_CONFIG)
+// -----------------------------------------------------------------------------
+TEST(test_combo_layer_mask_limits_buffering_and_trigger) {
+  resetState();
+  comboTimeoutMs = 40;
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  KEYMAP[2][2][1] = 'x';
+  KEYMAP[2][2][2] = 'y';
+  toggleLayers[2] = false;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 1", false);   // J + K -> Esc, nur Ebene 0 (Maske 0x01)
+  assert(mockChar.value == "OK ADD_COMBO 0");
+  assert(userCombos[0].layerMask == 0x01);
+
+  // Ebene 0: die Combo löst aus, die Tasten werden gepuffert
+  setMillis(1000);
+  pressKey(2, 1);
+  assert(isComboCandidateKey(2, 1));
+  assert(bleKeyboard.pressedKeys.empty());                 // gepuffert: noch nichts gesendet
+  setMillis(1010);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  releaseKey(2, 1);
+  releaseKey(2, 2);
+  checkUserCombos();
+  bleKeyboard.writtenKeys.clear();
+
+  // Ebene 2: außerhalb der Maske, die Taste sendet sofort und löst keine Combo aus
+  advanceMillis(1000);
+  toggleLayers[2] = true;
+  assert(getActiveLayer() == 2);
+  assert(!isComboCandidateKey(2, 1));
+  pressKey(2, 1);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'x'); // ohne Combo-Verzögerung
+  advanceMillis(10);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.empty());
+  assert(bleKeyboard.pressedKeys.size() == 2);
+  releaseKey(2, 1);
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_combo_layer_mask_uses_the_layer_of_the_press) {
+  resetState();
+  comboTimeoutMs = 40;
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[2][2][1] = 'x';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 1", false);
+  // Gedrückt auf Ebene 0 (gepuffert), die Ebene wechselt vor dem Loslassen: der Druck bleibt ein Kandidat
+  setMillis(1000);
+  pressKey(2, 1);
+  toggleLayers[2] = true;
+  assert(isComboCandidateKey(2, 1));
+  releaseKey(2, 1);
+  assert(countPresses('j') == 1);                          // schneller Tipp: wird beim Loslassen gesendet
+  assert(countPresses('x') == 0);
+  assert(!isComboCandidateKey(2, 1));                      // nach dem Loslassen zählt wieder die aktive Ebene
+}
+
+TEST(test_combo_layer_mask_follows_the_tri_layer_target) {
+  resetState();
+  comboTimeoutMs = 40;
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[3][2][1] = 'z';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 7", false); // Ebenen 0..2
+  numTriLayers = 1;
+  triLayerRules[0] = 1; triLayerRules[1] = 2; triLayerRules[2] = 3;
+  momentaryLayers[1] = true;
+  assert(getActiveLayer() == 1);
+  assert(isComboCandidateKey(2, 1));                       // Ebene 1 liegt in der Maske
+  momentaryLayers[2] = true;
+  assert(getActiveLayer() == 3);                           // Tri-Layer-Ziel
+  assert(!isComboCandidateKey(2, 1));                      // Ebene 3 liegt außerhalb der Maske
+  pressKey(2, 1);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'z');
+  releaseKey(2, 1);
+  numTriLayers = 0;
+}
+
+TEST(test_add_combo_layer_mask_arguments) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);   // ohne Maske: alle Ebenen
+  assert(mockChar.value == "OK ADD_COMBO 0" && userCombos[0].layerMask == 0xFF);
+  handleConfigCommand("ADD_COMBO 2 1 2 3 0 177 5", false);
+  assert(mockChar.value == "OK ADD_COMBO 1" && userCombos[1].layerMask == 5);
+  handleConfigCommand("ADD_COMBO 2 1 2 4 0 177 0", false); // Maske 0: nie gültig
+  assert(mockChar.value == "ERR ARGS ADD_COMBO 2 1 2 4 0 177 0");
+  handleConfigCommand("ADD_COMBO 2 1 2 4 0 177 256", false);
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 4 0 177 1 9", false); // zu viele Werte
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  assert(numCombos == 2);
+}
+
+TEST(test_combo_layer_mask_persists_and_is_reported) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 1", false);
+  handleConfigCommand("ADD_COMBO 3 1 3 2 1 128 6", false);
+  handleConfigCommand("SAVE_COMBOS", false);
+  assert(mockChar.value == "OK SAVE_COMBOS");
+  assert(preferences.isKey("combos_v2") && !preferences.isKey("combos_data"));
+  assert(preferences.getBytesLength("combos_v2") == 2 + 2 * COMBO_NVS_RECORD_BYTES);
+
+  numCombos = 0;
+  userCombos[0] = KeyCombo{};
+  userCombos[1] = KeyCombo{};
+  loadKeymapFromNVS();
+  assert(numCombos == 2);
+  assert(userCombos[0].layerMask == 1 && userCombos[0].action == 177 && userCombos[0].r1 == 2 && userCombos[0].c2 == 2);
+  assert(userCombos[1].layerMask == 6 && userCombos[1].behavior == 1 && userCombos[1].action == 128);
+
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool data = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n == "COMBO_DATA:{\"o\":0,\"e\":[[2,1,2,2,0,177,1],[3,1,3,2,1,128,6]]}") data = true;
+  }
+  assert(data);
+}
+
+TEST(test_combo_nvs_legacy_format_loads_with_all_layers) {
+  resetState();
+  // Altes Format: 8 Bytes je Combo (Padding vor der 16-Bit-Aktion)
+  const uint8_t legacy[16] = { 2, 1, 2, 2, 0, 0, 177, 0,   3, 1, 3, 2, 1, 0, 128, 0 };
+  preferences.putUChar("num_combos", 2);
+  preferences.putBytes("combos_data", legacy, sizeof(legacy));
+  loadKeymapFromNVS();
+  assert(numCombos == 2);
+  assert(userCombos[0].layerMask == 0xFF && userCombos[1].layerMask == 0xFF);
+  assert(userCombos[0].action == 177 && userCombos[1].action == 128 && userCombos[1].behavior == 1);
+  // Beim Speichern wandert die Liste ins neue Format; das alte verschwindet
+  handleConfigCommand("SAVE_COMBOS", false);
+  assert(preferences.isKey("combos_v2") && !preferences.isKey("combos_data"));
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 2 && userCombos[1].action == 128 && userCombos[1].layerMask == 0xFF);
+}
+
+TEST(test_combo_nvs_rejects_unknown_version_or_size) {
+  resetState();
+  uint8_t bad[2 + COMBO_NVS_RECORD_BYTES] = { 99, COMBO_NVS_RECORD_BYTES, 2, 1, 2, 2, 0, 177, 0, 1 };
+  preferences.putUChar("num_combos", 1);
+  preferences.putBytes("combos_v2", bad, sizeof(bad));
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 0);                                  // unbekannte Version: nicht übernommen
+  bad[0] = COMBO_NVS_VERSION;
+  preferences.putBytes("combos_v2", bad, sizeof(bad) - 1);
+  loadKeymapFromNVS();
+  assert(numCombos == 0);                                  // falsche Länge
+}
+
+TEST(test_combo_save_failure_keeps_the_old_format_and_count) {
+  resetState();
+  // Zustand eines Geräts mit altem Format
+  const uint8_t legacy[8] = { 2, 1, 2, 2, 0, 0, 177, 0 };
+  preferences.putUChar("num_combos", 1);
+  preferences.putBytes("combos_data", legacy, sizeof(legacy));
+  loadKeymapFromNVS();
+  assert(numCombos == 1 && userCombos[0].layerMask == 0xFF);
+  handleConfigCommand("ADD_COMBO 3 1 3 2 0 128 2", false);
+  // Das neue Blob schlägt fehl (NVS voll): altes Blob und Zähler bleiben gültig
+  Preferences::failBytesKey = "combos_v2";
+  handleConfigCommand("SAVE_COMBOS", false);
+  Preferences::failBytesKey.clear();
+  assert(mockChar.value == "ERR NVS SAVE_COMBOS");
+  assert(preferences.isKey("combos_data") && preferences.getUChar("num_combos", 0) == 1);
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 1 && userCombos[0].action == 177);
+}
+
+TEST(test_combo_load_falls_back_to_old_format_when_v2_is_unusable) {
+  resetState();
+  const uint8_t legacy[8] = { 2, 1, 2, 2, 0, 0, 177, 0 };
+  preferences.putUChar("num_combos", 1);
+  preferences.putBytes("combos_data", legacy, sizeof(legacy));
+  uint8_t bad[2 + COMBO_NVS_RECORD_BYTES] = { 99, COMBO_NVS_RECORD_BYTES };
+  preferences.putBytes("combos_v2", bad, sizeof(bad));
+  loadKeymapFromNVS();
+  assert(numCombos == 1 && userCombos[0].action == 177 && userCombos[0].layerMask == 0xFF);
+}
+
+TEST(test_add_combo_rejects_a_non_numeric_mask) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 abc", false);
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0 && numCombos == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 3x", false);
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0 && numCombos == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 3 ", false);
+  assert(numCombos == 1 && userCombos[0].layerMask == 3);
+}
+
+TEST(test_combo_layer_mask_holds_for_a_late_double_tap_flush) {
+  resetState();
+  comboTimeoutMs = 40;
+  KEYMAP[0][2][1] = 'j';
+  DTAPMAP[0][2][1] = 'd';
+  KEYMAP[2][2][1] = 'x';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 1", false);   // nur Ebene 0
+  // Erster Tipp auf Ebene 0 wartet auf einen zweiten; die Ebene wechselt, dann wird der Tipp nachgeholt
+  tapKeyAt(2, 1, 1000, 1020);
+  assert(bleKeyboard.pressedKeys.empty());
+  toggleLayers[2] = true;
+  assert(getActiveLayer() == 2);
+  runTicks(1020 + tappingTermMs + 5);
+  // Die Ausgabe ist in beiden Zweigen gleich (gepuffert oder sofort); geprüft wird der Zustand nach dem Nachholen
+  assert(countPresses('j') == 1);
+  assert(countPresses('x') == 0);
+  assert(comboPressLayer1[2][1] == 0);                      // der Wert des Nachholens bleibt nicht stehen
+}
+
+TEST(test_combo_save_failure_after_the_blob_loads_the_new_combos) {
+  resetState();
+  const uint8_t legacy[8] = { 2, 1, 2, 2, 0, 0, 177, 0 };
+  preferences.putUChar("num_combos", 1);
+  preferences.putBytes("combos_data", legacy, sizeof(legacy));
+  loadKeymapFromNVS();
+  handleConfigCommand("ADD_COMBO 3 1 3 2 0 128 2", false);
+  // Der Zähler schlägt nach dem neuen Blob fehl: das alte Blob bleibt stehen, das neue ist vollständig.
+  // Das Laden nimmt die Anzahl aus dem neuen Blob, die Combos der Speicherung gehen nicht verloren.
+  Preferences::failUCharKey = "num_combos";
+  handleConfigCommand("SAVE_COMBOS", false);
+  Preferences::failUCharKey.clear();
+  assert(mockChar.value == "ERR NVS SAVE_COMBOS");
+  assert(!preferences.isKey("combos_data"));                // das alte Blob ist vor dem Zähler entfernt
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 2 && userCombos[0].action == 177 && userCombos[0].layerMask == 0xFF);
+  assert(userCombos[1].action == 128 && userCombos[1].layerMask == 2);
+  // Gelingt das Speichern danach, gilt das neue Format und das alte Blob verschwindet
+  handleConfigCommand("SAVE_COMBOS", false);
+  assert(mockChar.value == "OK SAVE_COMBOS" && !preferences.isKey("combos_data"));
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 2 && userCombos[1].layerMask == 2);
+}
+
+TEST(test_combo_save_over_a_v2_blob_survives_a_failed_count_write) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 1", false);
+  handleConfigCommand("SAVE_COMBOS", false);               // v2 mit einer Combo, Zähler 1
+  assert(mockChar.value == "OK SAVE_COMBOS");
+  handleConfigCommand("ADD_COMBO 3 1 3 2 0 128 2", false);
+  // Der Zähler schlägt nach dem neuen Blob (2 Combos) fehl: der alte Zähler 1 passt nicht zur Länge
+  Preferences::failUCharKey = "num_combos";
+  handleConfigCommand("SAVE_COMBOS", false);
+  Preferences::failUCharKey.clear();
+  assert(mockChar.value == "ERR NVS SAVE_COMBOS");
+  assert(preferences.getUChar("num_combos", 0) == 1);
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 2);                                  // keine Rückkehr zu den einkompilierten Combos
+  assert(userCombos[0].layerMask == 1 && userCombos[1].layerMask == 2 && userCombos[1].action == 128);
+}
+
+TEST(test_combo_downgrade_edit_upgrade_keeps_the_newer_old_format) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 1", false);
+  handleConfigCommand("SAVE_COMBOS", false);               // Stand der neuen Firmware: v2 mit einer Combo
+  // Eine ältere Firmware schreibt danach ihr Format (zwei Combos, ohne Maske) und lässt combos_v2 stehen
+  const uint8_t older[16] = { 2, 1, 2, 2, 0, 0, 177, 0,   4, 1, 4, 2, 0, 0, 120, 0 };
+  preferences.putUChar("num_combos", 2);
+  preferences.putBytes("combos_data", older, sizeof(older));
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 2 && userCombos[1].action == 120 && userCombos[1].layerMask == 0xFF);
+}
+
+TEST(test_empty_combo_save_with_failed_count_keeps_the_blobs) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 1", false);
+  handleConfigCommand("SAVE_COMBOS", false);
+  handleConfigCommand("CLEAR_COMBOS", false);
+  Preferences::failUCharKey = "num_combos";
+  handleConfigCommand("SAVE_COMBOS", false);
+  Preferences::failUCharKey.clear();
+  assert(mockChar.value == "ERR NVS SAVE_COMBOS");
+  assert(preferences.isKey("combos_v2"));                  // der Zähler blieb 1: die Combo geht nicht verloren
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 1 && userCombos[0].layerMask == 1);
 }
 
 int main() {

@@ -94,6 +94,8 @@ static int testsRun = 0;
 static int testsPassed = 0;
 
 static void resetState() {
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++) comboPressLayer1[r][c] = 0;
   for (int l = 0; l < NUM_LAYERS; l++) {
     momentaryLayers[l] = toggleLayers[l] = false;
     for (int r = 0; r < NUM_ROWS; r++)

@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Combos per layer
-
-- **Rank:** Feature model. Total 25/40 (typing 5, configuration 5, harmony 8, safety 7). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h` (`KeyCombo`), `firmware/dactyl_right/DactylLogic.h` (`isComboCandidateKey`, `getActiveLayer`), `firmware/dactyl_right/DactylVersion.h`, `server.py`, `js/editor.js` (combo table), `js/config-model.js` (`lintLayouts`).
-- **Problem:** A combo acts on every layer. Two keys that form a combo on the base layer also buffer their keys on the number layer or the gaming layer, so these keys get the combo delay there too.
-- **Goal:** Add a layer mask per combo (8 bits, default all layers). `isComboCandidateKey` checks the mask against the active layer, so a key outside the mask sends at once. Store the mask in a new NVS combo format. Keep the old 6-byte format readable. Extend `ADD_COMBO` and `COMBO_DATA` with an optional value. Increase `DACTYL_FW_VERSION`.
-- **Dependency:** "Three-key combos with their own window" also changes the combo format. Define one new NVS format for both entries.
-- **Acceptance test:** A firmware test shows that a combo with the mask of layer 0 triggers on layer 0 and that its keys send without delay on layer 2. A test loads the old NVS format with the mask of all layers.
 
 ### Hold only after a typing pause
 
@@ -64,7 +55,7 @@ Rules for this file:
 - **Area:** Firmware, App, Server.
 - **Code:** `firmware/dactyl_right/DactylCommon.h` (`KeyCombo`, `MAX_COMBOS`), `firmware/dactyl_right/DactylLogic.h` (`isComboCandidateKey`, combo buffer), `firmware/dactyl_right/DactylVersion.h`, `server.py`, `js/editor.js` (combo table), `js/config-model.js`.
 - **Problem:** A combo has exactly two keys and uses the global `comboTimeoutMs`. Fast typists need a short window for combos on letter keys and a longer window for combos on thumb keys.
-- **Goal:** Add an optional third key and an optional window per combo (`0` = `comboTimeoutMs`). Keep the old 6-byte NVS format readable; store the new format under a new NVS key. Extend `ADD_COMBO` and `COMBO_DATA` with optional values. Increase `DACTYL_FW_VERSION`.
+- **Goal:** Add an optional third key and an optional window per combo (`0` = `comboTimeoutMs`). Use the `combos_v2` NVS format (see `FEATURES.md`, "Combos per layer"): it has reserved fields for the third key (`r3`, `c3`) and the window, so no new format is needed. Keep the old 8-byte `combos_data` format readable. Extend `ADD_COMBO` and `COMBO_DATA` with optional values after the layer mask. Increase `DACTYL_FW_VERSION`.
 - **Acceptance test:** A firmware test triggers a three-key combo only when all three keys arrive within the window of that combo. A test loads the old NVS format without data loss.
 
 ## Priority 4

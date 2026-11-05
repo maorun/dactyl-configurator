@@ -146,6 +146,30 @@ Rules for this file:
 - Holding the key still resolves as hold; a key with double-tap but without hold action presses its tap action as a normal key when held. A triggered combo cancels a pending or active double-tap of its member keys.
 - `keymapDefaultsFingerprint()` includes `DTAPMAP` only when it contains a non-zero code, so firmware updates from before Tap-Dance keep the stored layout. A missing `dtapmap` is filled with the compiled-in `DTAPMAP`.
 
+### Combos per layer (`KeyCombo.layerMask`)
+
+- Each combo has a layer mask (8 bits, bit `i` = the combo applies on layer `i`). The default is `0xFF` (all layers). A mask of `0` is invalid.
+- `isComboCandidateKey(r, c)` (`DactylLogic.h`) buffers a key only when a combo with this key applies on the layer of the press. A key outside the mask sends at once, without the `comboTimeoutMs` delay. `checkUserCombos()` and `hasPressedComboPartnerInWindow()` use the same rule, so a combo never triggers on a layer outside its mask.
+- The layer of a press is the result of `getActiveLayer()` at the press, including the tri-layer target. The firmware keeps it per key (`comboPressLayer1[][]`) until the release is handled. A layer change between press and release does not change the decision for this press.
+- `ADD_COMBO <r1> <c1> <r2> <c2> <behavior> <action> [<mask>]`: the optional seventh value is the mask (1..255). A missing value means all layers. Mask `0`, a value above 255 and an eighth value return `ERR ARGS`. `COMBO_DATA` entries carry the mask as seventh value: `[r1,c1,r2,c2,behavior,action,mask]`. An app that reads a six-value entry (firmware before version 15) uses all layers.
+- NVS format `combos_v2` (key `num_combos` keeps the count). The blob has a two-byte header `version` (`COMBO_NVS_VERSION` = 2) and `record size` (`COMBO_NVS_RECORD_BYTES` = 12), then one record per combo:
+
+  | Byte | Field |
+  |---|---|
+  | 0..3 | `r1`, `c1`, `r2`, `c2` |
+  | 4 | `behavior` |
+  | 5..6 | `action` (little endian) |
+  | 7 | `layerMask` |
+  | 8..9 | `r3`, `c3`: reserved for a third key (`0xFF` = none). Not read yet. |
+  | 10..11 | window in ms: reserved for a window per combo (`0` = `comboTimeoutMs`). Not read yet. |
+
+  The loader accepts the blob only when the version and the record size match and the length is `2 + count * 12` with `count` in 1..16. With a stored `num_combos` > 0 the loader reads a valid `combos_data` first (length `num_combos * 8`); only without it, it reads `combos_v2` and takes `count` from the blob length, not from `num_combos`. `num_combos` = 0 means an empty list. `SAVE_COMBOS` writes the blob, removes `combos_data`, then writes `num_combos`; an empty list writes `num_combos` = 0 first and removes the blobs only after that. So each power loss leaves a loadable list, and a list written by older firmware after a downgrade wins over a stale `combos_v2`. "Three-key combos with their own window" uses the reserved fields and needs no new format. Raise the version only for a change that old readers must not read.
+- The old format `combos_data` (8 bytes per combo: `r1, c1, r2, c2, behavior`, one byte padding, `action`) stays readable. Its combos get the mask `0xFF`. `SAVE_COMBOS` writes `combos_v2` and removes `combos_data`.
+- Server: `generate_combos_cpp` (`server.py`) validates `layerMask` (1..255, integer; missing = all layers) and renders it as seventh field only when it is not `0xFF`. App: `comboLayerMask`, `comboMaskLayers`, `comboAppliesOnLayer` (`js/config-model.js`); the combo dialog has one checkbox per layer, the table has the column "Ebenen". The file stores `layerMask` only for a restricted combo. The full sync appends the mask to `ADD_COMBO` only when it differs from all layers, so firmware without masks still accepts the other combos. The layout diff compares the mask.
+- `lintLayouts`: two combos on the same keys count as a duplicate only when their masks overlap. A "toggle layer" combo is a way into a layer only from the layers of its mask. The hint `combo-hold-cancelled` lists only the layers of the mask.
+- The live monitor combo alert (`checkActiveCombos`) does not check the mask: the app shows the viewed layer, not the hardware layer.
+- Mixed firmware: a half with firmware before version 15 ignores the mask and reads only six values. Flash both halves.
+
 ---
 
 ## Split Keyboard
@@ -435,7 +459,7 @@ Rules for this file:
 
 ### GET_CONFIG lists
 
-- After the key matrices, `GET_CONFIG` sends combos, key pairs and macros in short blocks (`sendCombosPairsMacros`, `DactylLogic.h`): `COMBO_COUNT:<n>` and `COMBO_DATA:{"o":<offset>,"e":[[r1,c1,r2,c2,behavior,action],...]}` (4 per line), `PAIR_COUNT:<n>` and `PAIR_DATA:{"o":..,"e":[[first,second],...]}` (8 per line), `MACRO_COUNT:<n>` and `MACRO_DATA:{"i":<index>,"n":<steps>,"o":<offset>,"s":[[type,code,ms],...]}` (8 steps per line; an empty macro sends one line without steps), then `CONFIG_SYNC_DONE`. Each line stays below 160 characters, so it fits one BLE notification at a small MTU (`test_get_config_lines_stay_short_at_maximum`). `DACTYL_FW_VERSION` is 5.
+- After the key matrices, `GET_CONFIG` sends combos, key pairs and macros in short blocks (`sendCombosPairsMacros`, `DactylLogic.h`): `COMBO_COUNT:<n>` and `COMBO_DATA:{"o":<offset>,"e":[[r1,c1,r2,c2,behavior,action,layerMask],...]}` (4 per line), `PAIR_COUNT:<n>` and `PAIR_DATA:{"o":..,"e":[[first,second],...]}` (8 per line), `MACRO_COUNT:<n>` and `MACRO_DATA:{"i":<index>,"n":<steps>,"o":<offset>,"s":[[type,code,ms],...]}` (8 steps per line; an empty macro sends one line without steps), then `CONFIG_SYNC_DONE`. Each line stays below 160 characters, so it fits one BLE notification at a small MTU (`test_get_config_lines_stay_short_at_maximum`). `DACTYL_FW_VERSION` is 5.
 - App: `captureListLine` (`js/config-model.js`) checks each line (decimal count, offset in sequence, combo behavior 0..2, macro step type 1..4) and takes it into the snapshot. An invalid line marks the snapshot as broken. `snapshotListsState` returns `absent` (firmware before version 5 sends no lists), `incomplete` (a line is missing or invalid) or `complete`. `diffKeymap` returns `lists` (`diffLists`): combos, key pairs and macros per index, in list order (the firmware checks combos in this order). With `absent` or `incomplete`, the diff compares nothing; the dialog asks to flash the half (`absent`) or says that the lists arrived incomplete.
 - Late list lines after a timeout are discarded like the key lines (`captureDeviceSnapshotLine`).
 - `GET_CONFIG` with "Vom ESP32 laden" ignores these lines: the app does not take combos, key pairs and macros from the device into the local config. The direct device read of a complete backup is not part of this feature.

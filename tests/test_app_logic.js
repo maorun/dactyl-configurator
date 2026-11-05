@@ -35,6 +35,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, clearAbsentKeyActions,
+             COMBO_ALL_LAYERS, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
@@ -2831,12 +2832,15 @@ function fakeDom() {
     };
     return el;
   };
+  // Acht Ebenen-Checkboxen des Combo-Dialogs (alle gewählt)
+  const layerChecks = Array.from({ length: 8 }, (_, l) => ({ value: String(l), checked: true }));
   const document = {
     getElementById: id => byId[id] || (byId[id] = make()),
     createElement: tag => make(tag),
+    querySelectorAll: sel => (sel === ".combo-layer-check" ? layerChecks : []),
     addEventListener() {}
   };
-  return { document, byId, make };
+  return { document, byId, make, layerChecks };
 }
 
 // Kontext mit dem gemeinsamen Kern (code), einer Config der rechten Hälfte und Stubs für Anzeige und Server
@@ -3095,6 +3099,34 @@ asyncTests.push(["Combo-Dialog: Modifier Hold mit One-Shot oder Caps Word wird n
   await save("KEY_PRESS", "OSM_LSHIFT");
   await save("MODIFIER_HOLD", "KEY_LEFT_SHIFT");
   assert.strictEqual(count(), before + 2);
+}]);
+
+asyncTests.push(["Combo-Dialog: Ebenenmaske wird gespeichert, alle Ebenen bleiben ohne Feld, keine Ebene wird abgelehnt", async () => {
+  const { w, dom, log } = applyKeyHarness();
+  const el = id => dom.document.getElementById(id);
+  const save = async (layers) => {
+    dom.layerChecks.forEach((c, l) => { c.checked = layers.includes(l); });
+    el("comboKey1Select").value = "2,1";
+    el("comboKey2Select").value = "2,2";
+    el("comboBehaviorSelect").value = "KEY_PRESS";
+    const sel = el("comboActionSelect");
+    sel.value = "KEY_ESC";
+    sel.options = [{ text: "KEY_ESC" }];
+    sel.selectedIndex = 0;
+    await el("btnSaveCombo").click();
+  };
+  const count = () => vm.runInContext("currentConfig.combos.length", w);
+  const last = () => JSON.parse(vm.runInContext("JSON.stringify(currentConfig.combos.at(-1))", w));
+  const before = count();
+  await save([]);
+  assert.strictEqual(count(), before, "ohne Ebene wird nichts gespeichert");
+  assert.ok(log.alerts.at(-1).includes("Ebene"));
+  await save([0, 2]);
+  assert.strictEqual(count(), before + 1);
+  assert.strictEqual(last().layerMask, 0b101);
+  await save([0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.strictEqual(count(), before + 2);
+  assert.ok(!("layerMask" in last()), "alle Ebenen ist der Standard und steht nicht in der Datei");
 }]);
 
 asyncTests.push(["Import: vorgemerkte Änderung trägt pairs und macros", async () => {
@@ -3767,6 +3799,128 @@ test("Layout-Prüfung: doppelte Combo über dieselben zwei Tasten, auch in ander
   const broken = lintCfg();
   broken.combos = [null, { key1: { r: 1, c: 1 } }, { key1: { r: 1, c: 1 }, key2: { r: 1, c: 2 } }];
   assert.doesNotThrow(() => lintBoth(broken));
+});
+
+// =============================================================================
+// Combos je Ebene (Ebenenmaske)
+// =============================================================================
+test("Combo-Ebenenmaske: Hilfsfunktionen und Standard", () => {
+  assert.strictEqual(api.COMBO_ALL_LAYERS, 0xFF);
+  assert.strictEqual(api.comboLayerMask({}), 0xFF);
+  assert.strictEqual(api.comboLayerMask({ layerMask: 5 }), 5);
+  for (const bad of [0, 256, -1, 1.5, "3", null, true]) assert.strictEqual(api.comboLayerMask({ layerMask: bad }), 0xFF, String(bad));
+  assert.deepStrictEqual([...api.comboMaskLayers(0b101)], [0, 2]);
+  assert.strictEqual(api.comboAppliesOnLayer({ layerMask: 1 }, 0), true);
+  assert.strictEqual(api.comboAppliesOnLayer({ layerMask: 1 }, 2), false);
+  assert.strictEqual(api.comboAppliesOnLayer({}, 7), true);
+});
+
+test("Combo-Ebenenmaske: Validierung und Normalisierung", () => {
+  const base = () => ({ layers: [[]], combos: [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "KEY_ESC" }] });
+  const ok = base();
+  ok.combos[0].layerMask = 3;
+  assert.doesNotThrow(() => api.validateConfigShape(ok));
+  for (const bad of [0, 256, "1", 1.5]) {
+    const cfg = base();
+    cfg.combos[0].layerMask = bad;
+    assert.throws(() => api.validateConfigShape(cfg), /Ebenenmaske/, String(bad));
+  }
+  // null gilt wie ein fehlendes Feld (der Server nimmt es ebenfalls an)
+  const withNull = base();
+  withNull.combos[0].layerMask = null;
+  assert.doesNotThrow(() => api.validateConfigShape(withNull));
+  const n = api.normalizeConfig({ layers: [[]], combos: [
+    { ...base().combos[0], layerMask: 3 }, { ...base().combos[0], layerMask: 255 }, { ...base().combos[0], layerMask: 0 }
+  ] }, R);
+  assert.strictEqual(n.combos[0].layerMask, 3);
+  assert.ok(!("layerMask" in n.combos[1]), "alle Ebenen steht nicht in der Datei");
+  assert.ok(!("layerMask" in n.combos[2]), "ungültige Maske wird zu alle Ebenen");
+});
+
+test("Combo-Ebenenmaske: Geräte-Snapshot liest 6 Werte (alte Firmware) und 7 Werte", () => {
+  const snap = api.createDeviceSnapshot();
+  assert.ok(api.captureListLine(snap, "COMBO_COUNT:2"));
+  assert.ok(api.captureListLine(snap, 'COMBO_DATA:{"o":0,"e":[[2,1,2,2,0,177],[3,1,3,2,1,128,6]]}'));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(snap.combos)), [[2, 1, 2, 2, 0, 177, 255], [3, 1, 3, 2, 1, 128, 6]]);
+  for (const bad of ['[[2,1,2,2,0,177,0]]', '[[2,1,2,2,0,177,256]]', '[[2,1,2,2,0,177,1,1]]']) {
+    const s2 = api.createDeviceSnapshot();
+    api.captureListLine(s2, "COMBO_COUNT:1");
+    api.captureListLine(s2, `COMBO_DATA:{"o":0,"e":${bad}}`);
+    assert.strictEqual(api.snapshotListsState(s2), "incomplete", bad);
+  }
+});
+
+test("Combo-Ebenenmaske: Layout-Diff zeigt eine abweichende Maske", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap = snapshotWithLists(cfg);
+  assert.strictEqual(api.diffKeymap(cfg, snap, R).lists.combos.length, 0);
+  cfg.combos[0].layerMask = 1;
+  const d = api.diffKeymap(cfg, snap, R).lists;
+  assert.strictEqual(d.combos.length, 1);
+  assert.ok(d.combos[0].local.includes("Ebene 0"), d.combos[0].local);
+  assert.ok(!d.combos[0].device.includes("Ebene"), d.combos[0].device);
+});
+
+asyncTests.push(["Combo-Ebenenmaske: Sync hängt die Maske an ADD_COMBO, nur wenn sie abweicht", async () => {
+  const { w, sent } = fullSyncHarness(okReply);
+  w.cfgRef.combos = [
+    { key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior: "KEY_PRESS", action: "KEY_ESC" },
+    { key1: { r: 1, c: 0 }, key2: { r: 1, c: 1 }, behavior: "KEY_PRESS", action: "KEY_ESC", layerMask: 5 }
+  ];
+  await w.write();
+  const adds = sent.filter(c => c.startsWith("ADD_COMBO "));
+  assert.strictEqual(adds.length, 2);
+  assert.strictEqual(adds[0].split(" ").length, 7, adds[0]);   // ohne Maske: altes Format
+  assert.ok(adds[1].endsWith(" 5"), adds[1]);
+  assert.strictEqual(adds[1].split(" ").length, 8, adds[1]);
+}]);
+
+test("Layout-Prüfung: Combos über dieselben Tasten mit getrennten Ebenen sind keine Dopplung", () => {
+  const cfg = lintCfg();
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_B");
+  cfg.combos[0].layerMask = 0b0001;
+  cfg.combos[1].layerMask = 0b0100;
+  assert.deepStrictEqual(lintCodes(lintBoth(cfg), "combo-duplicate"), []);
+  cfg.combos[1].layerMask = 0b0101;                          // überlappt auf Ebene 0
+  assert.strictEqual(lintCodes(lintBoth(cfg), "combo-duplicate").length, 1);
+  // Ohne Maske gilt die Combo überall und überlappt mit jeder anderen
+  const all = lintCfg();
+  lintCombo(all, [2, 1], [2, 2]);
+  lintCombo(all, [2, 1], [2, 2]);
+  all.combos[1].layerMask = 0b0010;
+  assert.strictEqual(lintCodes(lintBoth(all), "combo-duplicate").length, 1);
+});
+
+test("Layout-Prüfung: Einrast-Combo zählt nur auf den Ebenen ihrer Maske als Weg", () => {
+  // Ebene 1 hat eigene Belegung; nur eine Einrast-Combo führt hinein
+  const make = mask => {
+    const cfg = lintCfg();
+    lintSet(cfg, 1, 2, 3, "KEY_X");
+    lintCombo(cfg, [2, 1], [2, 2], "LAYER_TOGGLE", "TG_1");
+    if (mask !== undefined) cfg.combos[0].layerMask = mask;
+    return cfg;
+  };
+  assert.deepStrictEqual(lintCodes(lintBoth(make()), "layer-unreachable"), []);
+  assert.deepStrictEqual(lintCodes(lintBoth(make(0b0001)), "layer-unreachable"), []);   // gilt auf Ebene 0
+  // Die Combo gilt nur auf Ebene 2, die niemand erreicht: Ebene 1 bleibt unerreichbar
+  assert.strictEqual(lintCodes(lintBoth(make(0b0100)), "layer-unreachable").length, 1);
+  // Rückweg: die Combo gilt auf Ebene 0, aber nicht auf Ebene 1 -> Ebene 1 lässt sich einrasten, ohne Rückweg
+  const trapped = lintCodes(lintBoth(make(0b0001)), "layer-trap");
+  assert.strictEqual(trapped.length, 1);
+  assert.deepStrictEqual(lintCodes(lintBoth(make(0b0011)), "layer-trap"), []);
+  assert.deepStrictEqual(lintCodes(lintBoth(make()), "layer-trap"), []);
+});
+
+test("Layout-Prüfung: Combo-Hinweis zu Halte-Aktionen nennt nur Ebenen der Maske", () => {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 2, 1, "KEY_J");
+  lintSet(cfg, 3, 2, 1, "KEY_J", "KEY_LEFT_CTRL");
+  lintSet(cfg, 0, 2, 2, "KEY_K");
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  assert.strictEqual(lintCodes(lintBoth(cfg), "combo-hold-cancelled").length, 1);
+  cfg.combos[0].layerMask = 0b0001;                          // Ebene 3 liegt außerhalb: die Halte-Aktion bleibt unberührt
+  assert.deepStrictEqual(lintCodes(lintBoth(cfg), "combo-hold-cancelled"), []);
 });
 
 test("Layout-Prüfung: Combo-Taste mit Halte- oder Doppel-Tipp-Aktion ist ein Hinweis", () => {

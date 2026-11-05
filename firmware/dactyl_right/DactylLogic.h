@@ -203,6 +203,27 @@ uint8_t getActiveLayer() {
   return 0;
 }
 
+// Ebene, auf der eine Taste gedrückt wurde (Combo-Ebenenmaske), als Ebene + 1; 0 = kein Druck vermerkt, dann gilt
+// die aktive Ebene. Der Wert bleibt vom Druck bis zum Ende der Loslass-Behandlung stehen, damit eine Ebene, die
+// zwischen Druck und Loslassen wechselt, die Puffer-Entscheidung (gesendet oder Combo-Kandidat) nicht ändert.
+#define COMBO_NVS_VERSION       2
+#define COMBO_NVS_RECORD_BYTES  12
+#define COMBO_NVS_LEGACY_BYTES  8
+
+// Ein Druck, der in deferredQueue wartet, hat noch keinen Eintrag: er wird beim Abspielen mit der dann aktiven
+// Ebene aufgelöst (wie seine Tastenbelegung), bis dahin gilt die aktive Ebene.
+uint8_t comboPressLayer1[NUM_ROWS][NUM_COLS] = {};
+
+uint8_t comboLayerForKey(uint8_t r, uint8_t c) {
+  if (comboPressLayer1[r][c] > 0) return (uint8_t)(comboPressLayer1[r][c] - 1);
+  return getActiveLayer();
+}
+
+// true, wenn die Combo i auf der Ebene gilt (Bit der Ebene in layerMask)
+bool comboAppliesOnLayer(uint8_t i, uint8_t layer) {
+  return layer < 8 && ((userCombos[i].layerMask >> layer) & 1);
+}
+
 // Eigene MO-Ebenen und eingerastete Ebenen als Bitmaske für den Layer-Abgleich
 uint8_t localMomentaryLayerMask() {
   uint8_t m = 0;
@@ -1259,8 +1280,12 @@ void flushDoubleTap(uint8_t r, uint8_t c) {
   // Der Tipp gehört zum ersten Anschlag: dessen Zeitstempel für wasComboRecentlyActive() herstellen
   unsigned long savedPressTime = keyPressTime[r][c];
   keyPressTime[r][c] = d.pressTime;
+  // Die Combo-Ebenenmaske gilt für die Ebene des ersten Anschlags, nicht für die Ebene beim Nachholen
+  uint8_t savedPressLayer = comboPressLayer1[r][c];
+  comboPressLayer1[r][c] = (uint8_t)(d.layer + 1);
   dispatchPress(r, c, d.tapAction, d.layer);
   dispatchRelease(r, c, d.tapAction);
+  comboPressLayer1[r][c] = savedPressLayer;
   keyPressTime[r][c] = savedPressTime;
   // Die UI hat KEY_RELEASE schon beim Loslassen erhalten; nach dem späten KEY_PRESS erneut senden
   sendKeyReleaseNotification(r, c);
@@ -1312,6 +1337,7 @@ bool hasPressedComboPartnerInWindow(uint8_t r, uint8_t c) {
     else if (userCombos[i].r2 == r && userCombos[i].c2 == c) { pr = userCombos[i].r1; pc = userCombos[i].c1; }
     else continue;
     if (!keyState[pr][pc]) continue;
+    if (!comboAppliesOnLayer(i, comboLayerForKey(r, c)) || !comboAppliesOnLayer(i, comboLayerForKey(pr, pc))) continue;
     unsigned long t1 = keyPressTime[r][c];
     unsigned long t2 = keyPressTime[pr][pc];
     if ((unsigned long)(t1 - t2) <= comboTimeoutMs || (unsigned long)(t2 - t1) <= comboTimeoutMs) return true;
@@ -1530,6 +1556,7 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
       resolvePendingTapHoldsAsHold(r, c);
     }
     uint8_t layer = getActiveLayer();
+    comboPressLayer1[r][c] = (uint8_t)(layer + 1);
     if (isSecondTap) {
       d.waiting = false;
       d.active = true;
@@ -1597,6 +1624,7 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     // keyPressTime erst NACH wasComboRecentlyActive auf 0 setzen,
     // damit der echte Anschlag-Zeitstempel für den Grace-Period-Check erhalten bleibt!
     keyPressTime[r][c] = 0;
+    comboPressLayer1[r][c] = 0;
   }
 }
 
@@ -1979,16 +2007,62 @@ void loadKeymapFromNVS() {
       // Gespeicherte leere Liste (CLEAR_COMBOS + SAVE_COMBOS) überschreibt die einkompilierten Combos
       numCombos = 0;
       Serial.println("NVS: 0 Combos geladen.");
-    } else if (n <= MAX_COMBOS && preferences.isKey("combos_data")) {
-      size_t sz = preferences.getBytesLength("combos_data");
-      if (sz == n * sizeof(KeyCombo)) {
-        numCombos = n;
-        preferences.getBytes("combos_data", userCombos, sz);
+    } else if (n <= MAX_COMBOS) {
+      bool loaded = false;
+      // Ein gültiges altes Blob (Länge passt zu num_combos) gewinnt vor combos_v2. Beide Blobs liegen nur vor, wenn
+      // ein Speichern vor dem Entfernen des alten Blobs scheiterte (der alte Stand gilt) oder eine ältere Firmware
+      // danach geschrieben hat (deren Stand ist der neuere). SAVE_COMBOS entfernt das alte Blob vor dem Zähler.
+      if (preferences.isKey("combos_data") && preferences.getBytesLength("combos_data") == n * COMBO_NVS_LEGACY_BYTES) {
+        // Altes Format: 8 Bytes je Combo (sizeof des alten KeyCombo: r1, c1, r2, c2, behavior, 1 Byte Padding,
+        // action 16 Bit), ohne Ebenenmaske. Die Combo gilt auf allen Ebenen.
+        uint8_t legacy[MAX_COMBOS * COMBO_NVS_LEGACY_BYTES];
+        size_t sz = n * COMBO_NVS_LEGACY_BYTES;
+        if (preferences.getBytes("combos_data", legacy, sz) == sz) {
+          numCombos = n;
+          for (int i = 0; i < n; i++) {
+            const uint8_t *rec = legacy + i * COMBO_NVS_LEGACY_BYTES;
+            userCombos[i].r1 = rec[0];
+            userCombos[i].c1 = rec[1];
+            userCombos[i].r2 = rec[2];
+            userCombos[i].c2 = rec[3];
+            userCombos[i].behavior = rec[4];
+            userCombos[i].action = (uint16_t)(rec[6] | (rec[7] << 8));
+            userCombos[i].layerMask = COMBO_ALL_LAYERS;
+          }
+          loaded = true;
+          Serial.printf("NVS: %d Combos geladen.\n", numCombos);
+        }
+      }
+      if (!loaded && preferences.isKey("combos_v2")) {
+        // Neues Format: Kopf (Version, Satzlänge) und je Combo ein Satz fester Länge (siehe COMBO_NVS_*).
+        // Die Anzahl folgt aus der Länge des Blobs, nicht aus num_combos: nach einem unterbrochenen Speichern
+        // (Blob geschrieben, Zähler nicht) passt der alte Zähler nicht, das Blob ist aber vollständig.
+        uint8_t buf[2 + MAX_COMBOS * COMBO_NVS_RECORD_BYTES];
+        size_t sz = preferences.getBytesLength("combos_v2");
+        size_t blobCount = sz >= 2 ? (sz - 2) / COMBO_NVS_RECORD_BYTES : 0;
+        if (sz >= 2 + COMBO_NVS_RECORD_BYTES && (sz - 2) % COMBO_NVS_RECORD_BYTES == 0 && blobCount <= MAX_COMBOS &&
+            preferences.getBytes("combos_v2", buf, sz) == sz && buf[0] == COMBO_NVS_VERSION && buf[1] == COMBO_NVS_RECORD_BYTES) {
+          numCombos = (uint8_t)blobCount;
+          for (int i = 0; i < (int)blobCount; i++) {
+            const uint8_t *rec = buf + 2 + i * COMBO_NVS_RECORD_BYTES;
+            userCombos[i].r1 = rec[0];
+            userCombos[i].c1 = rec[1];
+            userCombos[i].r2 = rec[2];
+            userCombos[i].c2 = rec[3];
+            userCombos[i].behavior = rec[4];
+            userCombos[i].action = (uint16_t)(rec[5] | (rec[6] << 8));
+            userCombos[i].layerMask = rec[7] ? rec[7] : COMBO_ALL_LAYERS;
+            // rec[8..11] (dritte Taste, eigenes Fenster) sind reserviert und werden noch nicht gelesen
+          }
+          loaded = true;
+          Serial.printf("NVS: %d Combos geladen (v2).\n", numCombos);
+        }
+      }
+      if (loaded) {
         for (int i = 0; i < MAX_COMBOS; i++) {
           comboRuntime[i].active = false;
           comboRuntime[i].lastReleaseTime = 0;
         }
-        Serial.printf("NVS: %d Combos geladen.\n", numCombos);
       }
     }
   }
@@ -2121,15 +2195,47 @@ bool saveHoldTapModeToNVS(uint8_t mode) {
   return ok;
 }
 
+// NVS-Format der Combos ("combos_v2"): 2 Bytes Kopf (COMBO_NVS_VERSION, COMBO_NVS_RECORD_BYTES), danach je Combo ein
+// Satz fester Länge:
+//   0 r1, 1 c1, 2 r2, 3 c2, 4 behavior, 5..6 action (little endian), 7 layerMask (Bit i = Ebene i),
+//   8 r3, 9 c3 (reserviert für eine dritte Taste, 0xFF = keine), 10..11 eigenes Fenster in ms (reserviert, 0 = global)
+// Das alte Format ("combos_data") hat 8 Bytes je Combo (Padding vor action) und bleibt lesbar (Ebenenmaske = alle Ebenen).
 bool saveCombosToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
-  bool ok = preferences.putUChar("num_combos", numCombos) > 0;
-  size_t len = numCombos * sizeof(KeyCombo);
-  // Leere Combo-Liste: putBytes mit Länge 0 meldet 0 Bytes, das ist kein Fehler
-  if (len > 0) {
-    ok = (preferences.putBytes("combos_data", userCombos, len) == len) && ok;
+  bool ok = true;
+  if (numCombos > 0) {
+    uint8_t buf[2 + MAX_COMBOS * COMBO_NVS_RECORD_BYTES];
+    size_t len = 2 + (size_t)numCombos * COMBO_NVS_RECORD_BYTES;
+    buf[0] = COMBO_NVS_VERSION;
+    buf[1] = COMBO_NVS_RECORD_BYTES;
+    for (int i = 0; i < numCombos; i++) {
+      uint8_t *rec = buf + 2 + i * COMBO_NVS_RECORD_BYTES;
+      rec[0] = userCombos[i].r1;
+      rec[1] = userCombos[i].c1;
+      rec[2] = userCombos[i].r2;
+      rec[3] = userCombos[i].c2;
+      rec[4] = userCombos[i].behavior;
+      rec[5] = (uint8_t)(userCombos[i].action & 0xFF);
+      rec[6] = (uint8_t)(userCombos[i].action >> 8);
+      rec[7] = userCombos[i].layerMask;
+      rec[8] = 0xFF;
+      rec[9] = 0xFF;
+      rec[10] = 0;
+      rec[11] = 0;
+    }
+    // Reihenfolge: neues Blob, altes Blob entfernen, Zähler. Das Laden nimmt die Anzahl aus der Länge des neuen
+    // Blobs und bevorzugt ein gültiges altes Blob. Zwischenstände: nach dem Blob gilt noch der alte Stand; nach dem
+    // Entfernen gilt das neue Blob (auch mit altem Zähler); ein Fehler davor lässt den alten Stand unverändert.
+    ok = (preferences.putBytes("combos_v2", buf, len) == len);
+    if (ok && preferences.isKey("combos_data")) ok = preferences.remove("combos_data");
+    if (ok) ok = preferences.putUChar("num_combos", numCombos) > 0;
   } else {
-    preferences.remove("combos_data");
+    // Leere Liste: zuerst der Zähler 0 (er entscheidet beim Laden), die Blobs nur nach Erfolg entfernen
+    ok = preferences.putUChar("num_combos", 0) > 0;
+    if (ok) {
+      preferences.remove("combos_v2");
+      if (preferences.isKey("combos_data")) preferences.remove("combos_data");
+    }
   }
   preferences.end();
   Serial.printf("NVS: %d Combos %s.\n", numCombos, ok ? "gespeichert" : "FEHLER beim Speichern");
@@ -2266,7 +2372,7 @@ void sendCombosPairsMacros() {
     String out = "COMBO_DATA:{\"o\":" + String(o) + ",\"e\":[";
     for (int i = o; i < numCombos && i < o + GET_CONFIG_COMBOS_PER_LINE; i++) {
       const KeyCombo &cb = userCombos[i];
-      out += String(i > o ? "," : "") + "[" + cb.r1 + "," + cb.c1 + "," + cb.r2 + "," + cb.c2 + "," + cb.behavior + "," + cb.action + "]";
+      out += String(i > o ? "," : "") + "[" + cb.r1 + "," + cb.c1 + "," + cb.r2 + "," + cb.c2 + "," + cb.behavior + "," + cb.action + "," + cb.layerMask + "]";
     }
     sendConfigNotification(out + "]}", true);
   }
@@ -2646,7 +2752,25 @@ void handleConfigCommand(String cmd, bool fromBle) {
     sendConfigNotification("OK CLEAR_COMBOS");
   } else if (cmd.startsWith("ADD_COMBO ")) {
     int r1, c1, r2, c2, beh, act;
-    if (sscanf(cmd.c_str(), "ADD_COMBO %d %d %d %d %d %d", &r1, &c1, &r2, &c2, &beh, &act) == 6 &&
+    int mask = COMBO_ALL_LAYERS;
+    // Sechs Werte sind Pflicht; ein siebter (Ebenenmaske 1..255) ist optional. Ohne ihn gilt die Combo auf allen
+    // Ebenen. Jeder weitere oder nicht numerische Rest ist ein Fehler.
+    int consumed = -1;
+    bool parsed = sscanf(cmd.c_str(), "ADD_COMBO %d %d %d %d %d %d%n", &r1, &c1, &r2, &c2, &beh, &act, &consumed) == 6 &&
+                  consumed > 0;
+    if (parsed) {
+      const char *rest = cmd.c_str() + consumed;
+      while (*rest == ' ') rest++;
+      if (*rest != '\0') {
+        char *end = nullptr;
+        long m = strtol(rest, &end, 10);
+        while (end && *end == ' ') end++;
+        parsed = end != rest && end && *end == '\0' && m >= 1 && m <= 0xFF;
+        if (parsed) mask = (int)m;
+      }
+    }
+    if (parsed &&
+        mask >= 1 && mask <= 0xFF &&
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) &&
@@ -2658,6 +2782,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
       userCombos[numCombos].c2 = (uint8_t)c2;
       userCombos[numCombos].behavior = (uint8_t)beh;
       userCombos[numCombos].action = (uint16_t)act;
+      userCombos[numCombos].layerMask = (uint8_t)mask;
       comboRuntime[numCombos].active = false;
       comboRuntime[numCombos].lastReleaseTime = 0;
       numCombos++;
@@ -2845,11 +2970,14 @@ bool wasComboRecentlyActive(uint8_t r, uint8_t c) {
   return false;
 }
 
+// Ein Combo-Kandidat wird gepuffert. Das gilt nur, wenn eine Combo mit der Taste auf der Ebene des Drucks gilt:
+// eine Taste außerhalb der Ebenenmaske sendet sofort, ohne Combo-Verzögerung.
 bool isComboCandidateKey(uint8_t r, uint8_t c) {
+  uint8_t layer = comboLayerForKey(r, c);
   for (uint8_t i = 0; i < numCombos; i++) {
     if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
         (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
-      return true;
+      if (comboAppliesOnLayer(i, layer)) return true;
     }
   }
   return false;
@@ -2870,8 +2998,10 @@ void checkUserCombos() {
       unsigned long t1 = keyPressTime[r1][c1];
       unsigned long t2 = keyPressTime[r2][c2];
       bool inWindow = ((unsigned long)(t1 - t2) <= comboTimeoutMs) || ((unsigned long)(t2 - t1) <= comboTimeoutMs);
+      // Beide Tasten müssen auf einer Ebene der Maske gedrückt worden sein: nur dann wurden sie gepuffert
+      bool onMaskLayers = comboAppliesOnLayer(i, comboLayerForKey(r1, c1)) && comboAppliesOnLayer(i, comboLayerForKey(r2, c2));
 
-      if (inWindow) {
+      if (inWindow && onMaskLayers) {
         comboRuntime[i].active = true;
         // Die Combo verbraucht beide Tasten: deren Mod-Tap-Entscheidung darf nicht mehr greifen
         cancelTapHoldForCombo(r1, c1);

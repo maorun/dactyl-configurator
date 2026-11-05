@@ -87,7 +87,7 @@ class TestServerAndCodegen(unittest.TestCase):
         ]
         cpp = server.generate_combos_cpp(combos)
         self.assertIn("uint8_t numCombos = 2;", cpp)
-        # KeyCombo in der Firmware hat genau 6 Felder (kein Runtime-Flag)
+        # Ohne Ebenenmaske (alle Ebenen) bleibt die Zeile bei 6 Feldern
         self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC }", cpp)
         self.assertIn("{ 2, 1, 2, 3, 1, KEY_LEFT_CTRL }", cpp)
         self.assertNotIn("false", cpp)
@@ -241,6 +241,22 @@ class TestServerAndCodegen(unittest.TestCase):
             server.generate_combos_cpp([{"key1": {"r": True, "c": 0}, "key2": {"r": 2, "c": 2}}])
         with self.assertRaises(ValueError):
             server.generate_combos_cpp([{"key1": {"r": 1, "c": 0}, "key2": {"r": 2, "c": 2}}] * 17)
+
+    def test_combo_layer_mask_rendering_and_range(self):
+        base = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "KEY_PRESS", "action": "KEY_ESC"}
+        # Standard: alle Ebenen, die Zeile bleibt unverändert
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC }", server.generate_combos_cpp([base]))
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC }", server.generate_combos_cpp([dict(base, layerMask=255)]))
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC, 5 }", server.generate_combos_cpp([dict(base, layerMask=5)]))
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC, 1 }", server.generate_combos_cpp([dict(base, layerMask=1)]))
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC }", server.generate_combos_cpp([dict(base, layerMask=None)]))
+        for bad in (0, 256, -1, "1", 1.5, True, [1]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_combos_cpp([dict(base, layerMask=bad)])
+        # Die Prüfung gilt auch für den Speicherpfad
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "combos": [dict(base, layerMask=0)]}, "R")
+        server.validate_config({"layers": [[]], "combos": [dict(base, layerMask=3)]}, "R")
 
     def test_settings_validation_and_name_sanitizing(self):
         with self.assertRaises(ValueError):

@@ -21,6 +21,29 @@ const SETTINGS_RANGES = {
   sleepTimeoutMinutes: [0, 240, 60]
 };
 const COMBO_BEHAVIORS = ["KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"];
+// Ebenenmaske einer Combo: Bit i = die Combo gilt auf Ebene i. Fehlt das Feld, gilt sie auf allen Ebenen.
+const COMBO_ALL_LAYERS = 0xFF;
+
+function isValidComboLayerMask(v) {
+  return Number.isInteger(v) && v >= 1 && v <= COMBO_ALL_LAYERS;
+}
+
+// Maske einer Combo (fehlend oder ungültig = alle Ebenen)
+function comboLayerMask(cb) {
+  return cb && isValidComboLayerMask(cb.layerMask) ? cb.layerMask : COMBO_ALL_LAYERS;
+}
+
+// Ebenen der Maske als aufsteigende Liste, z. B. 0b101 -> [0, 2]
+function comboMaskLayers(mask) {
+  const out = [];
+  for (let l = 0; l < NUM_LAYERS; l++) if ((mask >> l) & 1) out.push(l);
+  return out;
+}
+
+// true, wenn die Combo auf der Ebene gilt
+function comboAppliesOnLayer(cb, layer) {
+  return ((comboLayerMask(cb) >> layer) & 1) === 1;
+}
 
 // Seitenprofile (fehlende Tasten, Daumen, Config-Combo, Leitungen) liegen in js/side-profiles.js
 const SIDE_PROFILES = Dactyl.SIDE_PROFILES;
@@ -516,6 +539,9 @@ function validateConfigShape(cfg, profile) {
         isValidIndex(cb.key1.r, NUM_ROWS) && isValidIndex(cb.key1.c, NUM_COLS) &&
         isValidIndex(cb.key2.r, NUM_ROWS) && isValidIndex(cb.key2.c, NUM_COLS);
       if (!ok) throw new Error(`Combo ${i + 1} hat ungültige Tasten (key1/key2).`);
+      if (cb.layerMask !== undefined && cb.layerMask !== null && !isValidComboLayerMask(cb.layerMask)) {
+        throw new Error(`Combo ${i + 1} hat eine ungültige Ebenenmaske (1..${COMBO_ALL_LAYERS} erwartet).`);
+      }
     });
   }
   if (cfg.keyPairs !== undefined) {
@@ -604,6 +630,11 @@ function normalizeConfig(cfg, profile) {
     ? cfg.combos.filter(cb => cb && cb.key1 && cb.key2 &&
         isValidIndex(cb.key1.r, NUM_ROWS) && isValidIndex(cb.key1.c, NUM_COLS) &&
         isValidIndex(cb.key2.r, NUM_ROWS) && isValidIndex(cb.key2.c, NUM_COLS)).slice(0, MAX_COMBOS)
+        // Eine ungültige Maske wird zu "alle Ebenen"; die Maske für alle Ebenen steht nicht in der Datei
+        .map(cb => {
+          const { layerMask, ...rest } = cb;
+          return isValidComboLayerMask(layerMask) && layerMask !== COMBO_ALL_LAYERS ? { ...rest, layerMask } : rest;
+        })
     : [];
   cfg.keyPairs = Array.isArray(cfg.keyPairs)
     ? cfg.keyPairs.filter(p => p && isKeyPairMember(p.first) && isKeyPairMember(p.second))
@@ -785,8 +816,10 @@ function captureListLine(snapshot, line) {
     const count = snapshot.counts[kind];
     const list = snapshot[kind];
     if (count === null || data.o !== list.length || !Array.isArray(data.e) || list.length + data.e.length > count ||
-        !data.e.every(e => isCombo ? nums(e, 6, t => t[4] <= 2) : isOverride ? nums(e, 3, t => t[0] >= 1 && t[0] <= 15) : nums(e, 2))) return fail();
-    list.push(...data.e);
+        !data.e.every(e => isCombo ? (nums(e, 6, t => t[4] <= 2) || nums(e, 7, t => t[4] <= 2 && isValidComboLayerMask(t[6])))
+          : isOverride ? nums(e, 3, t => t[0] >= 1 && t[0] <= 15) : nums(e, 2))) return fail();
+    // Firmware vor der Ebenenmaske sendet 6 Werte je Combo: sie gilt auf allen Ebenen
+    list.push(...(isCombo ? data.e.map(e => (e.length === 6 ? [...e, COMBO_ALL_LAYERS] : e)) : data.e));
   } catch (_) { return fail(); }
   return true;
 }
@@ -816,7 +849,7 @@ function snapshotListsKnown(snapshot) {
 // Lokale Listen als Zahlen-Tupel, so wie die Firmware sie sendet
 function localComboTuples(cfg) {
   return (cfg.combos || []).slice(0, MAX_COMBOS).map(cb => [cb.key1.r, cb.key1.c, cb.key2.r, cb.key2.c,
-    COMBO_BEHAVIOR_CODES[cb.behavior] ?? 0, actionCodeToNumeric(cb.action)]);
+    COMBO_BEHAVIOR_CODES[cb.behavior] ?? 0, actionCodeToNumeric(cb.action), comboLayerMask(cb)]);
 }
 
 function localPairTuples(cfg) {
@@ -837,7 +870,9 @@ const MACRO_STEP_NAMES = { 1: "Tippen", 2: "Drücken", 3: "Loslassen", 4: "Pause
 
 function describeComboTuple(t) {
   const behavior = ["", " (Modifier halten)", " (Ebene umschalten)"][t[4]] || "";
-  return `R${t[0]}C${t[1]} + R${t[2]}C${t[3]} → ${findDefinitionByCode(t[5]).label}${behavior}`;
+  const mask = t[6] === undefined ? COMBO_ALL_LAYERS : t[6];
+  const layers = mask === COMBO_ALL_LAYERS ? "" : ` (${comboMaskLayers(mask).length === 1 ? "Ebene" : "Ebenen"} ${comboMaskLayers(mask).join(", ")})`;
+  return `R${t[0]}C${t[1]} + R${t[2]}C${t[3]} → ${findDefinitionByCode(t[5]).label}${behavior}${layers}`;
 }
 
 function describePairTuple(t) {
@@ -1134,15 +1169,19 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
       }
     }
   }
-  // Wie die Firmware: Ebene = Aktionscode & 7 (0 löscht alle eingerasteten Ebenen). Combos gelten auf jeder Ebene.
-  const comboToggles = new Set();
+  // Wie die Firmware: Ebene = Aktionscode & 7 (0 löscht alle eingerasteten Ebenen). Eine Combo gilt nur auf den Ebenen
+  // ihrer Maske (Standard: alle).
+  const comboToggles = [];   // { target, mask }
   for (const side of sides) {
     for (const cb of Array.isArray(configs[side].combos) ? configs[side].combos : []) {
       // Eine Combo auf einer fehlenden Taste löst nie aus und ist kein Weg; ein Nicht-String als Aktion (Import) auch nicht
       if (cb && cb.behavior === "LAYER_TOGGLE" && typeof cb.action === "string" && lintComboCanFire(cb, profiles[side])) {
         // Auch die Firmware-Schreibweise ACT_TG_n (wie bei den Tasten); actionCodeToNumeric kennt sie nicht
         const toggle = lintLayerAction(cb.action);
-        comboToggles.add(toggle && toggle.layer !== undefined ? toggle.layer : actionCodeToNumeric(cb.action) & 7);
+        comboToggles.push({
+          target: toggle && toggle.layer !== undefined ? toggle.layer : actionCodeToNumeric(cb.action) & 7,
+          mask: comboLayerMask(cb)
+        });
       }
     }
   }
@@ -1150,12 +1189,16 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
   const computeReach = triRules => {
     const reach = new Set([0]);
     const lock = new Set();   // Ebenen, die sich einrasten lassen (TG, LAYER_UP/DOWN, Combo)
-    for (const n of comboToggles) {
-      if (n > 0) { reach.add(n); lock.add(n); }
-    }
     for (let grew = true; grew;) {
       grew = false;
       for (const l of [...reach]) {
+        // Einrast-Combos, die auf Ebene l gelten
+        for (const { target, mask } of comboToggles) {
+          if (target > 0 && ((mask >> l) & 1)) {
+            lock.add(target);
+            if (!reach.has(target)) { reach.add(target); grew = true; }
+          }
+        }
         for (const a of onLayer[l]) {
           let target = -1;
           let locks = false;
@@ -1204,7 +1247,8 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
 
   // Einrastbare Ebene ohne Rückweg: TG der Ebene oder TG_0, LAYER_UP/DOWN auf der Ebene oder eine Einrast-Combo
   const trapped = [...lockable].sort((a, b) => a - b).filter(n =>
-    !comboToggles.has(n) && !comboToggles.has(0) &&
+    // Rückweg per Combo: eine Combo auf Ebene n, die n oder alle Ebenen (0) umschaltet
+    !comboToggles.some(t => (t.target === n || t.target === 0) && ((t.mask >> n) & 1)) &&
     !onLayer[n].some(a => (a.kind === "TG" && (a.layer === n || a.layer === 0)) || a.kind === "LAYER_UP" || a.kind === "LAYER_DOWN" || a.kind === "LAYER_LOCK"));
   if (trapped.length) {
     add("warn", null, "layer-trap",
@@ -1225,15 +1269,18 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
       const name = macro && typeof macro.name === "string" && macro.name ? macro.name : "ohne Name";
       add("info", side, "macro-unused", `Makro ${i} (${name}) wird nirgends verwendet.`);
     });
+    // Zwei Combos über dieselben Tasten sind nur ein Fehler, wenn ihre Ebenenmasken sich überlappen
     const seen = new Map();
     combos.forEach((cb, i) => {
       // Nur Combos, die auslösen können: Koordinaten als Text ("2") oder fehlende Tasten sind keine Dopplung
       if (!lintComboCanFire(cb, profiles[side])) return;
       const ids = [`${cb.key1.r}_${cb.key1.c}`, `${cb.key2.r}_${cb.key2.c}`].sort().join("|");
-      if (seen.has(ids)) {
-        add("warn", side, "combo-duplicate", `Combo ${seen.get(ids) + 1} und Combo ${i + 1} nutzen dieselben zwei Tasten. Beide lösen gleichzeitig aus.`);
+      const earlier = (seen.get(ids) || []).find(e => (e.mask & comboLayerMask(cb)) !== 0);
+      if (earlier) {
+        add("warn", side, "combo-duplicate", `Combo ${earlier.index + 1} und Combo ${i + 1} nutzen dieselben zwei Tasten. Beide lösen gleichzeitig aus.`);
       } else {
-        seen.set(ids, i);
+        if (!seen.has(ids)) seen.set(ids, []);
+        seen.get(ids).push({ index: i, mask: comboLayerMask(cb) });
       }
     });
     combos.forEach((cb, i) => {
@@ -1242,6 +1289,8 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
       for (const key of [cb.key1, cb.key2]) {
         const layers = [];
         for (let l = 0; l < NUM_LAYERS; l++) {
+          // Nur auf Ebenen der Maske hält die Combo die Taste zurück
+          if (!comboAppliesOnLayer(cb, l)) continue;
           // Mit dem Rückfall auf Ebene 0 wie die Firmware: eine transparente Taste erbt dort Halten und Doppel-Tipp
           const a = lintResolvedCell(cfg, l, key.r, key.c);
           if (a.tap !== "NONE" && (a.hold !== "NONE" || a.dtap !== "NONE")) layers.push(l);

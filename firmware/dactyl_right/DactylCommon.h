@@ -82,6 +82,9 @@
 #define ACT_CAPS_WORD            0x168
 // Repeat: wiederholt die zuletzt ausgeführte Aktion beider Hälften (nicht Layer-Aktionen, nicht sich selbst)
 #define ACT_REPEAT               0x169
+// Layer lock: rastet die höchste gehaltene MO-Ebene (eigene oder der anderen Hälfte) als TG-Ebene ein;
+// ein zweiter Druck oder ein Druck ohne gehaltene MO-Ebene löst die Einrastung
+#define ACT_LAYER_LOCK           0x16A
 
 #define NUM_LAYERS 8
 

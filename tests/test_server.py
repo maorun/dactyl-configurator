@@ -48,6 +48,7 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertEqual(server.code_to_cpp("KEY_UP_ARROW"), "KEY_UP_ARROW")
         self.assertEqual(server.code_to_cpp("ACT_LAYER_UP"), "ACT_LAYER_UP")
         self.assertEqual(server.code_to_cpp("ACT_LAYER_DOWN"), "ACT_LAYER_DOWN")
+        self.assertEqual(server.code_to_cpp("LAYER_LOCK"), "ACT_LAYER_LOCK")
         self.assertEqual(server.code_to_cpp("MOUSE_LEFT"), "ACT_MOUSE_LEFT")
         self.assertEqual(server.code_to_cpp("MOUSE_RIGHT"), "ACT_MOUSE_RIGHT")
         self.assertEqual(server.code_to_cpp("MOUSE_MIDDLE"), "ACT_MOUSE_MIDDLE")
@@ -495,9 +496,16 @@ class TestServerAndCodegen(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.generate_combos_cpp([combo])
 
+    def test_layer_lock_combo_only_with_key_press(self):
+        combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "KEY_PRESS", "action": "LAYER_LOCK"}
+        self.assertIn("ACT_LAYER_LOCK", server.generate_combos_cpp([combo]))
+        for beh in ("LAYER_TOGGLE", "MODIFIER_HOLD"):
+            with self.subTest(beh=beh), self.assertRaises(ValueError):
+                server.generate_combos_cpp([{**combo, "behavior": beh}])
+
     def test_modifier_hold_combo_rejects_one_shot_and_caps_word(self):
         # MODIFIER_HOLD hält nur Codes 1..255; One-Shot und Caps Word sendeten dort nichts (stille Fehlkonfiguration)
-        for action in ("OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD", "REPEAT"):
+        for action in ("OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD", "REPEAT", "LAYER_LOCK"):
             combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "MODIFIER_HOLD", "action": action}
             with self.subTest(action=action), self.assertRaises(ValueError):
                 server.generate_combos_cpp([combo])

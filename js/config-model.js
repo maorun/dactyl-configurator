@@ -1022,12 +1022,12 @@ function lintEffectiveActions(cfg, layer, r, c) {
   return [a.tap, a.hold, a.dtap].filter(x => x !== "NONE");
 }
 
-// MO_n / TG_n / LAYER_UP / LAYER_DOWN (auch als Firmware-Name ACT_...); sonst null
+// MO_n / TG_n / LAYER_UP / LAYER_DOWN / LAYER_LOCK (auch als Firmware-Name ACT_...); sonst null
 function lintLayerAction(code) {
   const name = String(code || "").replace(/^ACT_/, "");
   const m = /^(MO|TG)_([0-7])$/.exec(name);
   if (m) return { kind: m[1], layer: Number(m[2]) };
-  if (name === "LAYER_UP" || name === "LAYER_DOWN") return { kind: name };
+  if (name === "LAYER_UP" || name === "LAYER_DOWN" || name === "LAYER_LOCK") return { kind: name };
   return null;
 }
 
@@ -1152,6 +1152,8 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
           else if (a.kind === "TG") { target = a.layer; locks = true; }
           else if (a.kind === "LAYER_UP") { target = (l + 1) % NUM_LAYERS; locks = true; }
           else if (a.kind === "LAYER_DOWN") { target = (l + NUM_LAYERS - 1) % NUM_LAYERS; locks = true; }
+          // LAYER_LOCK auf Ebene l rastet die gehaltene MO-Ebene ein (Ebene l, wenn sie per MO aktiv ist)
+          else if (a.kind === "LAYER_LOCK" && l > 0) { target = l; locks = true; }
           if (target < 0) continue;
           if (locks && target > 0) lock.add(target);
           if (!reach.has(target)) { reach.add(target); grew = true; }
@@ -1192,11 +1194,11 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
   // Einrastbare Ebene ohne Rückweg: TG der Ebene oder TG_0, LAYER_UP/DOWN auf der Ebene oder eine Einrast-Combo
   const trapped = [...lockable].sort((a, b) => a - b).filter(n =>
     !comboToggles.has(n) && !comboToggles.has(0) &&
-    !onLayer[n].some(a => (a.kind === "TG" && (a.layer === n || a.layer === 0)) || a.kind === "LAYER_UP" || a.kind === "LAYER_DOWN"));
+    !onLayer[n].some(a => (a.kind === "TG" && (a.layer === n || a.layer === 0)) || a.kind === "LAYER_UP" || a.kind === "LAYER_DOWN" || a.kind === "LAYER_LOCK"));
   if (trapped.length) {
     add("warn", null, "layer-trap",
       `${lintLayerName(trapped)} ${trapped.length === 1 ? "lässt" : "lassen"} sich einrasten, aber dort gibt es keine Taste zurück ` +
-      "(TG der Ebene, TG_0, LAYER_UP, LAYER_DOWN oder eine Combo \"Layer umschalten\").");
+      "(TG der Ebene, TG_0, LAYER_UP, LAYER_DOWN, LAYER_LOCK oder eine Combo \"Layer umschalten\").");
   }
 
   // 3. Je Hälfte: ungenutzte Tastenpaare und Makros, doppelte Combos, Combo-Tasten mit Halte- oder Doppel-Tipp-Aktion

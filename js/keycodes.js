@@ -137,6 +137,7 @@ const KEYCODES = [
   { group: "Layer Umschalter", keys: [
     { code: "LAYER_UP", label: "⬆️ Layer +1 Hoch (Nächste Ebene)", char: "" },
     { code: "LAYER_DOWN", label: "⬇️ Layer -1 Runter (Vorherige Ebene)", char: "" },
+    { code: "LAYER_LOCK", label: "🔒 Layer Lock (gehaltene MO-Ebene einrasten)", char: "" },
     { code: "MO_0", label: "Momentary Layer 0 (Base)", char: "" },
     { code: "MO_1", label: "Momentary Layer 1", char: "" },
     { code: "MO_2", label: "Momentary Layer 2", char: "" },
@@ -245,6 +246,7 @@ const ACTION_TO_NUMERIC = {
   "TG_5": 0x115, "TG_6": 0x116, "TG_7": 0x117,
   "LAYER_UP": 0x118,
   "LAYER_DOWN": 0x119,
+  "LAYER_LOCK": 0x16A,
 
   // Umlaute für das macOS-Layout "U.S." (0x150..0x156): Tottaste Alt + u, dann Vokal; ß = Alt + s
   "UMLAUT_AE": 0x150, "UMLAUT_OE": 0x151, "UMLAUT_UE": 0x152,
@@ -287,7 +289,7 @@ const UMLAUT_LABELS = {
 const ONE_SHOT_LABELS = {
   OSM_LCTRL: "OS Ctrl", OSM_LSHIFT: "OS Shift", OSM_LALT: "OS Alt", OSM_LGUI: "OS Cmd",
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
-  CAPS_WORD: "CapsWd", REPEAT: "Repeat"
+  CAPS_WORD: "CapsWd", REPEAT: "Repeat", LAYER_LOCK: "Lock"
 };
 
 // true für Mausbewegung (Combos führen sie nicht aus)

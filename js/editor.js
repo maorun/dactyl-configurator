@@ -464,6 +464,7 @@ const ON_SCREEN_KEYBOARD_TABS = {
       [
         { code: "LAYER_UP", label: "Layer +1 (Aufwärts)", width: 2 },
         { code: "LAYER_DOWN", label: "Layer -1 (Abwärts)", width: 2 },
+        { code: "LAYER_LOCK", label: "Layer Lock", width: 2 },
         { code: "NONE", label: "--- Transparent / Keine ---", width: 3 }
       ]
     ]

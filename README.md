@@ -241,6 +241,7 @@ dactyl_configurator/
 | `0x110` .. `0x117` | Toggle Layer | `ACT_TG_0` .. `ACT_TG_7` | Einrastende Ebene; `TG_0` setzt auf Base zurück |
 | `0x118` | Layer +1 Hoch | `ACT_LAYER_UP` (`LAYER_UP`) | Schaltet 1 Ebene höher (`0 ➔ 1 ➔ ... ➔ 7 ➔ 0`) |
 | `0x119` | Layer -1 Runter | `ACT_LAYER_DOWN` (`LAYER_DOWN`) | Schaltet 1 Ebene tiefer (`0 ➔ 7 ➔ ... ➔ 1 ➔ 0`) |
+| `0x16A` | Layer Lock | `ACT_LAYER_LOCK` (`LAYER_LOCK`) | Rastet die gehaltene `MO_n`-Ebene ein; zweiter Druck löst sie |
 | `0x120` .. `0x126` | Media Keys | `Play/Pause`, `Mute`, `Vol+`, `Vol-` | Consumer Control HID |
 | `0x127` | Apple Mac Globe | `ACT_MAC_GLOBE` (`0x029D`) | Emojis / Fn-Tastenkombinationen |
 | `0x160` .. `0x167` | One-Shot-Modifier | `ACT_OSM_LCTRL` .. `ACT_OSM_RGUI` (`OSM_*`) | Tippen: Modifier nur für die nächste Taste (beide Hälften); Halten: normaler Modifier |

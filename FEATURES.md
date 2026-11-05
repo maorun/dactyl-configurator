@@ -156,7 +156,7 @@ Rules for this file:
 - `applyLayerLock()` (`DactylLogic.h`) only writes `toggleLayers[]`. The layer sync (`SPLIT_OP_LAYER_STATE`) carries the lock to the other half; there is no new op.
 - It works as tap, hold and double-tap action (`dispatchPress`) and as the action of a combo with the behavior `KEY_PRESS`. `ADD_COMBO`, the server and the app reject it with the behaviors `MODIFIER_HOLD` and `LAYER_TOGGLE`. `REPEAT` does not record it.
 - `lintLayouts` counts `LAYER_LOCK` on a layer as a lock of that layer and as a way back from a locked layer.
-- The firmware needs `DACTYL_FW_VERSION` 15 or higher on both halves, because the left half must know the code.
+- The firmware needs `DACTYL_FW_VERSION` 16 or higher on both halves, because the left half must know the code.
 
 ### Layer sync (`SPLIT_OP_LAYER_STATE`)
 

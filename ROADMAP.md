@@ -49,7 +49,6 @@ Rules for this file:
 - **Goal:** Read the LED bits (Num Lock, Caps Lock, Scroll Lock) in `onWrite`. Print each change on USB serial as `HOST_LEDS:{"caps":0|1,...}` and add the field to `DEVICE_INFO`. Add a setting (default off) that lights the onboard LED while Caps Lock is on. The app shows a Caps Lock pill in the header.
 - **Acceptance test:** A firmware test feeds an output report to the callback and checks the stored state and the serial line. An app test parses the line.
 
-
 ### Hold only after a typing pause
 
 - **Rank:** Feature model. Total 22/40 (typing 7, configuration 2, harmony 7, safety 6). Effort S. Estimate.

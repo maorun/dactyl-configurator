@@ -31,15 +31,6 @@ Rules for this file:
 - **Dependency:** "Three-key combos with their own window" also changes the combo format. Define one new NVS format for both entries.
 - **Acceptance test:** A firmware test shows that a combo with the mask of layer 0 triggers on layer 0 and that its keys send without delay on layer 2. A test loads the old NVS format with the mask of all layers.
 
-### Tapping term per key
-
-- **Rank:** Feature model. Total 24/40 (typing 7, configuration 4, harmony 7, safety 6). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (Mod-Tap and Tap-Dance timing), `firmware/dactyl_right/DactylVersion.h`, `server.py`, `js/editor.js` (inspector), `js/config-sync.js`, `js/config-model.js`.
-- **Problem:** `tappingTermMs` applies to all keys of a half. Home row mods on the ring finger and the little finger need a longer term than a thumb key. One value causes wrong holds or slow taps.
-- **Goal:** Add an optional tapping term per key (100..500 ms, `0` = the value of the half). The inspector shows the field next to the hold action. Store the values in a new NVS key; a missing key keeps the current behavior. Add a command for the full sync and the `GET_CONFIG` output. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test shows that a key with 300 ms stays a tap at 250 ms, while a key without its own value resolves as hold. A server test checks the rendering and the value range.
-
 ### Host LED state and Caps Lock indicator
 
 - **Rank:** Feature model. Total 23/40 (typing 5, configuration 4, harmony 6, safety 8). Effort S. Estimate.

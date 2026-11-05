@@ -234,6 +234,10 @@ Keys in the matrix use `uint16_t` action codes:
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 - Details: `FEATURES.md`, section "Tap-Dance / Double-Tap". Read it only before you change this feature.
 
+### Tapping term per key (`TAPTERMMAP`)
+- Details: `FEATURES.md`, section "Mod-Tap / Layer-Tap" (own tapping term). Read it only before you change this feature.
+- `0` = the value of the half (`tappingTermMs`). Use `effectiveTapTerm()`; never compare against `tappingTermMs` directly in the hold or double-tap logic. `SET_KT` is RAM only, like `SET_K`.
+
 ---
 
 ## Wireless Bluetooth Config Mode & Staged One-Shot Auto-Sync

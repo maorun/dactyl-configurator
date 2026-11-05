@@ -429,6 +429,21 @@ def cell_actions(cell):
     return "NONE", "NONE", "NONE"
 
 
+def cell_tap_term(cell, where="Taste"):
+    """Eigener Tapping-Term einer Taste in ms: 0 (Wert der Hälfte) oder 100..500. Fehlt das Feld, gilt 0."""
+    if not isinstance(cell, dict) or "tapTerm" not in cell:
+        return 0
+    value = cell["tapTerm"]
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Ungültiger Tapping-Term für {where}: Ganzzahl erwartet.")
+    lo, hi, _default = SETTINGS_RANGES["tappingTermMs"]
+    if value != 0 and not (lo <= value <= hi):
+        raise ValueError(f"Tapping-Term für {where} außerhalb von 0 oder {lo}..{hi}: {value}")
+    return value
+
+
 def generate_matrix_cpp(layers, marker, var_name, pick):
     lines = [
         f"// [[[START_{marker}]]]",
@@ -453,7 +468,7 @@ def generate_matrix_cpp(layers, marker, var_name, pick):
             row_entries = []
             row = layer_data[r] if r < len(layer_data) and isinstance(layer_data[r], list) else []
             for c in range(NUM_COLS):
-                val = code_to_cpp(pick(cell_actions(row[c]))) if c < len(row) else "0"
+                val = pick(row[c]) if c < len(row) else "0"
                 row_entries.append(val.ljust(16 if len(val) < 16 else len(val) + 1))
             comma = "," if r < NUM_ROWS - 1 else ""
             lines.append(f"    {{ {', '.join(row_entries)} }}{comma}")
@@ -466,15 +481,19 @@ def generate_matrix_cpp(layers, marker, var_name, pick):
 
 
 def generate_holdmap_cpp(layers):
-    return generate_matrix_cpp(layers, "HOLDMAP", "HOLDMAP", lambda a: a[1])
+    return generate_matrix_cpp(layers, "HOLDMAP", "HOLDMAP", lambda cell: code_to_cpp(cell_actions(cell)[1]))
 
 
 def generate_dtapmap_cpp(layers):
-    return generate_matrix_cpp(layers, "DTAPMAP", "DTAPMAP", lambda a: a[2])
+    return generate_matrix_cpp(layers, "DTAPMAP", "DTAPMAP", lambda cell: code_to_cpp(cell_actions(cell)[2]))
+
+
+def generate_tapterm_cpp(layers):
+    return generate_matrix_cpp(layers, "TAPTERMMAP", "TAPTERMMAP", lambda cell: str(cell_tap_term(cell) if any(x != "NONE" for x in cell_actions(cell)[1:]) else 0))
 
 
 def generate_keymap_cpp(layers):
-    return generate_matrix_cpp(layers, "KEYMAP", "KEYMAP", lambda a: a[0])
+    return generate_matrix_cpp(layers, "KEYMAP", "KEYMAP", lambda cell: code_to_cpp(cell_actions(cell)[0]))
 
 
 def generate_layer_names_cpp(layer_names):
@@ -781,6 +800,8 @@ def render_ino_content(content, config, defaults_id=None, side="R"):
     content = replace_marked_block(content, "KEYMAP", generate_keymap_cpp(layers), required=True)
     content = replace_marked_block(content, "HOLDMAP", generate_holdmap_cpp(layers), required=True)
     content = replace_marked_block(content, "DTAPMAP", generate_dtapmap_cpp(layers), required=True)
+    # Ältere Vorlagen ohne Block bleiben gültig (kein eigener Term)
+    content = replace_marked_block(content, "TAPTERMMAP", generate_tapterm_cpp(layers))
     if defaults_id is not None:
         content = replace_marked_block(content, "DEFAULTS_ID", generate_defaults_id_cpp(defaults_id), required=True)
     if config.get("layerNames"):
@@ -880,6 +901,7 @@ def validate_config(config, side="R"):
                 if not isinstance(cell, (dict, str)):
                     raise ValueError(f"Ungültige Taste R{r_idx}C{c_idx} in Ebene {l_idx}: Objekt oder Code erwartet.")
                 # Linke Hälfte: fehlende Tasten tragen keine Aktion (die rechte Vorlage hat dort historisch Werte)
+                cell_tap_term(cell, f"R{r_idx}C{c_idx} in Ebene {l_idx}")
                 if side == "L" and (r_idx, c_idx) in ABSENT_KEYS["L"] and any(a not in ("", "NONE", "0") for a in cell_actions(cell)):
                     raise ValueError(f"Taste R{r_idx}C{c_idx} existiert auf der linken Hälfte nicht (Ebene {l_idx}).")
     # Codegen prüft Combos und Einstellungen vollständig (Bereiche identisch zur Firmware)

@@ -1170,6 +1170,8 @@ function updateInspector(r, c) {
   primarySelect.value = keyData.tap || "KEY_SPACE";
   setOptionalActionSelect(holdSelect, normalizeHoldCode(keyData.hold));
   setOptionalActionSelect(document.getElementById("dtapActionSelect"), normalizeHoldCode(keyData.dtap));
+  const termInput = document.getElementById("keyTapTermInput");
+  if (termInput) termInput.value = Number.isInteger(keyData.tapTerm) && keyData.tapTerm > 0 ? keyData.tapTerm : "";
 }
 
 // Setzt eine Halte- oder Doppel-Tipp-Auswahl. Ein unbekannter Code (z. B. aus einem Import) fällt nicht

@@ -20,6 +20,7 @@ static ComboRuntime comboRuntime[MAX_COMBOS];
 static uint16_t KEYMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t HOLDMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t DTAPMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+static uint16_t TAPTERMMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static String layerNames[NUM_LAYERS] = {
   "Base", "Nav & Pfeile", "Symbole", "Numpad",
   "Function", "Media", "Shortcuts", "Custom"
@@ -142,7 +143,7 @@ void resetState() {
   }
   for (int l = 0; l < NUM_LAYERS; l++)
     for (int r = 0; r < NUM_ROWS; r++)
-      for (int c = 0; c < NUM_COLS; c++) { HOLDMAP[l][r][c] = 0; DTAPMAP[l][r][c] = 0; }
+      for (int c = 0; c < NUM_COLS; c++) { HOLDMAP[l][r][c] = 0; DTAPMAP[l][r][c] = 0; TAPTERMMAP[l][r][c] = 0; }
   resetTapHold();
   resetMouseMove();
   resetDoubleTap();
@@ -166,6 +167,7 @@ void resetState() {
   comboTimeoutMs = 40;
   tappingTermMs = 200;
   quickTapMs = 0;
+  tapTermsCompiledIn = false;
   holdTapMode = 0;
   numTriLayers = 0;
   memset(triLayerRules, 0, sizeof(triLayerRules));
@@ -1190,7 +1192,7 @@ TEST(test_get_config_lines_stay_short_at_maximum) {
     return c;
   };
   for (const auto& n : mockChar.notifications) {
-    if (n.rfind("LAYER_DATA", 0) == 0 || n.rfind("HOLD_DATA", 0) == 0 || n.rfind("DTAP_DATA", 0) == 0) continue;
+    if (n.rfind("LAYER_DATA", 0) == 0 || n.rfind("HOLD_DATA", 0) == 0 || n.rfind("DTAP_DATA", 0) == 0 || n.rfind("TERM_DATA", 0) == 0) continue;
     if (n.size() > longest) longest = n.size();
     if (n.rfind("COMBO_DATA", 0) == 0) comboEntries += countOf(n, "],[") + 1;
     if (n.rfind("PAIR_DATA", 0) == 0) pairEntries += countOf(n, "],[") + 1;
@@ -2859,6 +2861,190 @@ TEST(test_tapping_term_bounds_and_stored_out_of_range) {
   Preferences::uintStore["tap_term"] = 450;
   loadKeymapFromNVS();
   assert(tappingTermMs == 450);
+}
+
+// -----------------------------------------------------------------------------
+// Tapping-Term je Taste (TAPTERMMAP, SET_KT): 0 = Wert der Hälfte
+// -----------------------------------------------------------------------------
+TEST(test_tapping_term_per_key_resolution) {
+  resetState();
+  // Zwei gleiche Mod-Tap-Tasten; nur J hat einen eigenen Term von 300 ms, die Hälfte hat 200 ms
+  handleConfigCommand("SET_K 0 2 1 106 128", false);   // J: Tap j, Hold Left Ctrl
+  handleConfigCommand("SET_K 0 2 2 107 129", false);   // K: Tap k, Hold Left Shift
+  handleConfigCommand("SET_KT 0 2 1 300", false);
+  assert(TAPTERMMAP[0][2][1] == 300 && TAPTERMMAP[0][2][2] == 0);
+  bleKeyboard.pressHistory.clear();
+
+  // J: bei 250 ms noch unentschieden, Loslassen ergibt einen Tap
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1250);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 0);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(countPresses('j') == 1);
+  assert(countPresses(KEY_LEFT_CTRL) == 0);
+
+  // K ohne eigenen Wert: nach 250 ms (> 200 ms der Hälfte) ist es ein Hold
+  setMillis(2000);
+  keyState[2][2] = true;
+  onMatrixKeyChange(2, 2, true);
+  setMillis(2250);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_SHIFT) == 1);
+  keyState[2][2] = false;
+  onMatrixKeyChange(2, 2, false);
+  assert(countPresses('k') == 0);
+
+  // J erreicht den eigenen Term von 300 ms und wird Hold
+  setMillis(3000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(3300);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 1);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+
+  // Das Loslassen allein (ohne Tick) entscheidet nach dem eigenen Term ebenfalls als Hold
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 128", false);
+  handleConfigCommand("SET_KT 0 2 1 300", false);
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  setMillis(1299);
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  assert(countPresses('j') == 1 && countPresses(KEY_LEFT_CTRL) == 0);
+}
+
+TEST(test_tapping_term_per_key_double_tap_window) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 177", false); // J: Tap j, Doppel-Tipp Esc
+  handleConfigCommand("SET_KT 0 2 1 400", false);
+  bleKeyboard.pressHistory.clear();
+  // Zweiter Tipp 350 ms nach dem ersten Loslassen: im Fenster von 400 ms, außerhalb von 200 ms
+  tapKeyAt(2, 1, 1000, 1050);
+  tapKeyAt(2, 1, 1400, 1450);
+  assert(countPresses(KEY_ESC) == 1);
+  assert(countPresses('j') == 0);
+
+  // Ohne eigenen Wert gilt der Wert der Hälfte: derselbe Abstand ergibt zwei Einzel-Tipps
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 177", false);
+  bleKeyboard.pressHistory.clear();
+  tapKeyAt(2, 1, 1000, 1050);
+  tapKeyAt(2, 1, 1400, 1450);
+  setMillis(2000);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_ESC) == 0);
+  assert(countPresses('j') == 2);
+}
+
+TEST(test_tapping_term_per_key_commands_and_nvs) {
+  resetState();
+  handleConfigCommand("SET_KT 0 2 1 99", false);
+  assert(mockChar.value == "ERR ARGS SET_KT 0 2 1 99");
+  handleConfigCommand("SET_KT 0 2 1 501", false);
+  assert(mockChar.value == "ERR ARGS SET_KT 0 2 1 501");
+  handleConfigCommand("SET_KT 8 2 1 300", false);
+  assert(mockChar.value == "ERR ARGS SET_KT 8 2 1 300");
+  handleConfigCommand("SET_KT 0 2 1 300 7", false);
+  assert(mockChar.value == "ERR ARGS SET_KT 0 2 1 300 7");
+  assert(TAPTERMMAP[0][2][1] == 0);
+  handleConfigCommand("SET_KT 0 2 1 100", false);
+  handleConfigCommand("SET_KT 1 3 4 500", false);
+  assert(TAPTERMMAP[0][2][1] == 100 && TAPTERMMAP[1][3][4] == 500);
+
+  // GET_CONFIG meldet die Werte je Ebene
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool foundL0 = false, foundL1 = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n.rfind("TERM_DATA:{\"l\":0,", 0) == 0 && n.find("[0,0,0,0,0,0,0],[0,0,0,0,0,0,0],[0,100,0,") != std::string::npos) foundL0 = true;
+    if (n.rfind("TERM_DATA:{\"l\":1,", 0) == 0 && n.find("[0,0,0,0,500,0,0]") != std::string::npos) foundL1 = true;
+  }
+  assert(foundL0 && foundL1);
+
+  // Ohne SAVE_NVS bleibt der NVS leer; danach überlebt der Wert einen Neustart
+  assert(!preferences.isKey("tapterms"));
+  handleConfigCommand("SAVE_NVS", false);
+  assert(mockChar.value == "OK SAVE_NVS");
+  assert(preferences.getBytesLength("tapterms") == sizeof(TAPTERMMAP));
+  memset(TAPTERMMAP, 0, sizeof(TAPTERMMAP));
+  loadKeymapFromNVS();
+  assert(TAPTERMMAP[0][2][1] == 100 && TAPTERMMAP[1][3][4] == 500);
+
+  // CLEAR_TAP_TERMS + SAVE_NVS entfernt den Schlüssel: danach gilt überall der Wert der Hälfte
+  handleConfigCommand("CLEAR_TAP_TERMS", false);
+  assert(mockChar.value == "OK CLEAR_TAP_TERMS");
+  assert(TAPTERMMAP[0][2][1] == 0);
+  handleConfigCommand("SAVE_NVS", false);
+  assert(!preferences.isKey("tapterms"));
+  loadKeymapFromNVS();
+  assert(TAPTERMMAP[0][2][1] == 0);
+
+  // Ungültiger gespeicherter Wert zählt als 0, ein fehlender Schlüssel lässt alles beim Alten
+  std::vector<uint8_t> raw(sizeof(TAPTERMMAP), 0);
+  uint16_t bad = 50, good = 250;
+  memcpy(raw.data(), &bad, sizeof(bad));
+  memcpy(raw.data() + sizeof(uint16_t), &good, sizeof(good));
+  Preferences::bytesStore["tapterms"] = raw;
+  loadKeymapFromNVS();
+  assert(TAPTERMMAP[0][0][0] == 0 && TAPTERMMAP[0][0][1] == 250);
+}
+
+// Einkompilierte Terme dürfen nach CLEAR_TAP_TERMS + SAVE_NVS nicht beim nächsten Start zurückkommen
+TEST(test_tapping_term_per_key_cleared_compiled_in_terms_stay_cleared) {
+  resetState();
+  TAPTERMMAP[0][2][1] = 300;                 // einkompilierter Wert (Flash aus dem Repository)
+  loadKeymapFromNVS();                       // erster Start: Defaults landen im NVS
+  assert(TAPTERMMAP[0][2][1] == 300);
+  handleConfigCommand("CLEAR_TAP_TERMS", false);
+  handleConfigCommand("SAVE_NVS", false);
+  assert(mockChar.value == "OK SAVE_NVS");
+  assert(preferences.isKey("tapterms"));     // Null-Blob statt fehlendem Schlüssel
+  // Neustart: die Firmware trägt wieder den einkompilierten Wert, der NVS hat Vorrang
+  TAPTERMMAP[0][2][1] = 300;
+  tapTermsCompiledIn = false;
+  loadKeymapFromNVS();
+  assert(TAPTERMMAP[0][2][1] == 0);
+  assert(!anyKeyTapTerm());
+}
+
+// Eine transparente Taste auf Ebene 1 erbt den Term von Ebene 0 wie ihre Aktionen
+TEST(test_tapping_term_per_key_transparent_key_inherits_layer0_term) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 128", false);   // Ebene 0: J, Hold Ctrl
+  handleConfigCommand("SET_KT 0 2 1 300", false);
+  handleConfigCommand("SET_K 1 2 1 0", false);         // Ebene 1: transparent
+  assert(resolveKeyTapTerm(1, 2, 1) == 300);
+  assert(resolveKeyTapTerm(0, 2, 1) == 300);
+  handleConfigCommand("SET_K 1 2 1 107", false);       // Ebene 1: eigene Taste, kein eigener Term
+  assert(resolveKeyTapTerm(1, 2, 1) == 0);
+}
+
+TEST(test_tapping_term_per_key_fingerprint_and_defaults) {
+  resetState();
+  uint32_t base = keymapDefaultsFingerprint();
+  TAPTERMMAP[0][2][1] = 300;
+  assert(keymapDefaultsFingerprint() != base);          // belegte Terme gehören zur Belegung
+  TAPTERMMAP[0][2][1] = 0;
+  assert(keymapDefaultsFingerprint() == base);          // leer = Fingerprint der Firmware davor
+
+  // Ein Flash aus der App (ID != 0) ersetzt gespeicherte Terme durch die einkompilierten
+  resetState();
+  TAPTERMMAP[0][2][1] = 300;
+  handleConfigCommand("SAVE_NVS", false);
+  memset(TAPTERMMAP, 0, sizeof(TAPTERMMAP));
+  testDefaultsId = 77;
+  loadKeymapFromNVS();
+  assert(TAPTERMMAP[0][2][1] == 0);
+  assert(!preferences.isKey("tapterms"));
+  testDefaultsId = 0;
 }
 
 

@@ -83,7 +83,7 @@ async function writeConfigToESP32(options = {}) {
 
     // Sendet einen Befehl und wartet auf "OK <prefix>" der Firmware (ERR oder Timeout = Fehler).
     // optional: ältere Firmware kennt den Befehl nicht ("ERR UNKNOWN"); der Sync läuft dann ohne ihn weiter.
-    const sendConfirmed = async (cmd, okPrefix, timeoutMs = 3000, optional = false) => {
+    const sendConfirmed = async (cmd, okPrefix, timeoutMs = 3000, optional = false, quietUnknown = false) => {
       const ack = waitForAck(okPrefix, timeoutMs, side, optional);
       try {
         await sendCmd(cmd);
@@ -93,6 +93,7 @@ async function writeConfigToESP32(options = {}) {
       }
       const result = await ack;
       if (result === "unknown") {
+        if (quietUnknown) return "unknown";
         showToast(`⚠️ Die Firmware der ${profile.label} kennt ${okPrefix} nicht. Bitte neu flashen, um die Einstellung zu übernehmen.`, 7000);
         return "unknown";
       }
@@ -119,8 +120,12 @@ async function writeConfigToESP32(options = {}) {
     };
     showProgressLabel();
 
-    for (const { cmd, ack, optional } of settingCommands) {
-      await sendConfirmed(cmd, ack, 3000, optional);
+    // Eigene Tapping-Terme je Taste: Firmware davor kennt CLEAR_TAP_TERMS nicht; der Hinweis erscheint nur,
+    // wenn die App Werte senden müsste. Die Werte folgen nach den Tasten (SET_KT, wie SET_K ohne Bestätigung).
+    let tapTermsKnown = false;
+    for (const { cmd, ack, optional, quietUnknown } of settingCommands) {
+      const result = await sendConfirmed(cmd, ack, 3000, optional, !!quietUnknown && !hasKeyTapTerms(cfg.layers));
+      if (ack === "CLEAR_TAP_TERMS") tapTermsKnown = result !== "unknown";
       updateProgress();
     }
 
@@ -140,6 +145,8 @@ async function writeConfigToESP32(options = {}) {
           const { tapCode, holdCode, dtapCode } = keyToNumericActions(row[c]);
           await sendCmd(`SET_K ${l} ${r} ${c} ${tapCode} ${holdCode} ${dtapCode}`);
           updateProgress();
+          const term = keyTapTerm(row[c]);
+          if (term && tapTermsKnown) await sendCmd(`SET_KT ${l} ${r} ${c} ${term}`);
         }
       }
     }
@@ -291,8 +298,14 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_TAPPING_TERM ${clampSetting("tappingTermMs", s.tappingTermMs ?? 200)}`, ack: "SET_TAPPING_TERM", optional: true },
     { cmd: `SET_HOLD_MODE ${clampSetting("holdTapMode", s.holdTapMode ?? 0)}`, ack: "SET_HOLD_MODE", optional: true },
     { cmd: `SET_QUICK_TAP ${clampSetting("quickTapMs", s.quickTapMs ?? 0)}`, ack: "SET_QUICK_TAP", optional: true },
-    { cmd: `SET_TRI_LAYER ${triLayerArgs(s.triLayers)}`, ack: "SET_TRI_LAYER", optional: true }
+    { cmd: `SET_TRI_LAYER ${triLayerArgs(s.triLayers)}`, ack: "SET_TRI_LAYER", optional: true },
+    { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true }
   ];
+}
+
+// true, wenn mindestens eine Taste einen eigenen Tapping-Term trägt
+function hasKeyTapTerms(layers) {
+  return (layers || []).some(layer => (layer || []).some(row => (row || []).some(cell => keyTapTerm(cell) > 0)));
 }
 
 // Argument von SET_TRI_LAYER: "a b target" je Regel, "-" ohne Regel

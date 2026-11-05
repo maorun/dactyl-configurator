@@ -32,6 +32,7 @@ static ComboRuntime comboRuntime[MAX_COMBOS];
 static uint16_t KEYMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t HOLDMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t DTAPMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+static uint16_t TAPTERMMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static String layerNames[NUM_LAYERS] = {
   "Base", "Nav & Pfeile", "Symbole", "Numpad", "Function", "Media", "Shortcuts", "Custom"
 };
@@ -95,7 +96,7 @@ static void resetState() {
   for (int l = 0; l < NUM_LAYERS; l++) {
     momentaryLayers[l] = toggleLayers[l] = false;
     for (int r = 0; r < NUM_ROWS; r++)
-      for (int c = 0; c < NUM_COLS; c++) KEYMAP[l][r][c] = HOLDMAP[l][r][c] = DTAPMAP[l][r][c] = 0;
+      for (int c = 0; c < NUM_COLS; c++) KEYMAP[l][r][c] = HOLDMAP[l][r][c] = DTAPMAP[l][r][c] = TAPTERMMAP[l][r][c] = 0;
   }
   for (int r = 0; r < NUM_ROWS; r++)
     for (int c = 0; c < NUM_COLS; c++) {

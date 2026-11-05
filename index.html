@@ -274,6 +274,12 @@
               <small class="form-hint">Zwei Tipps innerhalb von 200 ms lösen diese Aktion aus. Ein einzelner Tipp dieser Taste wird dann erst nach 200 ms gesendet. Wirkt nur mit einer Tap-Aktion.</small>
             </div>
 
+            <div class="form-group">
+              <label for="keyTapTermInput">Eigener Tapping-Term (ms, leer = Wert der Hälfte):</label>
+              <input type="number" id="keyTapTermInput" class="form-control" min="100" max="500" step="10" placeholder="Wert der Hälfte">
+              <small class="form-hint">100 bis 500 ms für Halte- und Doppel-Tipp-Aktion dieser Taste, zum Beispiel länger für Ring- und kleinen Finger. Wirkt nur mit einer Halte- oder Doppel-Tipp-Aktion.</small>
+            </div>
+
             <div class="inspector-actions">
               <button id="btnApplyKey" class="btn btn-primary btn-sm">Änderung übernehmen</button>
             </div>

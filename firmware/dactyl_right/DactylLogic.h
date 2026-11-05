@@ -11,7 +11,7 @@
  * Die einbindende Übersetzungseinheit muss VOR dem #include deklarieren:
  *   NUM_LAYERS, NUM_ROWS, NUM_COLS, MAX_COMBOS, CONFIG_MODE_MAGIC,
  *   KeyCombo, ComboRuntime, comboRuntime[], userCombos[], numCombos,
- *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], layerNames[],
+ *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], TAPTERMMAP[][][], layerNames[],
  *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
  *   nur Master (DACTYL_KEY_OVERRIDES): KeyOverride, userKeyOverrides[], numKeyOverrides (DactylKeyOverride.h),
  *   MAX_MACROS, MAX_MACRO_STEPS, ACT_MACRO_BASE, MacroStep, userMacros[][], macroLengths[], numMacros,
@@ -160,6 +160,7 @@ void processOtaTimeout() {
 // Quick-Tap-Term (Mod-Tap): 0 = aus; sonst gilt ein erneuter Druck derselben Mod-Tap-Taste innerhalb dieser Zeit
 // nach ihrem Tipp sofort als gehaltener Tipp (der Host wiederholt das Zeichen)
 #define QUICK_TAP_MAX_MS 500
+// Eigener Tapping-Term je Taste (TAPTERMMAP, je Ebene): 0 = Wert der Hälfte (tappingTermMs)
 
 // -----------------------------------------------------------------------------
 // Layer-Auflösung
@@ -248,6 +249,18 @@ void resolveKeyActions(uint8_t layer, uint8_t r, uint8_t c, uint16_t &tapAct, ui
 void resolveKeyActions(uint8_t layer, uint8_t r, uint8_t c, uint16_t &tapAct, uint16_t &holdAct) {
   uint16_t dtapAct;
   resolveKeyActions(layer, r, c, tapAct, holdAct, dtapAct);
+}
+
+// Eigener Tapping-Term der Taste auf der aktiven Ebene (0 = Wert der Hälfte). Gleiche Auflösung wie
+// resolveKeyActions: eine Taste ohne jede Aktion auf der Ebene erbt Aktionen und Term von Ebene 0.
+uint16_t resolveKeyTapTerm(uint8_t layer, uint8_t r, uint8_t c) {
+  if (layer > 0 && KEYMAP[layer][r][c] == 0 && HOLDMAP[layer][r][c] == 0 && DTAPMAP[layer][r][c] == 0) layer = 0;
+  return TAPTERMMAP[layer][r][c];
+}
+
+// Gültiger Wert für TAPTERMMAP: 0 (Wert der Hälfte) oder TAPPING_TERM_MIN_MS..TAPPING_TERM_MAX_MS
+bool isValidKeyTapTerm(int ms) {
+  return ms == 0 || (ms >= TAPPING_TERM_MIN_MS && ms <= TAPPING_TERM_MAX_MS);
 }
 
 // Eine der beiden Tasten der physischen Config-Combo (rechts R0C0/R4C5, links R0C5/R4C0)
@@ -1171,6 +1184,7 @@ struct TapHoldKey {
   uint16_t holdAction;
   uint8_t layer;
   unsigned long pressTime;
+  uint16_t term;     // Eigener Tapping-Term dieser Taste (0 = tappingTermMs der Hälfte)
 };
 TapHoldKey tapHold[NUM_ROWS][NUM_COLS];
 // Quick-Tap: Zeitpunkt des letzten Tipps (Loslassen) je Mod-Tap-Taste; nur der Tipp der zuletzt gedrückten Taste zählt
@@ -1178,10 +1192,15 @@ bool quickTapValid[NUM_ROWS][NUM_COLS];
 unsigned long quickTapAt[NUM_ROWS][NUM_COLS];
 bool quickTapHeld[NUM_ROWS][NUM_COLS];   // Der laufende Druck gilt als gehaltener Tipp
 
+// Wirksamer Tapping-Term: der eigene Wert der Taste, sonst der Wert der Hälfte
+static inline uint16_t effectiveTapTerm(uint16_t keyTerm) {
+  return keyTerm != 0 ? keyTerm : tappingTermMs;
+}
+
 void resetTapHold() {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      tapHold[r][c] = { false, false, 0, 0, 0, 0 };
+      tapHold[r][c] = { false, false, 0, 0, 0, 0, 0 };
       quickTapValid[r][c] = false;
       quickTapAt[r][c] = 0;
       quickTapHeld[r][c] = false;
@@ -1190,8 +1209,8 @@ void resetTapHold() {
   resetDeferredQueue();
 }
 
-void tapHoldOnPress(uint8_t r, uint8_t c, uint16_t tapAct, uint16_t holdAct, uint8_t layer, unsigned long now) {
-  tapHold[r][c] = { true, false, tapAct, holdAct, layer, now };
+void tapHoldOnPress(uint8_t r, uint8_t c, uint16_t tapAct, uint16_t holdAct, uint8_t layer, unsigned long now, uint16_t term = 0) {
+  tapHold[r][c] = { true, false, tapAct, holdAct, layer, now, term };
 }
 
 // -----------------------------------------------------------------------------
@@ -1209,6 +1228,7 @@ struct DoubleTapKey {
   uint8_t layer;
   unsigned long pressTime;     // Anschlag des ersten Tipps (für die Combo-Grace-Prüfung beim Nachholen)
   unsigned long releaseTime;
+  uint16_t term;               // Eigener Tapping-Term der Taste (0 = Wert der Hälfte), gilt auch für das Fenster
 };
 DoubleTapKey doubleTap[NUM_ROWS][NUM_COLS];
 // Beim Anschlag aufgelöste Doppel-Tipp-Aktion (ein Layer-Wechsel während des Haltens ändert sie nicht)
@@ -1217,7 +1237,7 @@ uint16_t tapHoldDtap[NUM_ROWS][NUM_COLS];
 void resetDoubleTap() {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      doubleTap[r][c] = { false, false, 0, 0, 0, 0, 0 };
+      doubleTap[r][c] = { false, false, 0, 0, 0, 0, 0, 0 };
       tapHoldDtap[r][c] = 0;
     }
   }
@@ -1274,7 +1294,7 @@ bool anyDoubleTapWaiting() {
 void doubleTapTick(unsigned long now) {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      if (doubleTap[r][c].waiting && (unsigned long)(now - doubleTap[r][c].releaseTime) >= tappingTermMs) {
+      if (doubleTap[r][c].waiting && (unsigned long)(now - doubleTap[r][c].releaseTime) >= effectiveTapTerm(doubleTap[r][c].term)) {
         flushDoubleTap(r, c);
       }
     }
@@ -1438,13 +1458,13 @@ bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct 
   TapHoldKey &k = tapHold[r][c];
   // Release wird vor dem Tick verarbeitet: Tapping-Term hier erneut prüfen,
   // sonst würde ein Halten über tappingTermMs noch als Tap gewertet.
-  if (k.pending && (unsigned long)(now - k.pressTime) >= tappingTermMs) {
+  if (k.pending && (unsigned long)(now - k.pressTime) >= effectiveTapTerm(k.term)) {
     activateTapHoldAsHold(r, c);
   }
   if (k.pending) {
     k.pending = false;
     if (dtapAct != 0) {
-      doubleTap[r][c] = { true, false, k.tapAction, dtapAct, k.layer, k.pressTime, now };
+      doubleTap[r][c] = { true, false, k.tapAction, dtapAct, k.layer, k.pressTime, now, k.term };
       if (!anyTapHoldPending() && deferredQueue.count > 0) replayDeferredQueue();
       return true;
     }
@@ -1469,7 +1489,7 @@ bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct 
 void tapHoldTick(unsigned long now) {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      if (tapHold[r][c].pending && (unsigned long)(now - tapHold[r][c].pressTime) >= tappingTermMs) {
+      if (tapHold[r][c].pending && (unsigned long)(now - tapHold[r][c].pressTime) >= effectiveTapTerm(tapHold[r][c].term)) {
         activateTapHoldAsHold(r, c);
       }
     }
@@ -1497,7 +1517,7 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     // Wartende Einzel-Tipps anderer Tasten zuerst senden, damit die Reihenfolge der Zeichen stimmt
     flushDoubleTapsExcept(r, c);
     DoubleTapKey &d = doubleTap[r][c];
-    bool isSecondTap = d.waiting && (unsigned long)(now - d.releaseTime) < tappingTermMs;
+    bool isSecondTap = d.waiting && (unsigned long)(now - d.releaseTime) < effectiveTapTerm(d.term);
     // Fenster abgelaufen, aber noch kein Tick: ersten Tipp vor dem neuen Anschlag nachholen
     if (!isSecondTap) flushDoubleTap(r, c);
     keyPressTime[r][c] = now;
@@ -1531,7 +1551,7 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
       return;
     }
     if (holdAct != 0 || dtapAct != 0) {
-      tapHoldOnPress(r, c, tapAct, holdAct, layer, now);
+      tapHoldOnPress(r, c, tapAct, holdAct, layer, now, resolveKeyTapTerm(layer, r, c));
       tapHoldDtap[r][c] = dtapAct;
     } else {
       dispatchPress(r, c, tapAct, layer);
@@ -1668,11 +1688,37 @@ void feedSerialChar(char ch, String &buf) {
 // -----------------------------------------------------------------------------
 // NVS-Persistenz (alle Schreibfunktionen melden Erfolg zurück)
 // -----------------------------------------------------------------------------
+// true, wenn mindestens eine Taste einen eigenen Tapping-Term hat
+bool anyKeyTapTerm() {
+  for (int l = 0; l < NUM_LAYERS; l++)
+    for (int r = 0; r < NUM_ROWS; r++)
+      for (int c = 0; c < NUM_COLS; c++)
+        if (TAPTERMMAP[l][r][c] != 0) return true;
+  return false;
+}
+
+// true, wenn die einkompilierten Defaults eigene Terme tragen (gesetzt am Anfang von loadKeymapFromNVS,
+// bevor der NVS TAPTERMMAP überschreibt)
+bool tapTermsCompiledIn = false;
+
+// Schreibt TAPTERMMAP in den geöffneten Namespace "dactyl". Ohne eigene Werte entfällt der Schlüssel
+// "tapterms": ein fehlender Schlüssel heißt "einkompilierte Werte" (altes Verhalten). Tragen die
+// einkompilierten Defaults selbst Terme, speichert ein leeres TAPTERMMAP einen Null-Blob, sonst
+// kämen die einkompilierten Terme beim nächsten Start zurück.
+bool writeTapTermsToOpenNVS() {
+  if (!anyKeyTapTerm() && !tapTermsCompiledIn) {
+    if (preferences.isKey("tapterms")) preferences.remove("tapterms");
+    return true;
+  }
+  return preferences.putBytes("tapterms", TAPTERMMAP, sizeof(TAPTERMMAP)) == sizeof(TAPTERMMAP);
+}
+
 bool saveKeymapToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
   bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
   ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
   ok = (preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP)) && ok;
+  ok = writeTapTermsToOpenNVS() && ok;
   preferences.end();
   Serial.println(ok ? "NVS: Keymap gespeichert." : "NVS: FEHLER beim Speichern der Keymap!");
   return ok;
@@ -1692,9 +1738,10 @@ uint32_t keymapDefaultsFingerprint() {
   for (size_t i = 0; i < sizeof(DTAPMAP); i++) {
     if (dtapBytes[i] != 0) { hasDtap = true; break; }
   }
-  const uint8_t* parts[4] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, dtapBytes, (const uint8_t*)&id };
-  const size_t sizes[4] = { sizeof(KEYMAP), sizeof(HOLDMAP), hasDtap ? sizeof(DTAPMAP) : 0, sizeof(id) };
-  for (int p = 0; p < 4; p++) {
+  // TAPTERMMAP zählt wie DTAPMAP nur mit, wenn sie belegt ist (Fingerprint älterer Firmware bleibt gleich)
+  const uint8_t* parts[5] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, dtapBytes, (const uint8_t*)&id, (const uint8_t*)TAPTERMMAP };
+  const size_t sizes[5] = { sizeof(KEYMAP), sizeof(HOLDMAP), hasDtap ? sizeof(DTAPMAP) : 0, sizeof(id), anyKeyTapTerm() ? sizeof(TAPTERMMAP) : 0 };
+  for (int p = 0; p < 5; p++) {
     for (size_t i = 0; i < sizes[p]; i++) {
       h ^= parts[p][i];
       h *= 16777619u;
@@ -1704,6 +1751,7 @@ uint32_t keymapDefaultsFingerprint() {
 }
 
 void loadKeymapFromNVS() {
+  tapTermsCompiledIn = anyKeyTapTerm();
   preferences.begin("dactyl", false);
   uint32_t defaultsHash = keymapDefaultsFingerprint();
   bool hasStoredHash = preferences.isKey("defaults_fp");
@@ -1729,6 +1777,8 @@ void loadKeymapFromNVS() {
     bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
     ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
     ok = (preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP)) && ok;
+    // Eigene Tapping-Terme gehören zur Belegung: gespeicherte durch die einkompilierten ersetzen
+    ok = writeTapTermsToOpenNVS() && ok;
     // Neue App-Belegung über einer gespeicherten Keymap: sie verweist auf die einkompilierten Tastenpaare (PAIR_n),
     // alte Paare aus dem NVS daher verwerfen. Ohne Keymap (erster Start) gibt es nichts zu ersetzen.
     if (hasKeymap) {
@@ -1781,6 +1831,14 @@ void loadKeymapFromNVS() {
     }
     if (hasDtapmap) {
       preferences.getBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP));
+    }
+    // Eigene Tapping-Terme: fehlender Schlüssel = einkompilierte Werte; ungültige Werte zählen als 0
+    if (preferences.isKey("tapterms") && preferences.getBytesLength("tapterms") == sizeof(TAPTERMMAP)) {
+      preferences.getBytes("tapterms", TAPTERMMAP, sizeof(TAPTERMMAP));
+      for (int l = 0; l < NUM_LAYERS; l++)
+        for (int r = 0; r < NUM_ROWS; r++)
+          for (int c = 0; c < NUM_COLS; c++)
+            if (!isValidKeyTapTerm(TAPTERMMAP[l][r][c])) TAPTERMMAP[l][r][c] = 0;
     }
   }
   for (int i = 0; i < NUM_LAYERS; i++) {
@@ -2409,6 +2467,21 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd == "CLEAR_TAP_TERMS") {
+    // RAM: alle eigenen Tapping-Terme löschen (der volle Sync sendet danach SET_KT je Taste, SAVE_NVS speichert)
+    memset(TAPTERMMAP, 0, sizeof(TAPTERMMAP));
+    sendConfigNotification("OK CLEAR_TAP_TERMS");
+  } else if (cmd.startsWith("SET_KT ")) {
+    // "SET_KT <l> <r> <c> <ms>": eigener Tapping-Term einer Taste (RAM, wie SET_K ohne OK; 0 = Wert der Hälfte,
+    // sonst 100..500). SAVE_NVS schreibt ihn.
+    int l, r, c, ms;
+    char extra;
+    if (sscanf(cmd.c_str(), "SET_KT %d %d %d %d %c", &l, &r, &c, &ms, &extra) == 4 &&
+        l >= 0 && l < NUM_LAYERS && r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS && isValidKeyTapTerm(ms)) {
+      TAPTERMMAP[l][r][c] = (uint16_t)ms;  // wie SET_K: keine Bestätigung, nur ERR
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd == "SAVE_NVS") {
     sendConfigNotification(saveKeymapToNVS() ? "OK SAVE_NVS" : "ERR NVS SAVE_NVS");
   } else if (cmd.startsWith("SET_NAME ")) {
@@ -2635,6 +2708,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
         sendMatrixData("LAYER_DATA:", KEYMAP, l);
         sendMatrixData("HOLD_DATA:", HOLDMAP, l);
         sendMatrixData("DTAP_DATA:", DTAPMAP, l);
+        // Eigene Tapping-Terme je Taste in ms (0 = Wert der Hälfte); Firmware davor sendet keine TERM_DATA-Zeile
+        sendMatrixData("TERM_DATA:", TAPTERMMAP, l);
       }
       sendCombosPairsMacros();
       sendConfigNotification("CONFIG_SYNC_DONE", true);

@@ -164,7 +164,10 @@ async function writeConfigToESP32(options = {}) {
     for (const cb of combos) {
       const bCode = bMap[cb.behavior] ?? 0;
       const actCode = actionCodeToNumeric(cb.action);
-      await sendConfirmed(`ADD_COMBO ${cb.key1.r} ${cb.key1.c} ${cb.key2.r} ${cb.key2.c} ${bCode} ${actCode}`, "ADD_COMBO");
+      // Siebter Wert: Ebenenmaske. Bei "alle Ebenen" entfällt er, so versteht ihn auch Firmware ohne Masken.
+      const mask = comboLayerMask(cb);
+      const maskArg = mask === COMBO_ALL_LAYERS ? "" : ` ${mask}`;
+      await sendConfirmed(`ADD_COMBO ${cb.key1.r} ${cb.key1.c} ${cb.key2.r} ${cb.key2.c} ${bCode} ${actCode}${maskArg}`, "ADD_COMBO");
       updateProgress();
     }
     await sendConfirmed("SAVE_COMBOS", "SAVE_COMBOS", 5000);

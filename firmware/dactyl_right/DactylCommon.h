@@ -90,12 +90,17 @@
 
 #define MAX_COMBOS 16
 
-// Reine NVS-persistierte Combo-Definition (exakt 6 Bytes, kompatibel mit bisherigen NVS-Daten)
+// Combo-Definition im RAM. Das alte NVS-Format ("combos_data") hat je Combo 8 Bytes
+// (r1, c1, r2, c2, behavior, 1 Byte Padding, action als 16 Bit little endian); das neue Format "combos_v2" steht in DactylLogic.h (COMBO_NVS_*).
+// layerMask: Bit i = die Combo gilt auf Ebene i. Standard alle Ebenen (0xFF). Ein Druck außerhalb der Maske
+// wird nicht gepuffert, die Combo löst dort nie aus.
+#define COMBO_ALL_LAYERS 0xFF
 struct KeyCombo {
   uint8_t r1, c1;
   uint8_t r2, c2;
   uint8_t behavior; // 0 = KEY_PRESS, 1 = MODIFIER_HOLD, 2 = LAYER_TOGGLE
   uint16_t action;
+  uint8_t layerMask = COMBO_ALL_LAYERS;
 };
 
 // Separater flüchtiger Runtime-Zustand für Tasten-Chording

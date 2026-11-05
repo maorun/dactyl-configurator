@@ -2477,3 +2477,21 @@ body {
   body.layer-sheet-open #layerSheetModal .sheet-key { background: #fff; color: #000; border-color: #000; }
   body.layer-sheet-open #layerSheetModal .sheet-key.is-transparent { border-style: dashed; opacity: 1; color: #555; }
 }
+
+.combo-layer-mask {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+}
+
+.combo-layer-mask label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  cursor: pointer;
+}
+
+.combo-layers-cell {
+  color: #94a3b8;
+  font-size: 0.85rem;
+}

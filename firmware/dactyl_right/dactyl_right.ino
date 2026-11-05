@@ -994,6 +994,8 @@ void loop() {
         pressedAction[4][5] = 0;
         keyState[0][0] = false;
         keyState[4][5] = false;
+        comboPressLayer1[0][0] = 0;
+        comboPressLayer1[4][5] = 0;
         rawKeyState[0][0] = false;
         rawKeyState[4][5] = false;
         // Zurückgehaltene Änderungen gehören zur Zeit vor dem Moduswechsel

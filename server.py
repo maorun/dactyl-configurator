@@ -520,6 +520,14 @@ def validate_combo_key(key, field):
     c = validate_int(key.get("c"), 0, NUM_COLS - 1, f"{field}.c")
     return r, c
 
+COMBO_ALL_LAYERS = 0xFF
+
+def validate_combo_layer_mask(value):
+    """Ebenenmaske einer Combo (Bit i = Ebene i). Fehlt sie (null), gilt die Combo auf allen Ebenen."""
+    if value is None:
+        return COMBO_ALL_LAYERS
+    return validate_int(value, 1, COMBO_ALL_LAYERS, "layerMask")
+
 # One-Shot-, Caps-Word- und Repeat-Aktionen (Codes > 0xFF): als Combo nur mit KEY_PRESS
 ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD", "ACT_REPEAT", "ACT_LAYER_LOCK"}
 
@@ -552,8 +560,11 @@ def generate_combos_cpp(combos):
             raise ValueError("Layer Lock funktioniert nur mit dem Verhalten \"Einzeltaste senden\".")
         if beh == 1 and act in ONE_SHOT_CPP:
             raise ValueError("Modifier Hold unterstützt keine One-Shot-, Caps-Word-, Repeat- oder Layer-Lock-Aktion.")
-        # KeyCombo hat exakt 6 Felder (r1, c1, r2, c2, behavior, action)
-        cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act} }}")
+        # layerMask: Bit i = die Combo gilt auf Ebene i; fehlend = alle Ebenen
+        mask = validate_combo_layer_mask(cb.get("layerMask"))
+        # KeyCombo: r1, c1, r2, c2, behavior, action[, layerMask]; ohne Maske (alle Ebenen) bleibt die Zeile wie bisher
+        extra = "" if mask == COMBO_ALL_LAYERS else f", {mask}"
+        cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act}{extra} }}")
     lines = [
         "// [[[START_COMBOS]]]",
         f"uint8_t numCombos = {len(cb_entries)};",

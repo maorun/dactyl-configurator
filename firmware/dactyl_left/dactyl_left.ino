@@ -845,6 +845,8 @@ void loop() {
         pressedAction[CONFIG_COMBO_R2][CONFIG_COMBO_C2] = 0;
         keyState[CONFIG_COMBO_R1][CONFIG_COMBO_C1] = false;
         keyState[CONFIG_COMBO_R2][CONFIG_COMBO_C2] = false;
+        comboPressLayer1[CONFIG_COMBO_R1][CONFIG_COMBO_C1] = 0;
+        comboPressLayer1[CONFIG_COMBO_R2][CONFIG_COMBO_C2] = 0;
         // Zurückgehaltene Änderungen gehören zur Zeit vor dem Moduswechsel (wie am Master). Der eingegangene Zustand
         // folgt dann dem ausgeführten, sonst fehlte einer zurückgehaltenen Taste ihr Drücken und ihr Loslassen liefe allein.
         splitDeferReset(leftDefer);

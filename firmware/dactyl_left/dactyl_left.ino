@@ -80,6 +80,7 @@ uint16_t quickTapMs = 0;
 uint8_t holdTapMode = 0;
 uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
 uint8_t numTriLayers = 0;
+uint8_t capsLedEnabled = 0;
 uint32_t standbyTimeoutMinutes = 5;    // Stufe 1: 5 Min bis Standby (gedrosselter Scan, CPU bleibt 240 MHz)
 uint32_t deepSleepTimeoutMinutes = 60; // Stufe 2: 60 Min (1h) bis Deep Sleep (~10 µA)
 // [[[END_SETTINGS]]]

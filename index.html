@@ -40,6 +40,11 @@
           <span class="split-link-dot"></span>
           <strong id="splitLinkText"></strong>
         </div>
+        <!-- Caps Lock am Mac aktiv (HOST_LEDS / DEVICE_INFO.host_leds, js/serial.js) -->
+        <div class="caps-lock-pill" id="capsLockPill" hidden>
+          <span class="caps-lock-icon">⇪</span>
+          <strong>Caps Lock</strong>
+        </div>
         <!-- Bluetooth Permission Check / Config / Live-Sync Button Flow -->
         <button id="btnCheckBtPermission" class="btn btn-outline" style="border-color: #f59e0b; color: #fcd34d;" title="Prüft die macOS Bluetooth-Berechtigung für diese App">
           <span class="btn-icon">🔒</span> Bluetooth prüfen
@@ -650,6 +655,13 @@
           <label for="quickTapInput">Quick-Tap (Millisekunden, 0 = aus):</label>
           <input type="number" id="quickTapInput" class="form-control" value="0" min="0" max="500">
           <small class="form-hint">Drückst du eine Mod-Tap-Taste innerhalb dieser Zeit nach ihrem Tipp erneut, gilt sie sofort als gehaltener Tipp. Der Host wiederholt das Zeichen. Erfordert Firmware-Version 15 oder neuer.</small>
+        </div>
+
+        <div class="form-group" id="capsLedGroup">
+          <label for="capsLedCheckbox">
+            <input type="checkbox" id="capsLedCheckbox"> Onboard-LED zeigt Caps Lock (nur rechte Hälfte)
+          </label>
+          <small class="form-hint">Die blaue LED auf dem Board leuchtet, solange Caps Lock am Mac aktiv ist. Standard: aus.</small>
         </div>
 
         <div class="form-group" id="triLayerGroup">

@@ -320,6 +320,8 @@ function setupEventListeners() {
       setVal("holdTapModeSelect", holdTapMode);
       setVal("quickTapInput", quickTap);
 
+      const capsLedEl = document.getElementById("capsLedCheckbox");
+      const capsLed = capsLedEl && capsLedEl.checked ? 1 : 0;
       const triLayers = readTriLayersFromInputs();
       applyTriLayersToInputs(triLayers);
       const oldSettings = JSON.parse(JSON.stringify(currentConfig.settings || {}));
@@ -332,6 +334,7 @@ function setupEventListeners() {
         holdTapMode: holdTapMode,
         quickTapMs: quickTap,
         triLayers: triLayers,
+        capsLed: capsLed,
         standbyTimeoutMinutes: standbyMinutes,
         sleepTimeoutMinutes: sleepMinutes
       };

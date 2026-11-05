@@ -299,6 +299,8 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_HOLD_MODE ${clampSetting("holdTapMode", s.holdTapMode ?? 0)}`, ack: "SET_HOLD_MODE", optional: true },
     { cmd: `SET_QUICK_TAP ${clampSetting("quickTapMs", s.quickTapMs ?? 0)}`, ack: "SET_QUICK_TAP", optional: true },
     { cmd: `SET_TRI_LAYER ${triLayerArgs(s.triLayers)}`, ack: "SET_TRI_LAYER", optional: true },
+    // Caps-Lock-LED: nur die Hälfte mit dem Host-Dienst (Master) kennt den Befehl
+    ...(profile.master ? [{ cmd: `SET_CAPS_LED ${clampSetting("capsLed", s.capsLed ?? 0)}`, ack: "SET_CAPS_LED", optional: true }] : []),
     { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true }
   ];
 }

@@ -128,6 +128,22 @@ body {
   border: 1px solid currentColor;
 }
 
+.caps-lock-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.95rem;
+  border-radius: 20px;
+  font-size: 0.86rem;
+  color: var(--warning, #f59e0b);
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid currentColor;
+}
+
+.caps-lock-pill[hidden] {
+  display: none;
+}
+
 .split-link-pill[hidden] {
   display: none;
 }

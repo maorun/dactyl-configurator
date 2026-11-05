@@ -448,6 +448,11 @@ function applySettingsToInputs(settings) {
   setVal("holdTapModeSelect", settings.holdTapMode ?? 0);
   setVal("quickTapInput", settings.quickTapMs ?? 0);
   applyTriLayersToInputs(settings.triLayers);
+  const capsLed = document.getElementById("capsLedCheckbox");
+  if (capsLed) capsLed.checked = !!settings.capsLed;
+  // Die Onboard-LED gehört zum Master (nur er hat einen Host)
+  const capsLedGroup = document.getElementById("capsLedGroup");
+  if (capsLedGroup) capsLedGroup.hidden = !activeProfile().master;
   setVal("standbyTimeoutSelect", settings.standbyTimeoutMinutes);
   setVal("sleepTimeoutSelect", settings.sleepTimeoutMinutes);
 }

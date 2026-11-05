@@ -1,6 +1,8 @@
 #include "ArduinoMock.h"
 #include <cassert>
 #include <iostream>
+#include <fstream>
+#include <iterator>
 
 // Firmware-Definitionen, die DactylLogic.h von der einbindenden Übersetzungseinheit erwartet.
 // Die getestete Logik selbst stammt unverändert aus firmware/dactyl_right/DactylLogic.h.
@@ -9,6 +11,7 @@
 #define NUM_COLS 7
 
 #include "../dactyl_right/DactylCommon.h"
+#include "../dactyl_right/DactylHostLeds.h"
 
 #define CONFIG_MODE_MAGIC 0xDAC7CF60UL
 // Im Test änderbar, um einen Flash aus der App (ID != 0) zu simulieren
@@ -44,6 +47,9 @@ static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
+static uint8_t capsLedEnabled = 0;
+static HostLedsState testHostLeds;
+#define DEVICE_INFO_HOST_LEDS_BITS() testHostLeds.bits
 static uint8_t numTriLayers = 0;
 static uint32_t standbyTimeoutMinutes = 5;
 static uint32_t deepSleepTimeoutMinutes = 60;
@@ -171,6 +177,8 @@ void resetState() {
   holdTapMode = 0;
   numTriLayers = 0;
   memset(triLayerRules, 0, sizeof(triLayerRules));
+  capsLedEnabled = 0;
+  testHostLeds = HostLedsState();
   debounceMs = 5;
   standbyTimeoutMinutes = 5;
   deepSleepTimeoutMinutes = 60;
@@ -5153,6 +5161,141 @@ TEST(test_get_diag_ble_rejected_in_keyboard_mode) {
   isConfigMode = false;
 }
 
+// =============================================================================
+// Host-LEDs (Num/Caps/Scroll Lock) und Caps-Lock-LED
+// =============================================================================
+static void feedLedReport(uint8_t b) { hostLedsOnReport(testHostLeds, &b, 1); }
+
+TEST(test_host_leds_report_stores_state_and_prints_line) {
+  resetState();
+  Serial.clear();
+  feedLedReport(0x02);  // Caps Lock
+  assert(testHostLeds.bits == HOST_LED_CAPS);
+  hostLedsService(testHostLeds);
+  assert(Serial.outputLines.size() == 1);
+  assert(Serial.outputLines[0] == "HOST_LEDS:{\"num\":0,\"caps\":1,\"scroll\":0}");
+  // Ohne Änderung keine weitere Zeile
+  hostLedsService(testHostLeds);
+  feedLedReport(0x02);
+  hostLedsService(testHostLeds);
+  assert(Serial.outputLines.size() == 1);
+  // Alle drei Bits; die oberen Bits (Compose, Kana) zählen nicht
+  feedLedReport(0xFF);
+  assert(testHostLeds.bits == 0x07);
+  hostLedsService(testHostLeds);
+  assert(Serial.outputLines.back() == "HOST_LEDS:{\"num\":1,\"caps\":1,\"scroll\":1}");
+  // Ein leerer Report ändert nichts
+  assert(!hostLedsOnReport(testHostLeds, nullptr, 0));
+  uint8_t none = 0;
+  assert(!hostLedsOnReport(testHostLeds, &none, 0));
+  assert(testHostLeds.bits == 0x07);
+}
+
+TEST(test_host_leds_two_changes_between_loops_print_latest) {
+  resetState();
+  Serial.clear();
+  feedLedReport(0x02);
+  feedLedReport(0x00);   // zurück auf den Ausgangswert vor der Ausgabe: eine Zeile mit dem neuen Stand
+  hostLedsService(testHostLeds);
+  assert(Serial.outputLines.size() == 1);
+  assert(Serial.outputLines[0] == "HOST_LEDS:{\"num\":0,\"caps\":0,\"scroll\":0}");
+}
+
+TEST(test_host_leds_line_uses_the_given_snapshot) {
+  resetState();
+  feedLedReport(0x02);
+  char line[64];
+  assert(hostLedsTakeLine(testHostLeds, 0x01, line, sizeof(line)));
+  assert(std::string(line) == "HOST_LEDS:{\"num\":1,\"caps\":0,\"scroll\":0}");
+  assert(!hostLedsTakeLine(testHostLeds, 0x01, line, sizeof(line)));
+}
+
+TEST(test_host_leds_disconnect_clears_state) {
+  resetState();
+  feedLedReport(0x02);
+  hostLedsReset(testHostLeds);
+  assert(testHostLeds.bits == 0);
+  Serial.clear();
+  hostLedsService(testHostLeds);
+  assert(Serial.outputLines.back() == "HOST_LEDS:{\"num\":0,\"caps\":0,\"scroll\":0}");
+}
+
+TEST(test_host_leds_device_info_field) {
+  resetState();
+  feedLedReport(0x02);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"host_leds\":{\"num\":0,\"caps\":1,\"scroll\":0},\"caps_led\":0") != std::string::npos);
+  assert(mockChar.value.back() == '}');
+}
+
+TEST(test_caps_led_setting_command_and_nvs) {
+  resetState();
+  handleConfigCommand("SET_CAPS_LED 1", false);
+  assert(mockChar.value == "OK SET_CAPS_LED 1");
+  assert(capsLedEnabled == 1);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"caps_led\":1") != std::string::npos);
+  capsLedEnabled = 0;
+  loadKeymapFromNVS();
+  assert(capsLedEnabled == 1);
+  const char* bad[] = {"SET_CAPS_LED 2", "SET_CAPS_LED", "SET_CAPS_LED x", "SET_CAPS_LED -1"};
+  for (const char* b : bad) {
+    handleConfigCommand(b, false);
+    assert(mockChar.value.rfind("ERR", 0) == 0);
+  }
+  assert(capsLedEnabled == 1);
+  // NVS-Fehler: RAM-Stand bleibt
+  Preferences::failUCharKey = "caps_led";
+  handleConfigCommand("SET_CAPS_LED 0", false);
+  assert(mockChar.value == "ERR NVS SET_CAPS_LED");
+  assert(capsLedEnabled == 1);
+}
+
+TEST(test_host_leds_state_hidden_from_keyboard_mode_ble) {
+  resetState();
+  feedLedReport(0x02);
+  isConfigMode = false;
+  handleConfigCommand("GET_INFO", true);
+  assert(mockChar.value.find("DEVICE_INFO:") != std::string::npos);
+  assert(mockChar.value.find("host_leds") == std::string::npos && mockChar.value.find("caps_led") == std::string::npos);
+  handleConfigCommand("GET_INFO", false);   // USB
+  assert(mockChar.value.find("\"host_leds\":{\"num\":0,\"caps\":1") != std::string::npos);
+  isConfigMode = true;                      // Config Mode über BLE
+  handleConfigCommand("GET_INFO", true);
+  assert(mockChar.value.find("\"host_leds\"") != std::string::npos);
+  isConfigMode = false;
+}
+
+TEST(test_caps_led_pin_follows_caps_lock_only_when_enabled) {
+  resetState();
+  _mock_pin_state[HOST_LED_PIN] = 1;
+  feedLedReport(0x02);
+  capsLedEnabled = 0;
+  hostLedsService(testHostLeds);
+  assert(_mock_pin_state[HOST_LED_PIN] == 1);       // Setting aus: LED bleibt aus
+  capsLedEnabled = 1;
+  hostLedsService(testHostLeds);
+  assert(_mock_pin_state[HOST_LED_PIN] == 0);       // aktiv LOW: LED an
+  feedLedReport(0x01);                              // nur Num Lock
+  hostLedsService(testHostLeds);
+  assert(_mock_pin_state[HOST_LED_PIN] == 1);
+  feedLedReport(0x03);
+  hostLedsService(testHostLeds);
+  assert(_mock_pin_state[HOST_LED_PIN] == 0);
+  capsLedEnabled = 0;                               // Setting aus bei Caps Lock: LED löschen
+  hostLedsService(testHostLeds);
+  assert(_mock_pin_state[HOST_LED_PIN] == 1);
+}
+
+TEST(test_host_leds_ble_composite_wired_to_core) {
+  // Die BLE-Klasse darf nur den Kern aufrufen (onWrite läuft im BLE-Task)
+  std::ifstream f(std::string(__FILE__).substr(0, std::string(__FILE__).rfind('/')) + "/../dactyl_right/DactylBleComposite.h");
+  std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  assert(src.find("hostLedsOnReport(hostLeds, me->getData(), me->getLength());") != std::string::npos);
+  assert(src.find("hostLedsReset(hostLeds);") != std::string::npos);
+  assert(src.find("void onWrite(BLECharacteristic* me) override {}") == std::string::npos);
+}
 
 int main() {
   std::cout << "==================================================" << std::endl;

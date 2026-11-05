@@ -125,6 +125,13 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("uint32_t standbyTimeoutMinutes = 15;", cpp)
         self.assertIn("uint32_t deepSleepTimeoutMinutes = 90;", cpp)
 
+    def test_caps_led_setting(self):
+        self.assertIn("uint8_t capsLedEnabled = 0;", server.generate_settings_cpp({}))
+        self.assertIn("uint8_t capsLedEnabled = 1;", server.generate_settings_cpp({"capsLed": 1}))
+        for value in (2, -1, "x"):
+            with self.assertRaises(ValueError):
+                server.generate_settings_cpp({"capsLed": value})
+
     def test_tri_layer_settings(self):
         cpp = server.generate_settings_cpp({})
         self.assertIn("uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };", cpp)

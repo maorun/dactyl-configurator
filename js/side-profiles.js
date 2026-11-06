@@ -112,7 +112,7 @@
     }
     if (Array.isArray(cfg.combos)) {
       cfg.combos.forEach((cb, i) => {
-        for (const key of [cb && cb.key1, cb && cb.key2]) {
+        for (const key of [cb && cb.key1, cb && cb.key2, cb && cb.key3]) {
           if (key && !isPhysicalKey(profile, key.r, key.c)) out.push(`Combo ${i + 1} (R${key.r}C${key.c})`);
         }
       });

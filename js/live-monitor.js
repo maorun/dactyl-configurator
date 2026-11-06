@@ -111,9 +111,7 @@ function triggerVisualKeyRelease(r, c, side = editSide) {
 function checkActiveCombos() {
   for (const side of browserKeySides(activeHandView, editSide, Dactyl.SIDE_IDS)) {
     for (const combo of configFor(side).combos) {
-      const k1Id = `${side}_${combo.key1.r}_${combo.key1.c}`;
-      const k2Id = `${side}_${combo.key2.r}_${combo.key2.c}`;
-      if (activePressedKeys.has(k1Id) && activePressedKeys.has(k2Id)) {
+      if (comboKeys(combo).every(k => activePressedKeys.has(`${side}_${k.r}_${k.c}`))) {
         showComboAlert(combo);
         return;
       }
@@ -126,7 +124,7 @@ function showComboAlert(combo) {
   const alertEl = document.getElementById("comboActiveAlert");
   const textEl = document.getElementById("comboActiveText");
   if (alertEl && textEl) {
-    textEl.textContent = `COMBO AKTIV: ${combo.key1.label} + ${combo.key2.label} ➔ ${combo.actionLabel || combo.action}`;
+    textEl.textContent = `COMBO AKTIV: ${comboKeys(combo).map(k => k.label).join(" + ")} ➔ ${combo.actionLabel || combo.action}`;
     alertEl.style.display = "inline-flex";
   }
 }

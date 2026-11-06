@@ -166,7 +166,12 @@ async function writeConfigToESP32(options = {}) {
       const actCode = actionCodeToNumeric(cb.action);
       // Siebter Wert: Ebenenmaske. Bei "alle Ebenen" entfällt er, so versteht ihn auch Firmware ohne Masken.
       const mask = comboLayerMask(cb);
-      const maskArg = mask === COMBO_ALL_LAYERS ? "" : ` ${mask}`;
+      // Weitere Werte: r3 c3 (255 255 = keine) und Fenster in ms. Sie entfallen bei zwei Tasten mit globalem Fenster;
+      // dann versteht auch Firmware vor Stand 24 den Befehl.
+      const third = comboThirdKey(cb);
+      const windowMs = comboWindowMs(cb);
+      const moreArg = third || windowMs ? ` ${mask} ${third ? third.r : COMBO_NO_KEY} ${third ? third.c : COMBO_NO_KEY} ${windowMs}` : "";
+      const maskArg = moreArg || (mask === COMBO_ALL_LAYERS ? "" : ` ${mask}`);
       await sendConfirmed(`ADD_COMBO ${cb.key1.r} ${cb.key1.c} ${cb.key2.r} ${cb.key2.c} ${bCode} ${actCode}${maskArg}`, "ADD_COMBO");
       updateProgress();
     }

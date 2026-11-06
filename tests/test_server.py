@@ -273,6 +273,33 @@ class TestServerAndCodegen(unittest.TestCase):
             server.validate_config({"layers": [[]], "combos": [dict(base, layerMask=0)]}, "R")
         server.validate_config({"layers": [[]], "combos": [dict(base, layerMask=3)]}, "R")
 
+    def test_combo_third_key_and_window_rendering_and_range(self):
+        base = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "KEY_PRESS", "action": "KEY_ESC"}
+        # Zwei Tasten ohne Fenster bleiben unverändert
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC }", server.generate_combos_cpp([dict(base, key3=None, windowMs=None)]))
+        # Drei Tasten: Maske, r3, c3 und Fenster stehen als Zusatzwerte
+        three = server.generate_combos_cpp([dict(base, key3={"r": 2, "c": 3})])
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC, 255, 2, 3, 0 }", three)
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC, 5, 2, 3, 90 }",
+                      server.generate_combos_cpp([dict(base, key3={"r": 2, "c": 3}, windowMs=90, layerMask=5)]))
+        # Zwei Tasten mit eigenem Fenster: keine dritte Taste (255, 255)
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC, 255, 255, 255, 120 }", server.generate_combos_cpp([dict(base, windowMs=120)]))
+        self.assertIn("255, 255, 255, 500 }", server.generate_combos_cpp([dict(base, windowMs=500)]))
+        for bad in (0, 9, 501, -1, "40", 40.5, True, [40]):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_combos_cpp([dict(base, windowMs=bad)])
+        for bad in ({"r": 2, "c": 1}, {"r": 2, "c": 2}, {"r": 6, "c": 0}, {"r": 2, "c": 7}, {"r": True, "c": 0}, "x", 5):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_combos_cpp([dict(base, key3=bad)])
+        # Die Prüfung gilt auch für den Speicherpfad
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "combos": [dict(base, windowMs=5)]}, "R")
+        server.validate_config({"layers": [[]], "combos": [dict(base, key3={"r": 2, "c": 3}, windowMs=60)]}, "R")
+        # Eine fehlende Taste der linken Hälfte ist auch als dritte Taste ungültig
+        absent_r, absent_c = sorted(server.ABSENT_KEYS["L"])[0]
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "combos": [dict(base, key3={"r": absent_r, "c": absent_c})]}, "L")
+
     def test_settings_validation_and_name_sanitizing(self):
         with self.assertRaises(ValueError):
             server.generate_settings_cpp({"debounceMs": 0})

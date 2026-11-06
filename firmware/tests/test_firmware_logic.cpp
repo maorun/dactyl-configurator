@@ -6052,6 +6052,319 @@ TEST(test_empty_combo_save_with_failed_count_keeps_the_blobs) {
 }
 
 // -----------------------------------------------------------------------------
+// Combos mit dritter Taste und eigenem Fenster (ADD_COMBO, NVS, GET_CONFIG)
+// -----------------------------------------------------------------------------
+static void setUpThreeKeyKeymap() {
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  KEYMAP[0][2][3] = 'l';
+}
+
+TEST(test_three_key_combo_fires_when_all_keys_arrive_in_the_window) {
+  resetState();
+  comboTimeoutMs = 40;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 0", false);   // J + K + L -> Esc
+  assert(mockChar.value == "OK ADD_COMBO 0");
+  assert(userCombos[0].r3 == 2 && userCombos[0].c3 == 3 && userCombos[0].windowMs == 0);
+
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1010);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);                           // zwei von drei Tasten lösen nichts aus
+  assert(bleKeyboard.writtenKeys.empty() && bleKeyboard.pressedKeys.empty());   // beide bleiben gepuffert
+  setMillis(1025);
+  pressKey(2, 3);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  assert(bleKeyboard.pressedKeys.empty());                   // keine Einzeltaste ging vorher oder nachher raus
+  releaseKey(2, 3);                                          // eine Taste los: die Combo endet
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+  releaseKey(2, 1);
+  releaseKey(2, 2);
+  checkUserCombos();
+  assert(bleKeyboard.pressedKeys.empty() && bleKeyboard.writtenKeys.size() == 1);
+}
+
+TEST(test_three_key_combo_does_not_fire_when_one_key_comes_late) {
+  resetState();
+  comboTimeoutMs = 40;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 0", false);
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1010);
+  pressKey(2, 2);
+  setMillis(1060);                                           // 60 ms nach der ersten Taste: außerhalb von 40 ms
+  pressKey(2, 3);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.empty());
+  releaseKey(2, 1);
+  releaseKey(2, 2);
+  releaseKey(2, 3);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+}
+
+TEST(test_three_key_combo_window_covers_all_pairs_not_only_neighbours) {
+  resetState();
+  comboTimeoutMs = 40;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 0", false);
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1030);
+  pressKey(2, 2);
+  setMillis(1060);                                           // jedes Nachbarpaar liegt im Fenster, J und L nicht
+  pressKey(2, 3);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+}
+
+TEST(test_two_key_combo_with_a_custom_window) {
+  resetState();
+  comboTimeoutMs = 40;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 255 255 120", false);   // J + K, Fenster 120 ms
+  assert(mockChar.value == "OK ADD_COMBO 0");
+  assert(userCombos[0].r3 == COMBO_NO_KEY && userCombos[0].windowMs == 120);
+
+  // 100 ms Abstand: nur das eigene Fenster erlaubt die Combo
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1100);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  releaseKey(2, 1);
+  releaseKey(2, 2);
+  checkUserCombos();
+  bleKeyboard.writtenKeys.clear();
+
+  // 130 ms Abstand: außerhalb des eigenen Fensters
+  advanceMillis(1000);
+  pressKey(2, 1);
+  advanceMillis(130);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+}
+
+TEST(test_combo_window_sets_the_buffer_time_of_a_candidate) {
+  resetState();
+  comboTimeoutMs = 40;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 255 255 120", false);
+  setMillis(1000);
+  pressKey(2, 1);
+  assert(bleKeyboard.pressedKeys.empty());
+  setMillis(1060);                                           // das globale Fenster (40 ms) ist abgelaufen
+  processDeferredKeys(1060);
+  assert(bleKeyboard.pressedKeys.empty());                   // die Taste wartet das eigene Fenster ab
+  setMillis(1125);
+  processDeferredKeys(1125);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'j');
+}
+
+TEST(test_combo_without_window_keeps_the_global_timeout) {
+  resetState();
+  comboTimeoutMs = 40;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  assert(userCombos[0].windowMs == 0 && userCombos[0].r3 == COMBO_NO_KEY && userCombos[0].c3 == COMBO_NO_KEY);
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1045);
+  processDeferredKeys(1045);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'j');
+}
+
+TEST(test_third_key_is_buffered_as_a_combo_candidate) {
+  resetState();
+  setUpThreeKeyKeymap();
+  assert(!isComboCandidateKey(2, 3));
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 0", false);
+  assert(isComboCandidateKey(2, 3));
+  setMillis(1000);
+  pressKey(2, 3);
+  assert(bleKeyboard.pressedKeys.empty());                   // gepuffert, nicht sofort gesendet
+}
+
+TEST(test_add_combo_third_key_and_window_arguments) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2", false);            // nur eine Koordinate
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 9 3 0", false);        // Zeile außerhalb der Matrix
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 9 0", false);        // Spalte außerhalb der Matrix
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 1 0", false);        // dritte Taste = erste Taste
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 501", false);      // Fenster über dem Höchstwert
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 9", false);        // Fenster unter dem Mindestwert
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 255 255 1", false);
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 255 3 0", false);      // nur eine Koordinate ist 255
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 0 7", false);      // zu viele Werte
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 0 2 3 0", false);          // Maske 0
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  assert(numCombos == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 10", false);       // Mindestwert ist erlaubt
+  assert(mockChar.value == "OK ADD_COMBO 0" && userCombos[0].windowMs == 10);
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 500", false);      // Höchstwert ist erlaubt
+  assert(mockChar.value == "OK ADD_COMBO 0" && userCombos[0].windowMs == 500);
+  handleConfigCommand("ADD_COMBO 3 1 3 2 0 177 3", false);                // nur Maske wie bisher
+  assert(mockChar.value == "OK ADD_COMBO 1" && userCombos[1].r3 == COMBO_NO_KEY && userCombos[1].windowMs == 0);
+  handleConfigCommand("ADD_COMBO 4 1 4 2 0 177 255 4 3", false);          // dritte Taste ohne Fenster: globales Fenster
+  assert(mockChar.value == "OK ADD_COMBO 2" && userCombos[2].r3 == 4 && userCombos[2].c3 == 3 && userCombos[2].windowMs == 0);
+}
+
+TEST(test_combo_third_key_and_window_persist_and_are_reported) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 90", false);       // drei Tasten, Fenster 90 ms
+  handleConfigCommand("ADD_COMBO 3 1 3 2 1 128", false);                  // zwei Tasten, globales Fenster
+  handleConfigCommand("ADD_COMBO 4 1 4 2 0 97 5 255 255 300", false);     // zwei Tasten, Fenster 300 ms, Maske 5
+  handleConfigCommand("SAVE_COMBOS", false);
+  assert(mockChar.value == "OK SAVE_COMBOS");
+
+  numCombos = 0;
+  for (int i = 0; i < 3; i++) userCombos[i] = KeyCombo{};
+  loadKeymapFromNVS();
+  assert(numCombos == 3);
+  assert(userCombos[0].r3 == 2 && userCombos[0].c3 == 3 && userCombos[0].windowMs == 90 && userCombos[0].layerMask == 0xFF);
+  assert(userCombos[1].r3 == COMBO_NO_KEY && userCombos[1].c3 == COMBO_NO_KEY && userCombos[1].windowMs == 0);
+  assert(userCombos[2].r3 == COMBO_NO_KEY && userCombos[2].windowMs == 300 && userCombos[2].layerMask == 5);
+
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool data = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n == "COMBO_DATA:{\"o\":0,\"e\":[[2,1,2,2,0,177,255,2,3,90],[3,1,3,2,1,128,255],[4,1,4,2,0,97,5,255,255,300]]}") data = true;
+  }
+  assert(data);
+}
+
+TEST(test_combo_nvs_v2_record_without_new_fields_loads_as_before) {
+  resetState();
+  // Blob wie ihn die Firmware vor Stand 24 schrieb: r3/c3 = 0xFF, Fenster 0
+  const uint8_t blob[2 + COMBO_NVS_RECORD_BYTES] = { COMBO_NVS_VERSION, COMBO_NVS_RECORD_BYTES,
+                                                     2, 1, 2, 2, 0, 177, 0, 0x06, 0xFF, 0xFF, 0, 0 };
+  preferences.putUChar("num_combos", 1);
+  preferences.putBytes("combos_v2", blob, sizeof(blob));
+  loadKeymapFromNVS();
+  assert(numCombos == 1);
+  assert(userCombos[0].layerMask == 6 && userCombos[0].r3 == COMBO_NO_KEY && userCombos[0].c3 == COMBO_NO_KEY && userCombos[0].windowMs == 0);
+}
+
+TEST(test_combo_nvs_ignores_an_invalid_third_key_or_window) {
+  resetState();
+  const uint8_t blob[2 + COMBO_NVS_RECORD_BYTES] = { COMBO_NVS_VERSION, COMBO_NVS_RECORD_BYTES,
+                                                     2, 1, 2, 2, 0, 177, 0, 0xFF, 99, 99, 0xFF, 0xFF };
+  preferences.putUChar("num_combos", 1);
+  preferences.putBytes("combos_v2", blob, sizeof(blob));
+  loadKeymapFromNVS();
+  assert(numCombos == 1);
+  assert(userCombos[0].r3 == COMBO_NO_KEY && userCombos[0].c3 == COMBO_NO_KEY);   // keine Taste außerhalb der Matrix
+  assert(userCombos[0].windowMs == 0);                                            // Fenster über dem Höchstwert entfällt
+
+  // Dritte Taste gleich Taste 1 oder 2, und ein Fenster unter dem Mindestwert, entfallen ebenfalls
+  const uint8_t dup[2 + 3 * COMBO_NVS_RECORD_BYTES] = { COMBO_NVS_VERSION, COMBO_NVS_RECORD_BYTES,
+      2, 1, 2, 2, 0, 177, 0, 0xFF, 2, 1, 0, 0,
+      2, 1, 2, 2, 0, 177, 0, 0xFF, 2, 2, 0, 0,
+      2, 1, 2, 2, 0, 177, 0, 0xFF, 0xFF, 0xFF, 9, 0 };
+  numCombos = 0;
+  preferences.putUChar("num_combos", 3);
+  preferences.putBytes("combos_v2", dup, sizeof(dup));
+  loadKeymapFromNVS();
+  assert(numCombos == 3);
+  for (int i = 0; i < 3; i++) assert(userCombos[i].r3 == COMBO_NO_KEY && userCombos[i].c3 == COMBO_NO_KEY && userCombos[i].windowMs == 0);
+}
+
+// Eine Combo mit drei Tasten, die erst zwei Tasten hat, hält die Mod-Tap-Entscheidung zurück (sonst ginge Ctrl vorab raus)
+TEST(test_pending_three_key_combo_holds_back_the_mod_tap_hold) {
+  resetState();
+  comboTimeoutMs = 40;
+  chordalHold = 0;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 0", false);   // J + K + L -> Esc
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;                                  // J: Tap j / Hold Ctrl
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1010);
+  pressKey(2, 2);
+  // Das Tapping-Term-Ende von J fällt in die Wartezeit auf L: Ctrl darf nicht vorab am Host ankommen
+  setMillis(1020);
+  activateTapHoldAsHold(2, 1);
+  assert(hasPressedComboPartnerInWindow(2, 1));
+  assert(bleKeyboard.pressedKeys.empty() && !keySentToHost[2][1]);
+  setMillis(1030);
+  pressKey(2, 3);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  assert(bleKeyboard.pressHistory.empty());                          // Ctrl erscheint nie als einzelner Druck
+}
+
+TEST(test_pending_three_key_combo_ends_with_the_window) {
+  resetState();
+  comboTimeoutMs = 40;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 0", false);
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1010);
+  pressKey(2, 2);
+  setMillis(1039);
+  assert(hasPressedComboPartnerInWindow(2, 1));                      // die dritte Taste kann noch im Fenster eintreffen
+  setMillis(1041);
+  assert(!hasPressedComboPartnerInWindow(2, 1));                     // Fenster abgelaufen: nichts wartet mehr
+  // Eine Combo mit zwei Tasten wartet nicht auf eine dritte
+  resetState();
+  comboTimeoutMs = 40;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  pressKey(2, 1);
+  assert(!hasPressedComboPartnerInWindow(2, 1));
+}
+
+TEST(test_combo_nvs_legacy_format_has_no_third_key_and_no_window) {
+  resetState();
+  const uint8_t legacy[8] = { 2, 1, 2, 2, 0, 0, 177, 0 };
+  preferences.putUChar("num_combos", 1);
+  preferences.putBytes("combos_data", legacy, sizeof(legacy));
+  loadKeymapFromNVS();
+  assert(numCombos == 1 && userCombos[0].r3 == COMBO_NO_KEY && userCombos[0].c3 == COMBO_NO_KEY && userCombos[0].windowMs == 0);
+}
+
+TEST(test_three_key_combo_consumes_all_three_keys_for_chordal_hold) {
+  resetState();
+  comboTimeoutMs = 40;
+  setUpThreeKeyKeymap();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 0", false);
+  assert(wasComboRecentlyActive(2, 3) == false);
+  setMillis(1000);
+  pressKey(2, 1);
+  pressKey(2, 2);
+  pressKey(2, 3);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(wasComboRecentlyActive(2, 3));                      // die dritte Taste gehört zur aktiven Combo
+  assert(keySentToHost[2][3]);
+}
+
+// -----------------------------------------------------------------------------
 // One-Shot-Ebene (OSL_0 .. OSL_7)
 // -----------------------------------------------------------------------------
 static void tapOsl(int r, int c) {

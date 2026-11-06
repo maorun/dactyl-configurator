@@ -252,6 +252,62 @@ bool comboAppliesOnLayer(uint8_t i, uint8_t layer) {
   return layer < 8 && ((userCombos[i].layerMask >> layer) & 1);
 }
 
+// true, wenn die Combo eine dritte Taste hat
+bool comboHasThirdKey(uint8_t i) {
+  return userCombos[i].r3 != COMBO_NO_KEY && userCombos[i].c3 != COMBO_NO_KEY;
+}
+
+// true, wenn (r, c) eine der Tasten der Combo i ist (zwei oder drei Tasten)
+bool comboContainsKey(uint8_t i, uint8_t r, uint8_t c) {
+  const KeyCombo &cb = userCombos[i];
+  return (cb.r1 == r && cb.c1 == c) || (cb.r2 == r && cb.c2 == c) || (comboHasThirdKey(i) && cb.r3 == r && cb.c3 == c);
+}
+
+// Zeitfenster der Combo i in ms: eigenes Fenster oder das globale comboTimeoutMs (windowMs = 0)
+unsigned long comboWindowMs(uint8_t i) {
+  return userCombos[i].windowMs ? userCombos[i].windowMs : comboTimeoutMs;
+}
+
+// Wartezeit, bis eine gepufferte Taste (r, c) als Einzeltaste ausgeht: das größte Fenster der Combos, die auf der
+// Ebene des Drucks gelten und die Taste enthalten. Ohne solche Combo gilt comboTimeoutMs.
+unsigned long comboBufferMs(uint8_t r, uint8_t c) {
+  uint8_t layer = comboLayerForKey(r, c);
+  unsigned long ms = 0;
+  for (uint8_t i = 0; i < numCombos; i++) {
+    if (comboContainsKey(i, r, c) && comboAppliesOnLayer(i, layer) && comboWindowMs(i) > ms) ms = comboWindowMs(i);
+  }
+  return ms ? ms : comboTimeoutMs;
+}
+
+// true, wenn zwei Druckzeitpunkte höchstens window ms auseinander liegen (Überlauf-sicher)
+static inline bool comboTimesWithin(unsigned long t1, unsigned long t2, unsigned long window) {
+  return (unsigned long)(t1 - t2) <= window || (unsigned long)(t2 - t1) <= window;
+}
+
+// true, wenn alle Tasten der Combo i gedrückt sind und paarweise im Fenster der Combo gedrückt wurden
+bool comboKeysInWindow(uint8_t i) {
+  const KeyCombo &cb = userCombos[i];
+  unsigned long w = comboWindowMs(i);
+  unsigned long t1 = keyPressTime[cb.r1][cb.c1], t2 = keyPressTime[cb.r2][cb.c2];
+  if (!comboTimesWithin(t1, t2, w)) return false;
+  if (!comboHasThirdKey(i)) return true;
+  unsigned long t3 = keyPressTime[cb.r3][cb.c3];
+  return comboTimesWithin(t1, t3, w) && comboTimesWithin(t2, t3, w);
+}
+
+// true, wenn alle Tasten der Combo i gerade gedrückt sind
+bool comboAllPressed(uint8_t i) {
+  const KeyCombo &cb = userCombos[i];
+  return keyState[cb.r1][cb.c1] && keyState[cb.r2][cb.c2] && (!comboHasThirdKey(i) || keyState[cb.r3][cb.c3]);
+}
+
+// true, wenn alle Tasten der Combo i auf einer Ebene der Maske gedrückt wurden: nur dann wurden sie gepuffert
+bool comboOnMaskLayers(uint8_t i) {
+  const KeyCombo &cb = userCombos[i];
+  return comboAppliesOnLayer(i, comboLayerForKey(cb.r1, cb.c1)) && comboAppliesOnLayer(i, comboLayerForKey(cb.r2, cb.c2)) &&
+         (!comboHasThirdKey(i) || comboAppliesOnLayer(i, comboLayerForKey(cb.r3, cb.c3)));
+}
+
 // Eigene MO-Ebenen und eingerastete Ebenen als Bitmaske für den Layer-Abgleich
 uint8_t localMomentaryLayerMask() {
   uint8_t m = 0;
@@ -552,7 +608,7 @@ bool isUmlautAction(uint16_t action) {
 bool isActiveComboMember(uint8_t r, uint8_t c) {
   for (uint8_t i = 0; i < numCombos; i++) {
     if (!comboRuntime[i].active) continue;
-    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) || (userCombos[i].r2 == r && userCombos[i].c2 == c)) return true;
+    if (comboContainsKey(i, r, c)) return true;
   }
   return false;
 }
@@ -1513,19 +1569,37 @@ void doubleTapTick(unsigned long now) {
   }
 }
 
-// true, wenn (r, c) mit einer bereits gedrückten Partnertaste innerhalb von comboTimeoutMs eine Combo bildet.
-// Diese Combo wird im selben Scan von checkUserCombos() ausgelöst.
+// true, wenn eine Combo mit drei Tasten erst zwei gedrückte Tasten hat (darunter (r, c)), beide im Fenster und
+// auf der Maske, und die dritte Taste noch im Fenster ab dem ersten Druck eintreffen kann.
+bool hasPendingThreeKeyCombo(uint8_t i, uint8_t r, uint8_t c) {
+  if (!comboHasThirdKey(i) || comboAllPressed(i) || !keyState[r][c]) return false;
+  const KeyCombo &cb = userCombos[i];
+  const uint8_t rs[3] = { cb.r1, cb.r2, cb.r3 }, cs[3] = { cb.c1, cb.c2, cb.c3 };
+  unsigned long window = comboWindowMs(i), now = millis(), first = 0;
+  int pressed = 0;
+  for (int k = 0; k < 3; k++) {
+    if (!keyState[rs[k]][cs[k]]) continue;
+    if (!comboAppliesOnLayer(i, comboLayerForKey(rs[k], cs[k]))) return false;
+    unsigned long t = keyPressTime[rs[k]][cs[k]];
+    // Alle gedrückten Tasten liegen paarweise im Fenster; first = der älteste Druck (Abstand zu now am größten)
+    for (int j = 0; j < k; j++) {
+      if (keyState[rs[j]][cs[j]] && !comboTimesWithin(t, keyPressTime[rs[j]][cs[j]], window)) return false;
+    }
+    if (pressed == 0 || (unsigned long)(now - t) > (unsigned long)(now - first)) first = t;
+    pressed++;
+  }
+  return pressed == 2 && (unsigned long)(now - first) < window;
+}
+
+// true, wenn (r, c) mit bereits gedrückten Partnertasten innerhalb des Fensters der Combo eine Combo bildet
+// (bei drei Tasten müssen beide Partner gedrückt sein) oder eine Combo mit drei Tasten noch auf die dritte Taste wartet.
+// Eine vollständige Combo wird im selben Scan von checkUserCombos() ausgelöst.
 bool hasPressedComboPartnerInWindow(uint8_t r, uint8_t c) {
   for (uint8_t i = 0; i < numCombos; i++) {
-    uint8_t pr, pc;
-    if (userCombos[i].r1 == r && userCombos[i].c1 == c) { pr = userCombos[i].r2; pc = userCombos[i].c2; }
-    else if (userCombos[i].r2 == r && userCombos[i].c2 == c) { pr = userCombos[i].r1; pc = userCombos[i].c1; }
-    else continue;
-    if (!keyState[pr][pc]) continue;
-    if (!comboAppliesOnLayer(i, comboLayerForKey(r, c)) || !comboAppliesOnLayer(i, comboLayerForKey(pr, pc))) continue;
-    unsigned long t1 = keyPressTime[r][c];
-    unsigned long t2 = keyPressTime[pr][pc];
-    if ((unsigned long)(t1 - t2) <= comboTimeoutMs || (unsigned long)(t2 - t1) <= comboTimeoutMs) return true;
+    if (!comboContainsKey(i, r, c)) continue;
+    if (hasPendingThreeKeyCombo(i, r, c)) return true;
+    if (!comboAllPressed(i) || !comboOnMaskLayers(i) || !comboKeysInWindow(i)) continue;
+    return true;
   }
   return false;
 }
@@ -1896,7 +1970,7 @@ void processDeferredKeys(unsigned long now) {
     for (int r = 0; r < NUM_ROWS; r++) {
       for (int c = 0; c < NUM_COLS; c++) {
         if (keyState[r][c] && !keySentToHost[r][c] && isComboCandidateKey(r, c)) {
-          if ((unsigned long)(now - keyPressTime[r][c]) >= comboTimeoutMs) {
+          if ((unsigned long)(now - keyPressTime[r][c]) >= comboBufferMs(r, c)) {
             uint16_t act = pressedAction[r][c];
             recordRepeatAction(act);
             if (act > 0 && act <= 0xFF) {
@@ -2278,6 +2352,9 @@ void loadKeymapFromNVS() {
             userCombos[i].behavior = rec[4];
             userCombos[i].action = (uint16_t)(rec[6] | (rec[7] << 8));
             userCombos[i].layerMask = COMBO_ALL_LAYERS;
+            userCombos[i].r3 = COMBO_NO_KEY;
+            userCombos[i].c3 = COMBO_NO_KEY;
+            userCombos[i].windowMs = 0;
           }
           loaded = true;
           Serial.printf("NVS: %d Combos geladen.\n", numCombos);
@@ -2302,7 +2379,13 @@ void loadKeymapFromNVS() {
             userCombos[i].behavior = rec[4];
             userCombos[i].action = (uint16_t)(rec[5] | (rec[6] << 8));
             userCombos[i].layerMask = rec[7] ? rec[7] : COMBO_ALL_LAYERS;
-            // rec[8..11] (dritte Taste, eigenes Fenster) sind reserviert und werden noch nicht gelesen
+            // Dritte Taste: gültig nur als Paar innerhalb der Matrix, sonst keine. Fenster 0 = comboTimeoutMs.
+            bool thirdOk = rec[8] < NUM_ROWS && rec[9] < NUM_COLS &&
+                           !(rec[8] == rec[0] && rec[9] == rec[1]) && !(rec[8] == rec[2] && rec[9] == rec[3]);
+            userCombos[i].r3 = thirdOk ? rec[8] : COMBO_NO_KEY;
+            userCombos[i].c3 = thirdOk ? rec[9] : COMBO_NO_KEY;
+            uint16_t w = (uint16_t)(rec[10] | (rec[11] << 8));
+            userCombos[i].windowMs = (w >= COMBO_WINDOW_MIN && w <= COMBO_WINDOW_MAX) ? w : 0;
           }
           loaded = true;
           Serial.printf("NVS: %d Combos geladen (v2).\n", numCombos);
@@ -2466,7 +2549,7 @@ bool saveHoldTapModeToNVS(uint8_t mode) {
 // NVS-Format der Combos ("combos_v2"): 2 Bytes Kopf (COMBO_NVS_VERSION, COMBO_NVS_RECORD_BYTES), danach je Combo ein
 // Satz fester Länge:
 //   0 r1, 1 c1, 2 r2, 3 c2, 4 behavior, 5..6 action (little endian), 7 layerMask (Bit i = Ebene i),
-//   8 r3, 9 c3 (reserviert für eine dritte Taste, 0xFF = keine), 10..11 eigenes Fenster in ms (reserviert, 0 = global)
+//   8 r3, 9 c3 (dritte Taste, 0xFF = keine), 10..11 eigenes Fenster in ms (little endian, 0 = comboTimeoutMs)
 // Das alte Format ("combos_data") hat 8 Bytes je Combo (Padding vor action) und bleibt lesbar (Ebenenmaske = alle Ebenen).
 bool saveCombosToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
@@ -2486,10 +2569,10 @@ bool saveCombosToNVS() {
       rec[5] = (uint8_t)(userCombos[i].action & 0xFF);
       rec[6] = (uint8_t)(userCombos[i].action >> 8);
       rec[7] = userCombos[i].layerMask;
-      rec[8] = 0xFF;
-      rec[9] = 0xFF;
-      rec[10] = 0;
-      rec[11] = 0;
+      rec[8] = userCombos[i].r3;
+      rec[9] = userCombos[i].c3;
+      rec[10] = (uint8_t)(userCombos[i].windowMs & 0xFF);
+      rec[11] = (uint8_t)(userCombos[i].windowMs >> 8);
     }
     // Reihenfolge: neues Blob, altes Blob entfernen, Zähler. Das Laden nimmt die Anzahl aus der Länge des neuen
     // Blobs und bevorzugt ein gültiges altes Blob. Zwischenstände: nach dem Blob gilt noch der alte Stand; nach dem
@@ -2630,7 +2713,7 @@ void sendMatrixData(const char* prefix, uint16_t (*matrix)[NUM_ROWS][NUM_COLS], 
 // GET_CONFIG: Combos, Tastenpaare und Makros in kurzen Blöcken (je Zeile höchstens ~150 Zeichen, damit sie in eine
 // BLE-Benachrichtigung bei kleiner MTU passt). Jede Liste beginnt mit ..._COUNT:<n>; ..._DATA trägt den Offset "o".
 // Ein Makro sendet "n" (Schrittzahl) in jedem Block; ein leeres Makro sendet einen Block ohne Schritte.
-#define GET_CONFIG_COMBOS_PER_LINE 4
+#define GET_CONFIG_COMBOS_PER_LINE 3
 #define GET_CONFIG_PAIRS_PER_LINE  8
 #define GET_CONFIG_OVERRIDES_PER_LINE 6
 #define GET_CONFIG_STEPS_PER_LINE  8
@@ -2640,7 +2723,10 @@ void sendCombosPairsMacros() {
     String out = "COMBO_DATA:{\"o\":" + String(o) + ",\"e\":[";
     for (int i = o; i < numCombos && i < o + GET_CONFIG_COMBOS_PER_LINE; i++) {
       const KeyCombo &cb = userCombos[i];
-      out += String(i > o ? "," : "") + "[" + cb.r1 + "," + cb.c1 + "," + cb.r2 + "," + cb.c2 + "," + cb.behavior + "," + cb.action + "," + cb.layerMask + "]";
+      out += String(i > o ? "," : "") + "[" + cb.r1 + "," + cb.c1 + "," + cb.r2 + "," + cb.c2 + "," + cb.behavior + "," + cb.action + "," + cb.layerMask;
+      // Dritte Taste und Fenster nur bei einer Combo, die sie nutzt: alle anderen Einträge bleiben bei sieben Werten
+      if (comboHasThirdKey(i) || cb.windowMs) out += String(",") + cb.r3 + "," + cb.c3 + "," + cb.windowMs;
+      out += "]";
     }
     sendConfigNotification(out + "]}", true);
   }
@@ -3040,20 +3126,42 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd.startsWith("ADD_COMBO ")) {
     int r1, c1, r2, c2, beh, act;
     int mask = COMBO_ALL_LAYERS;
-    // Sechs Werte sind Pflicht; ein siebter (Ebenenmaske 1..255) ist optional. Ohne ihn gilt die Combo auf allen
-    // Ebenen. Jeder weitere oder nicht numerische Rest ist ein Fehler.
+    int r3 = COMBO_NO_KEY, c3 = COMBO_NO_KEY, windowMs = 0;
+    // Sechs Werte sind Pflicht. Danach folgen optional: Ebenenmaske (1..255), dritte Taste (r3 c3, beide 255 = keine)
+    // und Fenster in ms (0 oder COMBO_WINDOW_MIN..COMBO_WINDOW_MAX, 0 = comboTimeoutMs). Erlaubt sind 0, 1, 3 oder 4 Zusatzwerte; ohne Maske
+    // gilt die Combo auf allen Ebenen. Jeder weitere oder nicht numerische Rest ist ein Fehler.
     int consumed = -1;
     bool parsed = sscanf(cmd.c_str(), "ADD_COMBO %d %d %d %d %d %d%n", &r1, &c1, &r2, &c2, &beh, &act, &consumed) == 6 &&
                   consumed > 0;
     if (parsed) {
+      long extra[4];
+      int nExtra = 0;
       const char *rest = cmd.c_str() + consumed;
-      while (*rest == ' ') rest++;
-      if (*rest != '\0') {
+      while (parsed) {
+        while (*rest == ' ') rest++;
+        if (*rest == '\0') break;
         char *end = nullptr;
-        long m = strtol(rest, &end, 10);
-        while (end && *end == ' ') end++;
-        parsed = end != rest && end && *end == '\0' && m >= 1 && m <= 0xFF;
-        if (parsed) mask = (int)m;
+        long v = strtol(rest, &end, 10);
+        parsed = end != rest && end && (*end == ' ' || *end == '\0') && nExtra < 4 && v >= 0 && v <= 0xFFFF;
+        if (!parsed) break;
+        extra[nExtra++] = v;
+        rest = end;
+      }
+      parsed = parsed && (nExtra <= 1 || nExtra >= 3);
+      if (parsed && nExtra >= 1) {
+        parsed = extra[0] >= 1 && extra[0] <= 0xFF;
+        mask = (int)extra[0];
+      }
+      if (parsed && nExtra >= 3) {
+        r3 = (int)extra[1];
+        c3 = (int)extra[2];
+        bool none = r3 == COMBO_NO_KEY && c3 == COMBO_NO_KEY;
+        bool inMatrix = r3 < NUM_ROWS && c3 < NUM_COLS;
+        parsed = none || (inMatrix && !(r3 == r1 && c3 == c1) && !(r3 == r2 && c3 == c2));
+      }
+      if (parsed && nExtra == 4) {
+        windowMs = (int)extra[3];
+        parsed = windowMs == 0 || (windowMs >= COMBO_WINDOW_MIN && windowMs <= COMBO_WINDOW_MAX);
       }
     }
     if (parsed &&
@@ -3070,6 +3178,9 @@ void handleConfigCommand(String cmd, bool fromBle) {
       userCombos[numCombos].behavior = (uint8_t)beh;
       userCombos[numCombos].action = (uint16_t)act;
       userCombos[numCombos].layerMask = (uint8_t)mask;
+      userCombos[numCombos].r3 = (uint8_t)r3;
+      userCombos[numCombos].c3 = (uint8_t)c3;
+      userCombos[numCombos].windowMs = (uint16_t)windowMs;
       comboRuntime[numCombos].active = false;
       comboRuntime[numCombos].lastReleaseTime = 0;
       numCombos++;
@@ -3241,8 +3352,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
 bool wasComboRecentlyActive(uint8_t r, uint8_t c) {
   unsigned long now = millis();
   for (uint8_t i = 0; i < numCombos; i++) {
-    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
-        (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
+    if (comboContainsKey(i, r, c)) {
       if (comboRuntime[i].active) return true;
       if (comboRuntime[i].lastReleaseTime > 0 && ((unsigned long)(now - comboRuntime[i].lastReleaseTime) < 300)) {
         // Nur unterdrücken, wenn der Tastendruck VOR oder WÄHREND des Chords gestartet wurde.
@@ -3262,8 +3372,7 @@ bool wasComboRecentlyActive(uint8_t r, uint8_t c) {
 bool isComboCandidateKey(uint8_t r, uint8_t c) {
   uint8_t layer = comboLayerForKey(r, c);
   for (uint8_t i = 0; i < numCombos; i++) {
-    if ((userCombos[i].r1 == r && userCombos[i].c1 == c) ||
-        (userCombos[i].r2 == r && userCombos[i].c2 == c)) {
+    if (comboContainsKey(i, r, c)) {
       if (comboAppliesOnLayer(i, layer)) return true;
     }
   }
@@ -3278,27 +3387,30 @@ void checkUserCombos() {
     uint8_t r2 = userCombos[i].r2;
     uint8_t c2 = userCombos[i].c2;
 
-    bool bothPressed = keyState[r1][c1] && keyState[r2][c2];
+    bool bothPressed = comboAllPressed(i);
     if (bothPressed && !comboRuntime[i].active) {
-      // Beide Tasten müssen innerhalb des konfigurierbaren comboTimeoutMs gedrückt worden sein!
+      // Alle Tasten müssen innerhalb des Fensters der Combo (windowMs oder comboTimeoutMs) gedrückt worden sein!
       // Wenn eine Taste schon lange gehalten wurde und man dann schnell tippt, ist es KEINE Combo!
-      unsigned long t1 = keyPressTime[r1][c1];
-      unsigned long t2 = keyPressTime[r2][c2];
-      bool inWindow = ((unsigned long)(t1 - t2) <= comboTimeoutMs) || ((unsigned long)(t2 - t1) <= comboTimeoutMs);
-      // Beide Tasten müssen auf einer Ebene der Maske gedrückt worden sein: nur dann wurden sie gepuffert
-      bool onMaskLayers = comboAppliesOnLayer(i, comboLayerForKey(r1, c1)) && comboAppliesOnLayer(i, comboLayerForKey(r2, c2));
+      bool inWindow = comboKeysInWindow(i);
+      // Alle Tasten müssen auf einer Ebene der Maske gedrückt worden sein: nur dann wurden sie gepuffert
+      bool onMaskLayers = comboOnMaskLayers(i);
 
       if (inWindow && onMaskLayers) {
         comboRuntime[i].active = true;
         // Die Combo verbraucht beide Tasten: deren Mod-Tap-Entscheidung darf nicht mehr greifen
         cancelTapHoldForCombo(r1, c1);
         cancelTapHoldForCombo(r2, c2);
+        if (comboHasThirdKey(i)) cancelTapHoldForCombo(userCombos[i].r3, userCombos[i].c3);
         // Beide Tasten als an Host gesendet markieren, damit lingernde Tasten nach dem Chord
         // nicht nach Ablauf der 300ms Grace Period versehentlich als Einzeltaste nachfeuern!
         keySentToHost[r1][c1] = true;
         keySentToHost[r2][c2] = true;
         mouseMoveStop(r1, c1);
         mouseMoveStop(r2, c2);
+        if (comboHasThirdKey(i)) {
+          keySentToHost[userCombos[i].r3][userCombos[i].c3] = true;
+          mouseMoveStop(userCombos[i].r3, userCombos[i].c3);
+        }
 
         // Sofort Einzeltasten auf Mac loslassen, damit der Combo-Chord die Einzeltasten überschreibt.
         // releaseAll() löst auch die Codes eines laufenden Makros; das Makro endet hier.

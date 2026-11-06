@@ -154,6 +154,7 @@ function setupEventListeners() {
   document.getElementById("btnOpenAddComboModal").addEventListener("click", () => {
     populateComboKeyDropdowns();
     document.querySelectorAll(".combo-layer-check").forEach(cb => { cb.checked = true; });
+    document.getElementById("comboWindowInput").value = "";
     clearSelectFilter("comboActionSelect");
     comboModal.style.display = "flex";
   });
@@ -172,8 +173,22 @@ function setupEventListeners() {
     const action = actionSelect.value;
     const actionLabel = actionSelect.options[actionSelect.selectedIndex].text;
 
+    // Leer = keine dritte Taste
+    const k3Raw = document.getElementById("comboKey3Select").value;
+    const k3Val = k3Raw ? k3Raw.split(",") : null;
     if (k1Val[0] === k2Val[0] && k1Val[1] === k2Val[1]) {
       alert("Taste 1 und Taste 2 dürfen nicht identisch sein!");
+      return;
+    }
+    if (k3Val && ((k3Val[0] === k1Val[0] && k3Val[1] === k1Val[1]) || (k3Val[0] === k2Val[0] && k3Val[1] === k2Val[1]))) {
+      alert("Taste 3 muss sich von Taste 1 und Taste 2 unterscheiden!");
+      return;
+    }
+    // Leer = globales Combo-Zeitfenster
+    const windowRaw = document.getElementById("comboWindowInput").value.trim();
+    const windowMs = windowRaw === "" ? 0 : Number(windowRaw);
+    if (windowRaw !== "" && !isValidComboWindow(windowMs)) {
+      alert(`Das Zeitfenster muss eine ganze Zahl von ${COMBO_WINDOW_MIN} bis ${COMBO_WINDOW_MAX} ms sein, oder leer für das globale Fenster.`);
       return;
     }
     if (currentConfig.combos.length >= MAX_COMBOS) {
@@ -210,18 +225,22 @@ function setupEventListeners() {
     const layer = currentConfig.layers[0];
     const lbl1 = (layer[r1] && layer[r1][c1]) ? layer[r1][c1].label : `R${r1}C${c1}`;
     const lbl2 = (layer[r2] && layer[r2][c2]) ? layer[r2][c2].label : `R${r2}C${c2}`;
+    const r3 = k3Val ? parseInt(k3Val[0], 10) : null, c3 = k3Val ? parseInt(k3Val[1], 10) : null;
+    const lbl3 = k3Val ? ((layer[r3] && layer[r3][c3]) ? layer[r3][c3].label : `R${r3}C${c3}`) : "";
 
     const newCombo = {
       id: "combo-" + Date.now(),
-      name: `${lbl1} + ${lbl2} -> ${actionLabel}`,
+      name: `${lbl1} + ${lbl2}${k3Val ? ` + ${lbl3}` : ""} -> ${actionLabel}`,
       key1: { r: r1, c: c1, label: lbl1 },
       key2: { r: r2, c: c2, label: lbl2 },
       behavior,
       action,
       actionLabel
     };
-    // Die Maske für alle Ebenen steht nicht in der Datei (Standard)
+    // Die Maske für alle Ebenen steht nicht in der Datei (Standard); ebenso fehlen dritte Taste und Fenster, wenn nicht gesetzt
     if (layerMask !== COMBO_ALL_LAYERS) newCombo.layerMask = layerMask;
+    if (k3Val) newCombo.key3 = { r: r3, c: c3, label: lbl3 };
+    if (windowMs) newCombo.windowMs = windowMs;
 
     currentConfig.combos.push(newCombo);
     comboModal.style.display = "none";
@@ -500,8 +519,15 @@ async function flashOtaToDactyl() {
 function populateComboKeyDropdowns() {
   const s1 = document.getElementById("comboKey1Select");
   const s2 = document.getElementById("comboKey2Select");
+  const s3 = document.getElementById("comboKey3Select");
   s1.innerHTML = "";
   s2.innerHTML = "";
+  s3.innerHTML = "";
+  // Taste 3 ist optional: der erste Eintrag heißt "keine"
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "(keine, nur zwei Tasten)";
+  s3.appendChild(none);
 
   const layer = currentConfig.layers[0];
   const profile = activeProfile();
@@ -522,11 +548,17 @@ function populateComboKeyDropdowns() {
       o2.value = `${r},${c}`;
       o2.textContent = optText;
       s2.appendChild(o2);
+
+      const o3 = document.createElement("option");
+      o3.value = `${r},${c}`;
+      o3.textContent = optText;
+      s3.appendChild(o3);
     }
   }
 
   s1.value = "2,1"; // J
   s2.value = "2,2"; // K
+  s3.value = ""; // keine dritte Taste
 }
 
 // Tri-Layer-Felder (Einstellungen): je Regel drei Auswahlfelder a, b, Ziel; leer = Regel aus

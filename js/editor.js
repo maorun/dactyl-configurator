@@ -1165,7 +1165,7 @@ function createKeycapElement(r, c, side, keyData, isThumb = false) {
 
   // Check if part of an active combo
   const isComboKey = configFor(side).combos.some(combo => combo.key1 && combo.key2 &&
-    ((combo.key1.r === r && combo.key1.c === c) || (combo.key2.r === r && combo.key2.c === c))
+    comboKeys(combo).some(k => k.r === r && k.c === c)
   );
   if (isComboKey) {
     keyEl.classList.add("has-combo");
@@ -1285,6 +1285,12 @@ function comboLayersText(combo) {
   return mask === COMBO_ALL_LAYERS ? "Alle" : comboMaskLayers(mask).join(", ");
 }
 
+// Spalte "Fenster" der Combo-Tabelle: das eigene Fenster in ms oder "Global" (comboTimeoutMs)
+function comboWindowText(combo) {
+  const ms = comboWindowMs(combo);
+  return ms ? `${ms} ms` : "Global";
+}
+
 function renderCombosTable() {
   // Tastenpaare, Überschreibungen und Makros liegen im selben Tab und ändern sich bei Laden, Import und Undo zusammen mit den Combos
   renderKeyPairs();
@@ -1326,6 +1332,17 @@ function renderCombosTable() {
     badge2.className = "combo-key-badge";
     badge2.textContent = (combo.key2 && combo.key2.label) || `R${combo.key2?.r ?? 0}C${combo.key2?.c ?? 0}`;
     td2.appendChild(badge2);
+    // Dritte Taste: "+ Taste 3" in derselben Zelle
+    const third = comboThirdKey(combo);
+    if (third) {
+      const plus3 = document.createElement("strong");
+      plus3.textContent = " + ";
+      const badge3 = document.createElement("span");
+      badge3.className = "combo-key-badge";
+      badge3.textContent = third.label || `R${third.r}C${third.c}`;
+      td2.appendChild(plus3);
+      td2.appendChild(badge3);
+    }
 
     const tdAction = document.createElement("td");
     const actStrong = document.createElement("strong");
@@ -1343,6 +1360,10 @@ function renderCombosTable() {
     tdLayers.className = "combo-layers-cell";
     tdLayers.textContent = comboLayersText(combo);
 
+    const tdWindow = document.createElement("td");
+    tdWindow.className = "combo-window-cell";
+    tdWindow.textContent = comboWindowText(combo);
+
     const tdDel = document.createElement("td");
     const delBtn = document.createElement("button");
     delBtn.className = "btn btn-danger btn-sm";
@@ -1356,6 +1377,7 @@ function renderCombosTable() {
     tr.appendChild(tdAction);
     tr.appendChild(tdBehavior);
     tr.appendChild(tdLayers);
+    tr.appendChild(tdWindow);
     tr.appendChild(tdDel);
     tbody.appendChild(tr);
   });

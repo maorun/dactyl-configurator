@@ -324,13 +324,13 @@ bool toggleLayers[NUM_LAYERS] = {false};
 
 // Makro-Schritte nur bei freiem Platz in der Sendewarteschlange (Reserve für die Tasten des Users)
 #define MACRO_OUTPUT_READY() queueHasRoomForMacro(sendQueue)
-// Repeat über beide Hälften: die Repeat-Taste links meldet sich beim Master (SPLIT_OP_REPEAT), der entscheidet,
+// Repeat (auch ALT_REPEAT, code 4) über beide Hälften: die Repeat-Taste links meldet sich beim Master (SPLIT_OP_REPEAT), der entscheidet,
 // welche Hälfte wiederholt. Der Master schickt die Wiederholung links als SPLIT_OP_REPEAT_RUN zurück.
-bool leftRepeatRemotePress(uint8_t r, uint8_t c);
+bool leftRepeatRemotePress(uint8_t r, uint8_t c, bool alt);
 void leftRepeatRemoteRelease(uint8_t r, uint8_t c);
 void leftRepeatRecorded();
 void leftRepeatReleaseHeldPairs();
-#define REPEAT_REMOTE_PRESS(r, c) leftRepeatRemotePress(r, c)
+#define REPEAT_REMOTE_PRESS(r, c, alt) leftRepeatRemotePress(r, c, alt)
 #define REPEAT_REMOTE_RELEASE(r, c) leftRepeatRemoteRelease(r, c)
 // Der Master muss wissen, dass links zuletzt eine Aktion aufgezeichnet hat (Repeat rechts)
 #define REPEAT_RECORDED() leftRepeatRecorded()
@@ -399,8 +399,8 @@ static SplitRepeatRun masterRepeatRun = {};
 // Repeat-Taste links: Nummern je Taste und die Notiz an den Master (DactylLeftLogic.h, getestet)
 static LeftRepeatLink leftRepeatLink = {};
 
-bool leftRepeatRemotePress(uint8_t r, uint8_t c) {
-  return leftRepeatPress(leftRepeatLink, sendQueue, r, c);
+bool leftRepeatRemotePress(uint8_t r, uint8_t c, bool alt) {
+  return leftRepeatPress(leftRepeatLink, sendQueue, r, c, alt);
 }
 
 void leftRepeatRemoteRelease(uint8_t r, uint8_t c) {

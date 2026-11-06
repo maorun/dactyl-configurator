@@ -2067,14 +2067,16 @@ TEST(test_repeat_ops_are_appended_and_directional) {
   assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 2), out));
   assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 3), out));
   assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 2, 1), out));
-  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 4), out));
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 5), out));
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, 4), out));          // ALT_REPEAT ohne Nummer
   // REPEAT_RUN: nur Master -> links, mit Nummer 1..127
   assert(!parse(SPLIT_LEFT_MAC, makeSplitRepeatRun(true, 5), out));
   assert(parseMaster(SPLIT_MASTER_MAC, makeSplitRepeatRun(true, 5), out) && out.op == SPLIT_OP_REPEAT_RUN);
   assert(parseMaster(SPLIT_MASTER_MAC, makeSplitRepeatRun(false, 127), out));
   assert(!parseMaster(SPLIT_LEFT_MAC, makeSplitRepeatRun(true, 5), out));
   assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT_RUN, 1, 0), out));   // ohne Nummer
-  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT_RUN, 2, 3), out));   // code > 1
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT_RUN, 3, 3), out));   // code > 2
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT_RUN, 2, 0), out));   // ALT_REPEAT ohne Nummer
   assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT_RUN, 1, -3), out));  // negative Nummer
 }
 
@@ -2285,6 +2287,121 @@ TEST(test_left_run_new_press_releases_the_old_action_first) {
   splitRepeatLeftRunEvent(r, makeSplitRepeatRun(true, 6), 400, env);
   splitRepeatLeftRunEvent(r, makeSplitRepeatRun(false, 6), 410, env);
   assert(env.log.empty());
+}
+
+// -----------------------------------------------------------------------------
+// Alternate repeat (ACT_ALT_REPEAT) über beide Hälften
+// -----------------------------------------------------------------------------
+TEST(test_alt_repeat_packets_are_valid_and_directional) {
+  SplitHidEvent out;
+  assert(SPLIT_REPEAT_CODE_ALT_PRESS == 4 && SPLIT_REPEAT_RUN_CODE_ALT_PRESS == 2);
+  assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, 5), out));
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, 0), out));
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, -1), out));
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitRepeatRun(true, 5, true), out) && out.code == 2);
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitRepeatRun(true, 5, true), out));   // nur Master -> links
+  assert(makeSplitRepeatRun(true, 5).code == 1 && makeSplitRepeatRun(false, 5, true).code == 0);
+}
+
+TEST(test_alt_repeat_key_right_with_left_last_sends_alt_run) {
+  SplitLeftHeld held = {};
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  SplitHidEvent run;
+  assert(!splitRepeatRightPress(held, s, run, 100, true));        // nichts links aufgezeichnet
+  held.linkUp = true;
+  held.repeatLastLeft = true;
+  assert(splitRepeatRightPress(held, s, run, 100, true));
+  assert(run.op == SPLIT_OP_REPEAT_RUN && run.code == SPLIT_REPEAT_RUN_CODE_ALT_PRESS && run.arg == 1);
+  assert(splitRepeatRightPress(held, s, run, 100) && run.code == 1);   // Repeat bleibt unverändert
+}
+
+TEST(test_alt_repeat_refresh_keeps_the_alt_flag_for_both_key_halves) {
+  // Rechte ALT-Taste: die Auffrischung trägt code 2, damit eine Hälfte ohne das erste Paket nicht REPEAT startet
+  SplitLeftHeld held = {};
+  held.linkUp = true;
+  held.repeatLastLeft = true;
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  SplitHidEvent run, out;
+  assert(splitRepeatRightPress(held, s, run, 100, true));
+  assert(splitRepeatRefresh(s, 100 + SPLIT_REPEAT_REFRESH_MS, out));
+  assert(out.code == SPLIT_REPEAT_RUN_CODE_ALT_PRESS && out.arg == run.arg);
+  // Danach eine normale Repeat-Taste: die Auffrischung fällt auf code 1 zurück
+  splitRepeatClose(s, (uint8_t)run.arg);
+  assert(splitRepeatRightPress(held, s, run, 5000));
+  assert(splitRepeatRefresh(s, 5000 + SPLIT_REPEAT_REFRESH_MS, out) && out.code == 1);
+  // Linke ALT-Taste, links zuletzt: die Auffrischung trägt ebenfalls code 2
+  SplitLeftHeld h2 = {};
+  h2.linkUp = true;
+  h2.repeatLastLeft = true;
+  SplitRepeatSender s2;
+  splitRepeatSenderReset(s2, 0);
+  SplitRepeatEnd old;
+  assert(splitRepeatLeftKey(h2, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, 3), s2, run, old, 100) == SPLIT_REPEAT_STEP_SEND);
+  assert(splitRepeatRefresh(s2, 100 + SPLIT_REPEAT_REFRESH_MS, out) && out.code == SPLIT_REPEAT_RUN_CODE_ALT_PRESS);
+  // Ein Lauf ohne erstes Paket: die Auffrischung mit code 2 startet das Gegenteil, nicht die Aktion selbst
+  SplitRepeatRun r = {};
+  FakeRepeatEnv env;
+  env.last = KEY_LEFT_ARROW;
+  splitRepeatLeftRunEvent(r, out, 2000, env);
+  assert((env.log == std::vector<std::string>{"P" + std::to_string(KEY_RIGHT_ARROW)}));
+}
+
+TEST(test_alt_repeat_key_left_after_right_key_runs_the_opposite_on_the_master) {
+  SplitLeftHeld held = {};
+  held.linkUp = true;
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  FakeRepeatEnv env;
+  env.last = KEY_LEFT_ARROW;                                       // rechts war zuletzt: Pfeil links
+  splitRepeatMasterEvent(held, s, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, 3), 100, env);
+  assert((env.log == std::vector<std::string>{"P" + std::to_string(KEY_RIGHT_ARROW)}));
+  splitRepeatMasterEvent(held, s, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, 3), 110, env);  // Retry
+  assert(env.log.size() == 1);
+  splitRepeatMasterEvent(held, s, makeSplitHidEvent(SPLIT_OP_REPEAT, 0, 3), 120, env);
+  assert((env.log == std::vector<std::string>{"P" + std::to_string(KEY_RIGHT_ARROW), "R" + std::to_string(KEY_RIGHT_ARROW)}));
+}
+
+TEST(test_alt_repeat_key_left_without_opposite_does_nothing_on_the_master) {
+  SplitLeftHeld held = {};
+  held.linkUp = true;
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  FakeRepeatEnv env;
+  env.last = 'a';
+  splitRepeatMasterEvent(held, s, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, 3), 100, env);
+  splitRepeatMasterEvent(held, s, makeSplitHidEvent(SPLIT_OP_REPEAT, 0, 3), 120, env);
+  assert(env.log.empty());
+}
+
+TEST(test_alt_repeat_key_left_with_left_last_forwards_alt_run) {
+  SplitLeftHeld held = {};
+  held.linkUp = true;
+  held.repeatLastLeft = true;
+  SplitRepeatSender s;
+  splitRepeatSenderReset(s, 0);
+  FakeRepeatEnv env;
+  splitRepeatMasterEvent(held, s, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, 3), 100, env);
+  assert(env.log.empty() && env.sent.size() == 1);
+  assert(env.sent[0].op == SPLIT_OP_REPEAT_RUN && env.sent[0].code == SPLIT_REPEAT_RUN_CODE_ALT_PRESS);
+}
+
+TEST(test_alt_run_on_the_left_half_presses_the_opposite_of_its_last_action) {
+  SplitRepeatRun r = {};
+  FakeRepeatEnv env;
+  env.last = KEY_UP_ARROW;
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(true, 4, true), 1000, env);
+  assert((env.log == std::vector<std::string>{"P" + std::to_string(KEY_DOWN_ARROW)}));
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(false, 4), 1010, env);   // Loslassen löst das Gegenteil
+  assert((env.log == std::vector<std::string>{"P" + std::to_string(KEY_DOWN_ARROW), "R" + std::to_string(KEY_DOWN_ARROW)}));
+  // Ohne Gegenteil bleibt links alles still
+  FakeRepeatEnv env2;
+  SplitRepeatRun r2 = {};
+  env2.last = 'a';
+  splitRepeatLeftRunEvent(r2, makeSplitRepeatRun(true, 7, true), 2000, env2);
+  splitRepeatLeftRunEvent(r2, makeSplitRepeatRun(false, 7), 2010, env2);
+  assert(env2.log.empty());
 }
 
 TEST(test_master_event_runs_the_right_action_and_releases_it_with_the_key) {

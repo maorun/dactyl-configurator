@@ -650,7 +650,7 @@ test("Tastenpaar: Standardtasten, Modifier, Globe, Media und Maus sind erlaubt",
                     "MOUSE_WHEEL_UP", "MOUSE_WHEEL_DOWN"]) {
     assert.ok(api.isKeyPairMember(ok), ok);
   }
-  for (const bad of ["NONE", "", undefined, 5, "MO_1", "TG_2", "PAIR_0", "LAYER_UP", "UMLAUT_AE", "OSM_LSHIFT", "CAPS_WORD", "REPEAT", "MOUSE_UP", "MACRO_0"]) {
+  for (const bad of ["NONE", "", undefined, 5, "MO_1", "TG_2", "PAIR_0", "LAYER_UP", "UMLAUT_AE", "OSM_LSHIFT", "CAPS_WORD", "REPEAT", "ALT_REPEAT", "MOUSE_UP", "MACRO_0"]) {
     assert.ok(!api.isKeyPairMember(bad), String(bad));
   }
   assert.strictEqual(api.keyPairLabel({ first: "A", second: "B" }, c => c.toLowerCase()), "a + b");
@@ -2413,7 +2413,7 @@ test("One-Shot-Modifier und Caps Word: Aktionscodes wie DactylCommon.h, Labels u
   // Reihenfolge = Modifier-Bit (KEY_LEFT_CTRL + i), wie oneShotMaskForAction in der Firmware
   codes.forEach((code, i) => assert.strictEqual(api.actionCodeToNumeric(code), fw("ONE_SHOT_BASE") + i, code));
   const all = api.KEYCODES.flatMap(g => g.keys);
-  for (const code of [...codes, "CAPS_WORD", "REPEAT"]) {
+  for (const code of [...codes, "CAPS_WORD", "REPEAT", "ALT_REPEAT"]) {
     const n = api.actionCodeToNumeric(code);
     assert.strictEqual(n, fw(code), code);
     const label = api.ONE_SHOT_LABELS[code];
@@ -2426,6 +2426,10 @@ test("One-Shot-Modifier und Caps Word: Aktionscodes wie DactylCommon.h, Labels u
   assert.strictEqual(fw("CAPS_WORD"), 0x168);
   // Repeat liegt direkt hinter Caps Word, in keinem anderen Bereich (Makros 0x170, Umlaute 0x150)
   assert.strictEqual(fw("REPEAT"), 0x169);
+  // Alt Repeat liegt hinter Layer Lock (0x16A), vor den Makros (0x170)
+  assert.strictEqual(fw("ALT_REPEAT"), 0x16B);
+  assert.strictEqual(api.actionCodeToNumeric("ALT_REPEAT"), 0x16B);
+  assert.strictEqual(api.holdSublabel("ALT_REPEAT"), "AltRep");
 });
 
 test("Mausbewegung: Aktionscodes wie DactylCommon.h, Auswahl, Rückweg und kein Combo-Ziel", () => {
@@ -2952,7 +2956,7 @@ test("Layout-Profile: Namen werden wie str.casefold() in server.py verglichen", 
 
 test("Combos: Modifier Hold mit One-Shot und Caps Word wird abgelehnt oder migriert", () => {
   const combo = (behavior, action) => ({ layers: [[[]]], combos: [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior, action }] });
-  for (const action of ["OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD", "REPEAT"]) {
+  for (const action of ["OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD", "REPEAT", "ALT_REPEAT"]) {
     assert.ok(api.isOneShotOrCapsWordCode(action));
     const migrated = combo("MODIFIER_HOLD", action);
     api.validateConfigShape(migrated, R);
@@ -2963,7 +2967,7 @@ test("Combos: Modifier Hold mit One-Shot und Caps Word wird abgelehnt oder migri
   assert.ok(!api.isOneShotOrCapsWordCode("constructor"));
   // Firmware-Namen, die server.py ebenfalls annimmt
   assert.ok(api.isOneShotOrCapsWordCode("ACT_OSM_LSHIFT") && api.isOneShotOrCapsWordCode("ACT_CAPS_WORD"));
-  assert.ok(api.isOneShotOrCapsWordCode("ACT_REPEAT"));
+  assert.ok(api.isOneShotOrCapsWordCode("ACT_REPEAT") && api.isOneShotOrCapsWordCode("ACT_ALT_REPEAT"));
   assert.ok(!api.isOneShotOrCapsWordCode("ACT_MOUSE_LEFT"));
   // Gespeicherte Configs mit der alten Form: validateConfigShape wandelt die Combo in KEY_PRESS um, statt abzulehnen
   const legacy = combo("MODIFIER_HOLD", "CAPS_WORD");
@@ -3305,7 +3309,7 @@ asyncTests.push(["Combo-Dialog: Modifier Hold mit One-Shot oder Caps Word wird n
   };
   const count = () => vm.runInContext("currentConfig.combos.length", w);
   const before = count();
-  for (const action of ["OSM_LSHIFT", "CAPS_WORD", "REPEAT"]) {
+  for (const action of ["OSM_LSHIFT", "CAPS_WORD", "REPEAT", "ALT_REPEAT"]) {
     await save("MODIFIER_HOLD", action);
     assert.strictEqual(count(), before);
     assert.ok(log.alerts.at(-1).includes("Modifier Hold"));

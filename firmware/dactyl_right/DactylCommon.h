@@ -5,6 +5,7 @@
  */
 #include <stdint.h>
 #include "DactylMatrixConstants.h"
+#include "DactylKeycodes.h" // KEY_*-Codes der Alternate-Repeat-Tabelle
 
 // Einschwingzeit des Matrix-Treibers in Mikrosekunden (Row/Col auf LOW treiben, Pegel stabilisieren)
 #define MATRIX_SETTLE_US 10
@@ -85,6 +86,9 @@
 // Layer lock: rastet die höchste gehaltene MO-Ebene (eigene oder der anderen Hälfte) als TG-Ebene ein;
 // ein zweiter Druck oder ein Druck ohne gehaltene MO-Ebene löst die Einrastung
 #define ACT_LAYER_LOCK           0x16A
+// Alternate repeat: wiederholt das Gegenteil der zuletzt ausgeführten Aktion (Links <-> Rechts, Hoch <-> Runter, ...);
+// ohne Gegenteil sendet die Taste nichts. Gehaltene Modifier bleiben wirksam.
+#define ACT_ALT_REPEAT           0x16B
 // One-Shot-Ebene (OSL_0 .. OSL_7): Tippen merkt die Ebene für den nächsten Tastendruck beider Hälften vor, danach
 // ist sie wieder gelöst; ein zweites Tippen nimmt die Vormerkung zurück; Halten wirkt wie MO_n und merkt nichts vor
 #define ACT_OSL_BASE             0x180
@@ -146,3 +150,21 @@ enum HoldTapMode : uint8_t {
   HOLD_MODE_TAP_PREFERRED = 2    // Hold nur nach Ablauf des Tapping-Terms
 };
 #define DEFAULT_HOLD_TAP_MODE HOLD_MODE_OTHER_KEY_PRESS
+
+// Alternate repeat: das Gegenteil einer Aktion; 0 = die Aktion hat keins (die Taste sendet dann nichts)
+inline uint16_t altRepeatAction(uint16_t a) {
+  static const uint16_t PAIRS[][2] = {
+    {KEY_LEFT_ARROW, KEY_RIGHT_ARROW}, {KEY_UP_ARROW, KEY_DOWN_ARROW},
+    {KEY_PAGE_UP, KEY_PAGE_DOWN}, {KEY_HOME, KEY_END}, {KEY_BACKSPACE, KEY_DELETE},
+    {0x133, 0x134},  // Scroll up <-> down
+    {0x122, 0x123},  // Volume up <-> down
+    {0x124, 0x125},  // Next <-> previous track
+  };
+  for (const auto &p : PAIRS) {
+    if (a == p[0]) return p[1];
+    if (a == p[1]) return p[0];
+  }
+  return 0;
+}
+
+inline bool isRepeatKeyAction(uint16_t a) { return a == ACT_REPEAT || a == ACT_ALT_REPEAT; }

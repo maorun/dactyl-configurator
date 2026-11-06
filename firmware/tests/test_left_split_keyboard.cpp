@@ -561,6 +561,18 @@ TEST(test_tap_pending_reset_after_espnow_setup) {
 // -----------------------------------------------------------------------------
 static LeftRepeatLink repeatLink;
 
+TEST(test_left_alt_repeat_key_queues_the_alt_press_code) {
+  repeatLink = {};
+  assert(leftRepeatPress(repeatLink, sendQueue, 2, 3, true));
+  assert(leftRepeatPress(repeatLink, sendQueue, 4, 1));
+  leftRepeatRelease(repeatLink, sendQueue, 2, 3, []() {});
+  auto ev = drain();
+  assert(ev.size() == 3);
+  assert(ev[0].op == SPLIT_OP_REPEAT && ev[0].code == SPLIT_REPEAT_CODE_ALT_PRESS && ev[0].arg == 1);
+  assert(ev[1].op == SPLIT_OP_REPEAT && ev[1].code == 1 && ev[1].arg == 2);   // Repeat bleibt code 1
+  assert(ev[2].code == 0 && ev[2].arg == 1);                                  // Loslassen wie bei Repeat
+}
+
 TEST(test_left_repeat_key_queues_numbered_press_and_release) {
   repeatLink = {};
   assert(leftRepeatPress(repeatLink, sendQueue, 2, 3));

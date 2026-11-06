@@ -472,9 +472,9 @@ int deviceInfoLeftLink(char *buf, size_t size);
 #define DEVICE_INFO_LEFT_LINK(buf, size) deviceInfoLeftLink(buf, size)
 // Repeat über beide Hälften (SPLIT_OP_REPEAT / SPLIT_OP_REPEAT_RUN): war links zuletzt, führt die linke Hälfte
 // die Wiederholung aus; eine aufgezeichnete rechte Aktion macht rechts wieder zur letzten Hälfte
-bool masterRepeatRemotePress(uint8_t r, uint8_t c);
+bool masterRepeatRemotePress(uint8_t r, uint8_t c, bool alt);
 void masterRepeatRemoteRelease(uint8_t r, uint8_t c);
-#define REPEAT_REMOTE_PRESS(r, c) masterRepeatRemotePress(r, c)
+#define REPEAT_REMOTE_PRESS(r, c, alt) masterRepeatRemotePress(r, c, alt)
 #define REPEAT_REMOTE_RELEASE(r, c) masterRepeatRemoteRelease(r, c)
 #define REPEAT_RECORDED() (bleKeyboard.splitLeft.repeatLastLeft = false)
 void masterRepeatReleaseHeldPairs();
@@ -527,9 +527,9 @@ static void sendRepeatRun(const SplitHidEvent &ev) {
   splitRepeatSchedule(splitRepeatSender, ev, millis());
 }
 
-bool masterRepeatRemotePress(uint8_t r, uint8_t c) {
+bool masterRepeatRemotePress(uint8_t r, uint8_t c, bool alt) {
   SplitHidEvent run;
-  if (!splitRepeatRightPress(bleKeyboard.splitLeft, splitRepeatSender, run, millis())) return false;
+  if (!splitRepeatRightPress(bleKeyboard.splitLeft, splitRepeatSender, run, millis(), alt)) return false;
   masterRepeatRunSeq[r][c] = (uint8_t)run.arg;
   sendRepeatRun(run);
   return true;

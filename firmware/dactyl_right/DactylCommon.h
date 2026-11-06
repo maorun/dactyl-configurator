@@ -85,6 +85,10 @@
 // Layer lock: rastet die höchste gehaltene MO-Ebene (eigene oder der anderen Hälfte) als TG-Ebene ein;
 // ein zweiter Druck oder ein Druck ohne gehaltene MO-Ebene löst die Einrastung
 #define ACT_LAYER_LOCK           0x16A
+// One-Shot-Ebene (OSL_0 .. OSL_7): Tippen merkt die Ebene für den nächsten Tastendruck beider Hälften vor, danach
+// ist sie wieder gelöst; ein zweites Tippen nimmt die Vormerkung zurück; Halten wirkt wie MO_n und merkt nichts vor
+#define ACT_OSL_BASE             0x180
+#define NUM_OSL_ACTIONS          8
 
 #define NUM_LAYERS 8
 

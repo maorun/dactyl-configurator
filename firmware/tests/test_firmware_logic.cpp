@@ -131,6 +131,9 @@ static int testsPassed = 0;
 // Reset mock state before tests
 void resetState() {
   remoteMomentaryLayers = 0;
+  oslArmed = remoteOslArmed = oslHeld = oslUsed = oslUsedToSend = remoteOslIgnore = 0;
+  for (int l = 0; l < NUM_LAYERS; l++) { oslTerm[l] = 0; oslPressTime[l] = 0; }
+  remoteOslIgnoreMs = remoteOslRxMs = 0;
   for (int l = 0; l < NUM_LAYERS; l++) {
     momentaryLayers[l] = false;
     toggleLayers[l] = false;
@@ -6044,6 +6047,272 @@ TEST(test_empty_combo_save_with_failed_count_keeps_the_blobs) {
   numCombos = 0;
   loadKeymapFromNVS();
   assert(numCombos == 1 && userCombos[0].layerMask == 1);
+}
+
+// -----------------------------------------------------------------------------
+// One-Shot-Ebene (OSL_0 .. OSL_7)
+// -----------------------------------------------------------------------------
+static void tapOsl(int r, int c) {
+  setMillis(1000);
+  pressKey(r, c, true);
+  setMillis(1050);
+  pressKey(r, c, false);
+}
+
+TEST(test_osl_tap_arms_layer_for_one_key_press_then_releases) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[2][2][1] = 'x';
+  tapOsl(5, 0);
+  // Die Ebene ist vorgemerkt, die Taste selbst ist gelöst
+  assert(oslArmed == (1 << 2) && oslHeld == 0 && !momentaryLayers[2] && getActiveLayer() == 2);
+  // Der nächste Druck löst die Aktion der Ebene 2 aus und verbraucht die Vormerkung
+  pressKey(2, 1, true);
+  assert(pressedAction[2][1] == 'x');
+  assert(oslArmed == 0 && getActiveLayer() == 0);
+  pressKey(2, 1, false);
+  // Der übernächste Druck läuft wieder auf Ebene 0
+  pressKey(2, 1, true);
+  assert(pressedAction[2][1] == 'a');
+  pressKey(2, 1, false);
+}
+
+TEST(test_osl_layer_holds_for_the_whole_key_press_even_after_consumption) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 3;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[3][2][1] = 'y';
+  tapOsl(5, 0);
+  pressKey(2, 1, true);
+  // Loslassen nach dem Verbrauch löst genau die Aktion, die gedrückt wurde (Ebene 3), nicht die der Ebene 0
+  pressKey(2, 1, false);
+  assert(pressedAction[2][1] == 0 && getActiveLayer() == 0);
+}
+
+TEST(test_osl_second_tap_disarms_the_layer) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[2][2][1] = 'x';
+  tapOsl(5, 0);
+  assert(oslArmed == (1 << 2));
+  tapOsl(5, 0);
+  assert(oslArmed == 0 && getActiveLayer() == 0);
+  pressKey(2, 1, true);
+  assert(pressedAction[2][1] == 'a');
+  pressKey(2, 1, false);
+}
+
+TEST(test_osl_hold_acts_like_mo_and_arms_nothing) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[2][2][1] = 'x';
+  setMillis(1000);
+  pressKey(5, 0, true);
+  // Während des Haltens gilt die Ebene wie bei MO_2
+  assert(getActiveLayer() == 2 && oslHeld == (1 << 2) && localMomentaryLayerMask() == (1 << 2));
+  pressKey(2, 1, true);
+  assert(pressedAction[2][1] == 'x');
+  pressKey(2, 1, false);
+  assert(getActiveLayer() == 2);   // weiter gehalten
+  pressKey(5, 0, false);
+  // Loslassen nach einer Taste dazwischen merkt nichts vor
+  assert(oslArmed == 0 && getActiveLayer() == 0 && oslHeld == 0 && localMomentaryLayerMask() == 0);
+}
+
+TEST(test_osl_long_hold_without_other_key_arms_nothing) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  setMillis(1000);
+  pressKey(5, 0, true);
+  setMillis(1000 + tappingTermMs + 50);
+  pressKey(5, 0, false);
+  assert(oslArmed == 0 && getActiveLayer() == 0);
+}
+
+TEST(test_osl_armed_layer_is_used_by_a_key_of_the_other_half) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[2][2][1] = 'x';
+  // Die andere Hälfte merkt Ebene 2 vor: diese Hälfte spiegelt sie und löst die Aktion der Ebene aus
+  applyRemoteOslState(1 << 2, millis());
+  assert(getActiveLayer() == 2);
+  pressKey(2, 1, true);
+  assert(pressedAction[2][1] == 'x');
+  // Die Vormerkung der anderen Hälfte ist verbraucht und wird gemeldet (Bits 8..15 im Paket)
+  assert(remoteOslArmed == 0 && oslUsedToSend == (1 << 2) && getActiveLayer() == 0);
+  pressKey(2, 1, false);
+  // Ein spätes Auffrischen der anderen Hälfte setzt die verbrauchte Ebene nicht wieder
+  applyRemoteOslState(1 << 2, millis() + 10);
+  assert(remoteOslArmed == 0 && getActiveLayer() == 0);
+  // Nach der Bestätigung (Bit weg im Stand der anderen Hälfte) ist die Sperre aufgehoben
+  applyRemoteOslState(0, millis() + 20);
+  assert(oslUsedToSend == 0);
+  applyRemoteOslState(1 << 2, millis() + 30);
+  assert(getActiveLayer() == 2);
+}
+
+TEST(test_osl_local_armed_layer_is_consumed_by_the_other_half_report) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  tapOsl(5, 0);
+  assert(oslArmed == (1 << 2));
+  // Die andere Hälfte meldet, dass ihr Tastendruck die Ebene verbraucht hat: die Vormerkung ist weg
+  applyRemoteOslUsed(1 << 2);
+  assert(oslArmed == 0 && getActiveLayer() == 0);
+}
+
+TEST(test_osl_osl_key_press_does_not_consume_and_other_osl_stacks) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  KEYMAP[0][5][1] = ACT_OSL_BASE + 3;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[3][2][1] = 'z';
+  tapOsl(5, 0);
+  tapOsl(5, 1);
+  // Beide Ebenen sind vorgemerkt, die höhere gewinnt
+  assert(oslArmed == ((1 << 2) | (1 << 3)) && getActiveLayer() == 3);
+  pressKey(2, 1, true);
+  assert(pressedAction[2][1] == 'z' && oslArmed == 0);
+  pressKey(2, 1, false);
+}
+
+TEST(test_osl_osl_0_forces_the_base_layer) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 0;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[2][2][1] = 'x';
+  toggleLayers[2] = true;
+  assert(getActiveLayer() == 2);
+  tapOsl(5, 0);
+  assert(getActiveLayer() == 0);
+  pressKey(2, 1, true);
+  assert(pressedAction[2][1] == 'a');
+  pressKey(2, 1, false);
+  assert(getActiveLayer() == 2);   // die Einrastung bleibt
+}
+
+TEST(test_osl_clear_after_link_timeout_and_release_all) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  // Vormerkung der anderen Hälfte verfällt ohne Paket
+  applyRemoteOslState(1 << 2, 1000);
+  assert(getActiveLayer() == 2);
+  oslExpireRemote(1000 + OSL_REMOTE_TIMEOUT_MS - 1);
+  assert(getActiveLayer() == 2);
+  oslExpireRemote(1000 + OSL_REMOTE_TIMEOUT_MS);
+  assert(remoteOslArmed == 0 && getActiveLayer() == 0);
+  // Eigene Vormerkung und die gespiegelte fallen bei Link-Verlust, RELEASE_ALL und Host-Verlust (oslClearAll)
+  tapOsl(5, 0);
+  applyRemoteOslState(1 << 4, millis());
+  assert(oslArmed == (1 << 2) && remoteOslArmed == (1 << 4));
+  oslClearAll();
+  assert(oslArmed == 0 && remoteOslArmed == 0 && getActiveLayer() == 0);
+  // Die verlorene Vormerkung der anderen Hälfte wird als verbraucht gemeldet, damit sie dort auch fällt
+  assert(oslUsedToSend == (1 << 4));
+  // Ihr Auffrischen vor der Bestätigung setzt sie nicht wieder
+  applyRemoteOslState(1 << 4, millis() + 5);
+  assert(getActiveLayer() == 0);
+}
+
+TEST(test_osl_in_hold_and_double_tap_slot) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = ACT_OSL_BASE + 2;
+  KEYMAP[2][2][2] = 'x';
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  pressKey(2, 1, true);
+  setMillis(1000 + tappingTermMs + 10);
+  processDeferredKeys(millis());   // Halten: die Taste hält OSL_2 wie MO_2
+  assert(getActiveLayer() == 2);
+  pressKey(2, 1, false);
+  assert(getActiveLayer() == 0 && oslArmed == 0);
+}
+
+TEST(test_osl_add_combo_rejects_osl_actions) {
+  resetState();
+  // Eine Combo-Aktion läuft nicht über dispatchPress: OSL bliebe dort wirkungslos, also lehnt ADD_COMBO sie ab
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 386", false);   // ACT_OSL_BASE + 2
+  assert(mockChar.value == "ERR ARGS ADD_COMBO 2 1 2 2 0 386" && numCombos == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 128", false);   // normale Aktion bleibt erlaubt
+  assert(numCombos == 1);
+}
+
+TEST(test_osl_release_keeps_a_held_mo_on_the_same_layer) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  KEYMAP[0][5][1] = ACT_MO_2;
+  setMillis(1000);
+  pressKey(5, 1, true);
+  pressKey(5, 0, true);
+  setMillis(1400);
+  pressKey(5, 0, false);
+  // Die OSL-Taste war lange gehalten (kein Vormerken); MO_2 hält die Ebene weiter
+  assert(oslArmed == 0 && momentaryLayers[2] && getActiveLayer() == 2);
+  pressKey(5, 1, false);
+  assert(getActiveLayer() == 0);
+}
+
+TEST(test_osl_uses_the_tapping_term_of_the_key) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  tappingTermMs = 200;
+  TAPTERMMAP[0][5][0] = 400;   // eigener, längerer Term: ein Druck von 300 ms ist noch ein Tipp
+  setMillis(1000);
+  pressKey(5, 0, true);
+  setMillis(1300);
+  pressKey(5, 0, false);
+  assert(oslArmed == (1 << 2));
+  tapOsl(5, 0);                // zweites Tippen nimmt die Vormerkung zurück
+  assert(oslArmed == 0);
+  TAPTERMMAP[0][5][0] = 100;   // kürzerer Term: 150 ms sind schon Halten
+  setMillis(2000);
+  pressKey(5, 0, true);
+  setMillis(2150);
+  pressKey(5, 0, false);
+  assert(oslArmed == 0);
+  TAPTERMMAP[0][5][0] = 0;
+}
+
+TEST(test_osl_held_key_counts_as_layer_lock_mo_layer) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 3;
+  setMillis(1000);
+  pressKey(5, 0, true);
+  dispatchPress(0, 0, ACT_LAYER_LOCK, getActiveLayer());
+  assert(toggleLayers[3]);
+  pressKey(5, 0, false);
+}
+
+TEST(test_osl_chord_with_a_key_of_the_other_half_arms_nothing) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  setMillis(1000);
+  pressKey(5, 0, true);
+  // Die andere Hälfte tippt innerhalb des Tapping-Terms und meldet die Ebene als benutzt
+  applyRemoteOslUsed(1 << 2);
+  setMillis(1060);
+  pressKey(5, 0, false);
+  assert(oslArmed == 0 && getActiveLayer() == 0);
+}
+
+TEST(test_osl_key_press_reports_layers_held_by_the_other_half_as_used) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  applyRemoteLayerState(1 << 3, false, 0);   // die andere Hälfte hält Ebene 3 (MO oder OSL)
+  pressKey(2, 1, true);
+  assert(oslUsedToSend == (1 << 3));
+  pressKey(2, 1, false);
+}
+
+TEST(test_osl_action_range_is_distinct_from_other_ranges) {
+  assert(ACT_OSL_BASE == 0x180 && NUM_OSL_ACTIONS == 8);
+  assert(isOslAction(0x180) && isOslAction(0x187) && !isOslAction(0x188) && !isOslAction(0x17F));
+  assert(ACT_OSL_BASE > ACT_MACRO_BASE + MAX_MACROS - 1);
 }
 
 int main() {

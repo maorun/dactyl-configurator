@@ -173,6 +173,26 @@ void processOtaTimeout() {
 // Hälfte aktiviert die Ebene auf beiden; die TG-Ebenen gleichen die Hälften direkt in toggleLayers[] ab.
 uint8_t remoteMomentaryLayers = 0;
 
+// One-Shot-Ebenen (ACT_OSL_BASE + n). Bit n = Ebene n.
+// oslArmed: von dieser Hälfte vorgemerkt; remoteOslArmed: von der anderen Hälfte vorgemerkt (SPLIT_OP_OSL).
+// oslHeld: OSL-Tasten dieser Hälfte, die gerade gehalten werden; oslUsed: davon die Tasten, während deren Halten
+// eine andere Taste dieser Hälfte kam (Halten statt Tippen, kein Vormerken beim Loslassen).
+// oslUsedToSend: von dieser Hälfte verbrauchte Vormerkungen der anderen Hälfte, die noch zu melden sind.
+uint8_t oslArmed = 0;
+uint8_t remoteOslArmed = 0;
+uint8_t oslHeld = 0;
+uint8_t oslUsed = 0;
+uint8_t oslUsedToSend = 0;
+uint8_t remoteOslIgnore = 0;
+unsigned long remoteOslIgnoreMs = 0;
+unsigned long oslPressTime[NUM_LAYERS] = {};
+uint16_t oslTerm[NUM_LAYERS] = {};
+unsigned long remoteOslRxMs = 0;
+
+bool isOslAction(uint16_t a) {
+  return a >= ACT_OSL_BASE && a < ACT_OSL_BASE + NUM_OSL_ACTIONS;
+}
+
 // Tri-Layer: bis zu TRI_LAYER_MAX_RULES Regeln {a, b, target} (je drei Bytes in triLayerRules[]).
 // Sind die Ebenen a und b aktiv (MO lokal, MO der anderen Hälfte oder TG), gilt auch die Ebene target.
 #define TRI_LAYER_MAX_RULES 2
@@ -187,10 +207,13 @@ bool isValidTriLayerRule(int a, int b, int t) {
 
 uint8_t getActiveLayer() {
   // Momentary Layer 0 zwingt temporär Base-Layer, auch von der anderen Hälfte
-  if (momentaryLayers[0] || (remoteMomentaryLayers & 1)) return 0;
+  // Vorgemerkte und gehaltene One-Shot-Ebenen gelten wie MO-Ebenen (oslHeld getrennt von momentaryLayers: eine gehaltene
+  // MO_n auf derselben Ebene bleibt beim Loslassen der OSL-Taste erhalten)
+  uint8_t armed = (uint8_t)(oslArmed | remoteOslArmed | oslHeld);
+  if (momentaryLayers[0] || (remoteMomentaryLayers & 1) || (armed & 1)) return 0;
   uint8_t active = 0;
   for (int l = 1; l < NUM_LAYERS && l < 8; l++) {
-    if (momentaryLayers[l] || toggleLayers[l] || (remoteMomentaryLayers & (1u << l))) active |= (uint8_t)(1u << l);
+    if (momentaryLayers[l] || toggleLayers[l] || (remoteMomentaryLayers & (1u << l)) || (armed & (1u << l))) active |= (uint8_t)(1u << l);
   }
   // Tri-Layer-Regeln einmal auswerten (keine Kaskade): das Ziel gilt zusätzlich zu a und b
   uint8_t withTri = active;
@@ -230,7 +253,7 @@ bool comboAppliesOnLayer(uint8_t i, uint8_t layer) {
 uint8_t localMomentaryLayerMask() {
   uint8_t m = 0;
   for (int l = 0; l < NUM_LAYERS && l < 8; l++) if (momentaryLayers[l]) m |= (uint8_t)(1u << l);
-  return m;
+  return (uint8_t)(m | oslHeld);   // eine gehaltene OSL-Taste wirkt auf der anderen Hälfte wie MO_n
 }
 uint8_t toggleLayerMask() {
   uint8_t m = 0;
@@ -250,6 +273,130 @@ bool applyRemoteLayerState(uint8_t momentary, bool setToggles, uint8_t toggles) 
   if (after == before) return false;
   Serial.printf("LAYER: SPLIT -> Layer %d\n", after);
   return true;
+}
+
+// -----------------------------------------------------------------------------
+// One-Shot-Ebene (OSL_0 .. OSL_7)
+// -----------------------------------------------------------------------------
+// Tippen merkt die Ebene für den nächsten Tastendruck beider Hälften vor; danach ist sie gelöst. Ein zweites Tippen
+// nimmt die Vormerkung zurück. Halten (länger als der Tapping-Term oder mit einer Taste dazwischen) wirkt wie MO_n und
+// merkt nichts vor. Jede Hälfte führt ihre eigenen Vormerkungen (oslArmed) und spiegelt die der anderen (remoteOslArmed,
+// SPLIT_OP_OSL). Verbraucht diese Hälfte eine Vormerkung der anderen, meldet sie das (oslUsedToSend), damit die Ebene
+// nur einmal gilt. Die Zeitgrenzen gelten für das Spiegelbild: es verfällt ohne Paket und ein verbrauchtes Bit bleibt
+// bis zur Bestätigung (Bit 0 im Zustand des Besitzers) oder OSL_IGNORE_MS gesperrt, sonst setzte ein altes Auffrischen
+// es wieder.
+#ifndef OSL_REMOTE_TIMEOUT_MS
+#define OSL_REMOTE_TIMEOUT_MS 3000
+#endif
+#define OSL_IGNORE_MS 500
+
+inline uint8_t oslBit(uint16_t action) { return (uint8_t)(1u << (action - ACT_OSL_BASE)); }
+
+void oslAnnounce(uint8_t before) {
+  uint8_t after = getActiveLayer();
+  if (after != before) Serial.printf("LAYER: OSL -> Layer %d\n", after);
+}
+
+// Taste mit OSL gedrückt: die Ebene gilt wie bei MO_n, solange die Taste gehalten wird
+// pressTime: Zeitpunkt des physischen Drucks der Taste (0 = unbekannt, dann jetzt). Eine OSL-Aktion, die erst nach
+// dem Tapping-Term als Halte-Aktion aufgelöst wird, gilt so beim Loslassen als gehalten und merkt nichts vor.
+// term: Tapping-Term der Taste (effectiveTapTerm, TAPTERMMAP); der Aufrufer löst ihn auf.
+void oslPress(uint16_t action, unsigned long pressTime, uint16_t term) {
+  uint8_t n = (uint8_t)(action - ACT_OSL_BASE), bit = oslBit(action);
+  oslHeld |= bit;
+  oslUsed &= (uint8_t)~bit;
+  oslPressTime[n] = pressTime ? pressTime : millis();
+  oslTerm[n] = term;
+}
+
+// Taste mit OSL losgelassen: ein kurzes Tippen ohne Taste dazwischen merkt vor oder nimmt zurück
+void oslRelease(uint16_t action) {
+  uint8_t n = (uint8_t)(action - ACT_OSL_BASE), bit = oslBit(action);
+  uint8_t before = getActiveLayer();
+  oslHeld &= (uint8_t)~bit;
+  bool used = (oslUsed & bit) != 0;
+  oslUsed &= (uint8_t)~bit;
+  if (used || (unsigned long)(millis() - oslPressTime[n]) >= oslTerm[n]) {
+    oslAnnounce(before);
+    return;
+  }
+  oslArmed ^= bit;
+  oslAnnounce(before);
+}
+
+// Ein Tastendruck (a, b, c = Tipp-, Halte- und Doppel-Tipp-Aktion der Taste) verbraucht die Vormerkungen beider Hälften.
+// Eine OSL-Taste verbraucht nichts. Der Aufrufer hat die Ebene der Taste schon aufgelöst.
+void oslNoteKeyPress(uint16_t a, uint16_t b, uint16_t c) {
+  if (isOslAction(a) || isOslAction(b) || isOslAction(c)) return;
+  oslUsed |= oslHeld;
+  // Hält die andere Hälfte eine Ebene (MO oder OSL), meldet dieser Druck sie ihr als benutzt: eine gehaltene OSL-Taste dort
+  // merkt beim Loslassen nichts vor (schneller Akkord über beide Hälften innerhalb des Tapping-Terms)
+  if (remoteMomentaryLayers) {
+    oslUsedToSend |= remoteMomentaryLayers;
+    remoteOslIgnoreMs = millis();
+  }
+  if (!(oslArmed | remoteOslArmed)) return;
+  uint8_t before = getActiveLayer();
+  oslArmed = 0;
+  if (remoteOslArmed) {
+    oslUsedToSend |= remoteOslArmed;
+    remoteOslIgnore |= remoteOslArmed;
+    remoteOslIgnoreMs = millis();
+    remoteOslArmed = 0;
+  }
+  oslAnnounce(before);
+}
+
+// SPLIT_OP_OSL (Zustand): die Vormerkungen der anderen Hälfte
+void applyRemoteOslState(uint8_t armed, unsigned long now) {
+  uint8_t before = getActiveLayer();
+  remoteOslIgnore &= armed;
+  oslUsedToSend &= armed;
+  remoteOslArmed = (uint8_t)(armed & ~remoteOslIgnore);
+  remoteOslRxMs = now;
+  oslAnnounce(before);
+}
+
+// SPLIT_OP_OSL (verbraucht): die andere Hälfte hat Vormerkungen dieser Hälfte verbraucht
+void applyRemoteOslUsed(uint8_t mask) {
+  uint8_t before = getActiveLayer();
+  oslUsed |= (uint8_t)(mask & oslHeld);   // die andere Hälfte hat getippt, während die OSL-Taste hier gehalten wird
+  oslArmed &= (uint8_t)~mask;
+  oslAnnounce(before);
+}
+
+// Ohne Paket der anderen Hälfte verfällt ihr Spiegelbild (Hälfte aus, Deep Sleep oder Funkausfall)
+void oslExpireRemote(unsigned long now) {
+  if ((remoteOslIgnore || oslUsedToSend) && (unsigned long)(now - remoteOslIgnoreMs) >= OSL_IGNORE_MS) {
+    remoteOslIgnore = 0;
+    oslUsedToSend = 0;
+  }
+  if (remoteOslArmed && (unsigned long)(now - remoteOslRxMs) >= OSL_REMOTE_TIMEOUT_MS) {
+    uint8_t before = getActiveLayer();
+    remoteOslArmed = 0;
+    oslAnnounce(before);
+  }
+}
+
+// Spiegelbild der anderen Hälfte löschen (Link-Ausfall, RELEASE_ALL der anderen Hälfte)
+void oslClearRemote() {
+  uint8_t before = getActiveLayer();
+  remoteOslArmed = 0;
+  remoteOslIgnore = 0;
+  oslUsedToSend = 0;
+  oslAnnounce(before);
+}
+
+// Alle Vormerkungen löschen (RELEASE_ALL, Link-Ausfall, Verlust des Hosts, Config Mode)
+void oslClearAll() {
+  uint8_t before = getActiveLayer();
+  oslArmed = 0;
+  // Die Vormerkungen der anderen Hälfte meldet diese Hälfte als verbraucht: sonst setzte deren Auffrischen sie wieder
+  oslUsedToSend = remoteOslArmed;
+  remoteOslIgnore = remoteOslArmed;
+  remoteOslIgnoreMs = millis();
+  remoteOslArmed = 0;
+  oslAnnounce(before);
 }
 
 // Ermittelt Tap-, Halte- und Doppel-Tipp-Aktion einer Taste inkl. transparentem Fallback auf Layer 0.
@@ -815,7 +962,7 @@ void repeatStopAt(uint8_t r, uint8_t c) {
 uint8_t applyLayerLock() {
   int held = 0;
   for (int l = NUM_LAYERS - 1; l > 0; l--) {
-    if (l < 8 && (momentaryLayers[l] || (remoteMomentaryLayers & (1u << l)))) { held = l; break; }
+    if (l < 8 && (momentaryLayers[l] || (remoteMomentaryLayers & (1u << l)) || (oslHeld & (1u << l)))) { held = l; break; }
   }
   if (held > 0) {
     toggleLayers[held] = !toggleLayers[held];
@@ -825,6 +972,7 @@ uint8_t applyLayerLock() {
   return getActiveLayer();
 }
 
+static inline uint16_t effectiveTapTerm(uint16_t keyTerm);
 void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) {
   pressedAction[r][c] = action;
   // Ein Combo-Kandidat zählt erst, wenn seine Aktion gesendet wird (Release, Combo-Fenster, Halte-Entscheidung):
@@ -867,6 +1015,13 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, actName, action, currentLayer, newL);
     sendConfigNotification(String(buf));
     Serial.printf("LAYER: %s -> Layer %d\n", actName, newL);
+  } else if (isOslAction(action)) {
+    oslPress(action, keyPressTime[r][c], effectiveTapTerm(resolveKeyTapTerm(currentLayer, r, c)));
+    uint8_t newL = getActiveLayer();
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"OSL_%d\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, action - ACT_OSL_BASE, action, currentLayer, newL);
+    sendConfigNotification(String(buf));
+    Serial.printf("LAYER: OSL(%d) gedrückt -> Layer %d\n", action - ACT_OSL_BASE, newL);
   } else if (action == ACT_LAYER_LOCK) {
     uint8_t newL = applyLayerLock();
     char buf[128];
@@ -1043,6 +1198,8 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
     uint8_t l = action - 0x100;
     if (l < NUM_LAYERS) momentaryLayers[l] = false;
     Serial.printf("LAYER: MO(%d) gelöst -> Layer %d\n", l, getActiveLayer());
+  } else if (isOslAction(action)) {
+    oslRelease(action);
   } else if (action >= 0x120 && action <= 0x127) {
     if (!isConfigMode && action == 0x127 && bleKeyboard.isConnected()) {
       bleKeyboard.release(KEY_MEDIA_GLOBE);
@@ -1604,11 +1761,14 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     if (isSecondTap) {
       d.waiting = false;
       d.active = true;
+      oslNoteKeyPress(d.dtapAction, 0, 0);
       dispatchPress(r, c, d.dtapAction, layer);
       return;
     }
     uint16_t tapAct, holdAct, dtapAct;
     resolveKeyActions(layer, r, c, tapAct, holdAct, dtapAct);
+    // Dieser Druck verbraucht eine vorgemerkte One-Shot-Ebene (die Ebene der Taste ist schon aufgelöst)
+    oslNoteKeyPress(tapAct, holdAct, dtapAct);
     // Quick-Tap: derselbe Mod-Tap-Druck kurz nach seinem Tipp gilt sofort als gehaltener Tipp.
     // Ein Druck einer anderen Taste verwirft den Merker (nur ein ununterbrochener Tipp-Druck zählt).
     bool quickTap = quickTapMs > 0 && quickTapValid[r][c] && holdAct != 0 && dtapAct == 0 && tapAct != 0 &&
@@ -2839,7 +2999,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) &&
         !(beh != 0 && (act == ACT_REPEAT || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;

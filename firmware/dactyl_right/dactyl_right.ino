@@ -165,6 +165,7 @@ void toggleConfigMode();
 void checkUserCombos();
 void stopMacro(bool releaseKeys);
 void resetMouseMove();
+void oslClearAll();
 void sendSplitLayerRelease();
 void sendSplitSleep();
 
@@ -175,6 +176,7 @@ void enterConfigMode() {
 
   stopMacro(false);
   resetMouseMove();
+  oslClearAll();
   bleKeyboard.releaseAll();
   sendSplitLayerRelease();
   Serial.println("\n=============================================");
@@ -507,6 +509,8 @@ static SplitDisconnectedSleep splitDisconnectedSleep = {};
 // Layer-Abgleich mit der linken Hälfte (SPLIT_OP_LAYER_STATE, DactylSplitHid.h)
 static SplitLayerSync splitLayerSync;
 static SplitRemoteLayers splitRemoteLayers;
+// One-Shot-Ebenen beider Hälften (SPLIT_OP_OSL, DactylSplitHid.h)
+static SplitOslSync splitOslSync;
 // REPEAT_RUN an die linke Hälfte, mit zweitem Versand nach SPLIT_REPEAT_COPY_MS (kein Retry wie links)
 static SplitRepeatSender splitRepeatSender;
 // Ein Loslassen oder RELEASE_ALL darf nicht verloren gehen, wenn GET_INFO den Mutex hält: es bleibt vorgemerkt
@@ -573,6 +577,12 @@ void sendSplitLayerStateIfDue(unsigned long refreshIntervalMs = SPLIT_LAYER_REFR
 // Entscheidung gesendet ist (DactylSplitHid.h, splitSendLayerThenHold). linkUp: ohne Link gilt nichts als gemeldet.
 static void sendSplitLayerAndHoldIfDue(unsigned long refreshIntervalMs = SPLIT_LAYER_REFRESH_MS) {
   if (!splitActivityPeerReady || isConfigMode) return;
+  // One-Shot-Ebenen: Spiegelbild der linken Hälfte verfällt ohne Paket; eigener Stand und verbrauchte Vormerkungen links
+  oslExpireRemote(millis());
+  splitOslSendIfDue(splitOslSync, oslArmed, oslUsedToSend, millis(), bleKeyboard.splitLeft.linkUp,
+                    [](const SplitHidEvent &ev) {
+                      return esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK;
+                    }, refreshIntervalMs);
   splitSendLayerThenHold(splitLayerSync, splitHoldReporter, bleKeyboard.splitLeft.linkUp, anyTapHoldPending(),
                          localMomentaryLayerMask(), toggleLayerMask(), [refreshIntervalMs] { sendSplitLayerStateIfDue(refreshIntervalMs); },
                          [](const SplitHidEvent &ev) {
@@ -625,6 +635,7 @@ void setupSplitReceiver() {
   splitActivityReset(splitActivity);
   splitHoldReporter.reported = false; // nach (Neu-)Start gilt nichts als gemeldet
   splitLayerReset(splitLayerSync);
+  splitOslReset(splitOslSync);
   splitRemoteLayersReset(splitRemoteLayers);
   splitActivityPeerReady = (esp_now_add_peer(&peer) == ESP_OK);
   if (!splitActivityPeerReady) {
@@ -656,6 +667,8 @@ static void onSplitKeyEvent(const SplitHidEvent &ev) {
 // eigene Einzel-Tipps zuerst senden, damit die Zeichen in der Reihenfolge der Anschläge ankommen
 static void onSplitBeforeLeftPress(const SplitHidEvent &ev) {
   (void)ev;
+  // Ein linker Druck zählt für eine gehaltene OSL-Taste dieser Hälfte: beim Loslassen merkt sie nichts vor
+  oslUsed |= oslHeld;
   // GET_INFO über BLE hält den Mutex kurz; ohne ihn bleibt die alte Reihenfolge, mit Hinweis
   if (configMutex && xSemaphoreTake(configMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
     Serial.println("WARN: configMutex busy, Einzel-Tipp nicht vor linker Taste gesendet");
@@ -728,6 +741,18 @@ static void onSplitLayer(const SplitHidEvent &ev) {
   applyRemoteLayerState(splitLayerMomentary(ev), set, splitLayerToggles(ev));
 }
 
+// One-Shot-Ebenen der linken Hälfte: ihr Stand (Bits 0..7) und die Vormerkungen dieser Hälfte, die sie verbraucht hat
+// (Bits 8..15). Läuft unter configMutex wie jede Änderung des Layer-Zustands.
+static void onSplitOsl(const SplitHidEvent &ev) {
+  if (configMutex && xSemaphoreTake(configMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+    Serial.println("WARN: configMutex busy, OSL-Zustand der linken Hälfte nicht übernommen");
+    return;
+  }
+  applyRemoteOslUsed(splitOslUsed(ev));
+  applyRemoteOslState(splitOslArmed(ev), millis());
+  if (configMutex) xSemaphoreGive(configMutex);
+}
+
 // Ereignisse der linken Hälfte aus loop() ausführen (Logik: splitProcessRx in DactylSplitHid.h)
 void processSplitEvents(unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
   if (!splitRxReady) return;
@@ -737,7 +762,9 @@ void processSplitEvents(unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
                                      hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer,
                                      onSplitBeforeLeftPress, onSplitRepeat, onSplitHoldResolve,
-                                     linkTimeoutMs);
+                                     linkTimeoutMs, onSplitOsl);
+  // Mac getrennt oder Config Mode: nichts bleibt vorgemerkt (auch die eigene Vormerkung)
+  if (rep.hostLost) oslClearAll();
   // Linke Hälfte gerade erreichbar (Start, Aufwachen): sofort den Layer-Zustand des Masters senden
   // Linke Hälfte nicht erreichbar, aus oder im Deep Sleep: ihre gehaltenen MO-Ebenen verfallen
   if (splitLayerMasterAfterRx(splitLayerSync, splitRemoteLayers, linkWasUp, bleKeyboard.splitLeft.linkUp,
@@ -1065,7 +1092,8 @@ void loop() {
   sendSplitRepeatCopyIfDue();
   sendSplitActivityIfDue();
   // Layer-Zustand und Meldung "Mod-Tap offen/entschieden" zusammen: die linke Hälfte sieht die neue Ebene vor der 0
-  bool masterQuiet = splitQuietStandby(isStandby, anyRightKeyHeld(), localMomentaryLayerMask(), splitRemoteLayers.momentary);
+  bool masterQuiet = splitQuietStandby(isStandby, anyRightKeyHeld(), localMomentaryLayerMask() | oslArmed | oslUsedToSend,
+                                 splitRemoteLayers.momentary | remoteOslArmed);
   sendSplitLayerAndHoldIfDue(splitRefreshIntervalMs(masterQuiet));
 
   // Deferriertes Starten/Beenden des Config-Modus aus loopTask

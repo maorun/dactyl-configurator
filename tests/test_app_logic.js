@@ -49,7 +49,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_KEY_OVERRIDES, KEY_OVERRIDE_MODS, isValidKeyOverride, isKeyOverrideMember, keyOverrideModsValue,
              normalizeKeyOverride, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
              isValidMacroStep, isValidMacro, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode,
+             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -4403,6 +4403,44 @@ test("Layout-Prüfung: LAYER_LOCK zählt als Rückweg und rastet die Ebene ein",
   const common = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylCommon.h"), "utf8");
   assert.match(common, /#define ACT_LAYER_LOCK\s+0x16A/);
   assert.strictEqual(api.keyToNumericActions({ tap: "LAYER_LOCK" }).tapCode, 0x16A);
+});
+
+test("One-Shot-Ebene: Codes passen zu Firmware und server.py, Combos lehnen sie ab", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(common, /#define ACT_OSL_BASE\s+0x180/);
+  assert.match(common, /#define NUM_OSL_ACTIONS\s+8/);
+  for (let n = 0; n < 8; n++) {
+    assert.strictEqual(api.actionCodeToNumeric(`OSL_${n}`), 0x180 + n);
+    assert.strictEqual(api.keyToNumericActions({ tap: `OSL_${n}` }).tapCode, 0x180 + n);
+    assert.strictEqual(api.findDefinitionByCode(0x180 + n).tap, `OSL_${n}`);
+  }
+  assert.strictEqual(api.isOslCode("OSL_3"), true);
+  assert.strictEqual(api.isOslCode("ACT_OSL_3"), true);
+  assert.strictEqual(api.isOslCode("OSL_8"), false);
+  assert.strictEqual(api.isOslCode("MO_3"), false);
+  const base = { layers: [[[]]], combos: [], keyPairs: [], macros: [] };
+  assert.throws(() => api.validateConfigShape({ ...base, combos: [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, action: "OSL_2" }] }, R), /One-Shot-Ebene/);
+});
+
+test("Layout-Prüfung: OSL_n macht die Ebene erreichbar, ohne sie einzurasten", () => {
+  // Ebene 2 hat Belegung und ist nur über OSL_2 erreichbar: kein Befund "unerreichbar"
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 0, 0, "OSL_2");
+  lintSet(cfg, 2, 1, 1, "KEY_A");
+  assert.deepStrictEqual(lintCodes(lintBoth(cfg), "layer-unreachable"), []);
+  // OSL rastet nicht ein: auch ohne Taste zurück gibt es keine Falle
+  assert.deepStrictEqual(lintCodes(lintBoth(cfg), "layer-trap"), []);
+  // Auch die Firmware-Schreibweise und die Halte-Aktion zählen
+  const hold = lintCfg();
+  lintSet(hold, 0, 0, 0, "KEY_A", "ACT_OSL_3");
+  lintSet(hold, 3, 1, 1, "KEY_B");
+  assert.deepStrictEqual(lintCodes(lintBoth(hold), "layer-unreachable"), []);
+  // Ohne OSL bleibt dieselbe Belegung unerreichbar (der Test schlägt ohne die Umsetzung fehl)
+  const none = lintCfg();
+  lintSet(none, 2, 1, 1, "KEY_A");
+  assert.strictEqual(lintCodes(lintBoth(none), "layer-unreachable").length, 1);
+  // OSL auf der anderen Hälfte führt die Ebene dieser Hälfte nicht ein: die Hälfte mit eigener Belegung braucht einen Weg
+  assert.strictEqual(api.lintLayouts({ R: cfg, L: lintCfg() }, api.SIDE_PROFILES).length, 0);
 });
 
 test("Layout-Prüfung (Anzeige): ein Fehler in der Prüfung gibt keinen Befund und stoppt nichts", () => {

@@ -49,6 +49,8 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertEqual(server.code_to_cpp("ACT_LAYER_UP"), "ACT_LAYER_UP")
         self.assertEqual(server.code_to_cpp("ACT_LAYER_DOWN"), "ACT_LAYER_DOWN")
         self.assertEqual(server.code_to_cpp("LAYER_LOCK"), "ACT_LAYER_LOCK")
+        self.assertEqual(server.code_to_cpp("OSL_0"), "(ACT_OSL_BASE + 0)")
+        self.assertEqual(server.code_to_cpp("OSL_7"), "(ACT_OSL_BASE + 7)")
         self.assertEqual(server.code_to_cpp("MOUSE_LEFT"), "ACT_MOUSE_LEFT")
         self.assertEqual(server.code_to_cpp("MOUSE_RIGHT"), "ACT_MOUSE_RIGHT")
         self.assertEqual(server.code_to_cpp("MOUSE_MIDDLE"), "ACT_MOUSE_MIDDLE")
@@ -563,6 +565,23 @@ class TestServerAndCodegen(unittest.TestCase):
         for beh in ("LAYER_TOGGLE", "MODIFIER_HOLD"):
             with self.subTest(beh=beh), self.assertRaises(ValueError):
                 server.generate_combos_cpp([{**combo, "behavior": beh}])
+
+    def test_osl_constants_match_firmware_and_codes_render(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_OSL_BASE\s+0x180")
+        self.assertRegex(common, r"#define NUM_OSL_ACTIONS\s+8")
+        keymap = [[[{"tap": f"OSL_{n}"} for n in range(7)] for _ in range(6)] for _ in range(8)]
+        self.assertIn("(ACT_OSL_BASE + 3)", server.generate_keymap_cpp(keymap))
+        self.assertIn("(ACT_OSL_BASE + 2)", server.generate_holdmap_cpp([[[{"tap": "KEY_A", "hold": "OSL_2"}]]]))
+        self.assertIn("(ACT_OSL_BASE + 5)", server.generate_dtapmap_cpp([[[{"tap": "KEY_A", "dtap": "OSL_5"}]]]))
+
+    def test_osl_combo_is_rejected_for_every_behavior(self):
+        # Die Firmware führt eine Combo-Aktion nicht über dispatchPress aus: OSL wäre dort wirkungslos
+        for beh in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
+            combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": beh, "action": "OSL_2"}
+            with self.subTest(beh=beh), self.assertRaises(ValueError):
+                server.generate_combos_cpp([combo])
 
     def test_modifier_hold_combo_rejects_one_shot_and_caps_word(self):
         # MODIFIER_HOLD hält nur Codes 1..255; One-Shot und Caps Word sendeten dort nichts (stille Fehlkonfiguration)

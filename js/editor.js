@@ -307,6 +307,8 @@ function holdSublabel(code) {
   if (m) return `L${m[1]}`;
   m = /^TG_(\d)$/.exec(c);
   if (m) return `TG${m[1]}`;
+  m = /^OSL_(\d)$/.exec(c);
+  if (m) return `OS${m[1]}`;
   return c.replace(/^(KEY_|MEDIA_|MOUSE_)/, "").slice(0, 6);
 }
 
@@ -460,6 +462,10 @@ const ON_SCREEN_KEYBOARD_TABS = {
       [
         { code: "TG_0", label: "TG 0" }, { code: "TG_1", label: "TG 1" }, { code: "TG_2", label: "TG 2" }, { code: "TG_3", label: "TG 3" },
         { code: "TG_4", label: "TG 4" }, { code: "TG_5", label: "TG 5" }, { code: "TG_6", label: "TG 6" }, { code: "TG_7", label: "TG 7" }
+      ],
+      [
+        { code: "OSL_0", label: "OSL 0" }, { code: "OSL_1", label: "OSL 1" }, { code: "OSL_2", label: "OSL 2" }, { code: "OSL_3", label: "OSL 3" },
+        { code: "OSL_4", label: "OSL 4" }, { code: "OSL_5", label: "OSL 5" }, { code: "OSL_6", label: "OSL 6" }, { code: "OSL_7", label: "OSL 7" }
       ],
       [
         { code: "LAYER_UP", label: "Layer +1 (Aufwärts)", width: 2 },

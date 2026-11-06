@@ -299,6 +299,9 @@ KEY_TO_CPP = {
     "LAYER_UP": "ACT_LAYER_UP",
     "LAYER_DOWN": "ACT_LAYER_DOWN",
     "LAYER_LOCK": "ACT_LAYER_LOCK",
+    "OSL_0": "(ACT_OSL_BASE + 0)", "OSL_1": "(ACT_OSL_BASE + 1)", "OSL_2": "(ACT_OSL_BASE + 2)",
+    "OSL_3": "(ACT_OSL_BASE + 3)", "OSL_4": "(ACT_OSL_BASE + 4)", "OSL_5": "(ACT_OSL_BASE + 5)",
+    "OSL_6": "(ACT_OSL_BASE + 6)", "OSL_7": "(ACT_OSL_BASE + 7)",
     "MOUSE_LEFT": "ACT_MOUSE_LEFT",
     "MOUSE_RIGHT": "ACT_MOUSE_RIGHT",
     "MOUSE_MIDDLE": "ACT_MOUSE_MIDDLE",
@@ -530,7 +533,7 @@ def validate_combo_layer_mask(value):
     return validate_int(value, 1, COMBO_ALL_LAYERS, "layerMask")
 
 # One-Shot-, Caps-Word- und Repeat-Aktionen (Codes > 0xFF): als Combo nur mit KEY_PRESS
-ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD", "ACT_REPEAT", "ACT_LAYER_LOCK"}
+ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD", "ACT_REPEAT", "ACT_LAYER_LOCK"} | {f"(ACT_OSL_BASE + {n})" for n in range(8)}
 
 # Mausbewegung braucht eine gehaltene Taste mit Beschleunigung; eine Combo führt sie nicht aus
 MOUSE_MOVE_CPP = {"ACT_MOUSE_UP", "ACT_MOUSE_DOWN", "ACT_MOUSE_LEFT_MOVE", "ACT_MOUSE_RIGHT_MOVE"}
@@ -559,6 +562,8 @@ def generate_combos_cpp(combos):
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts
         if beh != 0 and act == "ACT_LAYER_LOCK":
             raise ValueError("Layer Lock funktioniert nur mit dem Verhalten \"Einzeltaste senden\".")
+        if act.startswith("(ACT_OSL_BASE"):
+            raise ValueError("Combos unterstützen keine One-Shot-Ebene.")
         if beh == 1 and act in ONE_SHOT_CPP:
             raise ValueError("Modifier Hold unterstützt keine One-Shot-, Caps-Word-, Repeat- oder Layer-Lock-Aktion.")
         # layerMask: Bit i = die Combo gilt auf Ebene i; fehlend = alle Ebenen

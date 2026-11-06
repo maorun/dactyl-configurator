@@ -120,6 +120,7 @@ void serviceSendQueue();
 void flushSendQueue(unsigned long maxMs);
 void stopMacro(bool releaseKeys);
 void resetMouseMove();
+void oslClearAll();
 static void queueSplitLayerRelease();
 
 // Im Gegensatz zur rechten Hälfte gibt es keinen macOS-HID-Bond: Config Mode startet per Soft-Reboot
@@ -131,6 +132,7 @@ void enterConfigMode() {
 
   stopMacro(false);
   resetMouseMove();
+  oslClearAll();
   bleKeyboard.releaseAll();
   queueSplitLayerRelease();
   Serial.println("\n=============================================");
@@ -205,6 +207,7 @@ void enterDeepSleep() {
 
   // Alles lösen, was die linke Hälfte am Master gedrückt hält, und kurz auf die Zustellung warten
   stopMacro(false);
+  oslClearAll();
   bleKeyboard.releaseAll();
   queueSplitLayerRelease();
   flushSendQueue(300);
@@ -412,6 +415,10 @@ static SplitLayerMailbox masterLayerMailbox = {};
 static uint32_t masterLayerSeen = 0;
 static SplitLayerSync splitLayerSync;
 static SplitRemoteLayers splitRemoteLayers;
+// One-Shot-Ebenen (SPLIT_OP_OSL): Briefkasten vom Empfangs-Callback (ein 16-Bit-Wert, das neueste Paket gilt) und Sendezustand
+// Ein 32-Bit-Wort (Bit 16 = Paket wartet, Bits 0..15 = code): der Wi-Fi-Task schreibt, loop() holt es atomar
+static uint32_t masterOslWord = 0;
+static SplitOslSync splitOslSync;
 
 static void onEspNowSent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
   (void)info;
@@ -430,6 +437,7 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
   else if (ev.op == SPLIT_OP_HOLD_PENDING) masterHoldNote(masterHold, ev.code != 0, millis());
   else if (ev.op == SPLIT_OP_HOLD_RESOLVE) masterHoldResolveRequested = true;
   else if (ev.op == SPLIT_OP_REPEAT_RUN) splitRxPush(masterRepeatRing, ev);
+  else if (ev.op == SPLIT_OP_OSL) __atomic_store_n(&masterOslWord, 0x10000u | ev.code, __ATOMIC_RELEASE);
   else splitLayerMailboxPut(masterLayerMailbox, ev);
 }
 
@@ -484,6 +492,14 @@ static void processMasterLayerState(unsigned long timeoutMs = SPLIT_LAYER_REMOTE
     applyRemoteLayerState(splitLayerMomentary(ev), adopt, splitLayerToggles(ev));
   }
   if (splitRemoteLayersExpire(splitRemoteLayers, now, timeoutMs)) applyRemoteLayerState(0, false, 0);
+  // One-Shot-Ebenen des Masters: verbrauchte Vormerkungen dieser Hälfte zuerst, dann sein Stand; ohne Paket verfällt er
+  uint32_t oslWord = __atomic_exchange_n(&masterOslWord, 0u, __ATOMIC_ACQUIRE);
+  if (oslWord & 0x10000u) {
+    SplitHidEvent oslEv = makeSplitHidEvent(SPLIT_OP_OSL, (uint16_t)(oslWord & 0xFFFFu));
+    applyRemoteOslUsed(splitOslUsed(oslEv));
+    applyRemoteOslState(splitOslArmed(oslEv), now);
+  }
+  oslExpireRemote(now);
 }
 
 // Eigenen Layer-Zustand an den Master: Änderungen sofort, das Auffrischen nur bis zur halben Warteschlange
@@ -495,6 +511,9 @@ static void queueSplitLayerStateIfDue(unsigned long refreshIntervalMs = SPLIT_LA
                       sendQueue.count < SPLIT_DIAG_QUEUE_LIMIT,
                       [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); },
                       refreshIntervalMs);
+  // Eigene vorgemerkte One-Shot-Ebenen und die verbrauchten des Masters
+  splitOslSendIfDue(splitOslSync, oslArmed, oslUsedToSend, millis(), bleKeyboard.isConnected(),
+                    [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); }, refreshIntervalMs);
 }
 
 // Vor Config Mode und Deep Sleep: eigene MO-Ebenen am Master lösen (sonst erst nach dem Verfall). Eine
@@ -539,6 +558,10 @@ static bool setupEspNow() {
   // Layer-Zustand sofort neu melden. Nach restartEspNow bleibt ein offenes SET offen (eigener Toggle aus
   // dem Ausfall); nach Start und Aufwachen ist der Zustand leer (setup). Fremde MO-Ebenen gelten erst nach Empfang.
   splitLayerLeftRestart(splitLayerSync, splitRemoteLayers, masterLayerMailbox, masterLayerSeen, millis());
+  // Nach einem Neustart des Funks gelten keine Vormerkungen mehr (die RELEASE_ALL-Bestätigung löscht sie am Master)
+  __atomic_store_n(&masterOslWord, 0u, __ATOMIC_RELEASE);
+  oslClearAll();
+  splitOslReset(splitOslSync);
   // Über applyRemoteLayerState, damit ein Ebenenwechsel als LAYER-Zeile die App erreicht
   applyRemoteLayerState(0, false, 0);
   // Ohne Empfang schläft links weiter nach eigener Inaktivität ein (Verhalten vor ACTIVITY).
@@ -668,7 +691,8 @@ void flushSendQueue(unsigned long maxMs) {
 // Meldet regelmäßig den Firmwarestand (queueHeartbeat).
 static void sendHeartbeatIfDue() {
   static unsigned long lastHeartbeatMs = 0;
-  bool quiet = splitQuietStandby(isStandby, anyLeftKeyHeld(), localMomentaryLayerMask(), splitRemoteLayers.momentary);
+  bool quiet = splitQuietStandby(isStandby, anyLeftKeyHeld(), localMomentaryLayerMask() | oslArmed | oslUsedToSend,
+                                 splitRemoteLayers.momentary | remoteOslArmed);
   queueHeartbeatIfDue(sendQueue, heartbeatCounter, lastHeartbeatMs, millis(), splitRefreshIntervalMs(quiet));
 }
 
@@ -710,6 +734,7 @@ void setup() {
   queueReset(sendQueue);
   restartGuardReset(restartGuard);
   splitLayerReset(splitLayerSync, esp_random());
+  splitOslReset(splitOslSync);
   resetLeftKeys();
 
   Serial.println("\n=============================================");
@@ -837,6 +862,7 @@ void loop() {
       if (comboStartTime == 0) {
         comboStartTime = millis();
         stopMacro(false);
+        oslClearAll();
         if (!isConfigMode && bleKeyboard.isConnected()) {
           bleKeyboard.releaseAll();
         }
@@ -900,8 +926,20 @@ void loop() {
     }
   }
 
+  // Der Master ist nicht mehr erreichbar (Link-Timeout, Mac getrennt): eine vorgemerkte One-Shot-Ebene gilt nicht mehr
+  static bool masterWasConnected = false;
+  bool masterConnected = bleKeyboard.isConnected();
+  if (masterWasConnected && !masterConnected) {
+    if (configMutex && xSemaphoreTake(configMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+      oslClearAll();
+      xSemaphoreGive(configMutex);
+    }
+  }
+  masterWasConnected = masterConnected;
+
   if (!isConfigMode) {
-    bool quiet = splitQuietStandby(isStandby, anyLeftKeyHeld(), localMomentaryLayerMask(), splitRemoteLayers.momentary);
+    bool quiet = splitQuietStandby(isStandby, anyLeftKeyHeld(), localMomentaryLayerMask() | oslArmed | oslUsedToSend,
+                                 splitRemoteLayers.momentary | remoteOslArmed);
     bleKeyboard.setQuietStandby(quiet);
     unsigned long refreshMs = splitRefreshIntervalMs(quiet);
     unsigned long timeoutMs = splitTimeoutIntervalMs(quiet);

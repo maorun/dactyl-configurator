@@ -580,6 +580,7 @@ function validateConfigShape(cfg, profile) {
   }
   if ((cfg.combos || []).some(cb => cb && macroIndexFromCode(cb.action) >= 0)) throw new Error("Combos unterstützen keine Makros.");
   if ((cfg.combos || []).some(cb => cb && isMouseMoveCode(cb.action))) throw new Error("Combos unterstützen keine Mausbewegung.");
+  if ((cfg.combos || []).some(cb => cb && isOslCode(cb.action))) throw new Error("Combos unterstützen keine One-Shot-Ebene.");
   if (cfg.layerNames !== undefined && !Array.isArray(cfg.layerNames)) throw new Error("'layerNames' muss eine Liste sein.");
   if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");
   const absent = Dactyl.absentKeyViolations(profile, cfg);
@@ -1164,10 +1165,10 @@ function lintEffectiveActions(cfg, layer, r, c) {
   return [a.tap, a.hold, a.dtap].filter(x => x !== "NONE");
 }
 
-// MO_n / TG_n / LAYER_UP / LAYER_DOWN / LAYER_LOCK (auch als Firmware-Name ACT_...); sonst null
+// MO_n / TG_n / OSL_n / LAYER_UP / LAYER_DOWN / LAYER_LOCK (auch als Firmware-Name ACT_...); sonst null
 function lintLayerAction(code) {
   const name = String(code || "").replace(/^ACT_/, "");
-  const m = /^(MO|TG)_([0-7])$/.exec(name);
+  const m = /^(MO|TG|OSL)_([0-7])$/.exec(name);
   if (m) return { kind: m[1], layer: Number(m[2]) };
   if (name === "LAYER_UP" || name === "LAYER_DOWN" || name === "LAYER_LOCK") return { kind: name };
   return null;
@@ -1352,7 +1353,8 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
         for (const a of onLayer[l]) {
           let target = -1;
           let locks = false;
-          if (a.kind === "MO") target = a.layer;
+          // OSL wirkt wie MO_n, nur für den nächsten Tastendruck: die Ebene ist erreichbar, rastet aber nicht ein
+          if (a.kind === "MO" || a.kind === "OSL") target = a.layer;
           else if (a.kind === "TG") { target = a.layer; locks = true; }
           else if (a.kind === "LAYER_UP") { target = (l + 1) % NUM_LAYERS; locks = true; }
           else if (a.kind === "LAYER_DOWN") { target = (l + NUM_LAYERS - 1) % NUM_LAYERS; locks = true; }

@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Signal quality of the split link
-
-- **Rank:** Feature model. Total 24/40 (typing 1, configuration 7, harmony 7, safety 9). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`onSplitDataRecv`), `firmware/dactyl_right/DactylSplitHid.h` (`SplitLeftHeld`, `splitLeftLinkJson`, `SplitLinkReporter`), `js/side-routing.js` (`parseSplitLinkLine`, `describeSplitLink`), `js/serial.js` (`updateSplitLinkUI`), `tests/test_app_logic.js`.
-- **Problem:** The split link pill shows only "verbunden" or "getrennt" and the loss counters. The user cannot see a weak radio signal before keys of the left half get lost, for example after a change of the case or of the desk position.
-- **Goal:** Read `info->rx_ctrl->rssi` in `onSplitDataRecv` for each packet that passes the decryption and the format check, so a spoofed packet does not change the value. Keep an exponential average and the minimum since the start in `SplitLeftHeld`. Add `rssi` and `rssi_min` (dBm, `null` without a packet) to `splitLeftLinkJson`. Make sure that `DEVICE_INFO` still fits the 448-byte `GET_INFO` buffer. The app shows both values in the pill tooltip and marks the pill yellow below -80 dBm. `DACTYL_FW_VERSION` stays unchanged, because the radio protocol does not change.
-- **Acceptance test:** A firmware test feeds a series of RSSI values and checks the average, the minimum, the value `null` without a packet and the JSON. An app test parses a line with and without `rssi` and checks the yellow state.
-
 ### Action search across both halves
 
 - **Rank:** Feature model. Total 24/40 (typing 1, configuration 7, harmony 6, safety 10). Effort S. Estimate.

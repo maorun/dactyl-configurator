@@ -291,6 +291,7 @@ function updateSplitLinkUI() {
   pill.hidden = !view;
   pill.classList.toggle("link-up", !!view && view.state === "up");
   pill.classList.toggle("link-down", !!view && view.state === "down");
+  pill.classList.toggle("link-weak", !!view && view.weak === true);
   if (view) {
     text.textContent = view.text;
     pill.title = view.title;

@@ -583,6 +583,8 @@ static void sendSplitLayerAndHoldIfDue(unsigned long refreshIntervalMs = SPLIT_L
 static void onSplitDataRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   SplitHidEvent ev;
   if (info == nullptr || !parseSplitHidPacket(info->src_addr, data, len, ev)) return;
+  // Nur geprüfte Pakete: ein gefälschtes Paket ändert die Signalstärke nicht
+  if (info->rx_ctrl != nullptr) splitNoteRssi(bleKeyboard.splitLeft, info->rx_ctrl->rssi);
   splitRxPush(splitRxQueue, ev);
 }
 

@@ -160,6 +160,11 @@ body {
   background: rgba(16, 185, 129, 0.12);
 }
 
+.split-link-pill.link-weak {
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.12);
+}
+
 .split-link-pill.link-down {
   color: var(--danger);
   background: rgba(239, 68, 68, 0.12);

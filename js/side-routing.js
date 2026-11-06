@@ -221,16 +221,21 @@
 
   // Link zur Sender-Hälfte aus Sicht des Masters: SPLIT_LINK-Zeile (USB) und DEVICE_INFO.left_link.
   // Felder: up (0|1), ms (Zeit seit dem letzten Wechsel), ever (0|1, je ein Paket seit dem Start des Masters),
-  // losses, rx_dropped, key_dropped (Zähler seit dem Start des Masters).
+  // losses, rx_dropped, key_dropped (Zähler seit dem Start des Masters), rssi und rssi_min (dBm, null ohne Paket;
+  // fehlen bei älterer Firmware). Ein ungültiger Wert verwirft die Zeile wie jedes andere Feld.
+  const isDbm = v => Number.isInteger(v) && v >= -127 && v <= 0;
   const isCount = v => Number.isInteger(v) && v >= 0 && v <= 0xFFFFFFFF;
   const isFlag = v => v === 0 || v === 1;
   function sanitizeSplitLink(raw) {
     if (!raw || typeof raw !== "object") return undefined;
     if (!isFlag(raw.up) || !isFlag(raw.ever) || !isCount(raw.ms) || !isCount(raw.losses) ||
         !isCount(raw.rx_dropped) || !isCount(raw.key_dropped)) return undefined;
+    const hasRssi = raw.rssi !== undefined || raw.rssi_min !== undefined;
+    if (hasRssi && !((raw.rssi === null && raw.rssi_min === null) || (isDbm(raw.rssi) && isDbm(raw.rssi_min)))) return undefined;
     return {
       up: raw.up === 1, ever: raw.ever === 1, ms: raw.ms,
-      losses: raw.losses, rxDropped: raw.rx_dropped, keyDropped: raw.key_dropped
+      losses: raw.losses, rxDropped: raw.rx_dropped, keyDropped: raw.key_dropped,
+      rssi: hasRssi ? raw.rssi : null, rssiMin: hasRssi ? raw.rssi_min : null
     };
   }
 
@@ -302,14 +307,20 @@
     return !!(conn.serialUp && conn.serialSide && conn.serialSide === root.Dactyl.getMasterSide());
   }
 
-  // Anzeige des Links: { state: "up" | "down" | "never", text, title } oder null (nichts anzeigen)
+  // Unter dieser Signalstärke (dBm, Durchschnitt) färbt sich die Pill gelb: Tastenverluste werden wahrscheinlich
+  const SPLIT_RSSI_WEAK_DBM = -80;
+
+  // Anzeige des Links: { state: "up" | "down" | "never", weak, text, title } oder null (nichts anzeigen)
   function describeSplitLink(status, label, formatTime) {
     if (!status) return null;
-    const counters = `Verbindungsabbrüche: ${status.losses}, verworfene Pakete (Empfangspuffer): ${status.rxDropped}, ` +
+    const hasRssi = Number.isInteger(status.rssi) && Number.isInteger(status.rssiMin);
+    const signal = hasRssi ? `Signal: ${status.rssi} dBm (Durchschnitt), schlechtester Wert: ${status.rssiMin} dBm. ` : "";
+    const weak = hasRssi && status.up && status.rssi < SPLIT_RSSI_WEAK_DBM;
+    const counters = signal + `Verbindungsabbrüche: ${status.losses}, verworfene Pakete (Empfangspuffer): ${status.rxDropped}, ` +
       `verworfene Tastenmeldungen: ${status.keyDropped} (seit dem Start der rechten Hälfte)`;
-    if (status.up) return { state: "up", text: `${label}: verbunden`, title: counters };
-    if (!status.ever) return { state: "never", text: `${label}: nie verbunden`, title: counters };
-    return { state: "down", text: `${label}: getrennt seit ${formatTime(status.since)}`, title: counters };
+    if (status.up) return { state: "up", weak, text: `${label}: verbunden${weak ? " (schwaches Signal)" : ""}`, title: counters };
+    if (!status.ever) return { state: "never", weak: false, text: `${label}: nie verbunden`, title: counters };
+    return { state: "down", weak: false, text: `${label}: getrennt seit ${formatTime(status.since)}`, title: counters };
   }
 
   // Diagnose (GET_DIAG): DIAG:{"reset":"<Grund>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n}

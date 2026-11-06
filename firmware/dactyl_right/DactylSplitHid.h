@@ -672,6 +672,11 @@ struct SplitLeftHeld {
   uint32_t linkLosses;           // Link-Timeouts
   uint32_t rxDropped;            // verworfene Pakete bei vollem Empfangsring
   uint32_t keyDropped;           // KEY_EVENTs über SPLIT_KEY_EVENTS_PER_RX (nicht gemeldet)
+  // Signalstärke der geprüften Pakete (dBm), nur vom Wi-Fi-Task geschrieben (splitNoteRssi): Durchschnitt in
+  // 1/16 dBm und Minimum seit dem Start; rssiValid false = noch kein Paket
+  bool rssiValid;
+  int16_t rssiAvg16;
+  int8_t rssiMin;
   // Wartender Einzel-Tipp links (SPLIT_OP_TAP_PENDING) und Empfangszeit der Meldung
   bool tapPending;
   unsigned long tapPendingMs;
@@ -696,6 +701,24 @@ inline void splitCountAdd(uint32_t &counter, uint32_t n) {
 
 inline void splitHeldReset(SplitLeftHeld &h) {
   memset(&h, 0, sizeof(h));
+}
+
+// Ein Paket der linken Hälfte, das Entschlüsselung und Formatprüfung bestanden hat (Wi-Fi-Task, einziger Schreiber).
+// Gleitender Durchschnitt mit Gewicht 1/8; Werte außerhalb von -127..0 dBm sind keine Messung und zählen nicht.
+#define SPLIT_RSSI_MIN_DBM (-127)
+inline void splitNoteRssi(SplitLeftHeld &h, int rssi) {
+  if (rssi < SPLIT_RSSI_MIN_DBM || rssi > 0) return;
+  int avg16 = h.rssiValid ? h.rssiAvg16 : rssi * 16;
+  avg16 += (rssi * 16 - avg16) / 8;
+  h.rssiAvg16 = (int16_t)avg16;
+  h.rssiMin = (!h.rssiValid || rssi < h.rssiMin) ? (int8_t)rssi : h.rssiMin;
+  h.rssiValid = true;
+}
+
+// Durchschnitt in dBm, gerundet auf den nächsten ganzen Wert (nur mit rssiValid)
+inline int splitRssiAvg(const SplitLeftHeld &h) {
+  int a = h.rssiAvg16;
+  return (a >= 0 ? a + 8 : a - 8) / 16;
 }
 
 inline bool splitHeldKey(const SplitLeftHeld &h, uint8_t code) {
@@ -1495,6 +1518,9 @@ struct SplitLinkReporter {
   bool reported;          // schon einmal gemeldet
   bool up;
   uint32_t losses, rxDropped, keyDropped;
+  bool rssiValid;
+  int rssi;
+  int rssiMin;
   unsigned long lastMs;
 };
 
@@ -1506,16 +1532,25 @@ struct SplitLinkReporter {
 inline int splitLeftLinkJson(char *buf, size_t size, const SplitLeftHeld &h, unsigned long nowMs) {
   unsigned long since = h.everUp ? (nowMs - h.linkChangedMs) : 0;
   if (since > 0xFFFFFFFFUL - SPLIT_LINK_SKEW_MS) since = 0;
-  return snprintf(buf, size, "{\"up\":%d,\"ms\":%lu,\"ever\":%d,\"losses\":%lu,\"rx_dropped\":%lu,\"key_dropped\":%lu}",
+  // rssi/rssi_min: dBm, null ohne geprüftes Paket; das Maximum ("-127") hält das Ganze unter 160 Bytes
+  char rssi[32] = "null,\"rssi_min\":null";
+  if (h.rssiValid) snprintf(rssi, sizeof(rssi), "%d,\"rssi_min\":%d", splitRssiAvg(h), (int)h.rssiMin);
+  return snprintf(buf, size,
+                  "{\"up\":%d,\"ms\":%lu,\"ever\":%d,\"losses\":%lu,\"rx_dropped\":%lu,\"key_dropped\":%lu,\"rssi\":%s}",
                   h.linkUp ? 1 : 0, (unsigned long)since, h.everUp ? 1 : 0, (unsigned long)h.linkLosses,
-                  (unsigned long)h.rxDropped, (unsigned long)h.keyDropped);
+                  (unsigned long)h.rxDropped, (unsigned long)h.keyDropped, rssi);
 }
 
 inline bool splitLinkReportDue(SplitLinkReporter &r, const SplitLeftHeld &h, unsigned long nowMs) {
   bool changed = !r.reported || r.up != h.linkUp;
   bool counters = r.losses != h.linkLosses || r.rxDropped != h.rxDropped || r.keyDropped != h.keyDropped;
-  if (!changed && !(counters && (nowMs - r.lastMs) >= SPLIT_LINK_REPORT_MS)) return false;
+  // Signal: Beginn der Messung, neues Minimum oder Durchschnitt 3 dBm vom gemeldeten Wert (kein Bericht pro Paket)
+  bool signal = h.rssiValid && (!r.rssiValid || h.rssiMin != r.rssiMin || (splitRssiAvg(h) - r.rssi >= 3 || r.rssi - splitRssiAvg(h) >= 3));
+  if (!changed && !((counters || signal) && (nowMs - r.lastMs) >= SPLIT_LINK_REPORT_MS)) return false;
   r.reported = true;
+  r.rssiValid = h.rssiValid;
+  r.rssi = h.rssiValid ? splitRssiAvg(h) : 0;
+  r.rssiMin = h.rssiValid ? h.rssiMin : 0;
   r.up = h.linkUp;
   r.losses = h.linkLosses;
   r.rxDropped = h.rxDropped;

@@ -552,7 +552,7 @@ test("Diagnose: Firmware kennt GET_DIAG in beiden Bauarten und misst loop_max_us
 test("Split-Link: SPLIT_LINK kommt nur vom Master und wird auf Feldtypen geprüft", () => {
   // JSON-Vergleich: die Module laufen in einem eigenen Kontext, deepStrictEqual prüft den Prototyp
   assert.deepStrictEqual(JSON.parse(JSON.stringify(D.parseSplitLinkLine(LINK_LINE, "R"))),
-    { up: false, ever: true, ms: 5000, losses: 2, rxDropped: 3, keyDropped: 4 });
+    { up: false, ever: true, ms: 5000, losses: 2, rxDropped: 3, keyDropped: 4, rssi: null, rssiMin: null });
   assert.strictEqual(D.parseSplitLinkLine(LINK_LINE, "L"), undefined);   // nur der Master kennt den Link
   assert.strictEqual(D.parseSplitLinkLine("SPLIT_LINK:kaputt", "R"), undefined);
   assert.strictEqual(D.parseSplitLinkLine("SPLIT_LINK:null", "R"), undefined);
@@ -618,6 +618,16 @@ test("Split-Link: Anzeige verbunden, getrennt seit, nie verbunden und unbekannt"
   assert.deepStrictEqual([never.state, never.text], ["never", "Links: nie verbunden"]);
   assert.ok(down.title.includes("Verbindungsabbrüche: 2") && down.title.includes("Empfangspuffer): 3") &&
     down.title.includes("Tastenmeldungen: 4"));
+});
+
+test("Split-Link: Signalstärke wird nur für geprüfte Pakete gelesen und steht im JSON", () => {
+  const ino = read("firmware/dactyl_right/dactyl_right.ino");
+  const recv = ino.slice(ino.indexOf("static void onSplitDataRecv"), ino.indexOf("void setupSplitReceiver"));
+  // Erst die Prüfung (Absender, Länge, Wertebereich), dann der RSSI-Wert: ein gefälschtes Paket ändert ihn nicht
+  assert.ok(recv.indexOf("parseSplitHidPacket") >= 0 && recv.indexOf("parseSplitHidPacket") < recv.indexOf("splitNoteRssi"));
+  assert.ok(recv.includes("info->rx_ctrl->rssi"));
+  const hdr = read("firmware/dactyl_right/DactylSplitHid.h");
+  assert.ok(hdr.includes('\\"rssi\\":%s') && hdr.includes('\\"rssi_min\\":'));
 });
 
 test("Split-Link: Pill im Header, Anzeige wird beim Trennen des Masters vergessen", () => {

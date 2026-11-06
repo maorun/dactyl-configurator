@@ -1558,3 +1558,216 @@ function buildLayerSheet(configs, profiles, labelFor, sideOrder) {
   }
   return { sides, layers };
 }
+
+// =============================================================================
+// Übungsmodus (DOM-frei): Zeichen -> Taste, Übungssitzung, Wortliste aus der Heatmap
+// =============================================================================
+
+const PRACTICE_MAX_CHARS = 500;
+// Shift-Zeichen -> Zeichen der Taste ohne Shift (US-Layout)
+const PRACTICE_SHIFT_BASE = {
+  "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9", ")": "0",
+  "_": "-", "+": "=", "{": "[", "}": "]", "|": "\\", ":": ";", "\"": "'", "~": "`", "<": ",", ">": ".", "?": "/"
+};
+const PRACTICE_SHIFT_CODES = ["KEY_LEFT_SHIFT", "KEY_RIGHT_SHIFT", "OSM_LSHIFT", "OSM_RSHIFT"];
+
+// Mögliche Wege, ein Zeichen zu tippen: { code, shift } (Tastencode) oder { pair } (Tastenpaar), beste zuerst
+function practiceCandidates(ch) {
+  const out = [];
+  for (const group of KEYCODES) {
+    const k = group.keys.find(key => key.char === ch && ch !== "");
+    if (k) out.push({ code: k.code, shift: false });
+  }
+  if (/^[A-Z]$/.test(ch)) out.push({ code: `KEY_${ch}`, shift: true });
+  const base = PRACTICE_SHIFT_BASE[ch];
+  if (base) {
+    for (const group of KEYCODES) {
+      const k = group.keys.find(key => key.char === base);
+      if (k) out.push({ code: k.code, shift: true });
+    }
+  }
+  const mac = DE_MAC_CHARS.find(e => e.char === ch);
+  if (mac && mac.code) out.push({ code: mac.code, shift: false });
+  if (mac && mac.pair) out.push({ pair: mac.pair, shift: false });
+  if (ch.length === 1 && ch >= " " && ch <= "~") out.push({ code: ch, shift: false });
+  return out;
+}
+
+// Taste (Hälfte, Zeile, Spalte, Ebene), deren Tap oder Halten das Prädikat erfüllt; Ebene 0 zuerst
+// Mit collect (Array) werden alle Treffer gesammelt, der erste bleibt der Rückgabewert
+function practiceFindKey(configs, profiles, sides, layers, test, collect) {
+  let first = null;
+  for (const l of layers) {
+    for (const side of sides) {
+      const grid = configs[side] && configs[side].layers && configs[side].layers[l];
+      if (!grid) continue;
+      for (let r = 0; r < NUM_ROWS; r++) {
+        for (let c = 0; c < NUM_COLS; c++) {
+          const cell = grid[r] && grid[r][c];
+          if (cell && isPhysicalKey(r, c, profiles[side]) && test(cell, side, r, c, l)) {
+            const hit = { side, r, c, layer: l };
+            if (!collect) return hit;
+            collect.push(hit);
+            first = first || hit;
+          }
+        }
+      }
+    }
+  }
+  return first;
+}
+
+function practiceSameCode(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || a === "NONE" || b === "NONE") return false;
+  if (a === b) return true;
+  const na = actionCodeToNumeric(a);
+  return na > 0 && na === actionCodeToNumeric(b);
+}
+
+// Taste für ein Zeichen: { char, side, r, c, layer, shift, layerKey, shiftKey } oder null (keine Position).
+// Bevorzugt die niedrigste Ebene, dann ohne Shift. Eine Ebene > 0 braucht eine MO_n-Taste (TG_n wird nie ausgeschaltet), Shift eine Shift-Taste.
+function findCharPosition(ch, configs, profiles, sideOrder) {
+  const sides = (Array.isArray(sideOrder) ? sideOrder : Object.keys(configs || {}))
+    .filter(side => configs && configs[side] && profiles && profiles[side]);
+  let best = null;
+  for (const cand of practiceCandidates(ch)) {
+    for (let l = 0; l < NUM_LAYERS; l++) {
+      const hit = practiceFindKey(configs, profiles, sides, [l], cell => {
+        if (cand.pair) {
+          return false;
+        }
+        return practiceSameCode(cell.tap, cand.code);
+      }) || (cand.pair ? practiceFindPairKey(configs, profiles, sides, l, cand.pair) : null);
+      if (!hit) continue;
+      let layerKey = null;
+      if (l > 0) {
+        layerKey = practiceFindKey(configs, profiles, sides, [0, ...Array.from({ length: NUM_LAYERS }, (_, i) => i).filter(i => i > 0 && i !== l)],
+          cell => cell.tap === `MO_${l}` || cell.hold === `MO_${l}`);
+        if (!layerKey) continue;
+      }
+      let shiftKey = null;
+      const shiftAlternatives = [];
+      if (cand.shift) {
+        // Eine Shift-Taste von Ebene 0 wirkt auf Ebene l nur, wenn ihre Zelle dort transparent (NONE) ist
+        shiftKey = practiceFindKey(configs, profiles, sides, l === 0 ? [0] : [l, 0],
+          (cell, side, r, c, layer) => (PRACTICE_SHIFT_CODES.includes(cell.tap) || PRACTICE_SHIFT_CODES.includes(cell.hold))
+            && (layer === l || (configs[side].layers[l][r][c] || {}).tap === "NONE"), shiftAlternatives);
+        if (!shiftKey) continue;
+      }
+      const score = (l * 2 + (cand.shift ? 1 : 0));
+      if (!best || score < best.score) {
+        best = { score, pos: { char: ch, side: hit.side, r: hit.r, c: hit.c, layer: l, shift: !!cand.shift, layerKey, shiftKey, shiftAlternatives } };
+      }
+    }
+  }
+  return best ? best.pos : null;
+}
+
+function practiceFindPairKey(configs, profiles, sides, layer, pair) {
+  for (const side of sides) {
+    const idx = findKeyPairIndex(configs[side].keyPairs, pair);
+    if (idx < 0) continue;
+    const hit = practiceFindKey(configs, profiles, [side], [layer], cell => cell.tap === `PAIR_${idx}`);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+// Text -> Übungsschritte. Whitespace wird zu einem Leerzeichen, der Text auf PRACTICE_MAX_CHARS gekürzt.
+// missing: Zeichen ohne Tastenposition (einmalig, in Reihenfolge); sie sind nicht in steps.
+function buildPracticeSteps(text, configs, profiles, sideOrder) {
+  const clean = [...String(text || "").replace(/\s+/g, " ").trim()].slice(0, PRACTICE_MAX_CHARS);
+  const cache = new Map();
+  const steps = [];
+  const missing = [];
+  for (const ch of clean) {
+    if (!cache.has(ch)) cache.set(ch, findCharPosition(ch, configs, profiles, sideOrder));
+    const pos = cache.get(ch);
+    if (pos) steps.push(pos);
+    else if (!missing.includes(ch)) missing.push(ch);
+  }
+  return { steps, missing };
+}
+
+function createPracticeSession(steps) {
+  return { steps: steps.slice(), index: 0, correct: 0, errors: {}, errorTotal: 0, startMs: null, lastMs: null, finished: false };
+}
+
+function practiceKeyId(side, r, c) {
+  return `${side}_${r}_${c}`;
+}
+
+// Tastendruck der Hardware. Rückgabe: "correct", "error", "helper" (Shift-/Ebenentaste des Schritts) oder "ignored".
+// Ein Fehler zählt auf der erwarteten Taste. layer: Ebene beim Drücken (undefined = unbekannt).
+function practiceKeyPress(session, side, r, c, layer, nowMs) {
+  if (session.finished) return "ignored";
+  const step = session.steps[session.index];
+  if (!step) return "ignored";
+  const id = practiceKeyId(side, r, c);
+  const targetId = practiceKeyId(step.side, step.r, step.c);
+  // Eine Hilfstaste liegt auf einer anderen Ebene als das Ziel; dieselbe Position auf der Zielebene bleibt das Ziel
+  const targetWins = id === targetId && (layer === step.layer || !Number.isInteger(layer));
+  if (!targetWins) {
+    for (const helper of [step.layerKey, step.shiftKey, ...(step.shiftAlternatives || [])]) {
+      if (helper && practiceKeyId(helper.side, helper.r, helper.c) === id) return "helper";
+    }
+  }
+  if (session.startMs === null) session.startMs = nowMs;
+  const layerOk = !Number.isInteger(layer) || layer === step.layer;
+  if (id === targetId && layerOk) {
+    session.correct++;
+    session.index++;
+    session.lastMs = nowMs;
+    if (session.index >= session.steps.length) session.finished = true;
+    return "correct";
+  }
+  const expected = targetId;
+  session.errors[expected] = (session.errors[expected] || 0) + 1;
+  session.errorTotal++;
+  return "error";
+}
+
+// Tempo in Wörtern pro Minute (5 Zeichen = 1 Wort) von der ersten Taste bis zum letzten richtigen Zeichen, Genauigkeit in %
+function practiceSpeed(session) {
+  const elapsedMs = session.startMs !== null && session.lastMs !== null ? session.lastMs - session.startMs : 0;
+  const wpm = elapsedMs > 0 ? Math.round(session.correct / CHARS_PER_WORD / (elapsedMs / 60000)) : 0;
+  const presses = session.correct + session.errorTotal;
+  return { wpm, elapsedMs, accuracy: presses ? Math.round(session.correct / presses * 100) : 100 };
+}
+
+// Das Zeichen, das ein Tastencode tippt (druckbar, ohne Leerzeichen), sonst ""
+function practiceCharForCode(code) {
+  if (typeof code !== "string" || code === "NONE") return "";
+  for (const group of KEYCODES) {
+    const k = group.keys.find(key => key.code === code);
+    if (k) return k.char && k.char.trim() ? k.char : "";
+  }
+  const mac = deMacCharForCode(code);
+  if (mac) return mac;
+  return code.length === 1 && code > " " && code <= "~" ? code : "";
+}
+
+// Übungstext aus den häufigsten Tasten der Heatmap. sources: [{ config, stats }]. Zählt je Ebene den Tap der Taste
+// (ohne eigene Belegung gilt Ebene 0). Der Text besteht aus Dreier-Gruppen der häufigsten Zeichen, immer gleich für gleiche Daten.
+function practiceTextFromHeatmap(sources, keyCount = 8, wordCount = 12) {
+  const totals = new Map();
+  for (const { config, stats } of sources || []) {
+    if (!config || !stats) continue;
+    stats.layerCounts.forEach((counts, l) => {
+      for (const [id, n] of Object.entries(counts)) {
+        const [r, c] = id.split("_").map(Number);
+        const own = config.layers && config.layers[l] && config.layers[l][r] && config.layers[l][r][c];
+        const base = config.layers && config.layers[0] && config.layers[0][r] && config.layers[0][r][c];
+        const ch = practiceCharForCode(own && own.tap !== "NONE" ? own.tap : (base && base.tap));
+        if (ch) totals.set(ch, (totals.get(ch) || 0) + n);
+      }
+    });
+  }
+  const top = [...totals.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, keyCount).map(e => e[0]);
+  if (!top.length) return "";
+  const words = [];
+  for (let i = 0; i < wordCount; i++) {
+    words.push(top[i % top.length] + top[(i + 1) % top.length] + top[(i * 2 + 1) % top.length]);
+  }
+  return words.join(" ");
+}

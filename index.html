@@ -170,6 +170,7 @@
             <button id="btnApplyLayerTool" class="btn btn-outline btn-sm" title="Aktion ausführen (wird vorgemerkt und ist rückgängig machbar)">Ausführen</button>
             <button id="btnToggleLayerOverview" class="btn btn-outline btn-sm" type="button" aria-expanded="false" title="Alle 8 Ebenen nebeneinander anzeigen">🗺️ Ebenen-Übersicht</button>
             <button id="btnLayerSheet" class="btn btn-outline btn-sm" type="button" title="Druckansicht aller benutzten Ebenen beider Hälften">🖨️ Spickzettel</button>
+            <button id="btnPractice" class="btn btn-outline btn-sm" type="button" title="Das eigene Layout mit einem Text üben">⌨️ Üben</button>
           </div>
         </div>
 
@@ -769,6 +770,33 @@
       </div>
     </div>
 
+    <!-- Modal: Üben (Text tippen, nächste Taste auf der Matrix markiert) -->
+    <div class="modal-backdrop" id="practiceModal" style="display: none;">
+      <div class="modal-dialog layer-sheet-dialog">
+        <div class="modal-header">
+          <h4>Üben</h4>
+          <button class="modal-close" id="btnClosePractice">&times;</button>
+        </div>
+        <div class="modal-body">
+          <textarea id="practiceText" class="form-control" rows="3" maxlength="500" placeholder="Übungstext"></textarea>
+          <div class="practice-actions">
+            <button class="btn btn-primary btn-sm" id="btnStartPractice" type="button">Start</button>
+            <button class="btn btn-outline btn-sm" id="btnPracticeHeatmap" type="button">Wörter aus der Heatmap</button>
+          </div>
+          <p id="practiceMissing" class="practice-missing"></p>
+          <div id="practiceProgress" class="practice-progress"></div>
+          <p id="practiceStatus"></p>
+          <div id="practiceMatrix"></div>
+          <p id="practiceStats"></p>
+          <p id="practiceErrors"></p>
+          <p class="practice-hint">Tippe auf der Tastatur, nicht im Browser. Die linke Hälfte zählt nur bei USB-Verbindung.</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCancelPractice">Schließen</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Modal: Add / Edit Combo -->
     <div class="modal-backdrop" id="comboModal" style="display: none;">
       <div class="modal-dialog">
@@ -937,6 +965,7 @@
   <script src="js/matrix-test.js?v=1"></script>
   <script src="js/layout-lint-ui.js?v=1"></script>
   <script src="js/layer-sheet-ui.js?v=1"></script>
+  <script src="js/practice-ui.js?v=1"></script>
   <script src="js/keyboard-hooks.js?v=3"></script>
   <script src="js/config-sync.js?v=4"></script>
   <script src="app.js?v=43"></script>

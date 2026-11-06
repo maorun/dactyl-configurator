@@ -56,6 +56,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              moveKeySelection, ARROW_KEY_DIRECTIONS,
              createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES,
              buildLayerOverview, buildLayerSheet,
+             findCharPosition, buildPracticeSteps, createPracticeSession, practiceKeyPress, practiceSpeed, practiceTextFromHeatmap, practiceCharForCode,
              ON_SCREEN_KEYBOARD_ROWS: typeof ON_SCREEN_KEYBOARD_ROWS !== "undefined" ? ON_SCREEN_KEYBOARD_ROWS : undefined,
              KEYCODE_OPTIONS: typeof KEYCODE_OPTIONS !== "undefined" ? KEYCODE_OPTIONS : undefined,
              pickActionFromOnScreenKey: typeof pickActionFromOnScreenKey !== "undefined" ? pickActionFromOnScreenKey : undefined };`, ctx);
@@ -936,7 +937,7 @@ test("Layout-Diff: nicht vorhandene Tasten zählen nicht, unvollständige Snapsh
 // handleSerialLine aus js/serial.js in einem eigenen Kontext mit Stubs für DOM, Anzeige und Verbindungen.
 // conn: Verbindungszustand (bleUp, bleSide, serialUp, serialSide), wie connectionState() in js/ble.js.
 function serialLineHarness(conn = {}) {
-  const calls = { press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [], layers: [], tri: [], warns: [] };
+  const calls = { press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [], practice: [], layers: [], tri: [], warns: [] };
   const s = {
     calls, console: { log() {}, warn(...a) { calls.warns.push(a.map(String).join(' ')); } },
     document: { getElementById: () => null },
@@ -975,6 +976,7 @@ function applyTriLayersToInputs(rules) { calls.tri.push(JSON.stringify(rules)); 
 function saveConfigToServer() {}
 function clearPendingSync() {}
 function onTypingStatsChanged(side) { calls.stats.push(side); }
+function practiceHandleKeyPress(side, r, c, layer) { calls.practice.push([side, r, c, layer]); }
 function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + c); }
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
 ${section("js/serial.js", "// LED-Zustand des Hosts:", "function switchLayerUI")}
@@ -5117,6 +5119,271 @@ test("Spickzettel: Knopf, Dialog, Skript-Tag, APP_MODULES und Druck-CSS sind ver
   assert.ok(ui.includes("window.print()") && ui.includes("buildLayerSheet("));
   assert.ok(!/["']R["']|["']L["']/.test(ui), "keine Seitenliterale im Modul");
   assert.ok(/@media print[\s\S]*#layerSheetModal/.test(read("style.css")), "@media print für den Spickzettel");
+});
+
+
+// ---- Übungsmodus ----
+function practiceConfigs(setup) {
+  const cell = (tap = "NONE", hold = "NONE") => ({ label: "", tap, hold, dtap: "NONE" });
+  const make = () => ({
+    layers: Array.from({ length: 8 }, () => Array.from({ length: 6 }, () => Array.from({ length: 7 }, () => cell()))),
+    keyPairs: []
+  });
+  const configs = { R: make(), L: make() };
+  setup(configs, cell);
+  return configs;
+}
+const practiceSides = ["R", "L"];
+
+test("Übungsmodus: Rückwärtssuche findet Buchstaben, Shift-Zeichen, Zeichen auf Ebene und Zeichen ohne Position", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][2][1] = cell("KEY_A");
+    c.L.layers[0][1][1] = cell("KEY_LEFT_SHIFT");
+    c.R.layers[0][5][3] = cell("MO_1");
+    c.L.layers[0][0][0] = cell("KEY_1");
+    c.R.layers[1][1][2] = cell("KEY_Z");
+    c.R.layers[0][0][5] = cell("KEY_SEMICOLON");
+  });
+  const find = ch => api.findCharPosition(ch, configs, { R, L }, practiceSides);
+  const a = find("a");
+  assert.deepStrictEqual([a.side, a.r, a.c, a.layer, a.shift], ["R", 2, 1, 0, false], "Buchstabe");
+  const big = find("A");
+  assert.deepStrictEqual([big.side, big.r, big.c, big.shift], ["R", 2, 1, true], "Großbuchstabe braucht Shift");
+  assert.deepStrictEqual([big.shiftKey.side, big.shiftKey.r, big.shiftKey.c], ["L", 1, 1], "Shift-Taste benannt");
+  const bang = find("!");
+  assert.deepStrictEqual([bang.side, bang.r, bang.c, bang.shift], ["L", 0, 0, true], "! ist Shift + 1");
+  const colon = find(":");
+  assert.ok(colon && colon.shift && colon.r === 0 && colon.c === 5, ": ist Shift + ;");
+  const z = find("z");
+  assert.deepStrictEqual([z.side, z.r, z.c, z.layer], ["R", 1, 2, 1], "Zeichen auf Ebene 1");
+  assert.deepStrictEqual([z.layerKey.side, z.layerKey.r, z.layerKey.c], ["R", 5, 3], "Ebenentaste MO_1");
+  assert.strictEqual(find("q"), null, "Zeichen ohne Position");
+  assert.strictEqual(find("€"), null, "Option-Zeichen ohne Tastenpaar");
+});
+
+test("Übungsmodus: Ebene ohne Ebenentaste und Tastenpaar", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[2][1][1] = cell("KEY_Q");
+    c.R.keyPairs = [{ first: "KEY_LEFT_ALT", second: "@" }];
+    c.R.layers[0][3][3] = cell("PAIR_0");
+  });
+  assert.strictEqual(api.findCharPosition("q", configs, { R, L }, practiceSides), null, "Ebene 2 ohne MO_2 ist nicht erreichbar");
+  const euro = api.findCharPosition("€", configs, { R, L }, practiceSides);
+  assert.deepStrictEqual([euro.side, euro.r, euro.c], ["R", 3, 3], "Tastenpaar liefert €");
+});
+
+test("Übungsmodus: Schritte sammeln fehlende Zeichen einmalig", () => {
+  const configs = practiceConfigs((c, cell) => { c.R.layers[0][2][1] = cell("KEY_A"); });
+  const built = api.buildPracticeSteps("a q\n a q", configs, { R, L }, practiceSides);
+  assert.strictEqual(JSON.stringify(built.missing), JSON.stringify([" ", "q"]), "Leertaste und q ohne Position, je einmal");
+  assert.strictEqual(built.steps.filter(x => x.char === "a").length, 2);
+});
+
+test("Übungsmodus: Tastendrücke zählen Fehler je Taste und das Tempo", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][2][1] = cell("KEY_A");
+    c.R.layers[0][2][2] = cell("KEY_B");
+  });
+  const { steps } = api.buildPracticeSteps("abab", configs, { R, L }, practiceSides);
+  assert.strictEqual(steps.length, 4);
+  const s = api.createPracticeSession(steps);
+  assert.strictEqual(api.practiceKeyPress(s, "R", 2, 1, 0, 1000), "correct");
+  assert.strictEqual(api.practiceKeyPress(s, "R", 2, 1, 0, 2000), "error", "falsche Taste für b");
+  assert.strictEqual(api.practiceKeyPress(s, "R", 0, 0, 0, 3000), "error");
+  assert.strictEqual(JSON.stringify(s.errors), JSON.stringify({ R_2_2: 2 }), "Fehler zählen auf der erwarteten Taste");
+  assert.strictEqual(api.practiceKeyPress(s, "R", 2, 2, 0, 4000), "correct");
+  assert.strictEqual(api.practiceKeyPress(s, "R", 2, 1, 0, 5000), "correct");
+  assert.strictEqual(s.finished, false);
+  assert.strictEqual(api.practiceKeyPress(s, "R", 2, 2, 0, 61000), "correct");
+  assert.strictEqual(s.finished, true);
+  assert.strictEqual(api.practiceKeyPress(s, "R", 2, 2, 0, 62000), "ignored");
+  const speed = api.practiceSpeed(s);
+  assert.strictEqual(speed.elapsedMs, 60000);
+  assert.strictEqual(speed.wpm, 1, "4 Zeichen in 60 s = 0,8 Wörter, gerundet 1");
+  assert.strictEqual(speed.accuracy, 67, "4 richtig, 2 Fehler");
+});
+
+test("Übungsmodus: falsche Ebene ist ein Fehler, Hilfstasten zählen nicht", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][5][3] = cell("MO_1");
+    c.R.layers[1][1][2] = cell("KEY_Z");
+    c.R.layers[0][1][2] = cell("KEY_Y");
+  });
+  const { steps } = api.buildPracticeSteps("z", configs, { R, L }, practiceSides);
+  const s = api.createPracticeSession(steps);
+  assert.strictEqual(api.practiceKeyPress(s, "R", 5, 3, 0, 100), "helper");
+  assert.strictEqual(s.errorTotal, 0);
+  assert.strictEqual(api.practiceKeyPress(s, "R", 1, 2, 0, 200), "error", "gleiche Taste auf Ebene 0");
+  assert.strictEqual(api.practiceKeyPress(s, "R", 1, 2, 1, 300), "correct");
+});
+
+test("Übungsmodus: Wortliste aus den häufigsten Tasten der Heatmap", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][2][1] = cell("KEY_A");
+    c.R.layers[0][2][2] = cell("KEY_B");
+    c.R.layers[0][2][3] = cell("KEY_C");
+  });
+  const stats = api.createTypingStats(null, R);
+  for (let i = 0; i < 5; i++) api.recordKeyPress(stats, 2, 1, 1000 + i, 0);
+  for (let i = 0; i < 3; i++) api.recordKeyPress(stats, 2, 2, 1000 + i, 0);
+  api.recordKeyPress(stats, 2, 3, 1000, 0);
+  const text = api.practiceTextFromHeatmap([{ config: configs.R, stats }], 2, 4);
+  assert.ok(text.length > 0 && /^[ab ]+$/.test(text), `nur die zwei häufigsten Zeichen: ${text}`);
+  assert.strictEqual(text, api.practiceTextFromHeatmap([{ config: configs.R, stats }], 2, 4), "deterministisch");
+  assert.strictEqual(api.practiceTextFromHeatmap([], 2, 4), "", "ohne Daten leer");
+});
+
+test("Übungsmodus: Ziel an der Position der Ebenentaste bleibt das Ziel", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][5][3] = cell("MO_1");
+    c.R.layers[1][5][3] = cell("KEY_Z");
+  });
+  const { steps } = api.buildPracticeSteps("z", configs, { R, L }, practiceSides);
+  const s = api.createPracticeSession(steps);
+  assert.strictEqual(api.practiceKeyPress(s, "R", 5, 3, 0, 100), "helper", "Ebene 0: Ebenentaste");
+  assert.strictEqual(api.practiceKeyPress(s, "R", 5, 3, 1, 200), "correct", "Ebene 1: dieselbe Position ist z");
+});
+
+test("Übungsmodus: TG_n gilt nicht als Ebenentaste", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][5][3] = cell("TG_1");
+    c.R.layers[1][1][2] = cell("KEY_Z");
+  });
+  assert.strictEqual(api.findCharPosition("z", configs, { R, L }, practiceSides), null);
+});
+
+test("Übungsmodus: KEY_PRESS und SPLIT_KEY melden Hälfte, Position und Ebene", () => {
+  const s = serialLineHarness();
+  s.handle('KEY_PRESS:{"r":2,"c":3,"layer":1,"key":"a"}', "R", "usb");
+  s.handle('SPLIT_KEY:{"r":1,"c":2,"pressed":1,"layer":3}', "R", "usb");
+  s.handle('SPLIT_KEY:{"r":1,"c":2,"pressed":0,"layer":3}', "R", "usb");
+  assert.strictEqual(JSON.stringify(s.calls.practice), JSON.stringify([["R", 2, 3, 1], ["L", 1, 2, 3]]), "nur Drücken zählt");
+});
+
+test("Übungsmodus: Dialog, Skript-Tag, APP_MODULES und Tasten-Anbindung sind verdrahtet", () => {
+  const html = read("index.html");
+  assert.ok(html.includes('id="btnPractice"') && html.includes('id="practiceModal"'));
+  assert.ok(html.indexOf("js/practice-ui.js") > html.indexOf("js/layer-sheet-ui.js") && html.indexOf("js/practice-ui.js") < html.indexOf('src="app.js'));
+  assert.ok(read("server.py").includes('"practice-ui"'), "APP_MODULES braucht practice-ui");
+  assert.ok(read("app.js").includes("initPracticeUI()"));
+  const serial = read("js/serial.js");
+  assert.strictEqual((serial.match(/practiceHandleKeyPress\(/g) || []).length, 2, "KEY_PRESS und SPLIT_KEY");
+  assert.ok(!/["']R["']|["']L["']/.test(read("js/practice-ui.js")), "keine Seitenliterale im Modul");
+});
+
+
+test("Übungsmodus: Zeichen auf Ebene mit Shift nennt Ebenen- und Shift-Taste", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][5][3] = cell("MO_1");
+    c.L.layers[0][1][1] = cell("KEY_LEFT_SHIFT");
+    c.L.layers[1][1][1] = cell("KEY_LEFT_SHIFT");
+    c.R.layers[1][1][2] = cell("KEY_Z");
+  });
+  const z = api.findCharPosition("Z", configs, { R, L }, practiceSides);
+  assert.deepStrictEqual([z.layer, z.shift, z.layerKey.r, z.layerKey.c], [1, true, 5, 3]);
+  assert.deepStrictEqual([z.shiftKey.side, z.shiftKey.r, z.shiftKey.c], ["L", 1, 1], "Shift-Taste der Ebene 1");
+});
+
+test("Übungsmodus: Dialog zeigt Ziel, Ende und leeren Zustand; Start verwirft Tasten", () => {
+  const { w, dom } = uiHarness(`
+    var Dactyl = { SIDE_IDS: ["R", "L"], sidesInDisplayOrder: () => ["R", "L"] };
+    function configFor() { return {}; }
+    function typingStatsFor() { return null; }
+    function sheetKeyElement() { return { classList: { add() {} } }; }
+    var practiceBuilt = [];
+    function buildPracticeSteps() { return practiceBuilt.pop(); }
+    function createPracticeSession(steps) { return { steps, index: 0, finished: false, errors: {}, errorTotal: 0 }; }
+    function practiceSpeed() { return { wpm: 0, accuracy: 100, elapsedMs: 0 }; }
+    function buildLayerSheet() { return { layers: [{ layer: 0, halves: [{ side: "R", label: "Rechts", rows: [[]], thumbs: [] }] }] }; }
+  `);
+  const ctx = vm.runInContext("this", w);
+  vm.runInContext(read("js/practice-ui.js"), w);
+  const modal = dom.document.getElementById("practiceModal");
+  modal.style.display = "flex";
+  const run = src => vm.runInContext(src, w);
+  run("renderPractice()");
+  assert.ok(dom.document.getElementById("practiceStatus").textContent.includes("Start"), "leerer Zustand");
+  run(`practiceBuilt.push({ steps: [{ char: "a", side: "R", r: 2, c: 1, layer: 0, shift: false, layerKey: null, shiftKey: null }], missing: [] });
+       practiceSheet = null; practicePrepare(); renderPractice();`);
+  assert.ok(dom.document.getElementById("practiceStatus").textContent.includes("Nächste Taste: a"));
+  assert.strictEqual(dom.document.getElementById("practiceMatrix").children.length, 1, "Matrix mit Ziel");
+  let prevented = 0;
+  run("practiceSwallowKey")({ target: { id: "btnStartPractice" }, preventDefault: () => prevented++ });
+  run("practiceSwallowKey")({ target: { id: "practiceText" }, preventDefault: () => prevented++ });
+  assert.strictEqual(prevented, 1, "Knopf verwirft die Taste, das Textfeld nicht");
+  run(`practiceSession.finished = true; renderPractice();`);
+  assert.strictEqual(dom.document.getElementById("practiceStatus").textContent, "Fertig!");
+  run(`practiceSession = createPracticeSession([]); renderPractice();`);
+  assert.ok(dom.document.getElementById("practiceStatus").textContent.includes("Kein Zeichen"));
+  void ctx;
+});
+
+
+test("Übungsmodus: überdeckte Shift-Taste, fehlende Shift-Taste, Mod-Tap-Shift und niedrigste Ebene", () => {
+  const shadow = practiceConfigs((c, cell) => {
+    c.R.layers[0][5][3] = cell("MO_1");
+    c.L.layers[0][1][1] = cell("KEY_LEFT_SHIFT");
+    c.L.layers[1][1][1] = cell("KEY_X");
+    c.L.layers[0][2][2] = cell("KEY_RIGHT_SHIFT");
+    c.R.layers[1][1][2] = cell("KEY_Z");
+  });
+  const z = api.findCharPosition("Z", shadow, { R, L }, practiceSides);
+  assert.deepStrictEqual([z.shiftKey.r, z.shiftKey.c], [2, 2], "überdeckte Shift-Taste wird übersprungen");
+  const none = practiceConfigs((c, cell) => { c.R.layers[0][2][1] = cell("KEY_A"); });
+  assert.strictEqual(api.findCharPosition("A", none, { R, L }, practiceSides), null, "ohne Shift-Taste keine Position");
+  const modTap = practiceConfigs((c, cell) => {
+    c.R.layers[0][2][1] = cell("KEY_A");
+    c.L.layers[0][3][1] = cell("KEY_D", "KEY_LEFT_SHIFT");
+  });
+  const big = api.findCharPosition("A", modTap, { R, L }, practiceSides);
+  assert.deepStrictEqual([big.shiftKey.side, big.shiftKey.r, big.shiftKey.c], ["L", 3, 1], "Mod-Tap-Halten gilt als Shift");
+  const low = practiceConfigs((c, cell) => {
+    c.R.layers[0][5][3] = cell("MO_2");
+    c.R.layers[0][1][1] = cell("KEY_A");
+    c.R.layers[2][2][2] = cell("KEY_A");
+  });
+  assert.strictEqual(api.findCharPosition("a", low, { R, L }, practiceSides).layer, 0, "niedrigste Ebene gewinnt");
+});
+
+test("Übungsmodus: practiceHandleKeyPress zählt nur bei offenem Dialog mit laufender Übung", () => {
+  const { w, dom } = uiHarness(`
+    var Dactyl = { SIDE_IDS: ["R", "L"], sidesInDisplayOrder: () => ["R", "L"] };
+    var counted = 0;
+  `);
+  vm.runInContext(read("js/practice-ui.js"), w);
+  const run = src => vm.runInContext(src, w);
+  run(`practiceKeyPress = () => { counted++; return "correct"; }; renderPractice = () => {};`);
+  const modal = dom.document.getElementById("practiceModal");
+  run(`practiceSession = { steps: [] }`);
+  modal.style.display = "none";
+  run(`practiceHandleKeyPress("R", 0, 0, 0)`);
+  assert.strictEqual(run("counted"), 0, "Dialog zu: kein Zählen");
+  modal.style.display = "flex";
+  run(`practiceHandleKeyPress("R", 0, 0, 0)`);
+  assert.strictEqual(run("counted"), 1, "Dialog offen: Zählen");
+  run(`practiceSession = null; practiceHandleKeyPress("R", 0, 0, 0)`);
+  assert.strictEqual(run("counted"), 1, "ohne Übung: kein Zählen");
+  let prevented = 0;
+  run("practiceSession = { steps: [] }");
+  run("practiceSwallowKey")({ target: { id: "btnClosePractice" }, preventDefault: () => prevented++ });
+  assert.strictEqual(prevented, 0, "Schließen-Knopf bleibt per Tastatur bedienbar");
+});
+
+
+test("Übungsmodus: transparente Shift-Taste gilt, zweite Shift-Taste und unbekannte Ebene sind keine Fehler", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][5][3] = cell("MO_1");
+    c.L.layers[0][1][1] = cell("KEY_LEFT_SHIFT");
+    c.R.layers[0][4][4] = cell("KEY_RIGHT_SHIFT");
+    c.R.layers[1][1][2] = cell("KEY_Z");
+  });
+  const z = api.findCharPosition("Z", configs, { R, L }, practiceSides);
+  assert.deepStrictEqual([z.shiftKey.side, z.shiftKey.r, z.shiftKey.c], ["R", 4, 4], "transparente Zelle auf Ebene 1 lässt Shift gelten");
+  const s = api.createPracticeSession([z]);
+  assert.strictEqual(api.practiceKeyPress(s, "L", 1, 1, 0, 100), "helper", "zweite Shift-Taste ist eine Hilfstaste");
+  assert.strictEqual(s.errorTotal, 0);
+  assert.strictEqual(api.practiceKeyPress(s, "R", 1, 2, undefined, 200), "correct", "unbekannte Ebene wird akzeptiert");
+  assert.strictEqual(api.practiceSpeed(s).wpm, 0, "ein Zeichen ohne Dauer");
 });
 
 

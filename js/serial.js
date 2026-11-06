@@ -486,6 +486,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
       triggerVisualKeyPress(evt.r, evt.c, typeof evt.key === "string" ? evt.key : "", lineSide, pressedLayer);
       if (recordKeyPress(typingStatsFor(lineSide), evt.r, evt.c, Date.now(), pressedLayer)) onTypingStatsChanged(lineSide);
       if (markMatrixKeyTested(matrixTestFor(lineSide), evt.r, evt.c) && isEditSide) renderMatrixTest();
+      practiceHandleKeyPress(lineSide, evt.r, evt.c, pressedLayer);
     } catch (e) {
       console.warn("Failed to parse KEY_PRESS:", e, line);
     }
@@ -547,6 +548,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
     triggerVisualKeyPress(evt.r, evt.c, "", evt.side, evt.layer);
     if (recordKeyPress(typingStatsFor(evt.side), evt.r, evt.c, Date.now(), evt.layer)) onTypingStatsChanged(evt.side);
     if (markMatrixKeyTested(matrixTestFor(evt.side), evt.r, evt.c) && evt.side === editSide) renderMatrixTest();
+    practiceHandleKeyPress(evt.side, evt.r, evt.c, evt.layer);
   }
 
   // 3. Taste losgelassen (Key Release Event)

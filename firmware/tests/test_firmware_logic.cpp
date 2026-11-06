@@ -99,15 +99,15 @@ static bool testRemoteTakesRepeat = false;
 static std::vector<std::string> testRemoteCalls;
 static int testRecorded = 0;
 static int testPairReleases = 0;
-static bool testRemotePress(uint8_t r, uint8_t c) {
+static bool testRemotePress(uint8_t r, uint8_t c, bool alt) {
   if (!testRemoteTakesRepeat) return false;
-  testRemoteCalls.push_back("press" + std::to_string(r) + std::to_string(c));
+  testRemoteCalls.push_back(std::string(alt ? "alt" : "press") + std::to_string(r) + std::to_string(c));
   return true;
 }
 static void testRemoteRelease(uint8_t r, uint8_t c) {
   testRemoteCalls.push_back("release" + std::to_string(r) + std::to_string(c));
 }
-#define REPEAT_REMOTE_PRESS(r, c) testRemotePress(r, c)
+#define REPEAT_REMOTE_PRESS(r, c, alt) testRemotePress(r, c, alt)
 #define REPEAT_REMOTE_RELEASE(r, c) testRemoteRelease(r, c)
 #define REPEAT_RECORDED() (testRecorded++)
 #define REPEAT_RELEASE_HELD_PAIRS() (testPairReleases++)
@@ -6508,6 +6508,198 @@ TEST(test_prior_idle_command_nvs_and_info) {
   assert(requirePriorIdleMs == 0);
   handleConfigCommand("SET_PRIOR_IDLE 0", false);
   assert(mockChar.value == "OK SET_PRIOR_IDLE 0");
+}
+
+// -----------------------------------------------------------------------------
+// Alternate repeat (ACT_ALT_REPEAT): das Gegenteil der letzten Aktion
+// -----------------------------------------------------------------------------
+struct AltRepeatPair { uint16_t a, b; };
+static const AltRepeatPair ALT_REPEAT_TABLE[] = {
+  {KEY_LEFT_ARROW, KEY_RIGHT_ARROW}, {KEY_UP_ARROW, KEY_DOWN_ARROW}, {KEY_PAGE_UP, KEY_PAGE_DOWN},
+  {KEY_HOME, KEY_END}, {KEY_BACKSPACE, KEY_DELETE}, {0x133, 0x134}, {0x122, 0x123}, {0x124, 0x125},
+};
+
+// Wie oft hat die Aktion den Host erreicht (Taste, Medientaste oder Scrollschritt)?
+static size_t altRepeatOutputs(uint16_t a) {
+  size_t n = 0;
+  if (a == 0x133 || a == 0x134) {
+    for (int8_t s : bleKeyboard.mouseScrolls) if (s == (a == 0x133 ? 1 : -1)) n++;
+  } else if (a >= 0x120 && a <= 0x127) {
+    static const MediaKeyReport *const MEDIA[] = {&KEY_MEDIA_PLAY_PAUSE, &KEY_MEDIA_MUTE, &KEY_MEDIA_VOLUME_UP,
+      &KEY_MEDIA_VOLUME_DOWN, &KEY_MEDIA_NEXT_TRACK, &KEY_MEDIA_PREVIOUS_TRACK};
+    uint16_t bits = mediaBits(*MEDIA[a - 0x120]);
+    for (uint16_t m : bleKeyboard.writtenMediaKeys) if (m == bits) n++;
+  } else {
+    n = countPresses((uint8_t)a);
+  }
+  return n;
+}
+
+TEST(test_alt_repeat_action_table_is_symmetric) {
+  for (const auto &p : ALT_REPEAT_TABLE) {
+    assert(altRepeatAction(p.a) == p.b);
+    assert(altRepeatAction(p.b) == p.a);
+  }
+  for (uint16_t none : std::initializer_list<uint16_t>{0, 'a', KEY_RETURN, 0x120, 0x121, 0x130, ACT_REPEAT, ACT_ALT_REPEAT, 0x100}) {
+    assert(altRepeatAction(none) == 0);
+  }
+  assert(ACT_ALT_REPEAT == 0x16B && isRepeatKeyAction(ACT_ALT_REPEAT) && isRepeatKeyAction(ACT_REPEAT));
+}
+
+TEST(test_alt_repeat_sends_the_opposite_for_each_pair_in_both_directions) {
+  for (const auto &p : ALT_REPEAT_TABLE) {
+    for (int dir = 0; dir < 2; dir++) {
+      uint16_t first = dir ? p.b : p.a;
+      uint16_t opposite = dir ? p.a : p.b;
+      resetState();
+      KEYMAP[0][2][1] = first;
+      KEYMAP[0][2][2] = ACT_ALT_REPEAT;
+      tapKeyAt(2, 1, 1000, 1020);
+      assert(altRepeatOutputs(opposite) == 0);
+      tapKeyAt(2, 2, 1100, 1120);
+      assert(altRepeatOutputs(opposite) == 1);
+      assert(altRepeatOutputs(first) == 1);                      // die erste Aktion wurde nicht wiederholt
+      assert(lastRepeatAction == first);                          // ALT_REPEAT zeichnet nichts auf
+      assert(bleKeyboard.pressedKeys.empty());
+    }
+  }
+}
+
+TEST(test_alt_repeat_without_opposite_or_without_action_sends_nothing) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = ACT_ALT_REPEAT;
+  tapKeyAt(2, 2, 900, 920);                                       // noch keine Aktion
+  assert(bleKeyboard.keyEvents.empty());
+  tapKeyAt(2, 1, 1000, 1020);
+  bleKeyboard.keyEvents.clear();
+  tapKeyAt(2, 2, 1100, 1120);                                     // 'a' hat kein Gegenteil
+  assert(bleKeyboard.keyEvents.empty() && bleKeyboard.pressedKeys.empty());
+  assert(bleKeyboard.writtenMediaKeys.empty() && bleKeyboard.mouseScrolls.empty());
+}
+
+TEST(test_alt_repeat_twice_goes_back_and_forth_from_the_last_real_action) {
+  resetState();
+  KEYMAP[0][2][1] = KEY_LEFT_ARROW;
+  KEYMAP[0][2][2] = ACT_ALT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  tapKeyAt(2, 2, 1100, 1120);
+  tapKeyAt(2, 2, 1200, 1220);
+  assert(countPresses(KEY_LEFT_ARROW) == 1);
+  assert(countPresses(KEY_RIGHT_ARROW) == 2);                     // beide Male das Gegenteil der echten Aktion
+}
+
+TEST(test_alt_repeat_keeps_held_modifiers_applied) {
+  resetState();
+  KEYMAP[0][2][1] = KEY_LEFT_ARROW;
+  KEYMAP[0][2][2] = KEY_LEFT_GUI;
+  KEYMAP[0][2][3] = ACT_ALT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  pressKey(2, 2);                                                 // Cmd halten
+  setMillis(1100);
+  pressKey(2, 3);
+  assert(bleKeyboard.pressedKeys.size() == 2);                    // Cmd + Rechts gleichzeitig
+  assert(std::find(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), KEY_LEFT_GUI) != bleKeyboard.pressedKeys.end());
+  assert(std::find(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), KEY_RIGHT_ARROW) != bleKeyboard.pressedKeys.end());
+  releaseKey(2, 3);
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(lastRepeatAction == KEY_LEFT_ARROW);                     // das gehaltene Cmd änderte die letzte Aktion nicht
+}
+
+TEST(test_alt_repeat_key_hands_over_to_the_other_half_with_the_alt_flag) {
+  resetState();
+  KEYMAP[0][2][2] = ACT_ALT_REPEAT;
+  KEYMAP[0][2][3] = ACT_REPEAT;
+  testRemoteTakesRepeat = true;
+  testRemoteCalls.clear();
+  tapKeyAt(2, 2, 1000, 1020);
+  tapKeyAt(2, 3, 1100, 1120);
+  assert((testRemoteCalls == std::vector<std::string>{"alt22", "release22", "press23", "release23"}));
+  assert(bleKeyboard.keyEvents.empty());                          // die andere Hälfte führt aus, lokal geschieht nichts
+  testRemoteTakesRepeat = false;
+}
+
+TEST(test_alt_repeat_runs_locally_when_the_other_half_does_not_take_it) {
+  resetState();
+  KEYMAP[0][2][1] = KEY_LEFT_ARROW;
+  KEYMAP[0][2][2] = ACT_ALT_REPEAT;
+  testRemoteTakesRepeat = false;
+  testRemoteCalls.clear();
+  tapKeyAt(2, 1, 1000, 1020);
+  tapKeyAt(2, 2, 1100, 1120);
+  assert(testRemoteCalls.empty());                                // der Hook lehnte ab und merkte sich nichts
+  assert(countPresses(KEY_RIGHT_ARROW) == 1);
+}
+
+TEST(test_alt_repeat_as_combo_action_sends_the_opposite) {
+  resetState();
+  KEYMAP[0][2][0] = 'a';
+  KEYMAP[0][2][1] = 'b';
+  KEYMAP[0][2][2] = KEY_UP_ARROW;
+  tapKeyAt(2, 2, 1000, 1020);
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 363", false);          // KEY_PRESS ALT_REPEAT
+  assert(numCombos == 1);
+  setMillis(2000);
+  pressKey(2, 0);
+  pressKey(2, 1);
+  checkUserCombos();
+  assert(countPresses(KEY_DOWN_ARROW) == 1);                      // das Gegenteil der letzten Aktion
+  assert(countPresses('a') == 0 && countPresses('b') == 0);
+  assert(lastRepeatAction == KEY_UP_ARROW);
+  releaseKey(2, 0);
+  releaseKey(2, 1);
+}
+
+TEST(test_alt_repeat_as_hold_action_sends_the_opposite_while_held) {
+  resetState();
+  KEYMAP[0][2][1] = KEY_PAGE_UP;
+  KEYMAP[0][2][2] = 'x';
+  HOLDMAP[0][2][2] = ACT_ALT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  setMillis(3000);
+  pressKey(2, 2);
+  runTicks(3000 + TAPPING_TERM_MS + 10);                          // Halten gilt
+  assert(countPresses(KEY_PAGE_DOWN) == 1);
+  assert(countPresses('x') == 0);
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_alt_repeat_as_double_tap_action_sends_the_opposite) {
+  resetState();
+  KEYMAP[0][2][1] = KEY_HOME;
+  KEYMAP[0][2][2] = 'x';
+  DTAPMAP[0][2][2] = ACT_ALT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  setMillis(2000);
+  pressKey(2, 2);
+  releaseKey(2, 2);
+  setMillis(2050);
+  pressKey(2, 2);                                                 // zweiter Tipp
+  assert(countPresses(KEY_END) == 1);
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_clear_pairs_during_held_alt_repeat_keeps_the_key_state_clean) {
+  resetState();
+  KEYMAP[0][2][1] = KEY_DELETE;
+  KEYMAP[0][2][2] = ACT_ALT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  pressKey(2, 2);
+  assert(bleKeyboard.pressedKeys.size() == 1);                    // Backspace gehalten
+  handleConfigCommand("CLEAR_PAIRS", false);
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_alt_repeat_is_no_combo_hold_action) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 0 2 1 1 363", false);          // MODIFIER_HOLD mit ALT_REPEAT
+  assert(numCombos == 0);
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 363", false);          // KEY_PRESS ist erlaubt
+  assert(numCombos == 1);
 }
 
 int main() {

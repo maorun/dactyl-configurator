@@ -67,6 +67,7 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertEqual(server.code_to_cpp("OSM_RGUI"), "ACT_OSM_RGUI")
         self.assertEqual(server.code_to_cpp("CAPS_WORD"), "ACT_CAPS_WORD")
         self.assertEqual(server.code_to_cpp("REPEAT"), "ACT_REPEAT")
+        self.assertEqual(server.code_to_cpp("ALT_REPEAT"), "ACT_ALT_REPEAT")
         self.assertEqual(server.code_to_cpp("NONE"), "0")
         self.assertEqual(server.code_to_cpp(""), "0")
 
@@ -430,7 +431,7 @@ class TestServerAndCodegen(unittest.TestCase):
                       server.generate_key_pairs_cpp([{"first": "MEDIA_MUTE", "second": "KEY_A"}]))
         self.assertIn("{ ACT_MOUSE_LEFT, KEY_LEFT_SHIFT }",
                       server.generate_key_pairs_cpp([{"first": "MOUSE_LEFT", "second": "KEY_LEFT_SHIFT"}]))
-        for bad in ("MO_1", "UMLAUT_AE", "OSM_LSHIFT", "CAPS_WORD", "REPEAT", "MOUSE_UP", "PAIR_0", "MACRO_0", "NONE", "", None, 5, "KEY_A; evil",
+        for bad in ("MO_1", "UMLAUT_AE", "OSM_LSHIFT", "CAPS_WORD", "REPEAT", "ALT_REPEAT", "MOUSE_UP", "PAIR_0", "MACRO_0", "NONE", "", None, 5, "KEY_A; evil",
                     "KEY_0256", "KEY_256", "KEY_300", "KEY_FOO", "\x01"):
             with self.assertRaises(ValueError, msg=repr(bad)):
                 server.generate_key_pairs_cpp([{"first": "KEY_A", "second": bad}])
@@ -591,7 +592,7 @@ class TestServerAndCodegen(unittest.TestCase):
 
     def test_modifier_hold_combo_rejects_one_shot_and_caps_word(self):
         # MODIFIER_HOLD hält nur Codes 1..255; One-Shot und Caps Word sendeten dort nichts (stille Fehlkonfiguration)
-        for action in ("OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD", "REPEAT", "LAYER_LOCK"):
+        for action in ("OSM_LSHIFT", "OSM_RGUI", "CAPS_WORD", "REPEAT", "ALT_REPEAT", "LAYER_LOCK"):
             combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "MODIFIER_HOLD", "action": action}
             with self.subTest(action=action), self.assertRaises(ValueError):
                 server.generate_combos_cpp([combo])
@@ -1336,7 +1337,7 @@ class TestServerAndCodegen(unittest.TestCase):
         server.validate_config(migrated)
         self.assertEqual(server.migrate_config({"layers": []}), {"layers": []})
         # Firmware-Namen (ACT_OSM_*, ACT_CAPS_WORD) gelten wie die App-Namen
-        for action in ("ACT_OSM_LSHIFT", "ACT_CAPS_WORD", "ACT_REPEAT"):
+        for action in ("ACT_OSM_LSHIFT", "ACT_CAPS_WORD", "ACT_REPEAT", "ACT_ALT_REPEAT"):
             raw = {**cb, "action": action}
             with self.subTest(action=action):
                 with self.assertRaises(ValueError):

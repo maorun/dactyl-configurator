@@ -248,6 +248,7 @@ dactyl_configurator/
 | `0x160` .. `0x167` | One-Shot-Modifier | `ACT_OSM_LCTRL` .. `ACT_OSM_RGUI` (`OSM_*`) | Tippen: Modifier nur für die nächste Taste (beide Hälften); Halten: normaler Modifier |
 | `0x168` | Caps Word | `ACT_CAPS_WORD` (`CAPS_WORD`) | Buchstaben groß bis zum Wortende (Leertaste, Satzzeichen) |
 | `0x169` | Repeat | `ACT_REPEAT` (`REPEAT`) | Wiederholt die zuletzt ausgeführte Aktion, auch die der anderen Hälfte (Layer-Aktionen und reine Modifier zählen nicht) |
+| `0x16B` | Alt Repeat | `ACT_ALT_REPEAT` (`ALT_REPEAT`) | Wiederholt das Gegenteil der letzten Aktion (←/→, ↑/↓, Bild↑/↓, Pos1/Ende, Backspace/Entf, Scrollen, Lautstärke, Titel); ohne Gegenteil sendet die Taste nichts |
 | `0x170` .. `0x17F` | Makro | `ACT_MACRO_BASE` + n (`MACRO_0` .. `MACRO_15`) | Spielt eine Folge aus Tippen, Drücken, Loslassen und Pausen (max. 32 Schritte) |
 
 ---

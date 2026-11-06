@@ -283,7 +283,7 @@ KEY_TO_CPP = {
     "UMLAUT_UE_UPPER": "ACT_UMLAUT_UE_UPPER", "UMLAUT_SZ": "ACT_UMLAUT_SZ",
     "OSM_LCTRL": "ACT_OSM_LCTRL", "OSM_LSHIFT": "ACT_OSM_LSHIFT", "OSM_LALT": "ACT_OSM_LALT",
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
-    "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "REPEAT": "ACT_REPEAT",
+    "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "REPEAT": "ACT_REPEAT", "ALT_REPEAT": "ACT_ALT_REPEAT",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -534,7 +534,7 @@ def validate_combo_layer_mask(value):
     return validate_int(value, 1, COMBO_ALL_LAYERS, "layerMask")
 
 # One-Shot-, Caps-Word- und Repeat-Aktionen (Codes > 0xFF): als Combo nur mit KEY_PRESS
-ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD", "ACT_REPEAT", "ACT_LAYER_LOCK"} | {f"(ACT_OSL_BASE + {n})" for n in range(8)}
+ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD", "ACT_REPEAT", "ACT_ALT_REPEAT", "ACT_LAYER_LOCK"} | {f"(ACT_OSL_BASE + {n})" for n in range(8)}
 
 # Mausbewegung braucht eine gehaltene Taste mit Beschleunigung; eine Combo führt sie nicht aus
 MOUSE_MOVE_CPP = {"ACT_MOUSE_UP", "ACT_MOUSE_DOWN", "ACT_MOUSE_LEFT_MOVE", "ACT_MOUSE_RIGHT_MOVE"}

@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Alternate repeat (`ALT_REPEAT`)
-
-- **Rank:** Feature model. Total 22/40 (typing 5, configuration 2, harmony 8, safety 7). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h` (new action code), `firmware/dactyl_right/DactylLogic.h` (`lastRepeatAction`, `repeatPress`), `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_OP_REPEAT`, `SPLIT_OP_REPEAT_RUN`), `firmware/dactyl_left/DactylLeftLogic.h` (`LeftRepeatLink`), `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** `REPEAT` runs the last action again. A user who moves too far with an arrow key, or deletes too much, must reach for the opposite key.
-- **Goal:** Add the action `ALT_REPEAT`. It runs the opposite of the last action: Left and Right, Up and Down, Page Up and Page Down, Home and End, Backspace and Delete, wheel up and wheel down, volume up and volume down, next and previous track. A pure function `altRepeatAction(code)` holds the table and returns `0` for an action without an opposite; then the key sends nothing. Held modifiers stay applied, so `Cmd` + `ALT_REPEAT` after `Left` gives `Cmd` + `Right`. The action works across both halves like `REPEAT`, with a flag in the repeat operations. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test checks each pair of the table in both directions, an action without an opposite and an `ALT_REPEAT` on the left half after a right key.
-
 ### Read the complete configuration from the device
 
 - **Rank:** Feature model. Total 22/40 (typing 0, configuration 8, harmony 8, safety 6). Effort M. Estimate.

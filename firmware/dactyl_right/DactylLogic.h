@@ -639,12 +639,12 @@ uint8_t oneShotMaskForAction(uint16_t action) {
 #ifndef DOUBLE_TAP_FLUSHED
 #define DOUBLE_TAP_FLUSHED()
 #endif
-// Repeat (ACT_REPEAT) über beide Hälften. REPEAT_REMOTE_PRESS(r, c) liefert true, wenn die andere Hälfte die
+// Repeat (ACT_REPEAT, ACT_ALT_REPEAT) über beide Hälften. REPEAT_REMOTE_PRESS(r, c, alt) liefert true, wenn die andere Hälfte die
 // Wiederholung ausführt (oder, links, der Master entscheidet); REPEAT_REMOTE_RELEASE(r, c) löst sie.
 // REPEAT_RECORDED() läuft nach jeder aufgezeichneten Aktion dieser Hälfte (Master: "rechts war zuletzt";
 // links: Notiz an den Master, dass links zuletzt eine Aktion aufgezeichnet hat).
 #ifndef REPEAT_REMOTE_PRESS
-#define REPEAT_REMOTE_PRESS(r, c) false
+#define REPEAT_REMOTE_PRESS(r, c, alt) false
 #endif
 #ifndef REPEAT_REMOTE_RELEASE
 #define REPEAT_REMOTE_RELEASE(r, c)
@@ -866,7 +866,7 @@ uint16_t repeatResolved[NUM_ROWS][NUM_COLS] = {};
 bool repeatRemote[NUM_ROWS][NUM_COLS] = {};
 
 bool isRepeatableAction(uint16_t a) {
-  if (a == 0 || a == ACT_REPEAT) return false;
+  if (a == 0 || isRepeatKeyAction(a)) return false;
   if (a <= 0xFF) return a < KEY_LEFT_CTRL || a > KEY_RIGHT_GUI;
   if (a >= 0x120 && a <= 0x127) return true;
   if (a >= 0x130 && a <= 0x134) return true;
@@ -933,16 +933,18 @@ void repeatRelease(uint16_t a) {
 }
 
 // REPEAT-Taste (r, c) drückt: die andere Hälfte führt aus (Hook) oder diese Hälfte wiederholt ihre Aktion
-bool repeatStartAt(uint8_t r, uint8_t c) {
+// alt (ALT_REPEAT): das Gegenteil der letzten Aktion; ohne Gegenteil geschieht nichts
+bool repeatStartAt(uint8_t r, uint8_t c, bool alt = false) {
   repeatResolved[r][c] = 0;
   repeatRemote[r][c] = false;
-  if (REPEAT_REMOTE_PRESS(r, c)) {
+  if (REPEAT_REMOTE_PRESS(r, c, alt)) {
     repeatRemote[r][c] = true;
     return true;
   }
-  if (lastRepeatAction == 0) return false;
-  repeatResolved[r][c] = lastRepeatAction;
-  repeatPress(lastRepeatAction);
+  uint16_t a = alt ? altRepeatAction(lastRepeatAction) : lastRepeatAction;
+  if (a == 0) return false;
+  repeatResolved[r][c] = a;
+  repeatPress(a);
   return true;
 }
 
@@ -1118,7 +1120,7 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         keySentToHost[r][c] = true;
       }
     }
-  } else if (action == ACT_REPEAT) {
+  } else if (isRepeatKeyAction(action)) {
     repeatResolved[r][c] = 0;
     repeatRemote[r][c] = false;
     char buf[128];
@@ -1127,7 +1129,7 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     Serial.printf("Repeat gedrückt: [R%d, C%d] (L%d)\n", r, c, currentLayer);
     // Als Combo-Kandidat gepuffert wie eine normale Taste: eine ausgelöste Combo verbraucht den Druck
     if (!isConfigMode && bleKeyboard.isConnected() && !isConfigComboSuppressed(r, c) && !isComboCandidateKey(r, c)) {
-      repeatStartAt(r, c);
+      repeatStartAt(r, c, action == ACT_ALT_REPEAT);
       keySentToHost[r][c] = true;
     }
   } else if (isOneShotAction(action) || action == ACT_CAPS_WORD) {
@@ -1227,7 +1229,7 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
     // Die Bewegung endet beim Loslassen, auch nach Host-Verlust; ein nie gesendeter Druck (Combo-Kandidat) tippt nichts
     mouseMoveStop(r, c);
     keySentToHost[r][c] = false;
-  } else if (action == ACT_REPEAT) {
+  } else if (isRepeatKeyAction(action)) {
     if (repeatRemote[r][c] || repeatResolved[r][c]) {
       // Eine laufende Wiederholung endet immer, auch nach Host-Verlust oder einer Combo (die anderen Hälfte
       // läuft sonst weiter); repeatRelease prüft den Host selbst
@@ -1237,7 +1239,7 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
       keySentToHost[r][c] = false;
     } else if (!isConfigMode && bleKeyboard.isConnected() && !wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
       // Schneller Einzeltipp vor Ablauf des Combo-Timeouts
-      if (repeatStartAt(r, c)) {
+      if (repeatStartAt(r, c, action == ACT_ALT_REPEAT)) {
         delay(5);
         repeatStopAt(r, c);
       }
@@ -1555,8 +1557,8 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
     } else if (isMacroAction(act)) {
       startMacro(act, millis());
       keySentToHost[r][c] = true;
-    } else if (act == ACT_REPEAT) {
-      repeatStartAt(r, c);
+    } else if (isRepeatKeyAction(act)) {
+      repeatStartAt(r, c, act == ACT_ALT_REPEAT);
       keySentToHost[r][c] = true;
     } else if (act == ACT_CAPS_WORD) {
       // dispatchPress hat den Druck nur mit Host gepuffert; ohne ihn schaltet die Hold-Entscheidung nichts um
@@ -1583,7 +1585,7 @@ void releaseHeldKeyPairs() {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
       // Ein Paar, das REPEAT hält: pressedAction ist ACT_REPEAT, das Paar steht in repeatResolved
-      if (pressedAction[r][c] == ACT_REPEAT && isKeyPairAction(repeatResolved[r][c])) {
+      if (isRepeatKeyAction(pressedAction[r][c]) && isKeyPairAction(repeatResolved[r][c])) {
         if (bleKeyboard.isConnected()) releaseKeyPair(repeatResolved[r][c]);
         repeatResolved[r][c] = 0;
         keySentToHost[r][c] = false;
@@ -1908,8 +1910,8 @@ void processDeferredKeys(unsigned long now) {
             } else if (isMacroAction(act)) {
               startMacro(act, now);
               keySentToHost[r][c] = true;
-            } else if (act == ACT_REPEAT) {
-              repeatStartAt(r, c);
+            } else if (isRepeatKeyAction(act)) {
+              repeatStartAt(r, c, act == ACT_ALT_REPEAT);
               keySentToHost[r][c] = true;
             } else if (act == ACT_CAPS_WORD) {
               if (capsWordBuffered[r][c]) bleKeyboard.capsWordToggle();
@@ -3060,7 +3062,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) &&
         !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) &&
-        !(beh != 0 && (act == ACT_REPEAT || act == ACT_LAYER_LOCK))) {
+        !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;
       userCombos[numCombos].r2 = (uint8_t)r2;
@@ -3333,9 +3335,9 @@ void checkUserCombos() {
               bleKeyboard.oneShotRelease(oneShotMaskForAction(act));
             } else if (act == ACT_CAPS_WORD) {
               bleKeyboard.capsWordToggle();
-            } else if (act == ACT_REPEAT) {
+            } else if (isRepeatKeyAction(act)) {
               // Wie ein Tipp der ersten Combo-Taste
-              if (repeatStartAt(r1, c1)) {
+              if (repeatStartAt(r1, c1, act == ACT_ALT_REPEAT)) {
                 delay(5);
                 repeatStopAt(r1, c1);
               }

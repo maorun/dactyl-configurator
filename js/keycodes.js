@@ -73,7 +73,8 @@ const KEYCODES = [
     { code: "OSM_RALT", label: "One-Shot Alt/Option rechts (nächste Taste)", char: "" },
     { code: "OSM_RGUI", label: "One-Shot Cmd/Win rechts (nächste Taste)", char: "" },
     { code: "CAPS_WORD", label: "Caps Word (ein Wort in Großbuchstaben)", char: "" },
-    { code: "REPEAT", label: "Repeat (letzte Aktion wiederholen)", char: "" }
+    { code: "REPEAT", label: "Repeat (letzte Aktion wiederholen)", char: "" },
+    { code: "ALT_REPEAT", label: "Alt Repeat (Gegenteil der letzten Aktion)", char: "" }
   ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
@@ -264,6 +265,7 @@ const ACTION_TO_NUMERIC = {
   "OSM_RCTRL": 0x164, "OSM_RSHIFT": 0x165, "OSM_RALT": 0x166, "OSM_RGUI": 0x167,
   "CAPS_WORD": 0x168,
   "REPEAT": 0x169,
+  "ALT_REPEAT": 0x16B,
 
   // Mouse Actions (0x130..0x138)
   "MOUSE_LEFT": 0x130,
@@ -295,7 +297,7 @@ const UMLAUT_LABELS = {
 const ONE_SHOT_LABELS = {
   OSM_LCTRL: "OS Ctrl", OSM_LSHIFT: "OS Shift", OSM_LALT: "OS Alt", OSM_LGUI: "OS Cmd",
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
-  CAPS_WORD: "CapsWd", REPEAT: "Repeat", LAYER_LOCK: "Lock"
+  CAPS_WORD: "CapsWd", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock"
 };
 
 // true für One-Shot-Ebenen OSL_0 .. OSL_7 (Combos führen sie nicht aus)

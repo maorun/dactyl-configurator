@@ -164,10 +164,10 @@ struct LeftRepeatLink {
 
 // Eine volle Warteschlange verwirft das Drücken (der Master hört nichts). Rückgabe immer true: die Taste gilt als
 // übergeben, sonst wiederholte die linke Hälfte lokal eine Aktion, obwohl rechts zuletzt gehandelt hat.
-inline bool leftRepeatPress(LeftRepeatLink &l, SplitSendQueue &q, uint8_t r, uint8_t c) {
+inline bool leftRepeatPress(LeftRepeatLink &l, SplitSendQueue &q, uint8_t r, uint8_t c, bool alt = false) {
   l.counter = (uint8_t)((l.counter % 127) + 1);
   l.keySeq[r][c] = l.counter;
-  if (!queuePush(q, makeSplitHidEvent(SPLIT_OP_REPEAT, 1, (int8_t)l.counter))) l.keySeq[r][c] = 0;
+  if (!queuePush(q, makeSplitHidEvent(SPLIT_OP_REPEAT, alt ? SPLIT_REPEAT_CODE_ALT_PRESS : 1, (int8_t)l.counter))) l.keySeq[r][c] = 0;
   return true;
 }
 

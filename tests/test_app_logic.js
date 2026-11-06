@@ -34,7 +34,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
              createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
-             recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, clearAbsentKeyActions,
+             recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
              COMBO_ALL_LAYERS, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
@@ -3035,7 +3035,7 @@ test("Pfeiltasten: Daumen-Cluster folgt seinem Raster und stoppt am Rand", () =>
 function applyKeyHarness() {
   const h = uiHarness(`var pendingChanges = [];
 function togglePendingChangesDrawer() {} function discardAllPendingChanges() {} function populateComboKeyDropdowns() {}
-function renderPendingSyncUI() {} function setPendingFor() {}
+function renderPendingSyncUI() {} function setPendingFor() {} function setupActionSearch() {}
 function writeConfigWithDiff() {} function saveAndFlashToDactyl() {} function readConfigFromESP32() {}
 ${read("js/editor-events.js")}`);
   const { w, dom } = h;
@@ -3071,7 +3071,7 @@ asyncTests.push(["Pfeiltasten: keydown bewegt die Auswahl, nicht in Eingabefelde
   const docListeners = [];
   const h = uiHarness(`var pendingChanges = [], selected = [];
 function togglePendingChangesDrawer() {} function discardAllPendingChanges() {} function populateComboKeyDropdowns() {}
-function renderPendingSyncUI() {} function setPendingFor() {}
+function renderPendingSyncUI() {} function setPendingFor() {} function setupActionSearch() {}
 function writeConfigWithDiff() {} function saveAndFlashToDactyl() {} function readConfigFromESP32() {}
 function selectKey(r, c, side, isThumb) { selectedKey = { r, c, side, isThumb }; selected.push([r, c, side, isThumb]); }
 ${read("js/editor-events.js")}`);
@@ -5095,6 +5095,122 @@ test("Spickzettel: Knopf, Dialog, Skript-Tag, APP_MODULES und Druck-CSS sind ver
   assert.ok(ui.includes("window.print()") && ui.includes("buildLayerSheet("));
   assert.ok(!/["']R["']|["']L["']/.test(ui), "keine Seitenliterale im Modul");
   assert.ok(/@media print[\s\S]*#layerSheetModal/.test(read("style.css")), "@media print für den Spickzettel");
+});
+
+
+test("findActionUsages: findet Tap, Halten, Combo, Tastenpaar, Überschreibung und Makro-Schritt", () => {
+  const cell = (tap, hold = "NONE", dtap = "NONE") => ({ label: "", tap, hold, dtap });
+  const layers = Array.from({ length: 8 }, () => Array.from({ length: 6 }, () => Array.from({ length: 7 }, () => cell("NONE"))));
+  layers[0][1][2] = cell("KEY_ESC");
+  layers[3][4][1] = cell("KEY_A", "KEY_ESC");
+  const config = {
+    layers,
+    combos: [{ id: 7, name: "Raus", key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, action: "KEY_ESC" }],
+    keyPairs: [{ first: "KEY_LEFT_ALT", second: "KEY_ESC" }],
+    keyOverrides: [{ mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_ESC" }],
+    macros: [{ steps: [{ type: "pause", ms: 5 }, { type: "tap", code: "KEY_ESC" }] }]
+  };
+  const hits = api.findActionUsages(config, "KEY_ESC", "R");
+  assert.strictEqual(hits.length, 6);
+  assert.strictEqual(JSON.stringify(hits.filter(h => h.kind === "key").map(h => [h.layer, h.r, h.c, h.slot])), JSON.stringify([[0, 1, 2, "tap"], [3, 4, 1, "hold"]]));
+  assert.ok(hits.some(h => h.kind === "combo" && h.id === 7));
+  assert.ok(hits.some(h => h.kind === "pair" && h.index === 0 && h.member === "second"));
+  assert.ok(hits.some(h => h.kind === "override" && h.role === "replacement"));
+  assert.ok(hits.some(h => h.kind === "macro" && h.macro === 0 && h.step === 1));
+  assert.ok(hits.every(h => h.side === "R"));
+});
+
+test("findActionUsages: transparente Tasten und leere Codes geben keinen Treffer", () => {
+  const layers = Array.from({ length: 8 }, () => Array.from({ length: 6 }, () => Array.from({ length: 7 }, () => ({ label: "", tap: "NONE", hold: "NONE", dtap: "NONE" }))));
+  const config = { layers, combos: [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, action: "NONE" }], keyPairs: [], keyOverrides: [], macros: [] };
+  for (const code of ["NONE", "", "0", undefined, null]) assert.strictEqual(api.findActionUsages(config, code).length, 0);
+  assert.strictEqual(api.findActionUsages(null, "KEY_A").length, 0);
+});
+
+test("findActionUsagesForSides: wertet beide Hälften aus", () => {
+  const mk = tap => ({ layers: [[[{ tap, hold: "NONE", dtap: "NONE" }]]] });
+  const hits = api.findActionUsagesForSides({ R: mk("MO_3"), L: mk("MO_3") }, "MO_3", ["R", "L"]);
+  assert.strictEqual(hits.map(h => h.side).join(), "R,L");
+});
+
+test("findActionUsages: eine Pause mit Code zählt nicht, Daumentasten der linken Hälfte treffen", () => {
+  const layers = Array.from({ length: 8 }, () => Array.from({ length: 6 }, () => Array.from({ length: 7 }, () => ({ label: "", tap: "NONE", hold: "NONE", dtap: "NONE" }))));
+  layers[2][5][4] = { label: "", tap: "KEY_SPACE", hold: "NONE", dtap: "NONE" };
+  const hits = api.findActionUsages({ layers, macros: [{ steps: [{ type: "pause", ms: 5, code: "KEY_SPACE" }] }] }, "KEY_SPACE", "L");
+  assert.strictEqual(hits.length, 1);
+  assert.strictEqual(`${hits[0].layer},${hits[0].r},${hits[0].c},${hits[0].side}`, "2,5,4,L");
+});
+
+test("Aktion suchen: Feld ist verdrahtet, Klick auf einen Treffer wählt Hälfte, Ebene und Taste", () => {
+  const html = read("index.html");
+  assert.ok(html.includes('id="actionSearchSelect"') && html.includes('data-filter-for="actionSearchSelect"') && html.includes('id="actionSearchList"'));
+  assert.ok(read("js/editor-events.js").includes("setupActionSearch()"));
+  const h = uiHarness(`${section("js/editor.js", "// Text eines Treffers von findActionUsages", "function setupActionSearch")}
+var calls = [];
+var sideStore = Dactyl.createSideStore(Dactyl.SIDE_IDS);
+function switchEditSide(side) { editSide = side; calls.push("side:" + side); }
+function selectKey(r, c, side, isThumb) { selectedKey = { r, c, side, isThumb }; }`);
+  const { w } = h;
+  vm.runInContext(`gotoActionUsage({ kind: "key", side: "L", layer: 3, r: 5, c: 4, slot: "tap" });`, w);
+  assert.strictEqual(vm.runInContext(`calls.join() + "|" + activeLayerIndex + "|" + JSON.stringify(selectedKey)`, w),
+    'side:L|3|{"r":5,"c":4,"side":"L","isThumb":true}');
+  vm.runInContext(`calls = []; gotoActionUsage({ kind: "combo", side: "R", index: 0 });`, w);
+  assert.strictEqual(vm.runInContext(`calls.join() + "|" + activeLayerIndex`, w), "side:R|3");
+  vm.runInContext(`calls = []; gotoActionUsage({ kind: "key", side: "X", layer: 6, r: 0, c: 0, slot: "tap" });`, w);
+  assert.strictEqual(vm.runInContext(`calls.length + "|" + activeLayerIndex`, w), "0|3", "unbekannte Hälfte ändert nichts");
+});
+
+test("Aktion suchen: Trefferliste wird bei jeder Matrix- und Combo-Aktualisierung neu gebaut", () => {
+  const editor = read("js/editor.js");
+  const body = name => { const i = editor.indexOf(`function ${name}(`); return editor.slice(i, editor.indexOf("\nfunction ", i + 1)); };
+  assert.ok(body("renderMatrix").includes("renderActionSearch();"), "renderMatrix ruft renderActionSearch");
+  assert.ok(body("renderCombosTable").includes("renderActionSearch();"), "renderCombosTable ruft renderActionSearch");
+  assert.ok(/function gotoActionUsage[\s\S]*?sideStore\.has\(hit\.side\)[\s\S]*?switchEditSide/.test(editor), "unbekannte Hälfte ändert nichts");
+});
+
+test("findActionUsagesForSides: CHAR_PAIR und alte MOD_*-Halte-Codes finden ihre gespeicherten Aktionen", () => {
+  const idx = Array.from({ length: 40 }, (_, i) => i).find(i => api.charPairIndexFromCode(`CHAR_PAIR_${i}`) >= 0);
+  assert.ok(idx !== undefined, "DE_MAC_CHARS hat ein Zeichen mit Tastenpaar");
+  const entry = vm.runInContext(`DE_MAC_CHARS[${idx}].pair`, ctx);
+  const cfg = { layers: [[[{ tap: "PAIR_0", hold: "MOD_LSHIFT", dtap: "NONE" }]]], keyPairs: [{ first: entry.first, second: entry.second }] };
+  const viaChar = api.findActionUsagesForSides({ R: cfg }, `CHAR_PAIR_${idx}`, ["R"]);
+  assert.strictEqual(viaChar.length, 1);
+  assert.strictEqual(viaChar[0].slot, "tap");
+  assert.strictEqual(api.findActionUsagesForSides({ R: { ...cfg, keyPairs: [] } }, `CHAR_PAIR_${idx}`, ["R"]).length, 0);
+  const viaHold = api.findActionUsagesForSides({ R: cfg }, "KEY_LEFT_SHIFT", ["R"]);
+  assert.strictEqual(viaHold.length, 1);
+  assert.strictEqual(viaHold[0].slot, "hold");
+  const dtapCfg = { layers: [[[{ tap: "NONE", hold: "NONE", dtap: "MOD_LGUI" }]]] };
+  assert.strictEqual(api.findActionUsages(dtapCfg, "KEY_LEFT_GUI")[0].slot, "dtap");
+  const twice = { ...cfg, keyPairs: [{ first: entry.first, second: entry.second }, { first: entry.first, second: entry.second }],
+    layers: [[[{ tap: "PAIR_0", hold: "PAIR_1", dtap: "NONE" }]]] };
+  assert.strictEqual(api.findActionUsagesForSides({ R: twice }, `CHAR_PAIR_${idx}`, ["R"]).length, 2);
+});
+
+test("renderActionSearch: baut die Liste, lässt sie bei gleichem Ergebnis stehen und überlebt fehlende Elemente", () => {
+  const h = uiHarness(`${section("js/editor.js", "// Text eines Treffers von findActionUsages", "// Wählt Hälfte, Ebene und Taste eines Treffers")}
+function configFor(side) { return side === "R" ? currentConfig : null; }`);
+  const { w, dom } = h;
+  const select = dom.document.getElementById("actionSearchSelect");
+  const list = dom.document.getElementById("actionSearchList");
+  select.value = "NONE";
+  vm.runInContext("renderActionSearch()", w);
+  assert.strictEqual(list.children.length, 0);
+  select.value = "KEY_NONEXISTENT";
+  vm.runInContext("renderActionSearch()", w);
+  assert.strictEqual(list.children.length, 1);
+  assert.ok(/Keine Fundstelle/.test(list.children[0].textContent));
+  const first = list.children[0];
+  vm.runInContext("renderActionSearch()", w);
+  assert.strictEqual(list.children[0], first, "gleiches Ergebnis baut die Liste nicht neu");
+  select.value = vm.runInContext("currentConfig.layers[0].flat().map(r => r.tap).concat(currentConfig.layers[0].flatMap(r => r.map(k => k.tap))).find(t => t && t !== 'NONE')", w);
+  vm.runInContext("renderActionSearch()", w);
+  assert.ok(list.children.length >= 1 && list.children.every(li => li.children[0].tagName === "BUTTON"));
+  // Fehlende Elemente werfen nicht
+  const bare = uiHarness(`${section("js/editor.js", "// Text eines Treffers von findActionUsages", "// Wählt Hälfte, Ebene und Taste eines Treffers")}
+function configFor() { return null; }
+document.getElementById = () => null;`);
+  vm.runInContext("renderActionSearch()", bare.w);
 });
 
 (async () => {

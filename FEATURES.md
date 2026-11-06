@@ -495,6 +495,17 @@ Rules for this file:
 - Each key carries `tap`, `hold` and `dtap` labels. A key without own action on layers 1 to 7 has `transparent: true` and the label of layer 0 (`▽` mark); missing physical keys have `exists: false`.
 - `renderLayerSheet` reads the configs of all halves through `configFor` and `Dactyl.SIDE_IDS`; the order follows `Dactyl.sidesInDisplayOrder()`. No side literals.
 
+
+### Layout practice mode (`js/practice-ui.js`)
+
+- Button `#btnPractice` ("Üben") in the layer bar opens the dialog `#practiceModal`. The user enters a text (up to 500 characters; white space becomes one space) and selects "Start". "Wörter aus der Heatmap" fills the text from the most frequent keys of both halves.
+- `findCharPosition(ch, configs, profiles, sideOrder)` in `js/config-model.js` is the pure reverse lookup. It returns `{ char, side, r, c, layer, shift, layerKey, shiftKey }` or `null`. It uses `KEYCODES`, the shifted US characters, `DE_MAC_CHARS` (single codes and key pairs) and prefers the lowest layer, then no Shift. A character on layer n > 0 needs a reachable `MO_n` key (`layerKey`); `TG_n` does not count, because the practice never toggles it off. A shifted character needs a Shift key (`shiftKey`); without one, the character has no position. A Shift key of layer 0 counts on layer n only if its cell there is transparent (`NONE`); `shiftAlternatives` lists every usable Shift key, and each of them is a helper key, not an error.
+- `buildPracticeSteps(text, configs, profiles, sideOrder)` returns `{ steps, missing }`. `missing` lists the characters without a key position once; the dialog shows them before the start and skips them.
+- `practiceKeyPress(session, side, r, c, layer, nowMs)` evaluates one key press and returns `correct`, `error`, `helper` (the layer or Shift key of the step) or `ignored`. An error counts on the expected key (`session.errors`). A press on the right key on the wrong layer is an error; an unknown layer is accepted. A helper key counts only on another layer than the target layer, so a target at the position of the layer key stays the target.
+- While a session runs, the dialog discards hardware key events outside the text field and the close buttons (`practiceSwallowKey`), so the keyboard cannot trigger "Start" again. `practiceSpeed(session)` returns WPM (5 characters = 1 word, from the first key to the last correct character), the accuracy in percent and the elapsed time.
+- `handleSerialLine` (`js/serial.js`) calls `practiceHandleKeyPress` for `KEY_PRESS` and `SPLIT_KEY`. A press counts only while the dialog is open and a session runs. `SPLIT_KEY` (left half through the master) needs USB; `KEY_PRESS` also arrives over BLE.
+- The dialog marks the next key on the matrix of the correct half and the layer (`.practice-target`) and names the layer key and the Shift key.
+
 ### Action search across both halves (`findActionUsages`, `js/editor.js`)
 
 - The search field "Aktion suchen" (`#actionSearchPanel` above the layer overview) reuses the keycode search: the input `data-filter-for="actionSearchSelect"` filters the select `#actionSearchSelect` with `applySelectFilter`. The select lists all actions of `KEYCODES`.

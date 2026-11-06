@@ -112,6 +112,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initMacrosUI();
   initLayoutProfilesUI();
   initLayerSheetUI();
+  initPracticeUI();
   initOnScreenKeyboardPicker();
 });
 

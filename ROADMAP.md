@@ -30,15 +30,6 @@ Rules for this file:
 - **Goal:** Add the actions `OSL_0` .. `OSL_7`. A tap arms the layer for the next key press of either half; after that press, the layer is released. A second tap disarms it. A hold acts like `MO_n` and arms nothing. The armed state goes to the other half with the layer state. The half that uses the armed layer reports the use, so the layer is used only once. `RELEASE_ALL`, a link timeout and a host loss clear the armed state. Increase `DACTYL_FW_VERSION`.
 - **Acceptance test:** A firmware test taps `OSL_2`, presses a key and expects the action of layer 2, then layer 0 for the next key. A test with a key of the other half expects the same. A test checks the hold, the second tap and the clear after a link timeout. An app test checks that `lintLayouts` counts the target layer as reachable.
 
-### Layout practice mode
-
-- **Rank:** Feature model. Total 23/40 (typing 4, configuration 3, harmony 6, safety 10). Effort M. Estimate.
-- **Area:** App, Server.
-- **Code:** new module `js/practice-ui.js`, `js/config-model.js` (new pure function for the reverse lookup of a character to key position, layer and modifiers; `DE_MAC_CHARS`, key pairs), `js/live-monitor.js`, `js/serial.js` (`handleSerialLine`, `KEY_PRESS`, `SPLIT_KEY`), `index.html`, `server.py` (`APP_MODULES`), `tests/test_app_logic.js`.
-- **Problem:** After a layout change, the user learns the new positions only during real work. The app shows the layout, but it does not train it and does not show which keys cause errors.
-- **Goal:** Add a dialog "Üben". It shows a text and marks the next key on the matrix of the correct half, with the layer and the needed modifier. It reads the key presses from `KEY_PRESS` and `SPLIT_KEY`, counts the errors per key and shows the speed. The user can use a word list from the most frequent keys of the heatmap. A character without a key position is marked before the start.
-- **Acceptance test:** A test checks the reverse lookup for a letter, a shifted character, a character on a layer and a character without a position. A test feeds key events and checks the error count per key and the speed.
-
 ### Hold only after a typing pause
 
 - **Rank:** Feature model. Total 22/40 (typing 7, configuration 2, harmony 7, safety 6). Effort S. Estimate.

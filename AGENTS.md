@@ -234,6 +234,7 @@ Keys in the matrix use `uint16_t` action codes:
 ### Mod-Tap / Layer-Tap (`HOLDMAP`)
 - Details: `FEATURES.md`, section "Mod-Tap / Layer-Tap". Read it only before you change this feature.
 - Setting `quickTapMs` (0 = off): the same Mod-Tap key pressed within this time after its tap is a held tap (`SET_QUICK_TAP`, NVS `quick_tap`). Another key press clears the window.
+- Setting `chordalHold` (0 = off): a press of a key of the same half resolves an open Mod-Tap key as tap at once (`SET_CHORDAL_HOLD`, NVS `chordal`). The thumb row, `MO_n` Layer-Tap and keys with a double-tap action keep the decision of `holdTapMode`; the other half too.
 
 ### Combos per layer (`KeyCombo.layerMask`)
 - Details: `FEATURES.md`, section "Combos per layer". Read it only before you change this feature.

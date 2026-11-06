@@ -673,6 +673,15 @@
           <small class="form-hint">Die blaue LED auf dem Board leuchtet, solange Caps Lock am Mac aktiv ist. Standard: aus.</small>
         </div>
 
+        <div class="form-group">
+          <label for="chordalHoldSelect">Opposite-Hand-Regel (Chordal Hold):</label>
+          <select id="chordalHoldSelect" class="form-control">
+            <option value="0">Aus</option>
+            <option value="1">An</option>
+          </select>
+          <small class="form-hint">Drückst du eine Taste derselben Hälfte, während eine Mod-Tap-Taste offen ist, gilt die Mod-Tap-Taste sofort als Tipp. Tasten der anderen Hälfte, die Daumenreihe und Layer-Tap mit MO_n folgen weiter der Mod-Tap-Entscheidung. Erfordert Firmware-Version 20 oder neuer.</small>
+        </div>
+
         <div class="form-group" id="triLayerGroup">
           <label>Tri-Layer (bedingte Ebene):</label>
           <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">

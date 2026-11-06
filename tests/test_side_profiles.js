@@ -71,6 +71,15 @@ test("Links: Config-Combo, BLE-Name, Gerätename und Hälfte entsprechen dactyl_
   assert.strictEqual(define(leftIno, "DEVICE_SIDE"), "L");
 });
 
+test("Einstellung chordalHold: beide Sketche deklarieren sie, DactylLogic.h meldet sie und der Server rendert sie", () => {
+  for (const [name, src] of [["rechts", rightIno], ["links", leftIno]]) {
+    assert.ok(/^uint8_t chordalHold = 0;$/m.test(src), `${name}: chordalHold fehlt im Sketch`);
+  }
+  assert.ok(logic.includes('\\"chordal_hold\\":%u'), "GET_INFO meldet chordal_hold nicht");
+  assert.ok(logic.includes('cmd.startsWith("SET_CHORDAL_HOLD ")'), "SET_CHORDAL_HOLD fehlt");
+  assert.ok(read("server.py").includes('uint8_t chordalHold = {values["chordalHold"]};'), "server.py rendert chordalHold nicht");
+});
+
 test("Rechts: Standard-Makros in DactylLogic.h entsprechen dem Profil", () => {
   const block = logic.slice(logic.indexOf("#ifndef CONFIG_COMBO_R1"), logic.indexOf("#endif", logic.indexOf("#ifndef CONFIG_COMBO_R1")));
   const combo = [

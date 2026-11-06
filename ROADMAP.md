@@ -21,16 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Opposite-hand rule for Mod-Tap (chordal hold)
-
-- **Rank:** Feature model. Total 24/40 (typing 8, configuration 2, harmony 8, safety 6). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (`tapHoldOnPress`, `resolvePendingTapHoldsAsHold`, `holdTapMode`), `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_OP_HOLD_PENDING`, `SPLIT_OP_HOLD_RESOLVE`), `firmware/dactyl_left/DactylLeftLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `server.py` (`[[[START_SETTINGS]]]`), `js/editor.js`.
-- **Problem:** Home row mods resolve as hold when the user rolls two keys of the same hand. A modifier is useful mostly with a key of the other hand, but `holdTapMode` does not know the hand of the second key.
-- **Goal:** Add a setting per half `chordalHold` (default off). When a Mod-Tap key is open and the user presses another key of the same half, the Mod-Tap key resolves as tap at once, and the second key follows. A key of the other half keeps the decision of `holdTapMode`. Keys of the thumb row keep the decision of `holdTapMode` on both halves. Layer-Tap keys with `MO_n` keep their behavior. Add a command, an NVS key and a `DEVICE_INFO` field. Increase `DACTYL_FW_VERSION`.
-- **Dependency:** "Hold only after a typing pause" also changes the tap/hold resolution. Define the order of the two checks in the entry that comes second.
-- **Acceptance test:** A firmware test holds a Mod-Tap key and presses a key of the same half and expects the tap and then the second key. A test with a key of the other half expects the hold. A test with a thumb key and a test with the setting off expect the decision of `holdTapMode`.
-
 ### One-shot layer (`OSL_0` .. `OSL_7`)
 
 - **Rank:** Feature model. Total 23/40 (typing 6, configuration 3, harmony 8, safety 6). Effort M. Estimate.

@@ -128,6 +128,15 @@ Rules for this file:
   - Rule: when the user presses a Mod-Tap key again less than `quickTapMs` after its tap (release), the key resolves as tap at once and stays held, so the host repeats the character. No hold action runs, even when the key is held past the tapping term. The window starts at the release of the tap. A held quick tap that ends also starts a new window.
   - Only an uninterrupted tap counts: a press of any other key clears the stored tap time of all keys (`quickTapValid[][]`, `quickTapAt[][]`, `quickTapHeld[][]` in `DactylLogic.h`). A key with a double-tap action keeps the Tap-Dance behavior. A key without tap or hold action is not affected. `0` changes nothing.
   - Mixed firmware: needs `DACTYL_FW_VERSION` 15 or newer on the half that holds the key.
+- Opposite-hand rule (chordal hold) is a setting per half: `chordalHold` (0 = off, default; 1 = on), command `SET_CHORDAL_HOLD <0|1>` (answers `OK SET_CHORDAL_HOLD <n>`, `ERR ARGS` for any other value, `ERR NVS` when the write fails), NVS key `chordal`, `DEVICE_INFO` field `chordal_hold`, config field `settings.chordalHold`, rendered by `server.py` in `[[[START_SETTINGS]]]`. The full sync sends it as an optional step (older firmware answers `ERR UNKNOWN`).
+  - Rule: when a Mod-Tap key is open and the user presses another key of the same half, `resolvePendingTapHoldsAsTapSameHalf()` resolves the open key as tap at once (press and release), and the second key follows. It runs before the decision of `holdTapMode`, so it applies in all three modes. It runs on the half that owns the keys; a left key pressed on the left half is decided by `DactylLeftLogic.h` and the shared `DactylLogic.h` on that half.
+  - A press of the other half keeps the decision of `holdTapMode` (`SPLIT_OP_HOLD_RESOLVE` still resolves open keys as hold).
+  - Exceptions that keep the decision of `holdTapMode`: the thumb row (`CHORDAL_THUMB_ROW`, the last matrix row) as Mod-Tap key and as second key, Layer-Tap keys with a `MO_n` hold action, keys with a double-tap action, and keys without a tap action (hold-only keys). A key that already resolved as hold stays hold.
+  - Combos: a Mod-Tap key whose combo partner is pressed inside `comboTimeoutMs` is not resolved as tap. `checkUserCombos()` triggers the combo in the same scan and the tap does not run.
+  - Buffered presses: in modes 1 and 2 a press that waits in the deferred queue (behind an open Layer-Tap key) applies the rule when `replayDeferredQueue()` plays it.
+  - Quick tap: the tap of the rule does not start a quick-tap window (`quickTapValid` stays unchanged); only the tap on release does.
+  - Order with "Hold only after a typing pause" (open roadmap entry): the chordal check runs first. The pause check applies only to a key that the chordal rule did not resolve.
+  - Mixed firmware: needs `DACTYL_FW_VERSION` 20 or newer on the half that holds the key.
 
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 

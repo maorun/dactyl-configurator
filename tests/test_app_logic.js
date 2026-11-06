@@ -185,6 +185,11 @@ test("Config-Normalisierung: Namen, Einstellungen und Zellen werden bereinigt", 
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { quickTapMs: 120 } }, R).settings.quickTapMs, 120);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { quickTapMs: 900 } }, R).settings.quickTapMs, 500);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { quickTapMs: -5 } }, R).settings.quickTapMs, 0);
+  assert.strictEqual(n.settings.chordalHold, 0);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { chordalHold: 1 } }, R).settings.chordalHold, 1);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { chordalHold: 5 } }, R).settings.chordalHold, 1);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { chordalHold: -1 } }, R).settings.chordalHold, 0);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { chordalHold: "x" } }, R).settings.chordalHold, 0);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 1 } }, R).settings.holdTapMode, 1);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 2 } }, R).settings.holdTapMode, 2);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 99 } }, R).settings.holdTapMode, 2);
@@ -974,13 +979,13 @@ function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + 
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
 ${section("js/serial.js", "// LED-Zustand des Hosts:", "function switchLayerUI")}
 this.hostCaps = () => hostLedsState && hostLedsState.caps;
-this.handle = handleSerialLine; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
+this.handle = handleSerialLine; this.settingOf = (side, k) => configs[side].settings[k]; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
 this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);
 this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
   // Arrays aus dem VM-Kontext haben einen anderen Prototyp: für deepStrictEqual in einfache Werte kopieren
   const plain = v => JSON.parse(JSON.stringify(v));
   return {
-    warns: calls.warns, handle: (...a) => s.handle(...a), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
+    warns: calls.warns, handle: (...a) => s.handle(...a), settingOf: (side, k) => s.settingOf(side, k), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
     layerCounts: (side, l) => plain(s.layerCounts(side, l)), hostCaps: () => s.hostCaps(),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
     set snapshotActive(v) { s.snapshotActive = v; }
@@ -1069,6 +1074,19 @@ test("serial.js: DEVICE_INFO der nicht bearbeiteten Hälfte ändert die Tri-Laye
   s.handle(info("R"), "R", "usb");
   assert.deepStrictEqual(s.calls.tri, ['[{"a":1,"b":2,"target":3}]']);
   assert.strictEqual(s.triOf("R"), '[{"a":1,"b":2,"target":3}]');
+});
+
+test("serial.js: chordal_hold in DEVICE_INFO setzt die Einstellung der gemeldeten Hälfte", () => {
+  const s = serialLineHarness();
+  assert.strictEqual(s.settingOf("R", "chordalHold"), 0);
+  s.handle('DEVICE_INFO:{"side":"R","fw":20,"chordal_hold":1}', "R", "usb");
+  assert.strictEqual(s.settingOf("R", "chordalHold"), 1);
+  assert.strictEqual(s.settingOf("L", "chordalHold"), 0);
+  s.handle('DEVICE_INFO:{"side":"L","fw":20,"chordal_hold":1}', "L", "usb");
+  assert.strictEqual(s.settingOf("L", "chordalHold"), 1);
+  // Firmware ohne das Feld ändert nichts
+  s.handle('DEVICE_INFO:{"side":"R","fw":19}', "R", "usb");
+  assert.strictEqual(s.settingOf("R", "chordalHold"), 1);
 });
 
 test("serial.js: host_leds in DEVICE_INFO der linken Hälfte ändert den Stand nicht", () => {
@@ -1938,7 +1956,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|TRI_LAYER|CAPS_LED) |CLEAR_TAP_TERMS$)/.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|CHORDAL_HOLD|TRI_LAYER|CAPS_LED) |CLEAR_TAP_TERMS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -2017,18 +2035,22 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 11);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_TRI_LAYER", "SET_CAPS_LED", "CLEAR_TAP_TERMS"]);
+  assert.strictEqual(cmds.length, 12);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "CLEAR_TAP_TERMS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
-  assert.strictEqual(cmds[8].cmd, "SET_TRI_LAYER -");
-  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 2, target: 3 }, { a: 4, b: 5, target: 6 }] }, R)[8].cmd, "SET_TRI_LAYER 1 2 3 4 5 6");
-  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 1, target: 3 }] }, R)[8].cmd, "SET_TRI_LAYER -");
-  assert.strictEqual(cmds[9].cmd, "SET_CAPS_LED 0");
-  assert.strictEqual(ctx.build({ capsLed: 1 }, R)[9].cmd, "SET_CAPS_LED 1");
+  assert.strictEqual(cmds[8].cmd, "SET_CHORDAL_HOLD 0");
+  assert.strictEqual(ctx.build({ chordalHold: 1 }, R)[8].cmd, "SET_CHORDAL_HOLD 1");
+  assert.strictEqual(ctx.build({ chordalHold: 7 }, R)[8].cmd, "SET_CHORDAL_HOLD 1");
+  assert.strictEqual(ctx.build({ chordalHold: -3 }, R)[8].cmd, "SET_CHORDAL_HOLD 0");
+  assert.strictEqual(cmds[9].cmd, "SET_TRI_LAYER -");
+  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 2, target: 3 }, { a: 4, b: 5, target: 6 }] }, R)[9].cmd, "SET_TRI_LAYER 1 2 3 4 5 6");
+  assert.strictEqual(ctx.build({ triLayers: [{ a: 1, b: 1, target: 3 }] }, R)[9].cmd, "SET_TRI_LAYER -");
+  assert.strictEqual(cmds[10].cmd, "SET_CAPS_LED 0");
+  assert.strictEqual(ctx.build({ capsLed: 1 }, R)[10].cmd, "SET_CAPS_LED 1");
   // Die linke Hälfte hat keinen Host: kein Befehl
-  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 10);
+  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 11);
 });
 
 asyncTests.push(["Sync: Text über dem Balken zählt die übertragenen Schritte", async () => {

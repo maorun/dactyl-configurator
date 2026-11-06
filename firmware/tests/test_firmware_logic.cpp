@@ -45,6 +45,7 @@ static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
 static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
+static uint8_t chordalHold = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t capsLedEnabled = 0;
@@ -174,6 +175,7 @@ void resetState() {
   comboTimeoutMs = 40;
   tappingTermMs = 200;
   quickTapMs = 0;
+  chordalHold = 0;
   tapTermsCompiledIn = false;
   holdTapMode = 0;
   numTriLayers = 0;
@@ -4797,6 +4799,461 @@ TEST(test_quick_tap_command_nvs_and_info) {
   assert(quickTapMs == 0);
   handleConfigCommand("SET_QUICK_TAP 0", false);
   assert(mockChar.value == "OK SET_QUICK_TAP 0");
+}
+
+// Opposite-Hand-Regel (chordalHold): Mod-Tap-Taste offen + Taste derselben Hälfte -> Tipp, dann die zweite Taste
+TEST(test_chordal_hold_same_half_resolves_tap) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0; // ohne chordalHold wäre das Ctrl + B
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'a');   // Tipp zuerst
+  assert(bleKeyboard.pressHistory[1] == 'b');   // dann die zweite Taste
+  assert(countPresses(KEY_LEFT_CTRL) == 0);
+  assert(!anyTapHoldPending());
+  setMillis(1080);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1080);
+  setMillis(1120);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1120);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(countPresses('a') == 1 && countPresses('b') == 1);
+}
+
+TEST(test_chordal_hold_applies_in_every_hold_tap_mode) {
+  for (uint8_t mode = 0; mode <= 2; mode++) {
+    resetState();
+    chordalHold = 1;
+    holdTapMode = mode;
+    KEYMAP[0][2][1] = 'a';
+    HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+    KEYMAP[0][2][2] = 'b';
+    setMillis(1000);
+    keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+    setMillis(1050);
+    keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+    assert(bleKeyboard.pressHistory.size() == 2);
+    assert(bleKeyboard.pressHistory[0] == 'a' && bleKeyboard.pressHistory[1] == 'b');
+    assert(countPresses(KEY_LEFT_CTRL) == 0);
+    keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1080);
+    keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1120);
+    assert(bleKeyboard.pressedKeys.empty());
+  }
+}
+
+TEST(test_chordal_hold_off_keeps_hold_tap_mode_decision) {
+  resetState();
+  chordalHold = 0;
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL && bleKeyboard.pressHistory[1] == 'b');
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1080);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1120);
+}
+
+// Die Daumenreihe behält die Entscheidung von holdTapMode: als Mod-Tap-Taste und als zweite Taste
+TEST(test_chordal_hold_thumb_row_keeps_hold_tap_mode_decision) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][5][3] = ' ';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[5][3] = true; onMatrixKeyChange(5, 3, true, 1050);   // Daumentaste als zweite Taste
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL && bleKeyboard.pressHistory[1] == ' ');
+  keyState[5][3] = false; onMatrixKeyChange(5, 3, false, 1100);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0;
+  KEYMAP[0][5][3] = ' ';
+  HOLDMAP[0][5][3] = KEY_LEFT_SHIFT;           // Mod-Tap-Taste im Daumencluster
+  KEYMAP[0][2][2] = 'b';
+  setMillis(2000);
+  keyState[5][3] = true; onMatrixKeyChange(5, 3, true, 2000);
+  setMillis(2050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 2050);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_SHIFT && bleKeyboard.pressHistory[1] == 'b');
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 2100);
+  keyState[5][3] = false; onMatrixKeyChange(5, 3, false, 2120);
+}
+
+// Layer-Tap mit MO_n behält sein Verhalten: die Ebene wirkt auf die zweite Taste
+TEST(test_chordal_hold_layer_tap_unchanged) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = ACT_MO_BASE + 1;
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[1][2][2] = 'x';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+  assert(countPresses('a') == 0);
+  assert(countPresses('x') == 1 && countPresses('b') == 0);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1100);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+}
+
+// Eine Mod-Tap-Taste, die die Halte-Zeit erreicht hat, ist schon Hold: die Regel ändert sie nicht
+TEST(test_chordal_hold_decided_hold_stays_hold) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'c';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  processDeferredKeys(millis());               // Tapping-Term abgelaufen: Hold
+  setMillis(1350);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1350);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL && bleKeyboard.pressHistory[1] == 'c');
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1400);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1420);
+}
+
+// Taste mit Doppel-Tipp-Aktion behält Tap-Dance
+TEST(test_chordal_hold_double_tap_key_unchanged) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  DTAPMAP[0][2][1] = 'z';
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL && bleKeyboard.pressHistory[1] == 'b');
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1100);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+}
+
+// Combo-Partner im Fenster: checkUserCombos() löst die Combo aus, der Tipp der Mod-Tap-Taste darf nicht vorher raus
+TEST(test_chordal_hold_combo_partner_in_window_keeps_combo) {
+  resetState();
+  chordalHold = 1;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false); // J + K -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'k';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1010);                                      // innerhalb comboTimeoutMs (40 ms)
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1010);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(countPresses('j') == 0);                       // kein Tipp vor der Combo
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1100);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+  checkUserCombos();
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(countPresses('j') == 0 && countPresses('k') == 0);
+}
+
+// Modi 1 und 2 puffern die zweite Taste: ihr Zeitstempel darf danach keine Combo mit der offenen Taste bilden
+TEST(test_chordal_hold_buffered_key_keeps_no_stale_press_time) {
+  for (uint8_t mode = 1; mode <= 2; mode++) {
+    resetState();
+    chordalHold = 1;
+    holdTapMode = mode;
+    handleConfigCommand("ADD_COMBO 4 1 2 2 0 177", false);   // Layer-Taste (4,1) + K -> Esc
+    KEYMAP[0][4][1] = 'l';
+    HOLDMAP[0][4][1] = ACT_MO_BASE + 1;                      // Layer-Tap: von der Regel ausgenommen, bleibt offen
+    KEYMAP[0][2][2] = 'k';
+    setMillis(1000);
+    keyState[4][1] = true; onMatrixKeyChange(4, 1, true, 1000);
+    keyPressTime[2][2] = 0;
+    comboPressLayer1[2][2] = 0;
+    setMillis(1010);
+    keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1010);   // wird gepuffert
+    assert(anyTapHoldPending());
+    assert(keyPressTime[2][2] == 0 && comboPressLayer1[2][2] == 0);   // Zeit und Ebene unverändert
+    keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1050);
+    keyState[4][1] = false; onMatrixKeyChange(4, 1, false, 1060);
+    checkUserCombos();
+    assert(!comboRuntime[0].active);                             // keine Combo aus der gepufferten Taste
+    assert(bleKeyboard.writtenKeys.empty());
+  }
+}
+
+// Mod-Tap-Taste ist selbst Combo-Kandidat, die zweite Taste ist kein Partner: die Regel entscheidet sie als Tipp
+TEST(test_chordal_hold_combo_candidate_with_non_partner_key) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0;
+  handleConfigCommand("ADD_COMBO 2 1 2 3 0 177", false); // J + L -> Esc
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'k';                                 // kein Partner der Combo
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+  assert(countPresses(KEY_LEFT_CTRL) == 0);
+  assert(countPresses('j') == 1 && countPresses('k') == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1080);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1120);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// Hat die offene Taste den Tapping-Term erreicht (Tick lief noch nicht), bleibt sie Hold
+TEST(test_chordal_hold_term_reached_stays_hold) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'c';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1000 + TAPPING_TERM_MS + 10);                    // kein processDeferredKeys: die Taste ist noch offen
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1000 + TAPPING_TERM_MS + 10);
+  assert(countPresses('a') == 0);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL && bleKeyboard.pressHistory[1] == 'c');
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1300);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1320);
+}
+
+// Zweite Taste ist selbst eine Mod-Tap-Taste: die erste tippt, die zweite öffnet ihre eigene Entscheidung
+TEST(test_chordal_hold_second_key_is_mod_tap) {
+  for (uint8_t mode = 0; mode <= 2; mode++) {
+    resetState();
+    chordalHold = 1;
+    holdTapMode = mode;
+    KEYMAP[0][2][1] = 'a';
+    HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+    KEYMAP[0][2][2] = 's';
+    HOLDMAP[0][2][2] = KEY_LEFT_SHIFT;
+    setMillis(1000);
+    keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+    setMillis(1050);
+    keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+    assert(countPresses('a') == 1 && countPresses(KEY_LEFT_CTRL) == 0);   // erste Taste: Tipp
+    assert(tapHold[2][2].pending);                                         // zweite Taste: eigene offene Entscheidung
+    setMillis(1300);
+    processDeferredKeys(millis());                                         // Tapping-Term der zweiten Taste: Hold
+    assert(countPresses(KEY_LEFT_SHIFT) == 1 && countPresses('s') == 0);
+    keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1320);
+    keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1340);
+    assert(bleKeyboard.pressedKeys.empty());
+  }
+}
+
+// Das Combo-Fenster gilt in allen drei Modi: das Ergebnis ist mit und ohne chordalHold gleich
+// (Modi 1 und 2 puffern die zweite Taste schon ohne die Regel; dort löst die Combo wie bisher aus oder nicht)
+TEST(test_chordal_hold_combo_partner_in_window_all_modes) {
+  for (uint8_t mode = 0; mode <= 2; mode++) {
+    bool activeOf[2] = {false, false};
+    std::vector<uint8_t> historyOf[2];
+    for (uint8_t on = 0; on <= 1; on++) {
+      resetState();
+      chordalHold = on;
+      holdTapMode = mode;
+      handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+      KEYMAP[0][2][1] = 'j';
+      HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+      KEYMAP[0][2][2] = 'k';
+      setMillis(1000);
+      keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+      setMillis(1010);
+      keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1010);
+      checkUserCombos();
+      activeOf[on] = comboRuntime[0].active;
+      keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1100);
+      keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+      checkUserCombos();
+      processDeferredKeys(millis());
+      for (auto h : bleKeyboard.pressHistory) historyOf[on].push_back((uint8_t)h);
+      assert(bleKeyboard.pressedKeys.empty());
+    }
+    assert(activeOf[0] == activeOf[1]);
+    assert(historyOf[0] == historyOf[1]);
+    if (mode == 0) assert(activeOf[1]);               // Modus 0: die Combo löst aus, kein Tipp davor
+  }
+}
+
+// Außerhalb des Combo-Fensters gilt die Regel: Tipp, dann die zweite Taste
+TEST(test_chordal_hold_combo_partner_outside_window_resolves_tap) {
+  resetState();
+  chordalHold = 1;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'k';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1100);                                      // 100 ms > comboTimeoutMs
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1100);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+  assert(countPresses('j') == 1 && countPresses(KEY_LEFT_CTRL) == 0);   // Tipp sofort; k ist Combo-Kandidat und folgt beim Loslassen
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1150);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1160);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'j' && bleKeyboard.pressHistory[1] == 'k');
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// Zwei gepufferte Drücke derselben Hälfte hinter einer offenen Layer-Taste (Modus 1 und 2): die Regel gilt beim Abspielen
+TEST(test_chordal_hold_replayed_same_half_presses_resolve_tap) {
+  for (uint8_t mode = 1; mode <= 2; mode++) {
+    resetState();
+    chordalHold = 1;
+    holdTapMode = mode;
+    KEYMAP[0][4][1] = 'l';
+    HOLDMAP[0][4][1] = ACT_MO_BASE + 1;                 // Layer-Tap: von der Regel ausgenommen
+    KEYMAP[0][2][1] = 'a';
+    HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+    KEYMAP[0][2][2] = 'b';
+    setMillis(1000);
+    keyState[4][1] = true; onMatrixKeyChange(4, 1, true, 1000);
+    setMillis(1020);
+    keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1020);   // gepuffert
+    setMillis(1040);
+    keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1040);   // gepuffert
+    setMillis(1060);
+    keyState[4][1] = false; onMatrixKeyChange(4, 1, false, 1060); // Layer-Tap als Tipp: Queue läuft ab
+    assert(countPresses(KEY_LEFT_CTRL) == 0);
+    assert(countPresses('a') == 1 && countPresses('b') == 1);
+    size_t ia = 0, ib = 0;
+    for (size_t i = 0; i < bleKeyboard.pressHistory.size(); i++) {
+      if (bleKeyboard.pressHistory[i] == 'a') ia = i;
+      if (bleKeyboard.pressHistory[i] == 'b') ib = i;
+    }
+    assert(ia < ib);                                    // Reihenfolge bleibt
+    keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1100);
+    keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1120);
+    assert(bleKeyboard.pressedKeys.empty());
+  }
+}
+
+// Die Daumenreihe behält die Entscheidung von holdTapMode auch in den Modi 1 und 2
+TEST(test_chordal_hold_thumb_row_in_buffered_modes) {
+  for (uint8_t mode = 1; mode <= 2; mode++) {
+    resetState();
+    chordalHold = 1;
+    holdTapMode = mode;
+    KEYMAP[0][2][1] = 'a';
+    HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+    KEYMAP[0][5][3] = ' ';
+    setMillis(1000);
+    keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+    setMillis(1050);
+    keyState[5][3] = true; onMatrixKeyChange(5, 3, true, 1050);
+    assert(countPresses('a') == 0);                     // nicht per Regel entschieden: bleibt offen / gepuffert
+    assert(anyTapHoldPending());
+    keyState[5][3] = false; onMatrixKeyChange(5, 3, false, 1080);
+    keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1100);
+  }
+}
+
+// GET_INFO bleibt mit dem längsten Gerätenamen und dem neuen Feld gültiges JSON (Puffer nicht abgeschnitten)
+TEST(test_chordal_hold_device_info_fits_with_longest_name) {
+  resetState();
+  deviceName = String("0123456789012345678901234567890");   // 31 Zeichen
+  chordalHold = 1;
+  handleConfigCommand("GET_INFO", false);
+  const std::string &v = mockChar.value;
+  assert(v.rfind("DEVICE_INFO:{", 0) == 0);
+  assert(v.back() == '}');
+  assert(v.find("\"chordal_hold\":1") != std::string::npos);
+  assert(v.find("\"config_mode\":") != std::string::npos);
+  deviceName = DEFAULT_DEVICE_NAME;
+}
+
+// Guard-Test: Ein Druck der anderen Hälfte läuft über HOLD_RESOLVE (resolveAllPendingTapHoldsAsHold, nicht über die
+// Regel) und entscheidet offene Mod-Tap-Tasten als Hold, mit und ohne chordalHold. Der Test besteht auch ohne die
+// Funktion; er schützt davor, dass die Regel diesen Pfad später ändert.
+TEST(test_chordal_hold_other_half_resolves_hold) {
+  for (uint8_t on = 0; on <= 1; on++) {
+    resetState();
+    chordalHold = on;
+    holdTapMode = 0;
+    KEYMAP[0][2][1] = 'a';
+    HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+    setMillis(1000);
+    keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+    assert(anyTapHoldPending());
+    resolveAllPendingTapHoldsAsHold();
+    assert(!anyTapHoldPending());
+    assert(countPresses(KEY_LEFT_CTRL) == 1 && countPresses('a') == 0);
+    keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1100);
+    assert(bleKeyboard.pressedKeys.empty());
+  }
+}
+
+TEST(test_chordal_hold_command_nvs_and_info) {
+  resetState();
+  handleConfigCommand("SET_CHORDAL_HOLD 2", false);
+  assert(mockChar.value == "ERR ARGS SET_CHORDAL_HOLD 2");
+  handleConfigCommand("SET_CHORDAL_HOLD abc", false);
+  assert(mockChar.value == "ERR ARGS SET_CHORDAL_HOLD abc");
+  handleConfigCommand("SET_CHORDAL_HOLD -1", false);
+  assert(mockChar.value == "ERR ARGS SET_CHORDAL_HOLD -1");
+  assert(chordalHold == 0);
+  handleConfigCommand("SET_CHORDAL_HOLD 1", false);
+  assert(mockChar.value == "OK SET_CHORDAL_HOLD 1");
+  assert(chordalHold == 1);
+  handleConfigCommand("SET_CHORDAL_HOLD 0", false);
+  handleConfigCommand("SET_CHORDAL_HOLD   1  ", false);   // Leerzeichen um den Wert
+  assert(mockChar.value == "OK SET_CHORDAL_HOLD 1");
+  assert(chordalHold == 1);
+  handleConfigCommand("SET_CHORDAL_HOLD ", false);        // ohne Wert
+  assert(mockChar.value.rfind("ERR", 0) == 0);
+  assert(chordalHold == 1);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"chordal_hold\":1") != std::string::npos);
+  chordalHold = 0;
+  Serial.outputLines.clear();
+  loadKeymapFromNVS();
+  assert(chordalHold == 1);
+  bool logged = false;                                    // das Boot-Log nennt den geladenen Wert
+  for (const auto& l : Serial.outputLines) logged = logged || l.find("ChordalHold=1") != std::string::npos;
+  assert(logged);
+  Preferences::uintStore["chordal"] = 7;      // außerhalb des Bereichs
+  chordalHold = 0;
+  loadKeymapFromNVS();
+  assert(chordalHold == 0);
+  handleConfigCommand("SET_CHORDAL_HOLD 0", false);
+  assert(mockChar.value == "OK SET_CHORDAL_HOLD 0");
+  assert(chordalHold == 0);
+  // Schreibfehler: Antwort ERR NVS, der Wert bleibt unverändert
+  Preferences::failUCharKey = "chordal";
+  handleConfigCommand("SET_CHORDAL_HOLD 1", false);
+  assert(mockChar.value == "ERR NVS SET_CHORDAL_HOLD");
+  assert(chordalHold == 0);
+  Preferences::failUCharKey = "";
 }
 
 // Tri-Layer: sind die Ebenen a und b aktiv, gilt die Ebene target

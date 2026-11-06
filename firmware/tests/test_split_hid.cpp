@@ -1729,7 +1729,7 @@ TEST(test_left_link_json_reports_state_and_clamps_time) {
   char buf[160];
   SplitLeftHeld h = {};
   splitLeftLinkJson(buf, sizeof(buf), h, 5000);
-  assert(std::string(buf) == "{\"up\":0,\"ms\":0,\"ever\":0,\"losses\":0,\"rx_dropped\":0,\"key_dropped\":0}");
+  assert(std::string(buf) == "{\"up\":0,\"ms\":0,\"ever\":0,\"losses\":0,\"rx_dropped\":0,\"key_dropped\":0,\"rssi\":null,\"rssi_min\":null}");
   h.everUp = true;
   h.linkUp = true;
   h.linkChangedMs = 1000;
@@ -1737,7 +1737,7 @@ TEST(test_left_link_json_reports_state_and_clamps_time) {
   h.rxDropped = 3;
   h.keyDropped = 4;
   splitLeftLinkJson(buf, sizeof(buf), h, 3500);
-  assert(std::string(buf) == "{\"up\":1,\"ms\":2500,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4}");
+  assert(std::string(buf) == "{\"up\":1,\"ms\":2500,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4,\"rssi\":null,\"rssi_min\":null}");
   // BLE-Task liest millis() vor einem neueren linkChangedMs aus loop(): 0 statt einer riesigen Zahl
   splitLeftLinkJson(buf, sizeof(buf), h, 999);
   assert(std::string(buf).find("\"ms\":0,") != std::string::npos);
@@ -1754,6 +1754,68 @@ TEST(test_left_link_json_reports_state_and_clamps_time) {
   h.linkChangedMs = 0;
   int n = splitLeftLinkJson(buf, sizeof(buf), h, 0x7FFFFFFFUL);
   assert(n > 0 && n < (int)sizeof(buf) && buf[n - 1] == '}');
+}
+
+TEST(test_rssi_average_minimum_and_json) {
+  char buf[200];
+  SplitLeftHeld h = {};
+  // Ohne Paket: null, auch nach ungültigen Werten (0 dBm und darüber, unter -127 sind keine Messung)
+  splitNoteRssi(h, 5);
+  splitNoteRssi(h, -128);
+  assert(!h.rssiValid);
+  splitLeftLinkJson(buf, sizeof(buf), h, 0);
+  assert(std::string(buf).find("\"rssi\":null,\"rssi_min\":null}") != std::string::npos);
+  // Das erste Paket setzt Durchschnitt und Minimum
+  splitNoteRssi(h, -60);
+  assert(h.rssiValid && splitRssiAvg(h) == -60 && h.rssiMin == -60);
+  // Reihe: der Durchschnitt folgt träge, das Minimum hält den schlechtesten Wert
+  const int series[] = {-60, -60, -90, -60, -60, -60, -60, -60};
+  for (int v : series) splitNoteRssi(h, v);
+  assert(h.rssiMin == -90);
+  int avg = splitRssiAvg(h);
+  assert(avg < -60 && avg > -75);
+  // Dauerhaft schwaches Signal zieht den Durchschnitt unter -80, das Minimum bleibt der schlechteste Wert
+  for (int i = 0; i < 100; i++) splitNoteRssi(h, -85);
+  assert(splitRssiAvg(h) == -85 && h.rssiMin == -90);
+  splitLeftLinkJson(buf, sizeof(buf), h, 0);
+  assert(std::string(buf) == "{\"up\":0,\"ms\":0,\"ever\":0,\"losses\":0,\"rx_dropped\":0,\"key_dropped\":0,\"rssi\":-85,\"rssi_min\":-90}");
+  // Größte Zahlen, längster Wert (-127) und größte Zähler passen in den Puffer der Firmware (160 Bytes)
+  SplitLeftHeld m = {};
+  splitNoteRssi(m, -127);
+  m.linkLosses = m.rxDropped = m.keyDropped = 0xFFFFFFFFu;
+  m.everUp = true;
+  char small[160];
+  int n = splitLeftLinkJson(small, sizeof(small), m, 0x7FFFFFFFUL);
+  assert(n > 0 && n < (int)sizeof(small) && small[n - 1] == '}');
+  assert(std::string(small).find("\"rssi\":-127,\"rssi_min\":-127}") != std::string::npos);
+  // Ein Reset (setupSplitReceiver) löscht die Messung
+  splitHeldReset(h);
+  assert(!h.rssiValid);
+  // Negative Rundung: -85.5 -> -86 (zur größeren Beträgen), nicht Richtung null
+  SplitLeftHeld r = {};
+  r.rssiAvg16 = -85 * 16 - 8;
+  assert(splitRssiAvg(r) == -86);
+}
+
+TEST(test_link_report_includes_signal_changes_throttled) {
+  SplitLeftHeld h = {};
+  SplitLinkReporter r = {};
+  h.linkUp = true;
+  assert(splitLinkReportDue(r, h, 0));              // erster Bericht, noch ohne Messung
+  assert(!splitLinkReportDue(r, h, 5000));
+  splitNoteRssi(h, -60);
+  assert(!splitLinkReportDue(r, h, 500));           // Messung beginnt, aber höchstens alle SPLIT_LINK_REPORT_MS
+  assert(splitLinkReportDue(r, h, 1500));
+  assert(!splitLinkReportDue(r, h, 9000));          // nichts geändert
+  splitNoteRssi(h, -62);                            // neues Minimum
+  assert(splitLinkReportDue(r, h, 10000));          // letzter Bericht lange her: sofort fällig
+  splitNoteRssi(h, -64);                            // noch ein neues Minimum, direkt nach dem Bericht
+  assert(!splitLinkReportDue(r, h, 10500));         // gedrosselt
+  assert(splitLinkReportDue(r, h, 11000));
+  for (int i = 0; i < 100; i++) splitNoteRssi(h, -64);
+  assert(splitLinkReportDue(r, h, 20000));          // Durchschnitt mehr als 3 dBm weg vom gemeldeten Wert
+  splitNoteRssi(h, -63);                            // Schwankung um 1 dBm, Minimum gleich
+  assert(!splitLinkReportDue(r, h, 40000));
 }
 
 TEST(test_link_report_sends_changes_at_once_and_throttles_counters) {

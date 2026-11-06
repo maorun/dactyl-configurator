@@ -1094,6 +1094,47 @@ test("serial.js: HOST_LEDS zeigt Caps Lock nur vom Master über USB", () => {
   assert.strictEqual(s.hostCaps(), true);
 });
 
+test("Split-Link: Signalstärke aus rssi/rssi_min, Tooltip und gelbe Pill unter -80 dBm", () => {
+  const ctx = { console };
+  vm.createContext(ctx);
+  vm.runInContext(`${read("js/matrix-constants.js")}\n${read("js/side-profiles.js")}\n${read("js/side-right.js")}\n${read("js/side-left.js")}\n${read("js/side-routing.js")}`, ctx);
+  const D = ctx.Dactyl || vm.runInContext("Dactyl", ctx);
+  const plain = v => JSON.parse(JSON.stringify(v));
+  const line = extra => `SPLIT_LINK:{"up":1,"ms":10,"ever":1,"losses":0,"rx_dropped":0,"key_dropped":0${extra}}`;
+  const fmt = ms => `T${ms}`;
+  const view = extra => D.describeSplitLink({ ...D.parseSplitLinkLine(line(extra), "R"), since: 1 }, "Links", fmt);
+  // Mit Werten: beide im Tooltip, über der Schwelle nicht gelb
+  const ok = D.parseSplitLinkLine(line(',"rssi":-60,"rssi_min":-75'), "R");
+  assert.deepStrictEqual([ok.rssi, ok.rssiMin], [-60, -75]);
+  const good = view(',"rssi":-60,"rssi_min":-75');
+  assert.ok(good.title.includes("-60 dBm") && good.title.includes("-75 dBm"));
+  assert.strictEqual(good.weak, false);
+  assert.strictEqual(good.text, "Links: verbunden");
+  // Genau -80 ist noch nicht gelb, -81 ist gelb
+  assert.strictEqual(view(',"rssi":-80,"rssi_min":-90').weak, false);
+  const weak = view(',"rssi":-81,"rssi_min":-90');
+  assert.strictEqual(weak.weak, true);
+  assert.ok(weak.text.includes("schwaches Signal"));
+  // Ohne rssi (ältere Firmware) und mit null (noch kein Paket): kein Signaltext, nie gelb
+  for (const extra of ["", ',"rssi":null,"rssi_min":null']) {
+    const v = view(extra);
+    assert.strictEqual(v.weak, false);
+    assert.ok(!v.title.includes("dBm"));
+  }
+  assert.strictEqual(plain(D.parseSplitLinkLine(line(',"rssi":null,"rssi_min":null'), "R")).rssi, null);
+  // Ungültige Werte verwerfen die Zeile
+  for (const extra of [',"rssi":-60', ',"rssi":5,"rssi_min":-70', ',"rssi":"x","rssi_min":-70', ',"rssi":-60.5,"rssi_min":-70',
+                       ',"rssi":null,"rssi_min":-70', ',"rssi":-200,"rssi_min":-70']) {
+    assert.strictEqual(D.parseSplitLinkLine(line(extra), "R"), undefined, extra);
+  }
+  // Ein getrennter Link ist nie gelb, auch mit schwachem letzten Wert
+  const down = D.describeSplitLink({ ...plain(ok), up: false, rssi: -95, since: 1 }, "Links", fmt);
+  assert.strictEqual(down.weak, false);
+  // Pill in serial.js setzt die Klasse link-weak, das Stylesheet färbt sie gelb
+  assert.ok(read("js/serial.js").includes('pill.classList.toggle("link-weak", !!view && view.weak === true);'));
+  assert.ok(/\.split-link-pill\.link-weak\s*\{[^}]*var\(--warning\)/.test(read("style.css")));
+});
+
 test("Host-LEDs: Parser, Anzeige, Kopfzeile und Setting", () => {
   const ctx = { console };
   vm.createContext(ctx);

@@ -89,7 +89,7 @@ void sendConfigNotification(String msg, bool addDelay = false);
 static long testLeftFw = 0;
 #define DEVICE_INFO_LEFT_FW() testLeftFw
 // ... und die Link-Statistik (splitLeftLinkJson; das Format prüft test_split_hid.cpp)
-static const char *testLeftLink = "{\"up\":1,\"ms\":1234,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4}";
+static const char *testLeftLink = "{\"up\":1,\"ms\":1234,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4,\"rssi\":-61,\"rssi_min\":-70}";
 #define DEVICE_INFO_LEFT_LINK(buf, size) snprintf(buf, size, "%s", testLeftLink)
 
 // Repeat über beide Hälften: die Hooks rufen den Test ein, damit der Pfad zur anderen Hälfte prüfbar ist
@@ -301,7 +301,7 @@ TEST(test_security_ble_command_rejection) {
   assert(mockChar.value.find("\"left_fw\":-1" + linkTail) != std::string::npos);
   // Größte Zahlen in left_link (je 10 Stellen) mit langem Namen: gültig abgeschlossen, im Puffer (448) und
   // unter dem BLE-Attributlimit (512)
-  testLeftLink = "{\"up\":1,\"ms\":4294967295,\"ever\":1,\"losses\":4294967295,\"rx_dropped\":4294967295,\"key_dropped\":4294967295}";
+  testLeftLink = "{\"up\":1,\"ms\":4294967295,\"ever\":1,\"losses\":4294967295,\"rx_dropped\":4294967295,\"key_dropped\":4294967295,\"rssi\":-127,\"rssi_min\":-127}";
   testLeftFw = 65535;
   handleConfigCommand("GET_INFO", true);
   std::string maxTail = std::string(",\"left_fw\":65535,\"left_link\":") + testLeftLink + "}";
@@ -310,7 +310,7 @@ TEST(test_security_ble_command_rejection) {
   testLeftLink = "null";                       // Config Mode oder ESP-NOW nicht gestartet (deviceInfoLeftLink)
   handleConfigCommand("GET_INFO", true);
   assert(mockChar.value.find(",\"left_link\":null}") != std::string::npos);
-  testLeftLink = "{\"up\":1,\"ms\":1234,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4}";
+  testLeftLink = "{\"up\":1,\"ms\":1234,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4,\"rssi\":-61,\"rssi_min\":-70}";
   deviceName = savedName;
   testLeftFw = 0;
 

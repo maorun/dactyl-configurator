@@ -324,6 +324,7 @@ function setupEventListeners() {
       const tappingTerm = clampSetting("tappingTermMs", parseInt(document.getElementById("tappingTermInput")?.value, 10));
       const holdTapMode = clampSetting("holdTapMode", parseInt(document.getElementById("holdTapModeSelect")?.value, 10));
       const quickTap = clampSetting("quickTapMs", parseInt(document.getElementById("quickTapInput")?.value, 10));
+      const priorIdle = clampSetting("requirePriorIdleMs", parseInt(document.getElementById("priorIdleInput")?.value, 10));
       const chordalHold = clampSetting("chordalHold", parseInt(document.getElementById("chordalHoldSelect")?.value, 10));
       const standbyMinutes = clampSetting("standbyTimeoutMinutes", parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10));
       const sleepMinutes = clampSetting("sleepTimeoutMinutes", parseInt(document.getElementById("sleepTimeoutSelect")?.value, 10));
@@ -334,6 +335,7 @@ function setupEventListeners() {
       setVal("tappingTermInput", tappingTerm);
       setVal("holdTapModeSelect", holdTapMode);
       setVal("quickTapInput", quickTap);
+      setVal("priorIdleInput", priorIdle);
       setVal("chordalHoldSelect", chordalHold);
 
       const capsLedEl = document.getElementById("capsLedCheckbox");
@@ -349,6 +351,7 @@ function setupEventListeners() {
         tappingTermMs: tappingTerm,
         holdTapMode: holdTapMode,
         quickTapMs: quickTap,
+        requirePriorIdleMs: priorIdle,
         chordalHold: chordalHold,
         triLayers: triLayers,
         capsLed: capsLed,

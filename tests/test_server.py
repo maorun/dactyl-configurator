@@ -117,6 +117,12 @@ class TestServerAndCodegen(unittest.TestCase):
             server.generate_settings_cpp({"quickTapMs": 501})
         with self.assertRaises(ValueError):
             server.generate_settings_cpp({"quickTapMs": -1})
+        self.assertIn("uint16_t requirePriorIdleMs = 0;", server.generate_settings_cpp({}))
+        self.assertIn("uint16_t requirePriorIdleMs = 120;", server.generate_settings_cpp({"requirePriorIdleMs": 120}))
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"requirePriorIdleMs": 501})
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"requirePriorIdleMs": -1})
         self.assertIn("uint8_t chordalHold = 0;", server.generate_settings_cpp({}))
         self.assertIn("uint8_t chordalHold = 1;", server.generate_settings_cpp({"chordalHold": 1}))
         with self.assertRaises(ValueError):

@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### One-shot layer (`OSL_0` .. `OSL_7`)
-
-- **Rank:** Feature model. Total 23/40 (typing 6, configuration 3, harmony 8, safety 6). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h` (new action range), `firmware/dactyl_right/DactylLogic.h` (layer resolution), `firmware/dactyl_right/DactylOneShot.h`, `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_OP_LAYER_STATE`), `firmware/dactyl_left/DactylLeftLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`, `js/config-model.js` (`lintLayouts`).
-- **Problem:** A user who needs one character from a symbol layer must hold `MO_n` during the key press, or must switch the layer twice with `TG_n`.
-- **Goal:** Add the actions `OSL_0` .. `OSL_7`. A tap arms the layer for the next key press of either half; after that press, the layer is released. A second tap disarms it. A hold acts like `MO_n` and arms nothing. The armed state goes to the other half with the layer state. The half that uses the armed layer reports the use, so the layer is used only once. `RELEASE_ALL`, a link timeout and a host loss clear the armed state. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test taps `OSL_2`, presses a key and expects the action of layer 2, then layer 0 for the next key. A test with a key of the other half expects the same. A test checks the hold, the second tap and the clear after a link timeout. An app test checks that `lintLayouts` counts the target layer as reachable.
-
 ### Hold only after a typing pause
 
 - **Rank:** Feature model. Total 22/40 (typing 7, configuration 2, harmony 7, safety 6). Effort S. Estimate.

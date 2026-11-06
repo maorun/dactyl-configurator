@@ -201,6 +201,23 @@ Rules for this file:
 - `lintLayouts` counts `LAYER_LOCK` on a layer as a lock of that layer and as a way back from a locked layer.
 - The firmware needs `DACTYL_FW_VERSION` 16 or higher on both halves, because the left half must know the code.
 
+### One-shot layer (`OSL_0` .. `OSL_7`)
+
+- `ACT_OSL_BASE + n` (`0x180` .. `0x187`, `NUM_OSL_ACTIONS`, `DactylCommon.h`; `OSL_n` in `js/keycodes.js` and `server.py`). The range sits behind the macros (`0x170` .. `0x17F`).
+- A tap arms layer `n` for the next key press of either half. After that press, the layer is released. A second tap disarms it. A hold acts like `MO_n` and arms nothing: the key counts as held when it is held for at least its tapping term (`effectiveTapTerm`, `TAPTERMMAP`) or when another key of the same half is pressed while it is down. A tap or a hold key press of an `OSL` key never consumes the armed layer.
+- State (`DactylLogic.h`): `oslArmed` (this half), `remoteOslArmed` (the other half), `oslHeld` (held keys; separate from `momentaryLayers[]`, and part of `localMomentaryLayerMask()` so the other half sees a hold like `MO_n`), `oslUsed`. `getActiveLayer()` counts armed layers like MO layers; an armed `OSL_0` forces layer 0 like `MO_0`. Several armed layers stack and the highest wins.
+- The press that consumes the layer resolves its action on the armed layer first (`applyMatrixKeyChange` resolves the layer, then `oslNoteKeyPress` clears it). The release uses `pressedAction`, so the key releases the action that it pressed.
+- The armed state goes to the other half with its own op `SPLIT_OP_OSL` (27, appended; `LAYER_STATE` has no free bits). `code` bits 0..7 = armed layers of the sender, bits 8..15 = armed layers of the receiver that the sender consumed with a key press; `arg` is 0 (`makeSplitOslEvent`, `splitOslArmed`, `splitOslUsed`). Both directions use it; the left half accepts it from the master in `parseSplitMasterPacket`. It has no HID effect and does not count as activity.
+- The half that uses the armed layer reports the use (`oslUsedToSend`). The owner then clears the layer and sends its new state. The user half ignores a late refresh of a consumed bit (`remoteOslIgnore`, `OSL_IGNORE_MS`, until the owner state no longer holds the bit), so the layer is used only once.
+- Send (`SplitOslSync`, `splitOslSendIfDue`): on each change, every `SPLIT_LAYER_REFRESH_MS` (1 s) while a layer is armed, every `SPLIT_OSL_USED_REPEAT_MS` (100 ms) while a consumed bit is open. The master uses `esp_now_send`, the left half the send queue. The mirror expires after `OSL_REMOTE_TIMEOUT_MS` (3 s) without a packet (`oslExpireRemote`).
+- Clear: `RELEASE_ALL` of the left half, a link timeout, a buffer overflow and a host loss clear the mirror of the left half on the master (`splitProcessRx` calls `onOsl` with an empty state). A host loss, entering the config mode, `restartEspNow`, the config combo and, on the left half, a lost master connection clear all armed layers (`oslClearAll`); the Standby refresh counts armed layers as busy, so the mirror does not expire; the mirror of the other half is reported as consumed so it falls there too.
+- `lintLayouts` counts `OSL_n` like `MO_n` as a way into layer `n`. It does not lock the layer, so it needs no way back.
+- Combos reject `OSL_n` (`ADD_COMBO` actions run without `dispatchPress`; server, app and `validateConfigShape` return an error). Key pairs and macros allow only keyboard codes. `REPEAT` does not record it.
+- The firmware needs `DACTYL_FW_VERSION` 21 or higher on both halves. Mixed firmware: an older half rejects op 27 as invalid, so only its own `OSL` works.
+- Known limit: the `used` bits carry no sequence number. If the owner re-arms a layer within `OSL_IGNORE_MS` and both copies of its cleared state were lost, a repeated `used` packet clears the new arm once. The user taps again; no key is mis-sent.
+- Spoofing: a transmitter with a spoofed MAC can arm a layer of the receiver for one key press per packet, or clear an armed layer (see `AGENTS.md`, "BLE Command Authorization"). The packet carries no keycode and no config data.
+- Hardware check open: the radio path between the halves (consumed report) needs a test on the keyboard.
+
 ### Layer sync (`SPLIT_OP_LAYER_STATE`)
 
 - An `MO_n`, `TG_n`, `LAYER_UP`, `LAYER_DOWN` or `LAYER_LOCK` on one half activates the layer on both halves. Each half resolves its own keys on the shared layer.

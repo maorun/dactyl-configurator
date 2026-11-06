@@ -89,7 +89,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_HOLD_RESOLVE = 24, // beide Richtungen: offene Mod-Tap-Tasten des Empfängers jetzt als Halten entscheiden, ohne Werte
   SPLIT_OP_MOUSE_MOVE = 25,   // arg = X-Schritt (int8), code = Y-Schritt (int8 in Bits 0..7); -128 und (0, 0) sind ungültig
   SPLIT_OP_SLEEP = 26,        // nur Master -> links: Master geht in Deep Sleep, linke Hälfte legt sich ebenfalls schlafen, ohne Werte
-  SPLIT_OP_COUNT = 27
+  SPLIT_OP_OSL = 27,          // beide Richtungen: One-Shot-Ebenen des Absenders (code Bits 0..7 = vorgemerkte Ebenen, Bits 8..15 = verbrauchte Vormerkungen des Empfängers), arg 0
+  SPLIT_OP_COUNT = 28
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -163,6 +164,8 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
       return isValidSplitLayerEvent(ev);
     case SPLIT_OP_FW_VERSION:
       return ev.code != 0 && ev.arg == 0;
+    case SPLIT_OP_OSL:
+      return ev.arg == 0;
     case SPLIT_OP_TAP_PENDING:
     case SPLIT_OP_HOLD_PENDING:
       return ev.code <= 1 && ev.arg == 0;
@@ -200,8 +203,8 @@ inline bool parseSplitHidPacket(const uint8_t *srcMac, const uint8_t *data, int 
 #define SPLIT_ACTIVITY_INTERVAL_MS 10000
 
 // Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY, TAP_FLUSH, HOLD_RESOLVE oder SLEEP ohne Werte, ein
-// HOLD_PENDING (code 0/1), ein Master-LAYER_STATE (arg < 0, der Master führt die Toggles) oder ein REPEAT_RUN
-// (code 0/1, Nummer 1..127)
+// HOLD_PENDING (code 0/1), ein Master-LAYER_STATE (arg < 0, der Master führt die Toggles), ein OSL (arg 0) oder ein
+// REPEAT_RUN (code 0/1, Nummer 1..127)
 inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, int len, SplitHidEvent &out) {
   if (srcMac == nullptr || data == nullptr) return false;
   if (memcmp(srcMac, SPLIT_MASTER_MAC, sizeof(SPLIT_MASTER_MAC)) != 0) return false;
@@ -213,6 +216,7 @@ inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, i
              ev.code == 0 && ev.arg == 0) ||
             (ev.op == SPLIT_OP_HOLD_PENDING && ev.code <= 1 && ev.arg == 0) ||
             isValidSplitMasterLayerEvent(ev) ||
+            (ev.op == SPLIT_OP_OSL && ev.arg == 0) ||
             (ev.op == SPLIT_OP_REPEAT_RUN && ev.code <= 1 && ev.arg >= 1);
   if (!ok) return false;
   out = ev;
@@ -611,6 +615,49 @@ inline void splitLayerLeftRestart(SplitLayerSync &s, SplitRemoteLayers &r, Split
   splitLayerForce(s, nowMs);
   splitRemoteLayersReset(r);
   splitLayerMailboxDiscard(m, seenSeq);
+}
+
+// -----------------------------------------------------------------------------
+// One-Shot-Ebenen beider Hälften (SPLIT_OP_OSL)
+// -----------------------------------------------------------------------------
+// Jede Hälfte meldet ihre vorgemerkten One-Shot-Ebenen (Bits 0..7) und die Vormerkungen der anderen Hälfte, die sie
+// mit einem Tastendruck verbraucht hat (Bits 8..15). Der Besitzer löscht eine verbrauchte Vormerkung und meldet seinen
+// neuen Stand; so gilt die Ebene nur für einen Tastendruck, auch wenn beide Hälften fast gleichzeitig tippen.
+// Das Paket trägt den ganzen Zustand: das neueste gilt. Der Absender sendet bei jeder Änderung und, solange er
+// etwas vormerkt oder meldet, jede Sekunde (der Empfänger lässt ein Spiegelbild nach SPLIT_LAYER_REMOTE_TIMEOUT_MS
+// ohne Paket verfallen). Eine verbrauchte Vormerkung wird wiederholt, bis der Besitzer sie in seinem Stand gelöscht hat.
+// Eine verbrauchte Vormerkung wird so lange wiederholt, bis der Besitzer sie gelöscht hat (verlorenes Paket)
+#define SPLIT_OSL_USED_REPEAT_MS 100
+struct SplitOslSync {
+  uint8_t sentArmed;
+  uint8_t sentUsed;
+  unsigned long lastSentMs;
+};
+
+inline void splitOslReset(SplitOslSync &s) {
+  memset(&s, 0, sizeof(s));
+}
+
+inline SplitHidEvent makeSplitOslEvent(uint8_t armed, uint8_t used) {
+  return makeSplitHidEvent(SPLIT_OP_OSL, (uint16_t)(armed | ((uint16_t)used << 8)), 0);
+}
+inline uint8_t splitOslArmed(const SplitHidEvent &ev) { return (uint8_t)(ev.code & 0xFF); }
+inline uint8_t splitOslUsed(const SplitHidEvent &ev) { return (uint8_t)(ev.code >> 8); }
+
+// Eigenen Zustand senden, wenn fällig. send(ev) liefert true, wenn das Paket gesendet oder eingereiht ist; ein
+// Fehlschlag stellt den Stand vor dem Versuch wieder her (der nächste Aufruf sendet neu).
+template <class SendFn>
+bool splitOslSendIfDue(SplitOslSync &s, uint8_t armed, uint8_t used, unsigned long nowMs, bool linkUp, SendFn send,
+                       unsigned long refreshIntervalMs = SPLIT_LAYER_REFRESH_MS) {
+  bool changed = armed != s.sentArmed || used != s.sentUsed;
+  unsigned long interval = used != 0 ? (unsigned long)SPLIT_OSL_USED_REPEAT_MS : refreshIntervalMs;
+  bool due = (armed | used) != 0 && linkUp && (unsigned long)(nowMs - s.lastSentMs) >= interval;
+  if (!changed && !due) return false;
+  if (!send(makeSplitOslEvent(armed, used))) return false;
+  s.sentArmed = armed;
+  s.sentUsed = used;
+  s.lastSentMs = nowMs;
+  return true;
 }
 
 inline uint16_t splitMediaBits(const uint8_t report[2]) {
@@ -2015,7 +2062,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
                              SplitRxAppliedFn onKeyEvent = nullptr, SplitRxAppliedFn onLayer = nullptr,
                              SplitRxAppliedFn onBeforeLeftPress = nullptr, SplitRxAppliedFn onRepeat = nullptr,
                              SplitRxAppliedFn onHoldResolve = nullptr,
-                             unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
+                             unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS,
+                             SplitRxAppliedFn onOsl = nullptr) {
   SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -2030,6 +2078,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   SplitHidEvent ev;
   SplitHidEvent layerEv = {};
   bool haveLayer = false;
+  SplitHidEvent oslEv = {};
+  bool haveOsl = false;
   uint8_t keyEvents = 0;
   while (splitRxPop(q, ev)) {
     splitNoteLeftRx(kbd.splitLeft, ev, nowMs);
@@ -2063,6 +2113,14 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
       haveLayer = true;
       continue;
     }
+    // OSL hat keine HID-Wirkung: der Zustand gilt auch ohne Host, zählt aber nicht als Aktivität (wie LAYER_STATE)
+    if (ev.op == SPLIT_OP_OSL) {
+      kbd.splitLeft.lastRxMs = nowMs;
+      kbd.splitLeft.linkUp = true;
+      oslEv = ev;
+      haveOsl = true;
+      continue;
+    }
 
     if (!hostReady) {
       kbd.splitLeft.lastRxMs = nowMs;
@@ -2082,6 +2140,11 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
       continue;
     }
     if (ev.op == SPLIT_OP_RELEASE_ALL && onRepeat) onRepeat(ev);
+    // RELEASE_ALL der linken Hälfte löscht auch ihre vorgemerkten One-Shot-Ebenen (dort gelöscht, hier das Spiegelbild)
+    if (ev.op == SPLIT_OP_RELEASE_ALL) {
+      haveOsl = false;   // ein älteres OSL-Paket derselben Runde darf das Löschen nicht aufheben
+      if (onOsl) onOsl(makeSplitOslEvent(0, 0));
+    }
     if (onBeforeLeftPress && splitIsPressOp(ev.op)) onBeforeLeftPress(ev);
     if (!splitApplyHidEvent(kbd.splitLeft, ev, nowMs, kbd)) continue;
     if (rep.applied < 255) rep.applied++;
@@ -2096,9 +2159,12 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
     if (hostReady) splitReleaseHeld(kbd.splitLeft, kbd);
   }
   if (haveLayer && onLayer) onLayer(layerEv);
+  if (haveOsl && onOsl) onOsl(oslEv);
   if (splitCheckLinkTimeout(kbd.splitLeft, nowMs, kbd, linkTimeoutMs)) rep.linkLost = true;
   // Link weg, Ring voll oder Mac getrennt: eine offene Repeat-Taste links endet ohne ihr Loslassen
   if (onRepeat && (rep.linkLost || rep.overflow || rep.hostLost)) onRepeat(makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
+  // Link weg, Ring voll oder Mac getrennt: die vorgemerkten One-Shot-Ebenen der linken Hälfte gelten nicht mehr
+  if (onOsl && (rep.linkLost || rep.overflow || rep.hostLost)) onOsl(makeSplitOslEvent(0, 0));
   return rep;
 }
 

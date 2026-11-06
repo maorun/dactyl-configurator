@@ -99,6 +99,7 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_HOLD_PENDING, 0),
     makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE),
     makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0xFF, 5),   // x = 5, y = -1
+    makeSplitOslEvent(0x04, 0x02),                     // One-Shot-Ebene 2 vorgemerkt, Ebene 1 des Empfängers verbraucht
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
   // ACTIVITY, TAP_FLUSH, REPEAT_RUN und SLEEP sind die einzigen Ops nur der Rückrichtung. Jede dieser vier fehlt,
@@ -1850,7 +1851,7 @@ TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
   assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25);
-  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_COUNT == 27);
+  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_COUNT == 28);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -3270,6 +3271,124 @@ TEST(test_espnow_wake_window_constants_and_logic) {
   assert(splitWakeWindowUpdateIfNeeded(state, true, true, mockApply));
   assert(applyCalls == 3);
   assert(lastApplied == 40);
+}
+
+// -----------------------------------------------------------------------------
+// One-Shot-Ebenen (SPLIT_OP_OSL)
+// -----------------------------------------------------------------------------
+TEST(test_osl_packet_round_trip_and_validation) {
+  SplitHidEvent out;
+  SplitHidEvent ev = makeSplitOslEvent(0x04, 0x02);
+  assert(ev.op == SPLIT_OP_OSL && ev.arg == 0);
+  assert(splitOslArmed(ev) == 0x04 && splitOslUsed(ev) == 0x02);
+  assert(parse(SPLIT_LEFT_MAC, ev, out) && out.code == ev.code);
+  // Ein Wert in arg ist ungültig
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_OSL, 1, 1), out));
+  // Der Master darf OSL an die linke Hälfte senden, ein fremder Absender nicht
+  assert(parseSplitMasterPacket(SPLIT_MASTER_MAC, reinterpret_cast<const uint8_t *>(&ev), 4, out) && out.op == SPLIT_OP_OSL);
+  uint8_t other[6] = {1, 2, 3, 4, 5, 6};
+  assert(!parseSplitMasterPacket(other, reinterpret_cast<const uint8_t *>(&ev), 4, out));
+  assert(!parse(other, ev, out));
+}
+
+TEST(test_osl_is_no_hid_press_op_and_is_retried) {
+  assert(!splitIsPressOp(SPLIT_OP_OSL));
+  assert(splitEventRetryable(makeSplitOslEvent(1, 0)));
+}
+
+TEST(test_osl_send_only_on_change_and_while_armed) {
+  SplitOslSync s;
+  splitOslReset(s);
+  int sent = 0;
+  SplitHidEvent last = {};
+  auto send = [&](const SplitHidEvent &ev) { sent++; last = ev; return true; };
+  // Nichts vorgemerkt, nichts gesendet
+  assert(!splitOslSendIfDue(s, 0, 0, 1000, true, send) && sent == 0);
+  // Änderung: sofort
+  assert(splitOslSendIfDue(s, 0x04, 0, 1000, true, send) && sent == 1 && splitOslArmed(last) == 0x04);
+  // Unverändert: erst nach dem Auffrischen
+  assert(!splitOslSendIfDue(s, 0x04, 0, 1500, true, send));
+  assert(splitOslSendIfDue(s, 0x04, 0, 1000 + SPLIT_LAYER_REFRESH_MS, true, send) && sent == 2);
+  // Ohne Link kein Auffrischen
+  assert(!splitOslSendIfDue(s, 0x04, 0, 5000, false, send));
+  // Zurücknehmen ist eine Änderung (Stand 0 geht raus)
+  assert(splitOslSendIfDue(s, 0, 0, 5001, true, send) && sent == 3 && last.code == 0);
+  assert(!splitOslSendIfDue(s, 0, 0, 9000, true, send));
+  // Verbrauchte Vormerkung wiederholt schneller (verlorenes Paket)
+  assert(splitOslSendIfDue(s, 0, 0x08, 9001, true, send) && splitOslUsed(last) == 0x08);
+  assert(!splitOslSendIfDue(s, 0, 0x08, 9001 + SPLIT_OSL_USED_REPEAT_MS - 1, true, send));
+  assert(splitOslSendIfDue(s, 0, 0x08, 9001 + SPLIT_OSL_USED_REPEAT_MS, true, send));
+}
+
+TEST(test_osl_failed_send_is_retried_next_round) {
+  SplitOslSync s;
+  splitOslReset(s);
+  assert(!splitOslSendIfDue(s, 0x02, 0, 1000, true, [](const SplitHidEvent &) { return false; }));
+  int sent = 0;
+  assert(splitOslSendIfDue(s, 0x02, 0, 1001, true, [&](const SplitHidEvent &) { sent++; return true; }) && sent == 1);
+}
+
+static int oslCalls = 0;
+static SplitHidEvent oslLast = {};
+static void recordOsl(const SplitHidEvent &ev) { oslCalls++; oslLast = ev; }
+
+TEST(test_process_rx_hands_over_osl_without_hid_effect_or_activity) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  oslCalls = 0;
+  splitRxPush(rxq, makeSplitOslEvent(0x04, 0));
+  splitRxPush(rxq, makeSplitOslEvent(0x08, 0));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 100, nullptr, nullptr, nullptr, nullptr,
+                                     nullptr, nullptr, SPLIT_LINK_TIMEOUT_MS, recordOsl);
+  // Auch ohne Host; nur das neueste Paket gilt, keine Aktivität, keine HID-Ausgabe
+  assert(oslCalls == 1 && splitOslArmed(oslLast) == 0x08);
+  assert(rep.applied == 0 && rep.keyEvents == 0 && k.log.empty());
+  assert(k.splitLeft.linkUp && k.splitLeft.lastRxMs == 100);
+}
+
+TEST(test_process_rx_clears_osl_on_link_loss_host_loss_and_release_all) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  oslCalls = 0;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 SPLIT_LINK_TIMEOUT_MS, recordOsl);
+  assert(oslCalls == 0);
+  // RELEASE_ALL der linken Hälfte löscht ihre Vormerkungen
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 200, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 SPLIT_LINK_TIMEOUT_MS, recordOsl);
+  assert(oslCalls == 1 && oslLast.code == 0);
+  // Link-Timeout: Spiegelbild fällt
+  oslCalls = 0;
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 200 + SPLIT_LINK_TIMEOUT_MS, nullptr,
+                                     nullptr, nullptr, nullptr, nullptr, nullptr, SPLIT_LINK_TIMEOUT_MS, recordOsl);
+  assert(rep.linkLost && oslCalls == 1 && oslLast.code == 0);
+  // Host-Verlust
+  oslCalls = 0;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 10000, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 SPLIT_LINK_TIMEOUT_MS, recordOsl);
+  oslCalls = 0;
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 10100, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                       SPLIT_LINK_TIMEOUT_MS, recordOsl);
+  assert(rep.hostLost && oslCalls >= 1 && oslLast.code == 0);
+}
+
+TEST(test_process_rx_release_all_after_osl_in_the_same_round_keeps_the_clear) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  oslCalls = 0;
+  oslLast = makeSplitOslEvent(0xFF, 0);
+  splitRxPush(rxq, makeSplitOslEvent(0x04, 0));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 SPLIT_LINK_TIMEOUT_MS, recordOsl);
+  // Das letzte Ereignis an die Firmware ist das Löschen, nicht das ältere Paket mit Ebene 2
+  assert(oslCalls == 1 && oslLast.code == 0);
 }
 
 int main() {

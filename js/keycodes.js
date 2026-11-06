@@ -138,6 +138,9 @@ const KEYCODES = [
     { code: "LAYER_UP", label: "⬆️ Layer +1 Hoch (Nächste Ebene)", char: "" },
     { code: "LAYER_DOWN", label: "⬇️ Layer -1 Runter (Vorherige Ebene)", char: "" },
     { code: "LAYER_LOCK", label: "🔒 Layer Lock (gehaltene MO-Ebene einrasten)", char: "" },
+    ...Array.from({ length: 8 }, (_, n) => ({
+      code: `OSL_${n}`, label: `One-Shot Layer ${n} (nächste Taste${n === 0 ? ", zurück zur Base" : ""})`, char: ""
+    })),
     { code: "MO_0", label: "Momentary Layer 0 (Base)", char: "" },
     { code: "MO_1", label: "Momentary Layer 1", char: "" },
     { code: "MO_2", label: "Momentary Layer 2", char: "" },
@@ -247,6 +250,9 @@ const ACTION_TO_NUMERIC = {
   "LAYER_UP": 0x118,
   "LAYER_DOWN": 0x119,
   "LAYER_LOCK": 0x16A,
+  // One-Shot-Ebene (0x180..0x187): Tippen merkt die Ebene für den nächsten Tastendruck beider Hälften vor
+  "OSL_0": 0x180, "OSL_1": 0x181, "OSL_2": 0x182, "OSL_3": 0x183,
+  "OSL_4": 0x184, "OSL_5": 0x185, "OSL_6": 0x186, "OSL_7": 0x187,
 
   // Umlaute für das macOS-Layout "U.S." (0x150..0x156): Tottaste Alt + u, dann Vokal; ß = Alt + s
   "UMLAUT_AE": 0x150, "UMLAUT_OE": 0x151, "UMLAUT_UE": 0x152,
@@ -291,6 +297,11 @@ const ONE_SHOT_LABELS = {
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
   CAPS_WORD: "CapsWd", REPEAT: "Repeat", LAYER_LOCK: "Lock"
 };
+
+// true für One-Shot-Ebenen OSL_0 .. OSL_7 (Combos führen sie nicht aus)
+function isOslCode(code) {
+  return /^(ACT_)?OSL_[0-7]$/.test(String(code || ""));
+}
 
 // true für Mausbewegung (Combos führen sie nicht aus)
 function isMouseMoveCode(code) {
@@ -544,6 +555,7 @@ function findDefinitionByCode(numericCode) {
       else if (key === "KEY_NON_US_BACKSLASH") lbl = "§";
       else if (UMLAUT_LABELS[key]) lbl = UMLAUT_LABELS[key];
       else if (ONE_SHOT_LABELS[key]) lbl = ONE_SHOT_LABELS[key];
+      else if (isOslCode(key)) lbl = `OSL${key.slice(-1)}`;
       return { label: lbl, tap: key };
     }
   }

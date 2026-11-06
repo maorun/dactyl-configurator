@@ -189,6 +189,14 @@
         <ul class="layout-lint-list" id="layoutLintList"></ul>
       </details>
 
+      <!-- Aktion suchen: Fundstellen einer Aktion in beiden Hälften -->
+      <div class="action-search" id="actionSearchPanel">
+        <label for="actionSearchSelect" class="layer-label">Aktion suchen:</label>
+        <input type="search" class="form-control keycode-filter" data-filter-for="actionSearchSelect" placeholder="Aktion suchen, z. B. Esc oder MO_3" aria-label="Aktion suchen">
+        <select id="actionSearchSelect" class="form-control" aria-label="Gesuchte Aktion"></select>
+        <ul class="action-search-list" id="actionSearchList" aria-live="polite"></ul>
+      </div>
+
       <!-- Ebenen-Übersicht: Alle 8 Ebenen in kompakter Miniatur-Ansicht nebeneinander -->
       <div class="layer-overview-panel" id="layerOverviewPanel" style="display: none;">
         <div class="layer-overview-header">

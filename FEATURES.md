@@ -486,6 +486,16 @@ Rules for this file:
 - Each key carries `tap`, `hold` and `dtap` labels. A key without own action on layers 1 to 7 has `transparent: true` and the label of layer 0 (`▽` mark); missing physical keys have `exists: false`.
 - `renderLayerSheet` reads the configs of all halves through `configFor` and `Dactyl.SIDE_IDS`; the order follows `Dactyl.sidesInDisplayOrder()`. No side literals.
 
+### Action search across both halves (`findActionUsages`, `js/editor.js`)
+
+- The search field "Aktion suchen" (`#actionSearchPanel` above the layer overview) reuses the keycode search: the input `data-filter-for="actionSearchSelect"` filters the select `#actionSearchSelect` with `applySelectFilter`. The select lists all actions of `KEYCODES`.
+- `findActionUsages(config, code, side)` in `js/config-model.js` is a pure function. It returns one hit per use: `key` (`layer`, `r`, `c`, `slot` = `tap`, `hold` or `dtap`), `combo`, `pair` (`member` = `first` or `second`), `override` (`role` = `key` or `replacement`) and `macro` (`macro`, `step`, `type`). `side` is copied into each hit. `findActionUsagesForSides(configs, code, sides)` joins the hits of several halves.
+- Old configs store modifier actions of hold and double-tap as `MOD_*`; `findActionUsages` compares them through `normalizeHoldCode`, so a search for `KEY_LEFT_SHIFT` finds `MOD_LSHIFT`.
+- The select also offers the characters that need a key pair (`CHAR_PAIR_<i>`). `findActionUsagesForSides` resolves such a code per half to each stored equal pair `PAIR_<n>` and searches that code. A half without the pair gives no hit.
+- `renderActionSearch` runs after each `renderMatrix` and `renderCombosTable`. It skips the rebuild when the code and the hit texts stay equal, so the focus on a clicked hit stays. Macro hits show the German step label (`MACRO_STEP_LABELS`).
+- Transparent keys (`NONE`, empty or `0`) never count, and the codes `NONE`, `""` and `0` give no hit. Macro pauses carry no code and never count.
+- `renderActionSearch` lists the hits of all halves (`Dactyl.sidesInDisplayOrder()`, configs through `configFor`). A click on a key hit calls `gotoActionUsage`: it selects the half (`switchEditSide`), the layer and the key (`selectKey`). A hit without a key (combo, pair, override, macro) selects only the half. No side literal in the UI code.
+
 ### On-screen keyboard picker (`openOnScreenPickerForSelect`, `js/editor.js`)
 
 - Action select elements feature a dedicated picker trigger button (`🎹`, `.action-picker-trigger`).

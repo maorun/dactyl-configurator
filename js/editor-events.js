@@ -367,6 +367,7 @@ function setupEventListeners() {
       markPendingSync(changeRecord, side);
     });
   }
+  setupActionSearch();
 }
 
 async function saveAndFlashToDactyl() {

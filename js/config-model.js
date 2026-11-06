@@ -1123,6 +1123,60 @@ function clearAbsentKeyActions(cfg, profile, r, c, layerList) {
   return old.length ? { layers, old } : null;
 }
 
+// Fundstellen einer Aktion in der Config einer Hälfte (reine Funktion, ohne DOM). Ein Treffer ist eine Taste
+// (layer, r, c, slot tap/hold/dtap), eine Combo, ein Tastenpaar (member first/second), eine Überschreibung
+// (role key/replacement) oder ein Makro-Schritt. Transparente Tasten ("NONE", "", "0") zählen nie.
+// side wird unverändert in jeden Treffer übernommen (null = unbekannt).
+function findActionUsages(config, code, side = null) {
+  const hits = [];
+  if (!config || typeof config !== "object" || typeof code !== "string" || code === "" || code === "0" || code === "NONE") return hits;
+  const layers = Array.isArray(config.layers) ? config.layers : [];
+  layers.forEach((layer, l) => (Array.isArray(layer) ? layer : []).forEach((row, r) => (Array.isArray(row) ? row : []).forEach((_, c) => {
+    const a = lintCellActions(row[c]);
+    for (const slot of ["tap", "hold", "dtap"]) {
+      // Alte Configs speichern Modifier-Aktionen für Halten und Doppel-Tipp als MOD_*; sie zählen wie die KEY_*-Modifier
+      const value = slot !== "tap" ? normalizeHoldCode(a[slot]) : a[slot];
+      if (value === code) hits.push({ kind: "key", side, layer: l, r, c, slot });
+    }
+  })));
+  (Array.isArray(config.combos) ? config.combos : []).forEach((cb, index) => {
+    if (cb && cb.action === code) hits.push({ kind: "combo", side, index, id: cb.id, name: cb.name || "" });
+  });
+  (Array.isArray(config.keyPairs) ? config.keyPairs : []).forEach((p, index) => {
+    if (!p) return;
+    for (const member of ["first", "second"]) {
+      if (p[member] === code) hits.push({ kind: "pair", side, index, member });
+    }
+  });
+  (Array.isArray(config.keyOverrides) ? config.keyOverrides : []).forEach((o, index) => {
+    if (!o) return;
+    for (const role of ["key", "replacement"]) {
+      if (o[role] === code) hits.push({ kind: "override", side, index, role });
+    }
+  });
+  (Array.isArray(config.macros) ? config.macros : []).forEach((m, macro) => {
+    (m && Array.isArray(m.steps) ? m.steps : []).forEach((st, step) => {
+      if (st && st.type !== "pause" && st.code === code) hits.push({ kind: "macro", side, macro, step, type: st.type });
+    });
+  });
+  return hits;
+}
+
+// Wie findActionUsages für mehrere Hälften: configs = { [side]: config }; Treffer in der Reihenfolge von sides
+// CHAR_PAIR_<i> (Zeichen mit Tastenpaar) steht in keiner Config: es wird je Hälfte zum gleichen gespeicherten
+// Paar PAIR_<n> aufgelöst. Ohne gespeichertes Paar gibt es keinen Treffer.
+function findActionUsagesForSides(configs, code, sides = Object.keys(configs || {})) {
+  const charIdx = charPairIndexFromCode(code);
+  return sides.flatMap(side => {
+    const config = configs && configs[side];
+    if (charIdx < 0) return findActionUsages(config, code, side);
+    // Dasselbe Paar kann mehrfach gespeichert sein: jeder Index zählt
+    const target = actionCodeToNumeric(DE_MAC_CHARS[charIdx].pair.first) + "," + actionCodeToNumeric(DE_MAC_CHARS[charIdx].pair.second);
+    return ((config && config.keyPairs) || []).flatMap((p, n) => (p && actionCodeToNumeric(p.first) + "," + actionCodeToNumeric(p.second) === target
+      ? findActionUsages(config, `PAIR_${n}`, side) : []));
+  });
+}
+
 // Prüft die Konfigurationen beider Hälften gemeinsam, weil sie die aktive Ebene teilen (Layer-Abgleich).
 // configs: { [side]: config }, profiles: SIDE_PROFILES, labelFor: Anzeigename eines Tastencodes (für Tastenpaare).
 // Rückgabe: Liste { level: "warn" | "info", side: Hälfte oder null (beide), code, message }, Warnungen zuerst.

@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Action search across both halves
-
-- **Rank:** Feature model. Total 24/40 (typing 1, configuration 7, harmony 6, safety 10). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js` (new pure function `findActionUsages`), `js/editor.js` (keycode search, layer selection), `js/editor-events.js`, `index.html`, `tests/test_app_logic.js`.
-- **Problem:** Each half has 8 layers, combos, key pairs, key overrides and macros. The user cannot see where an action is used, for example `Esc` or `MO_3`. A manual search through all layers is slow and misses combos and macro steps.
-- **Goal:** Add a search field "Aktion suchen" to the editor. It uses the existing keycode search. `findActionUsages(config, code)` lists each hit of both halves: layer, key position and slot (tap, hold, double-tap), combo, key pair, key override and macro step. Transparent keys do not count. A click on a key hit selects the half, the layer and the key.
-- **Acceptance test:** A test builds a config with one action on a tap, a hold, a combo, a key pair, a key override and a macro step and expects all six hits. A test checks that a transparent key gives no hit.
-
 ### Opposite-hand rule for Mod-Tap (chordal hold)
 
 - **Rank:** Feature model. Total 24/40 (typing 8, configuration 2, harmony 8, safety 6). Effort M. Estimate.

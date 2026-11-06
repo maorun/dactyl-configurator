@@ -574,6 +574,84 @@ function fillKeycodeSelect(select, options = {}) {
   });
 }
 
+// Text eines Treffers von findActionUsages. layerName: Name einer Ebene. Zeilen zählen ab 1, Tastenpaare und Makros ab 0 wie ihre Tabellen.
+function describeActionUsage(hit, layerName) {
+  const slots = { tap: "Tippen", hold: "Halten", dtap: "2× Tippen" };
+  switch (hit.kind) {
+    case "key": return `Ebene ${hit.layer} (${layerName(hit.layer)}), R${hit.r}C${hit.c}: ${slots[hit.slot]}`;
+    case "combo": return `Combo in Zeile ${hit.index + 1}${hit.name ? ` (${hit.name})` : ""}`;
+    case "pair": return `Tastenpaar ${hit.index}: ${hit.member === "first" ? "erste" : "zweite"} Taste`;
+    case "override": return `Überschreibung in Zeile ${hit.index + 1}: ${hit.role === "key" ? "Taste" : "Ersatz"}`;
+    case "macro": return `Makro ${hit.macro}, Schritt ${hit.step + 1} (${MACRO_STEP_LABELS[hit.type] || hit.type})`;
+    default: return String(hit.kind);
+  }
+}
+
+function currentSideConfigs() {
+  const configs = {};
+  Dactyl.SIDE_IDS.forEach(side => { configs[side] = configFor(side); });
+  return configs;
+}
+
+// Text der zuletzt gebauten Trefferliste: bleibt sie gleich, bleibt die Liste (und der Fokus) unverändert
+let lastActionSearchSignature = null;
+
+function renderActionSearch() {
+  const select = document.getElementById("actionSearchSelect");
+  const list = document.getElementById("actionSearchList");
+  if (!select || !list) return;
+  const code = select.value;
+  const hits = !code || code === "NONE" ? [] : findActionUsagesForSides(currentSideConfigs(), code, Dactyl.sidesInDisplayOrder());
+  const texts = hits.map(hit => {
+    const names = (configFor(hit.side) || {}).layerNames || DEFAULT_LAYER_NAMES;
+    return `${SIDE_PROFILES[hit.side].label} · ${describeActionUsage(hit, l => names[l] || `Layer ${l}`)}`;
+  });
+  const signature = JSON.stringify([code, texts]);
+  if (signature === lastActionSearchSignature) return;
+  lastActionSearchSignature = signature;
+  list.innerHTML = "";
+  if (!code || code === "NONE") return;
+  if (!hits.length) {
+    const li = document.createElement("li");
+    li.className = "action-search-empty";
+    li.textContent = "Keine Fundstelle in beiden Hälften.";
+    list.appendChild(li);
+    return;
+  }
+  hits.forEach((hit, i) => {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-outline btn-sm action-search-hit";
+    btn.textContent = texts[i];
+    btn.addEventListener("click", () => gotoActionUsage(hit));
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+}
+
+// Wählt Hälfte, Ebene und Taste eines Treffers. Treffer ohne Taste (Combo, Paar, Überschreibung, Makro)
+// wechseln nur die Hälfte.
+function gotoActionUsage(hit) {
+  if (!sideStore.has(hit.side)) return;
+  switchEditSide(hit.side);
+  if (hit.kind !== "key") return;
+  activeLayerIndex = hit.layer;
+  renderLayerButtons();
+  const isThumb = (SIDE_PROFILES[hit.side].thumbDefs || []).some(def => def.r === hit.r && def.c === hit.c);
+  selectKey(hit.r, hit.c, hit.side, isThumb);
+}
+
+function setupActionSearch() {
+  const select = document.getElementById("actionSearchSelect");
+  if (!select) return;
+  fillKeycodeSelect(select, { holdMode: true, prefix: "", charPairs: true });
+  const input = document.querySelector('[data-filter-for="actionSearchSelect"]');
+  if (input) input.addEventListener("input", () => applySelectFilter("actionSearchSelect"));
+  select.addEventListener("change", renderActionSearch);
+  renderActionSearch();
+}
+
 function populateKeycodeSelects() {
   fillKeycodeSelect(document.getElementById("primaryActionSelect"), { charPairs: true });
   // Combo-Aktionen unterstützen keine Tastenpaare: nur Zeichen mit Einzelcode
@@ -643,6 +721,8 @@ function applySelectFilter(selectId) {
   const selected = select.options[select.selectedIndex];
   const selectedHidden = !!selected && (selected.hidden || (selected.parentElement && selected.parentElement.hidden));
   const hint = selectFilterHint(query, filtered.matches, selectedHidden, selected ? selected.textContent : "");
+  // Die reine Suche übernimmt nichts: der Hinweis zum Übernehmen passt dort nicht
+  if (selectId === "actionSearchSelect" && hint.blocked) hint.text = "Keine Treffer. Suche ändern.";
   const insertTarget = (select.closest && select.closest(".select-picker-row")) || select;
   const parent = insertTarget.parentElement || select.parentElement;
   let hintEl = parent && parent.querySelector(`[data-filter-hint-for="${selectId}"]`);
@@ -787,6 +867,7 @@ function renderMatrix() {
   }
   if (heatmapEnabled) applyHeatmap();
   renderLayoutLint();
+  renderActionSearch();
   if (layerOverviewOpen) renderLayerOverview();
 }
 
@@ -1202,6 +1283,7 @@ function renderCombosTable() {
   renderKeyPairs();
   renderKeyOverrides();
   renderMacros();
+  renderActionSearch();
   const tbody = document.getElementById("combosTableBody");
   const emptyState = document.getElementById("emptyCombosState");
   tbody.innerHTML = "";

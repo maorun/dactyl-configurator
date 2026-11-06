@@ -74,7 +74,9 @@ const KEYCODES = [
     { code: "OSM_RGUI", label: "One-Shot Cmd/Win rechts (nächste Taste)", char: "" },
     { code: "CAPS_WORD", label: "Caps Word (ein Wort in Großbuchstaben)", char: "" },
     { code: "REPEAT", label: "Repeat (letzte Aktion wiederholen)", char: "" },
-    { code: "ALT_REPEAT", label: "Alt Repeat (Gegenteil der letzten Aktion)", char: "" }
+    { code: "ALT_REPEAT", label: "Alt Repeat (Gegenteil der letzten Aktion)", char: "" },
+    { code: "DM_REC", label: "Makro aufnehmen (Start/Stopp, nur Master)", char: "" },
+    { code: "DM_PLAY", label: "Aufgenommenes Makro abspielen (nur Master)", char: "" }
   ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
@@ -266,6 +268,8 @@ const ACTION_TO_NUMERIC = {
   "CAPS_WORD": 0x168,
   "REPEAT": 0x169,
   "ALT_REPEAT": 0x16B,
+  "DM_REC": 0x16C,
+  "DM_PLAY": 0x16D,
 
   // Mouse Actions (0x130..0x138)
   "MOUSE_LEFT": 0x130,
@@ -297,8 +301,14 @@ const UMLAUT_LABELS = {
 const ONE_SHOT_LABELS = {
   OSM_LCTRL: "OS Ctrl", OSM_LSHIFT: "OS Shift", OSM_LALT: "OS Alt", OSM_LGUI: "OS Cmd",
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
-  CAPS_WORD: "CapsWd", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock"
+  CAPS_WORD: "CapsWd", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
+  DM_REC: "DM Rec", DM_PLAY: "DM Play"
 };
+
+// true für dynamische Makros DM_REC und DM_PLAY (nur Master, keine Combo-Aktion)
+function isDynamicMacroCode(code) {
+  return /^(ACT_)?DM_(REC|PLAY)$/.test(String(code || ""));
+}
 
 // true für One-Shot-Ebenen OSL_0 .. OSL_7 (Combos führen sie nicht aus)
 function isOslCode(code) {

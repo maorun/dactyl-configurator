@@ -762,6 +762,21 @@ void stopMacro(bool releaseKeys) {
 void macroTick(unsigned long now);
 bool macroRunStep(const MacroStep &st);
 
+// Der Slot des dynamischen Makros (nur Master, DACTYL_DYNAMIC_MACRO) läuft mit dem Index DM_SLOT_INDEX durch dieselbe Engine
+#define DM_SLOT_INDEX 0xFF
+uint8_t macroLengthOf(uint8_t idx) {
+#ifdef DACTYL_DYNAMIC_MACRO
+  if (idx == DM_SLOT_INDEX) return bleKeyboard.dynMacro.length;
+#endif
+  return macroLengths[idx];
+}
+const MacroStep &macroStepOf(uint8_t idx, uint8_t step) {
+#ifdef DACTYL_DYNAMIC_MACRO
+  if (idx == DM_SLOT_INDEX) return bleKeyboard.dynMacro.steps[step];
+#endif
+  return userMacros[idx][step];
+}
+
 // Startet das Makro. Ein laufendes Makro läuft zu Ende: ein weiterer Start während des Laufs entfällt.
 bool startMacro(uint16_t action, unsigned long now) {
   if (macroRun.active || isConfigMode || !bleKeyboard.isConnected()) return false;
@@ -774,6 +789,57 @@ bool startMacro(uint16_t action, unsigned long now) {
   // Erster Schritt sofort, die weiteren aus processDeferredKeys()
   macroTick(now);
   return true;
+}
+
+// Dynamisches Makro (DM_REC, DM_PLAY): nur der Master hat den Slot. Auf der linken Hälfte tun beide Aktionen nichts.
+// DM_REC schaltet die Aufnahme um; DM_PLAY beendet eine laufende Aufnahme (ohne abzuspielen, damit das Abspielen
+// nicht in den Slot läuft) oder spielt den Slot ab. Während des Abspielens startet keine neue Aufnahme.
+void dynamicMacroPress(uint16_t action, unsigned long now) {
+#ifdef DACTYL_DYNAMIC_MACRO
+  DynamicMacro &dm = bleKeyboard.dynMacro;
+  if (isConfigMode || !bleKeyboard.isConnected()) return;
+  if (action == ACT_DM_REC) {
+    if (dm.recording) dm.stopRecording();
+    else if (!macroRun.active) dm.startRecording();  // ein laufendes Makro würde sonst mit aufgenommen
+  } else if (action == ACT_DM_PLAY) {
+    if (dm.recording) {
+      dm.stopRecording();
+    } else if (dm.length > 0 && !macroRun.active) {
+      macroRun = {};
+      macroRun.active = true;
+      macroRun.index = DM_SLOT_INDEX;
+      macroRun.stepTime = now;
+      macroTick(now);
+    }
+  }
+#else
+  (void)action;
+  (void)now;
+#endif
+}
+
+// Slot und Aufnahme verwerfen (Config Mode, Neustart); ein laufendes Abspielen endet vorher mit stopMacro
+// Stand beim nächsten Durchlauf erneut melden (GET_INFO): eine App, die sich während der Aufnahme verbindet, sieht sie
+void dynamicMacroResend() {
+#ifdef DACTYL_DYNAMIC_MACRO
+  bleKeyboard.dynMacro.reported = -1;
+#endif
+}
+
+void dynamicMacroReset() {
+#ifdef DACTYL_DYNAMIC_MACRO
+  bleKeyboard.dynMacro.clear();
+#endif
+}
+
+// Im Hauptdurchlauf: neue Zeile "DM_REC:0|1" auf USB-Serial (nie über BLE), wenn sich der Aufnahmestand ändert
+void dynamicMacroService() {
+#ifdef DACTYL_DYNAMIC_MACRO
+  // Ohne Mac oder im Config Mode erreicht keine Taste den HID-Pfad: die Aufnahme endet, statt veraltet zu bleiben
+  if (bleKeyboard.dynMacro.recording && (isConfigMode || !bleKeyboard.isConnected())) bleKeyboard.dynMacro.stopRecording();
+  char line[16];
+  if (dynamicMacroTakeLine(bleKeyboard.dynMacro, line, sizeof(line))) Serial.println(line);
+#endif
 }
 
 // Höchstens ein HID-Ereignis pro Aufruf; Wartezeiten blockieren loop() nicht
@@ -794,15 +860,15 @@ void macroTick(unsigned long now) {
   if (macroRun.tapCode) {
     bleKeyboard.release(macroRun.tapCode);
     macroRun.tapCode = 0;
-  } else if (macroRun.step >= macroLengths[macroRun.index]) {
+  } else if (macroRun.step >= macroLengthOf(macroRun.index)) {
     // Ende: mit DOWN gedrückte Codes in umgekehrter Reihenfolge loslassen, einen pro Aufruf
     if (macroRun.numHeld > 0) bleKeyboard.release(macroRun.held[--macroRun.numHeld]);
   } else {
-    pausing = macroRunStep(userMacros[macroRun.index][macroRun.step++]);
+    pausing = macroRunStep(macroStepOf(macroRun.index, macroRun.step++));
   }
   // Nichts mehr offen: sofort beenden, damit ein neuer Druck das Makro ohne Verzögerung startet.
   // Eine Pause als letzter Schritt läuft erst ab; das Ende folgt im ersten Aufruf danach.
-  if (!pausing && macroRun.step >= macroLengths[macroRun.index] && !macroRun.tapCode && macroRun.numHeld == 0) {
+  if (!pausing && macroRun.step >= macroLengthOf(macroRun.index) && !macroRun.tapCode && macroRun.numHeld == 0) {
     macroRun = {};
   }
 }
@@ -1165,6 +1231,18 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         keySentToHost[r][c] = true;
       }
     }
+  } else if (isDynamicMacroAction(action)) {
+    const char* dmName = action == ACT_DM_REC ? "DM Rec" : "DM Play";
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, dmName, action, currentLayer);
+    sendConfigNotification(String(buf));
+    Serial.printf("%s gedrückt: [R%d, C%d] (L%d)\n", dmName, r, c, currentLayer);
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
+        dynamicMacroPress(action, millis());
+        keySentToHost[r][c] = true;
+      }
+    }
   } else if (isUmlautAction(action)) {
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Umlaut %d\",\"code\":%d,\"layer\":%d}", r, c, action - ACT_UMLAUT_BASE, action, currentLayer);
@@ -1324,6 +1402,15 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         keySentToHost[r][c] = false;
       } else if (!wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
         sendUmlaut(action);
+      }
+    }
+  } else if (isDynamicMacroAction(action)) {
+    // Die Aktion lief schon beim Drücken; nur ein gepufferter Combo-Kandidat führt sie jetzt aus
+    if (!isConfigMode && bleKeyboard.isConnected()) {
+      if (keySentToHost[r][c]) {
+        keySentToHost[r][c] = false;
+      } else if (!wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
+        dynamicMacroPress(action, millis());
       }
     }
   } else if (isMacroAction(action)) {
@@ -1630,6 +1717,9 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       keySentToHost[r][c] = true;
     } else if (isMacroAction(act)) {
       startMacro(act, millis());
+      keySentToHost[r][c] = true;
+    } else if (isDynamicMacroAction(act)) {
+      dynamicMacroPress(act, millis());
       keySentToHost[r][c] = true;
     } else if (isRepeatKeyAction(act)) {
       repeatStartAt(r, c, act == ACT_ALT_REPEAT);
@@ -1983,6 +2073,9 @@ void processDeferredKeys(unsigned long now) {
               keySentToHost[r][c] = true;
             } else if (isMacroAction(act)) {
               startMacro(act, now);
+              keySentToHost[r][c] = true;
+            } else if (isDynamicMacroAction(act)) {
+              dynamicMacroPress(act, now);
               keySentToHost[r][c] = true;
             } else if (isRepeatKeyAction(act)) {
               repeatStartAt(r, c, act == ACT_ALT_REPEAT);
@@ -3168,7 +3261,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         mask >= 1 && mask <= 0xFF &&
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
-        beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) &&
+        beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
         !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
@@ -3283,6 +3376,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
       sendConfigNotification("CONFIG_SYNC_DONE", true);
     }
   } else if (cmd == "GET_INFO") {
+    dynamicMacroResend();
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
     // Tri-Layer-Regeln als Liste [[a,b,target],...]

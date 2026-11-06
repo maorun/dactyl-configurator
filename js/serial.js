@@ -125,6 +125,7 @@ async function disconnectSerialNow() {
   serialReader = null;
   forgetSplitLink();
   forgetHostLeds();
+  forgetDmRec();
   abortDeviceSnapshotReadIfDisconnected();
   updateConnectionUI(false, "Nicht verbunden");
   showToast("ESP32 getrennt.");
@@ -321,6 +322,24 @@ function updateHostLedsUI() {
   pill.hidden = !view.capsOn;
   pill.title = view.title;
 }
+// Aufnahmestand des dynamischen Makros (DM_REC:0|1): Pill "Makro REC", sichtbar nur während der Aufnahme.
+// Die Zeile kommt nur vom Master und nur über USB; endet die Verbindung, gilt der Stand nicht mehr.
+let dmRecording = false;
+function noteDmRec(recording) {
+  if (recording === undefined) return;
+  dmRecording = recording;
+  updateDmRecUI();
+}
+function updateDmRecUI() {
+  const pill = document.getElementById("dmRecPill");
+  if (pill) pill.hidden = !dmRecording;
+}
+function forgetDmRec() {
+  if (Dactyl.splitLinkStaysValid(connectionState())) return;
+  dmRecording = false;
+  updateDmRecUI();
+}
+
 function forgetHostLeds() {
   // Der Stand kommt nur über USB vom Master: er bleibt gültig, solange diese Verbindung besteht
   if (Dactyl.splitLinkStaysValid(connectionState())) return;
@@ -534,6 +553,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
   // 2a''. LED-Zustand des Hosts (Num/Caps/Scroll Lock), nur vom Master und nur über USB-Serial
   else if (line.startsWith("HOST_LEDS:")) {
     if (transport === "usb") noteHostLeds(Dactyl.parseHostLedsLine(line, lineSide));
+  }
+
+  // 2a'''. Aufnahmestand des dynamischen Makros (DM_REC:0|1), nur vom Master und nur über USB-Serial
+  else if (line.startsWith("DM_REC:")) {
+    if (transport === "usb") noteDmRec(Dactyl.parseDmRecLine(line, lineSide));
   }
 
   // 2a'. Funkverbindung zur Sender-Hälfte, vom Master gemeldet (SPLIT_LINK, nur USB)

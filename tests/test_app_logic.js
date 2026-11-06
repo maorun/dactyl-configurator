@@ -49,7 +49,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_KEY_OVERRIDES, KEY_OVERRIDE_MODS, isValidKeyOverride, isKeyOverrideMember, keyOverrideModsValue,
              normalizeKeyOverride, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
              isValidMacroStep, isValidMacro, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode,
+             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -1229,6 +1229,7 @@ function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + 
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
 ${section("js/serial.js", "// LED-Zustand des Hosts:", "function switchLayerUI")}
 this.hostCaps = () => hostLedsState && hostLedsState.caps;
+this.dmRec = () => dmRecording; this.parse = Dactyl.parseDmRecLine;
 this.handle = handleSerialLine; this.settingOf = (side, k) => configs[side].settings[k]; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
 this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);
 this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
@@ -1236,7 +1237,7 @@ this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
   const plain = v => JSON.parse(JSON.stringify(v));
   return {
     warns: calls.warns, handle: (...a) => s.handle(...a), settingOf: (side, k) => s.settingOf(side, k), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
-    layerCounts: (side, l) => plain(s.layerCounts(side, l)), hostCaps: () => s.hostCaps(),
+    layerCounts: (side, l) => plain(s.layerCounts(side, l)), hostCaps: () => s.hostCaps(), dmRec: () => s.dmRec(), parse: (...a) => s.parse(...a),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
     set snapshotActive(v) { s.snapshotActive = v; },
     setLoadSide(v) { vm.runInContext("deviceLoadSide = " + JSON.stringify(v), s); },
@@ -2792,6 +2793,70 @@ test("One-Shot-Modifier und Caps Word: Aktionscodes wie DactylCommon.h, Labels u
   assert.strictEqual(fw("ALT_REPEAT"), 0x16B);
   assert.strictEqual(api.actionCodeToNumeric("ALT_REPEAT"), 0x16B);
   assert.strictEqual(api.holdSublabel("ALT_REPEAT"), "AltRep");
+});
+
+test("Dynamisches Makro: DM_REC und DM_PLAY wie DactylCommon.h, Auswahl, Rückweg und kein Combo-Ziel", () => {
+  const common = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylCommon.h"), "utf8");
+  const fw = name => Number(new RegExp(`#define ACT_${name}\\s+(0x[0-9A-F]+)`).exec(common)[1]);
+  assert.strictEqual(fw("DM_REC"), 0x16C);
+  assert.strictEqual(fw("DM_PLAY"), 0x16D);
+  const all = api.KEYCODES.flatMap(g => g.keys);
+  for (const code of ["DM_REC", "DM_PLAY"]) {
+    assert.strictEqual(api.actionCodeToNumeric(code), fw(code), code);
+    assert.ok(all.some(k => k.code === code), `${code} in der Auswahl`);
+    const label = api.ONE_SHOT_LABELS[code];
+    assert.ok(label && label.length <= 8, code);
+    assert.deepStrictEqual({ ...api.findDefinitionByCode(fw(code)) }, { label, tap: code });
+    assert.ok(!api.isKeyPairMember(code), `${code} ist kein Paar-Mitglied`);
+    assert.ok(api.isDynamicMacroCode(code) && api.isDynamicMacroCode(`ACT_${code}`));
+  }
+  assert.ok(!api.isDynamicMacroCode("REPEAT") && !api.isDynamicMacroCode("MACRO_0") && !api.isDynamicMacroCode("DM_RECX"));
+  // Die Codes dürfen mit keinem anderen Bereich kollidieren
+  assert.ok(fw("DM_PLAY") < fw("MACRO_BASE"));
+  // Combos führen sie nicht aus
+  const cfg = JSON.parse(JSON.stringify(api.SIDE_PROFILES.R.defaultConfig));
+  cfg.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "DM_REC", layerMask: 255 }];
+  let message = "";
+  try { api.validateConfigShape(cfg, api.SIDE_PROFILES.R); } catch (err) { message = String(err && err.message); }
+  assert.match(message, /keine dynamischen Makros/);
+  cfg.combos[0].action = "KEY_A";
+  api.validateConfigShape(cfg, api.SIDE_PROFILES.R);
+  // Den Slot hat nur der Master: links wird DM_REC/DM_PLAY als Tap, Halten oder Doppel-Tipp abgelehnt
+  const withDm = (profile, where) => {
+    const c = JSON.parse(JSON.stringify(profile.defaultConfig));
+    c.combos = [];
+    c.layers[0][2][1] = where === "tap" ? "DM_REC" : { tap: "KEY_A", [where]: "DM_PLAY" };
+    return c;
+  };
+  for (const where of ["tap", "hold", "dtap"]) {
+    api.validateConfigShape(withDm(api.SIDE_PROFILES.R, where), api.SIDE_PROFILES.R);
+    let msg = "";
+    try { api.validateConfigShape(withDm(api.SIDE_PROFILES.L, where), api.SIDE_PROFILES.L); } catch (err) { msg = String(err && err.message); }
+    assert.match(msg, /nur für die/, where);
+  }
+});
+
+test("serial.js: DM_REC zeigt die Aufnahme nur vom Master über USB", () => {
+  const s = serialLineHarness();
+  assert.strictEqual(s.dmRec(), false);
+  s.handle("DM_REC:1", "R", "usb");
+  assert.strictEqual(s.dmRec(), true);
+  s.handle("DM_REC:0", "R", "usb");
+  assert.strictEqual(s.dmRec(), false);
+  // Linke Hälfte, BLE und ungültige Zeilen ändern den Stand nicht
+  s.handle("DM_REC:1", "L", "usb");
+  s.handle("DM_REC:1", "R", "ble");
+  assert.strictEqual(s.dmRec(), false);
+  s.handle("DM_REC:1", "R", "usb");
+  for (const bad of ["DM_REC:2", "DM_REC:", "DM_REC:x", "DM_REC:11"]) s.handle(bad, "R", "usb");
+  assert.strictEqual(s.dmRec(), true);
+  assert.strictEqual(s.parse("DM_REC:1", "R"), true);
+  assert.strictEqual(s.parse("DM_REC:0", "R"), false);
+  assert.strictEqual(s.parse("DM_REC:1", "L"), undefined);
+  assert.strictEqual(s.parse("DM_REC:9", "R"), undefined);
+  assert.strictEqual(s.parse(null, "R"), undefined);
+  const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert.ok(/id="dmRecPill"[^>]*\bhidden\b/.test(html));
 });
 
 test("Mausbewegung: Aktionscodes wie DactylCommon.h, Auswahl, Rückweg und kein Combo-Ziel", () => {

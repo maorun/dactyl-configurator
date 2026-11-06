@@ -142,6 +142,8 @@ KeyPair userKeyPairs[MAX_KEY_PAIRS] = {
 
 // Tasten-Überschreibungen (nur der Master): Modifier + Taste ergibt eine andere Taste
 #define DACTYL_KEY_OVERRIDES
+// Dynamisches Makro (DM_REC, DM_PLAY): nur der Master hat den Slot (DactylDynamicMacro.h)
+#define DACTYL_DYNAMIC_MACRO
 // [[[START_KEY_OVERRIDES]]]
 uint8_t numKeyOverrides = 0;
 KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES] = {
@@ -176,6 +178,7 @@ void enterConfigMode() {
   enterConfigRequested = false;
 
   stopMacro(false);
+  dynamicMacroReset();
   resetMouseMove();
   oslClearAll();
   bleKeyboard.releaseAll();
@@ -942,6 +945,7 @@ void setup() {
 
 void loop() {
   hostLedsService(bleKeyboard.hostLeds);
+  dynamicMacroService();
   // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende
   const uint32_t diagLoopStartUs = micros();
   static unsigned long lastHeartbeat = 0;

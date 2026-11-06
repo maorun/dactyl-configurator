@@ -13,6 +13,7 @@
 #include "DactylKeycodes.h" // dactylAsciiToHid, KEY_LEFT_SHIFT (implizites Shift großer/gesetzter Zeichen)
 #include "DactylOneShot.h"  // One-Shot-Modifier und Caps Word (Zustand auf dem Master)
 #include "DactylKeyOverride.h" // Tasten-Überschreibungen (Modifier + Taste ergibt eine andere Taste)
+#include "DactylDynamicMacro.h" // Aufnahme eines dynamischen Makros (ACT_DM_REC)
 #include "DactylCommon.h"      // HoldTapMode, Aktionscodes, KeyCombo, KeyPair
 #include "DactylVersion.h"  // DACTYL_FW_VERSION (SPLIT_OP_FW_VERSION)
 
@@ -1637,8 +1638,12 @@ public:
   // One-Shot-Modifier und Caps Word beider Hälften (DactylOneShot.h)
   OneShotState oneShot = {};
 
+  // Dynamisches Makro: nimmt die Tastencodes beider Hälften auf, solange recording gilt (DactylDynamicMacro.h)
+  DynamicMacro dynMacro = {};
+
   // --- Rechte Hälfte (DactylLogic.h) ---
   size_t press(uint8_t k) {
+    dynMacro.noteDown(k);
     const KeyOverride *o = overrideFor(k);
     // Ein erneuter Druck ohne Loslassen: die alte Ersatztaste lösen, oder die schon gedrückte Taste selbst,
     // wenn jetzt eine Überschreibung greift. Sonst bliebe eine von beiden im Report hängen.
@@ -1656,6 +1661,8 @@ public:
   }
   size_t release(uint8_t k) {
     splitSetKey(right, k, false);
+    // Das Loslassen zählt erst, wenn auch die linke Hälfte den Code nicht mehr hält
+    if (!splitSetHasKey(splitLeft.set, k)) dynMacro.noteUp(k);
     if (overrideRelease(ovrRight, k)) return 1;
     if (splitSetHasKey(splitLeft.set, k) || overrideReplacementActive(k)) return 1;
     return releaseKeepingShift(k, splitLeft.set);
@@ -1719,6 +1726,7 @@ public:
     if (right.oneShot) oneShotKeyUp(oneShot, right.oneShot, false);
     splitSetClear(right);
     overrideClear(ovrRight);
+    dynMacro.noteReleaseAll([this](uint8_t k) { return splitSetHasKey(splitLeft.set, k); });
     if (!splitSetAny(splitLeft.set)) {
       Hid::releaseAll();
       return;
@@ -1736,6 +1744,8 @@ public:
     splitSetClear(splitLeft.set);
     overrideClear(ovrRight);
     overrideClear(ovrLeft);
+    dynMacro.noteReleaseAll([](uint8_t) { return false; });
+    dynMacro.stopRecording();  // ohne Mac erreicht keine Taste mehr den Report
     oneShotReset(oneShot);
     Hid::releaseAll();
   }
@@ -1751,6 +1761,7 @@ public:
 
   // --- Linke Hälfte (SplitHidSink, Zustand ist vorher aktualisiert) ---
   void leftKeyPress(uint8_t code) override {
+    dynMacro.noteDown(code);
     const KeyOverride *o = overrideFor(code);
     uint8_t mods = oneShotModsForKey(oneShot, heldOneShot(), o ? o->replacement : code, altInReport());
     if (o) {
@@ -1760,6 +1771,7 @@ public:
     pressWithMods(code, mods);
   }
   void leftKeyRelease(uint8_t code) override {
+    if (!splitSetHasKey(right, code)) dynMacro.noteUp(code);
     if (overrideRelease(ovrLeft, code)) return;
     if (!splitSetHasKey(right, code) && !overrideReplacementActive(code)) releaseKeepingShift(code, right);
   }

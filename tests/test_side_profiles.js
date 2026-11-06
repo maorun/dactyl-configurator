@@ -692,6 +692,28 @@ test("Firmwarestand: DactylVersion.h ist die einzige Quelle beider Hälften", ()
   assert.ok(rightIno.includes('SPLIT_FW:{\\"fw\\":%ld}'));
 });
 
+test("Dynamisches Makro: Slot nur auf dem Master, nur im RAM, Zeile nur über USB", () => {
+  const dm = read("firmware/dactyl_right/DactylDynamicMacro.h");
+  const split = read("firmware/dactyl_right/DactylSplitHid.h");
+  // Der Master nimmt die Tasten beider Hälften im gemeinsamen HID-Pfad auf
+  assert.ok(rightIno.includes("#define DACTYL_DYNAMIC_MACRO"));
+  assert.ok(!leftIno.includes("DACTYL_DYNAMIC_MACRO") && !leftIno.includes("dynMacro"));
+  for (const hook of ["dynMacro.noteDown(k)", "dynMacro.noteDown(code)", "dynMacro.noteUp(k)", "dynMacro.noteUp(code)"]) {
+    assert.ok(split.includes(hook), hook);
+  }
+  // Nie im NVS, nie in GET_CONFIG
+  assert.ok(!/Preferences|putBytes|putUChar|sendConfigNotification/.test(dm));
+  assert.ok(!/dynMacro|DM_REC|DynamicMacro/.test(logic.slice(logic.indexOf('cmd == "GET_CONFIG"'), logic.indexOf('cmd == "GET_DIAG"'))));
+  // Zeile nur über USB-Serial, nie über BLE
+  const svc = logic.slice(logic.indexOf("void dynamicMacroService()"), logic.indexOf("// Höchstens ein HID-Ereignis pro Aufruf"));
+  assert.ok(svc.includes("Serial.println(line)") && !svc.includes("sendConfigNotification"));
+  assert.ok(rightIno.includes("dynamicMacroService();"));
+  // Config Mode leert den Slot
+  assert.ok(/void enterConfigMode\(\) \{[\s\S]*?dynamicMacroReset\(\);/.test(rightIno));
+  // Der Firmwarestand ist gestiegen (neue Aktionen und Serial-Zeile)
+  assert.ok(Number(define(read("firmware/dactyl_right/DactylVersion.h"), "DACTYL_FW_VERSION")) >= 25);
+});
+
 test("Firmwarestand: links meldet ihn mit dem Lebenszeichen, gleich nach jedem Start von ESP-NOW", () => {
   const fnBody = (src, sig) => {
     const start = src.indexOf(sig);

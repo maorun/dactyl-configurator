@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Record macros on the keyboard (`DM_REC`, `DM_PLAY`)
-
-- **Rank:** Feature model. Total 21/40 (typing 5, configuration 4, harmony 7, safety 5). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h` (new action codes, `MACRO_STEP_DOWN`, `MACRO_STEP_UP`, `MAX_MACRO_STEPS`), `firmware/dactyl_right/DactylLogic.h` (macro engine), `firmware/dactyl_right/DactylSplitHid.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** A macro needs the app and a sync. A user who repeats an edit many times, for example in a text file, cannot record it during the work.
-- **Goal:** Add the actions `DM_REC` and `DM_PLAY` for one slot on the master. `DM_REC` starts and stops the recording of the key presses and releases of both halves (the master already runs the left key events). The recording holds up to `MAX_MACRO_STEPS` steps and stops at the limit. `DM_PLAY` runs it with the macro engine. The recording stays in RAM only: a restart, deep sleep and config mode clear it, and `GET_CONFIG` does not send it, because it can hold a password. The app shows the recording state from a USB serial line. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test records a key sequence of both halves and checks the steps, the stop at the limit and the playback. A test checks that `DM_REC` and `DM_PLAY` are not recorded and that a restart clears the slot.
-
 ## Priority 4
 
 ### Leader key (`LEADER`)

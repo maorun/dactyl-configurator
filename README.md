@@ -249,6 +249,8 @@ dactyl_configurator/
 | `0x168` | Caps Word | `ACT_CAPS_WORD` (`CAPS_WORD`) | Buchstaben groß bis zum Wortende (Leertaste, Satzzeichen) |
 | `0x169` | Repeat | `ACT_REPEAT` (`REPEAT`) | Wiederholt die zuletzt ausgeführte Aktion, auch die der anderen Hälfte (Layer-Aktionen und reine Modifier zählen nicht) |
 | `0x16B` | Alt Repeat | `ACT_ALT_REPEAT` (`ALT_REPEAT`) | Wiederholt das Gegenteil der letzten Aktion (←/→, ↑/↓, Bild↑/↓, Pos1/Ende, Backspace/Entf, Scrollen, Lautstärke, Titel); ohne Gegenteil sendet die Taste nichts |
+| `0x16C` | Makro aufnehmen | `ACT_DM_REC` (`DM_REC`) | Startet und beendet die Aufnahme eines Makros auf dem Master: die Tasten beider Hälften landen in einem RAM-Slot (höchstens 32 Schritte). Nur die rechte Hälfte; der Slot geht bei Neustart, Deep Sleep und Config Mode verloren |
+| `0x16D` | Makro abspielen | `ACT_DM_PLAY` (`DM_PLAY`) | Spielt den aufgenommenen Slot mit der Makro-Engine ab; während der Aufnahme beendet die Taste nur die Aufnahme |
 | `0x170` .. `0x17F` | Makro | `ACT_MACRO_BASE` + n (`MACRO_0` .. `MACRO_15`) | Spielt eine Folge aus Tippen, Drücken, Loslassen und Pausen (max. 32 Schritte) |
 
 ---

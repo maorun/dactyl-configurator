@@ -618,6 +618,15 @@ function validateConfigShape(cfg, profile) {
   if ((cfg.combos || []).some(cb => cb && macroIndexFromCode(cb.action) >= 0)) throw new Error("Combos unterstützen keine Makros.");
   if ((cfg.combos || []).some(cb => cb && isMouseMoveCode(cb.action))) throw new Error("Combos unterstützen keine Mausbewegung.");
   if ((cfg.combos || []).some(cb => cb && isOslCode(cb.action))) throw new Error("Combos unterstützen keine One-Shot-Ebene.");
+  if ((cfg.combos || []).some(cb => cb && isDynamicMacroCode(cb.action))) throw new Error("Combos unterstützen keine dynamischen Makros.");
+  // Den Slot hat nur der Master: auf der anderen Hälfte tun DM_REC und DM_PLAY nichts (wie validate_config in server.py)
+  if (profile && !profile.master && Array.isArray(cfg.layers) &&
+      cfg.layers.some(layer => Array.isArray(layer) && layer.some(row => Array.isArray(row) && row.some(cell => {
+        const actions = typeof cell === "string" ? [cell] : (cell && typeof cell === "object" ? [cell.tap, cell.hold, cell.dtap] : []);
+        return actions.some(isDynamicMacroCode);
+      })))) {
+    throw new Error(`Dynamische Makros (DM_REC, DM_PLAY) gelten nur für die ${Dactyl.SIDE_PROFILES[Dactyl.getMasterSide()].label} (Master).`);
+  }
   if (cfg.layerNames !== undefined && !Array.isArray(cfg.layerNames)) throw new Error("'layerNames' muss eine Liste sein.");
   if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");
   const absent = Dactyl.absentKeyViolations(profile, cfg);

@@ -21,6 +21,51 @@ Rules for this file:
 
 ## Priority 3
 
+### Signal quality of the split link
+
+- **Rank:** Feature model. Total 24/40 (typing 1, configuration 7, harmony 7, safety 9). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`onSplitDataRecv`), `firmware/dactyl_right/DactylSplitHid.h` (`SplitLeftHeld`, `splitLeftLinkJson`, `SplitLinkReporter`), `js/side-routing.js` (`parseSplitLinkLine`, `describeSplitLink`), `js/serial.js` (`updateSplitLinkUI`), `tests/test_app_logic.js`.
+- **Problem:** The split link pill shows only "verbunden" or "getrennt" and the loss counters. The user cannot see a weak radio signal before keys of the left half get lost, for example after a change of the case or of the desk position.
+- **Goal:** Read `info->rx_ctrl->rssi` in `onSplitDataRecv` for each packet that passes the decryption and the format check, so a spoofed packet does not change the value. Keep an exponential average and the minimum since the start in `SplitLeftHeld`. Add `rssi` and `rssi_min` (dBm, `null` without a packet) to `splitLeftLinkJson`. Make sure that `DEVICE_INFO` still fits the 448-byte `GET_INFO` buffer. The app shows both values in the pill tooltip and marks the pill yellow below -80 dBm. `DACTYL_FW_VERSION` stays unchanged, because the radio protocol does not change.
+- **Acceptance test:** A firmware test feeds a series of RSSI values and checks the average, the minimum, the value `null` without a packet and the JSON. An app test parses a line with and without `rssi` and checks the yellow state.
+
+### Action search across both halves
+
+- **Rank:** Feature model. Total 24/40 (typing 1, configuration 7, harmony 6, safety 10). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/config-model.js` (new pure function `findActionUsages`), `js/editor.js` (keycode search, layer selection), `js/editor-events.js`, `index.html`, `tests/test_app_logic.js`.
+- **Problem:** Each half has 8 layers, combos, key pairs, key overrides and macros. The user cannot see where an action is used, for example `Esc` or `MO_3`. A manual search through all layers is slow and misses combos and macro steps.
+- **Goal:** Add a search field "Aktion suchen" to the editor. It uses the existing keycode search. `findActionUsages(config, code)` lists each hit of both halves: layer, key position and slot (tap, hold, double-tap), combo, key pair, key override and macro step. Transparent keys do not count. A click on a key hit selects the half, the layer and the key.
+- **Acceptance test:** A test builds a config with one action on a tap, a hold, a combo, a key pair, a key override and a macro step and expects all six hits. A test checks that a transparent key gives no hit.
+
+### Opposite-hand rule for Mod-Tap (chordal hold)
+
+- **Rank:** Feature model. Total 24/40 (typing 8, configuration 2, harmony 8, safety 6). Effort M. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylLogic.h` (`tapHoldOnPress`, `resolvePendingTapHoldsAsHold`, `holdTapMode`), `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_OP_HOLD_PENDING`, `SPLIT_OP_HOLD_RESOLVE`), `firmware/dactyl_left/DactylLeftLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `server.py` (`[[[START_SETTINGS]]]`), `js/editor.js`.
+- **Problem:** Home row mods resolve as hold when the user rolls two keys of the same hand. A modifier is useful mostly with a key of the other hand, but `holdTapMode` does not know the hand of the second key.
+- **Goal:** Add a setting per half `chordalHold` (default off). When a Mod-Tap key is open and the user presses another key of the same half, the Mod-Tap key resolves as tap at once, and the second key follows. A key of the other half keeps the decision of `holdTapMode`. Keys of the thumb row keep the decision of `holdTapMode` on both halves. Layer-Tap keys with `MO_n` keep their behavior. Add a command, an NVS key and a `DEVICE_INFO` field. Increase `DACTYL_FW_VERSION`.
+- **Dependency:** "Hold only after a typing pause" also changes the tap/hold resolution. Define the order of the two checks in the entry that comes second.
+- **Acceptance test:** A firmware test holds a Mod-Tap key and presses a key of the same half and expects the tap and then the second key. A test with a key of the other half expects the hold. A test with a thumb key and a test with the setting off expect the decision of `holdTapMode`.
+
+### One-shot layer (`OSL_0` .. `OSL_7`)
+
+- **Rank:** Feature model. Total 23/40 (typing 6, configuration 3, harmony 8, safety 6). Effort M. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylCommon.h` (new action range), `firmware/dactyl_right/DactylLogic.h` (layer resolution), `firmware/dactyl_right/DactylOneShot.h`, `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_OP_LAYER_STATE`), `firmware/dactyl_left/DactylLeftLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`, `js/config-model.js` (`lintLayouts`).
+- **Problem:** A user who needs one character from a symbol layer must hold `MO_n` during the key press, or must switch the layer twice with `TG_n`.
+- **Goal:** Add the actions `OSL_0` .. `OSL_7`. A tap arms the layer for the next key press of either half; after that press, the layer is released. A second tap disarms it. A hold acts like `MO_n` and arms nothing. The armed state goes to the other half with the layer state. The half that uses the armed layer reports the use, so the layer is used only once. `RELEASE_ALL`, a link timeout and a host loss clear the armed state. Increase `DACTYL_FW_VERSION`.
+- **Acceptance test:** A firmware test taps `OSL_2`, presses a key and expects the action of layer 2, then layer 0 for the next key. A test with a key of the other half expects the same. A test checks the hold, the second tap and the clear after a link timeout. An app test checks that `lintLayouts` counts the target layer as reachable.
+
+### Layout practice mode
+
+- **Rank:** Feature model. Total 23/40 (typing 4, configuration 3, harmony 6, safety 10). Effort M. Estimate.
+- **Area:** App, Server.
+- **Code:** new module `js/practice-ui.js`, `js/config-model.js` (new pure function for the reverse lookup of a character to key position, layer and modifiers; `DE_MAC_CHARS`, key pairs), `js/live-monitor.js`, `js/serial.js` (`handleSerialLine`, `KEY_PRESS`, `SPLIT_KEY`), `index.html`, `server.py` (`APP_MODULES`), `tests/test_app_logic.js`.
+- **Problem:** After a layout change, the user learns the new positions only during real work. The app shows the layout, but it does not train it and does not show which keys cause errors.
+- **Goal:** Add a dialog "Üben". It shows a text and marks the next key on the matrix of the correct half, with the layer and the needed modifier. It reads the key presses from `KEY_PRESS` and `SPLIT_KEY`, counts the errors per key and shows the speed. The user can use a word list from the most frequent keys of the heatmap. A character without a key position is marked before the start.
+- **Acceptance test:** A test checks the reverse lookup for a letter, a shifted character, a character on a layer and a character without a position. A test feeds key events and checks the error count per key and the speed.
 
 ### Hold only after a typing pause
 
@@ -40,6 +85,15 @@ Rules for this file:
 - **Goal:** Assign each column of both halves to a finger in the side profile. Show the press share per finger and per half next to the heatmap. Count same-finger sequences (two different keys of one finger in a row) and list the five most frequent pairs. Store the counters with the typing statistics.
 - **Acceptance test:** A test feeds key presses and checks the finger shares, the same-finger count and the storage format. A test checks that an older stored statistic still loads.
 
+### Alternate repeat (`ALT_REPEAT`)
+
+- **Rank:** Feature model. Total 22/40 (typing 5, configuration 2, harmony 8, safety 7). Effort S. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylCommon.h` (new action code), `firmware/dactyl_right/DactylLogic.h` (`lastRepeatAction`, `repeatPress`), `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_OP_REPEAT`, `SPLIT_OP_REPEAT_RUN`), `firmware/dactyl_left/DactylLeftLogic.h` (`LeftRepeatLink`), `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
+- **Problem:** `REPEAT` runs the last action again. A user who moves too far with an arrow key, or deletes too much, must reach for the opposite key.
+- **Goal:** Add the action `ALT_REPEAT`. It runs the opposite of the last action: Left and Right, Up and Down, Page Up and Page Down, Home and End, Backspace and Delete, wheel up and wheel down, volume up and volume down, next and previous track. A pure function `altRepeatAction(code)` holds the table and returns `0` for an action without an opposite; then the key sends nothing. Held modifiers stay applied, so `Cmd` + `ALT_REPEAT` after `Left` gives `Cmd` + `Right`. The action works across both halves like `REPEAT`, with a flag in the repeat operations. Increase `DACTYL_FW_VERSION`.
+- **Acceptance test:** A firmware test checks each pair of the table in both directions, an action without an opposite and an `ALT_REPEAT` on the left half after a right key.
+
 ### Read the complete configuration from the device
 
 - **Rank:** Feature model. Total 22/40 (typing 0, configuration 8, harmony 8, safety 6). Effort M. Estimate.
@@ -57,6 +111,15 @@ Rules for this file:
 - **Problem:** A combo has exactly two keys and uses the global `comboTimeoutMs`. Fast typists need a short window for combos on letter keys and a longer window for combos on thumb keys.
 - **Goal:** Add an optional third key and an optional window per combo (`0` = `comboTimeoutMs`). Use the `combos_v2` NVS format (see `FEATURES.md`, "Combos per layer"): it has reserved fields for the third key (`r3`, `c3`) and the window, so no new format is needed. Keep the old 8-byte `combos_data` format readable. Extend `ADD_COMBO` and `COMBO_DATA` with optional values after the layer mask. Increase `DACTYL_FW_VERSION`.
 - **Acceptance test:** A firmware test triggers a three-key combo only when all three keys arrive within the window of that combo. A test loads the old NVS format without data loss.
+
+### Record macros on the keyboard (`DM_REC`, `DM_PLAY`)
+
+- **Rank:** Feature model. Total 21/40 (typing 5, configuration 4, harmony 7, safety 5). Effort M. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylCommon.h` (new action codes, `MACRO_STEP_DOWN`, `MACRO_STEP_UP`, `MAX_MACRO_STEPS`), `firmware/dactyl_right/DactylLogic.h` (macro engine), `firmware/dactyl_right/DactylSplitHid.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
+- **Problem:** A macro needs the app and a sync. A user who repeats an edit many times, for example in a text file, cannot record it during the work.
+- **Goal:** Add the actions `DM_REC` and `DM_PLAY` for one slot on the master. `DM_REC` starts and stops the recording of the key presses and releases of both halves (the master already runs the left key events). The recording holds up to `MAX_MACRO_STEPS` steps and stops at the limit. `DM_PLAY` runs it with the macro engine. The recording stays in RAM only: a restart, deep sleep and config mode clear it, and `GET_CONFIG` does not send it, because it can hold a password. The app shows the recording state from a USB serial line. Increase `DACTYL_FW_VERSION`.
+- **Acceptance test:** A firmware test records a key sequence of both halves and checks the steps, the stop at the limit and the playback. A test checks that `DM_REC` and `DM_PLAY` are not recorded and that a restart clears the slot.
 
 ## Priority 4
 
@@ -78,6 +141,26 @@ Rules for this file:
 - **Goal:** Replace the global delay with a debounce state per key: a press is sent at once (eager), and changes of that key are ignored for `debounceMs`. A release is sent after the key stays open for `debounceMs`. The scan rate in standby stays unchanged.
 - **Acceptance test:** A firmware test feeds bouncing matrix samples and expects one press and one release. A test checks that the press is sent in the first pass.
 
+### Key lock (`KEY_LOCK`)
+
+- **Rank:** Feature model. Total 19/40 (typing 4, configuration 2, harmony 7, safety 6). Effort S. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylCommon.h` (new action code), `firmware/dactyl_right/DactylLogic.h` (action dispatch, key release), `firmware/dactyl_right/DactylBleComposite.h` (`releaseAll`), `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
+- **Problem:** A long drag with a mouse button key, a held `Shift` for a selection or a held game key needs a finger for the whole time.
+- **Goal:** Add the action `KEY_LOCK`. After it, the next key press of either half stays held after the release of the key. A second press of the same key releases it. Layer keys, `KEY_LOCK` itself and macros are not locked. `RELEASE_ALL`, a link timeout, a host loss, standby and config mode release each locked key. Increase `DACTYL_FW_VERSION`.
+- **Acceptance test:** A firmware test presses `KEY_LOCK`, then a mouse button key, releases it and expects the button still held; a second press releases it. A test checks the release after a link timeout and that a layer key is not locked.
+
+### Horizontal scroll and held wheel keys
+
+- **Rank:** Feature model. Total 18/40 (typing 4, configuration 2, harmony 7, safety 5). Effort S. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylHidDescriptor.h` (mouse report), `firmware/dactyl_right/DactylBleComposite.h` (`sendMouseReport`), `firmware/dactyl_right/DactylLogic.h` (`ACT_MOUSE_WHEEL_UP`, `ACT_MOUSE_WHEEL_DOWN`, `MOUSE_MOVE_INTERVAL_MS`), `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
+- **Problem:** The mouse keys scroll only up and down, and each press gives one wheel step. A long page needs many presses, and wide tables cannot scroll sideways.
+- **Goal:** Add the actions `MOUSE_WHEEL_LEFT` and `MOUSE_WHEEL_RIGHT` with the usage AC Pan (`0x0238`, Consumer page) in the mouse report. A held wheel key repeats its step with an acceleration, like the mouse movement. Increase `DACTYL_FW_VERSION`.
+- **Risk:** The report map changes. macOS caches the report map per address (see "macOS Bluetooth GATT Report Map Caching" in `AGENTS.md`). The pull request must describe the steps to pair again.
+- **Dependency:** "macOS system keys" also changes the report map. Do both changes in one pull request, so the user pairs again only once.
+- **Acceptance test:** A firmware test checks the report descriptor and the report bytes for each wheel direction. A test holds a wheel key and checks the repeat and the acceleration.
+
 ### Auto Shift
 
 - **Rank:** Feature model. Total 18/40 (typing 5, configuration 2, harmony 6, safety 5). Effort M. Estimate.
@@ -86,6 +169,17 @@ Rules for this file:
 - **Problem:** `Shift` on a little finger or on a Mod-Tap key causes strain and timing errors.
 - **Goal:** Add a setting per half (default off) and a timeout (default 175 ms). A letter, digit or symbol key without a hold action sends its shifted character when the user holds it longer than the timeout. Keys with a hold action, modifiers and layer keys stay unchanged. Caps Word and One-Shot `Shift` keep their behavior.
 - **Acceptance test:** A firmware test checks a short tap (`a`), a long hold (`A`), a key with a hold action (no Auto Shift) and the character order during a fast roll.
+
+### macOS system keys
+
+- **Rank:** Feature model. Total 17/40 (typing 5, configuration 1, harmony 6, safety 5). Effort S. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylHidDescriptor.h` (Consumer report, `MEDIA_KEYS_ID`), `firmware/dactyl_right/DactylBleComposite.h` (`MediaKeyReport`), `firmware/dactyl_right/DactylCommon.h` (media action codes), `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
+- **Problem:** The Consumer report has 16 bits, and all 16 usages are assigned. The keyboard cannot send display brightness, Mission Control or Launchpad.
+- **Goal:** Make the Consumer report 24 bits wide. Add the actions for Brightness Up (`0x006F`), Brightness Down (`0x0070`), Mission Control (AC Desktop Show All Windows, `0x029F`) and Launchpad (AC Desktop Show All Applications, `0x02A2`). Key pairs and macros accept the new codes. Increase `DACTYL_FW_VERSION`.
+- **Risk:** The report map changes. macOS caches the report map per address (see "macOS Bluetooth GATT Report Map Caching" in `AGENTS.md`). The pull request must describe the steps to pair again.
+- **Dependency:** "Horizontal scroll and held wheel keys" also changes the report map. Do both changes in one pull request.
+- **Acceptance test:** A firmware test checks the report descriptor, the report length and the bit of each new action. A test checks that the existing media keys keep their bits.
 
 ### BLE host slots
 

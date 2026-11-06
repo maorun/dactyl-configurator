@@ -602,6 +602,15 @@
           <button id="btnResetHeatmap" class="hand-btn" type="button" title="Heatmap und Anschlagzähler zurücksetzen">↺</button>
         </div>
 
+        <div class="finger-load" id="fingerLoad">
+          <span class="live-label">Fingerlast:</span>
+          <div class="finger-load-halves" id="fingerLoadHalves"></div>
+          <div class="finger-load-bars" id="fingerLoadBars"></div>
+          <span class="live-label">Gleicher Finger nacheinander:</span>
+          <span class="stat-badge" id="sameFingerTotal" title="Zwei verschiedene Tasten desselben Fingers (ohne Daumen) direkt nacheinander">0</span>
+          <span class="finger-load-pairs" id="sameFingerPairs"></span>
+        </div>
+
         <div class="combo-active-alert" id="comboActiveAlert" style="display: none;">
           <span class="combo-pulse">⚡</span>
           <span id="comboActiveText">COMBO AKTIV: J + K ➔ Escape</span>
@@ -944,13 +953,13 @@
   <script src="js/matrix-constants.js"></script>
   <script src="js/side-profiles.js?v=3"></script>
   <!-- Profile der Hälften: registrieren sich bei js/side-profiles.js; die erste Datei legt den Start fest -->
-  <script src="js/side-right.js?v=2"></script>
-  <script src="js/side-left.js?v=2"></script>
+  <script src="js/side-right.js?v=3"></script>
+  <script src="js/side-left.js?v=3"></script>
   <script src="js/side-state.js?v=1"></script>
   <script src="js/side-routing.js?v=6"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=3"></script>
-  <script src="js/config-model.js?v=7"></script>
+  <script src="js/config-model.js?v=9"></script>
   <script src="js/editor.js?v=6"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/key-overrides-ui.js?v=1"></script>
@@ -961,7 +970,7 @@
   <script src="js/ble.js?v=1"></script>
   <script src="js/serial.js?v=8"></script>
   <script src="js/live-monitor.js?v=2"></script>
-  <script src="js/heatmap.js?v=2"></script>
+  <script src="js/heatmap.js?v=3"></script>
   <script src="js/matrix-test.js?v=1"></script>
   <script src="js/layout-lint-ui.js?v=1"></script>
   <script src="js/layer-sheet-ui.js?v=1"></script>

@@ -39,15 +39,6 @@ Rules for this file:
 - **Goal:** Add a setting per half `requirePriorIdleMs` (0..500 ms, default 0 = off). A Mod-Tap key that is pressed less than this time after the last key press of either half resolves as tap at once. The last key press of the other half comes from the split events that already arrive. Layer-Tap keys with `MO_n` keep their behavior.
 - **Acceptance test:** A firmware test presses a key and then a Mod-Tap key within the time and expects the tap. A test with a longer pause expects the normal hold decision. A test with a key of the other half also expects the tap.
 
-### Finger load analysis
-
-- **Rank:** Feature model. Total 22/40 (typing 2, configuration 5, harmony 6, safety 9). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js` (`recordKeyPress`, `heatmapCounts`), `js/heatmap.js`, `js/matrix-constants.js`, `index.html`, `tests/test_app_logic.js`.
-- **Problem:** The heatmap shows the presses per key. It does not show the load per finger or the keys that one finger types twice in a row.
-- **Goal:** Assign each column of both halves to a finger in the side profile. Show the press share per finger and per half next to the heatmap. Count same-finger sequences (two different keys of one finger in a row) and list the five most frequent pairs. Store the counters with the typing statistics.
-- **Acceptance test:** A test feeds key presses and checks the finger shares, the same-finger count and the storage format. A test checks that an older stored statistic still loads.
-
 ### Alternate repeat (`ALT_REPEAT`)
 
 - **Rank:** Feature model. Total 22/40 (typing 5, configuration 2, harmony 8, safety 7). Effort S. Estimate.

@@ -32,7 +32,7 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTriLayers, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
-             createTypingStats, recordKeyPress, computeWpm, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
+             createTypingStats, recordKeyPress, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
              COMBO_ALL_LAYERS, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
@@ -295,6 +295,135 @@ test("Heatmap pro Ebene: Speicherform übersteht Laden, alte Form bleibt lesbar"
   const broken = api.createTypingStats({ layers: [1] }, R);
   assert.strictEqual(broken.total, 0);
   assert.deepStrictEqual({ ...api.heatmapCounts(broken, 0) }, {});
+});
+
+test("Fingerlast: jede Spalte beider Hälften gehört zu einem Finger, der Daumen zur Daumenzeile", () => {
+  assert.deepStrictEqual(Array.from(R.fingerCols), ["index", "index", "middle", "ring", "pinky", "pinky"]);
+  assert.deepStrictEqual(Array.from(L.fingerCols), Array.from(R.fingerCols).reverse());
+  assert.strictEqual(api.fingerOfKey(0, 0, R), "index");
+  assert.strictEqual(api.fingerOfKey(3, 5, R), "pinky");
+  assert.strictEqual(api.fingerOfKey(0, 0, L), "pinky");
+  assert.strictEqual(api.fingerOfKey(3, 5, L), "index");
+  assert.strictEqual(api.fingerOfKey(5, 3, R), "thumb");
+  assert.strictEqual(api.fingerOfKey(2, 6, R), "thumb");
+  assert.strictEqual(api.fingerOfKey(4, 0, R), null); // fehlende Taste
+  assert.strictEqual(api.fingerOfKey(9, 0, R), null);
+});
+
+test("Fingerlast: Anteile je Finger und je Hälfte", () => {
+  const r = api.createTypingStats(null, R);
+  const l = api.createTypingStats(null, L);
+  for (const [row, col] of [[2, 1], [2, 0], [1, 2], [1, 4], [5, 3], [5, 3]]) api.recordKeyPress(r, row, col, 0, 0);
+  api.recordKeyPress(l, 2, 1, 0, 0);
+  const share = Object.fromEntries(api.fingerLoad(r).map(f => [f.finger, f]));
+  assert.deepStrictEqual(Array.from(api.fingerLoad(r).map(f => f.finger)), Array.from(api.FINGER_IDS));
+  assert.strictEqual(share.index.count, 2);
+  assert.strictEqual(share.middle.count, 1);
+  assert.strictEqual(share.pinky.count, 1);
+  assert.strictEqual(share.thumb.count, 2);
+  assert.strictEqual(share.ring.count, 0);
+  assert.ok(Math.abs(share.thumb.share - 2 / 6) < 1e-9);
+  assert.ok(Math.abs(api.fingerLoad(r).reduce((a, f) => a + f.share, 0) - 1) < 1e-9);
+  assert.strictEqual(api.fingerLoad(api.createTypingStats(null, R)).every(f => f.share === 0), true);
+  const halves = api.halfLoad([{ side: "L", stats: l }, { side: "R", stats: r }]);
+  assert.deepStrictEqual(Array.from(halves.map(h => h.side)), ["L", "R"]);
+  assert.ok(Math.abs(halves[0].share - 1 / 7) < 1e-9 && Math.abs(halves[1].share - 6 / 7) < 1e-9);
+  assert.strictEqual(api.halfLoad([{ side: "R", stats: api.createTypingStats(null, R) }])[0].share, 0);
+});
+
+test("Fingerlast: gleicher Finger nacheinander zählt nur verschiedene Tasten ohne Daumen", () => {
+  const s = api.createTypingStats(null, R);
+  api.recordKeyPress(s, 1, 1, 0); // erste Taste: keine Folge
+  api.recordKeyPress(s, 2, 1, 1); // Zeigefinger, andere Taste: 1
+  api.recordKeyPress(s, 1, 1, 2); // Rückrichtung zählt als dasselbe Paar: 2
+  api.recordKeyPress(s, 1, 1, 3); // dieselbe Taste zweimal: keine Folge
+  api.recordKeyPress(s, 1, 2, 4); // anderer Finger: keine Folge
+  api.recordKeyPress(s, 5, 3, 5); // Daumen
+  api.recordKeyPress(s, 5, 2, 6); // Daumen nacheinander: keine Folge
+  api.recordKeyPress(s, 4, 0, 7); // fehlende Taste ändert die Folge nicht
+  api.recordKeyPress(s, 1, 2, 8); // vorher 5_2, anderer Finger
+  assert.strictEqual(s.sameFingerTotal, 2);
+  assert.deepStrictEqual({ ...s.sameFingerPairs }, { "1_1|2_1": 2 });
+  assert.strictEqual(api.sameFingerPairKey("2_1", "1_1", R), "1_1|2_1");
+  assert.strictEqual(api.sameFingerPairKey("1_1", "1_1", R), null);
+  assert.strictEqual(api.sameFingerPairKey("5_3", "5_2", R), null);
+  // Die fünf häufigsten Paare, absteigend, bei Gleichstand nach Schlüssel
+  const t = api.createTypingStats(null, R);
+  const seq = [[0, 4], [1, 4], [0, 4], [1, 4], [0, 4], [2, 4], [0, 4], [3, 4], [0, 4], [0, 5], [1, 5], [0, 5], [2, 5], [0, 5], [3, 5]];
+  for (const [row, col] of seq) api.recordKeyPress(t, row, col, 0);
+  const top = api.topSameFingerPairs(t);
+  assert.strictEqual(top.length, 5);
+  assert.deepStrictEqual({ ...top[0] }, { a: "0_4", b: "1_4", count: 4 });
+  assert.ok(top.every((p, i) => i === 0 || top[i - 1].count >= p.count));
+  assert.strictEqual(api.topSameFingerPairs(t, 2).length, 2);
+});
+
+test("Fingerlast: Speicherform enthält die Folgen und übersteht Laden", () => {
+  const s = api.createTypingStats(null, R);
+  for (const [row, col] of [[1, 1], [2, 1], [1, 1], [0, 2]]) api.recordKeyPress(s, row, col, 0, 0);
+  const stored = JSON.parse(JSON.stringify(api.serializeTypingStats(s)));
+  assert.deepStrictEqual(stored.sameFinger, { pairs: { "1_1|2_1": 2 } }); // JSON-Kopie: gleicher Realm
+  // Eine ältere App-Version liest die Gesamtzähler weiter
+  assert.deepStrictEqual(Object.keys(stored).filter(k => /^(\d+)_(\d+)$/.test(k)).sort(), ["0_2", "1_1", "2_1"]);
+  const back = api.createTypingStats(stored, R);
+  assert.strictEqual(back.sameFingerTotal, 2);
+  assert.deepStrictEqual({ ...back.sameFingerPairs }, { "1_1|2_1": 2 });
+  assert.strictEqual(back.lastKeyId, null);
+  // Ungültige Einträge fallen heraus: anderer Finger, Daumen, falsche Ordnung, fehlende Taste, schlechte Zähler
+  const bad = api.createTypingStats(JSON.parse('{"1_1": 1, "sameFinger": {"pairs": {"1_1|2_1": 3, "2_1|1_1": 1, "1_1|1_2": 2, "5_3|5_2": 4, "4_0|3_0": 1, "1_1|2_1x": 1, "0_0|1_0": -1, "0_1|1_1": 1.5, "__proto__": 2}}}'), R);
+  assert.deepStrictEqual({ ...bad.sameFingerPairs }, { "1_1|2_1": 3 });
+  assert.strictEqual(bad.sameFingerTotal, 3);
+  for (const junk of [{ sameFinger: 5 }, { sameFinger: [] }, { sameFinger: { pairs: [1] } }, { sameFinger: null }]) {
+    assert.strictEqual(api.createTypingStats(junk, R).sameFingerTotal, 0);
+  }
+});
+
+test("Fingerlast: ältere gespeicherte Statistik ohne Folgen lädt sauber", () => {
+  // Form vor der Fingerlast und Form vor der Heatmap pro Ebene
+  for (const legacy of [{ "0_1": 4, "5_3": 2 }, { "0_1": 4, "5_3": 2, layers: { 0: { "0_1": 4 } } }]) {
+    const s = api.createTypingStats(JSON.parse(JSON.stringify(legacy)), R);
+    assert.strictEqual(s.total, 6);
+    assert.strictEqual(s.sameFingerTotal, 0);
+    assert.deepStrictEqual({ ...s.sameFingerPairs }, {});
+    assert.strictEqual(api.topSameFingerPairs(s).length, 0);
+    assert.strictEqual(api.fingerLoad(s).find(f => f.finger === "thumb").count, 2);
+    // Danach zählt die Statistik weiter und wird in der neuen Form gespeichert
+    api.recordKeyPress(s, 0, 1, 0);
+    api.recordKeyPress(s, 1, 1, 1);
+    assert.strictEqual(s.sameFingerTotal, 1);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(api.serializeTypingStats(s).sameFinger)), { pairs: { "0_1|1_1": 1 } });
+  }
+});
+
+test("Fingerlast: nach einer Pause beginnt eine neue Folge", () => {
+  const s = api.createTypingStats(null, R);
+  api.recordKeyPress(s, 1, 1, 0);
+  api.recordKeyPress(s, 2, 1, 1000); // genau an der Grenze: zählt
+  api.recordKeyPress(s, 1, 1, 2001); // 1001 ms nach der letzten Taste: zählt nicht
+  api.recordKeyPress(s, 2, 1, 2500); // wieder innerhalb der Grenze: zählt
+  assert.strictEqual(s.sameFingerTotal, 2);
+  assert.strictEqual(api.SAME_FINGER_MAX_GAP_MS, 1000);
+});
+
+test("Fingerlast: Anzeige füllt Hälften, Finger, Summe und Paarliste", () => {
+  const { w, dom } = uiHarness(`${section("js/heatmap.js", "function formatShare", "function onTypingStatsChanged")}
+var typingStatsBySide = { R: createTypingStats(null, SIDE_PROFILES.R), L: createTypingStats(null, SIDE_PROFILES.L) };
+function typingStatsFor(side) { return typingStatsBySide[side]; }`);
+  vm.runInContext(`recordKeyPress(typingStatsBySide.R, 1, 1, 0); recordKeyPress(typingStatsBySide.R, 2, 1, 10);
+    recordKeyPress(typingStatsBySide.R, 5, 3, 20); recordKeyPress(typingStatsBySide.L, 2, 1, 0); updateFingerLoadUI();`, w);
+  const el = id => dom.document.getElementById(id);
+  assert.strictEqual(el("fingerLoadHalves").textContent, "Linke Hand: 25 % · Rechte Hand: 75 %");
+  assert.strictEqual(el("fingerLoadBars").children.length, 5);
+  assert.ok(/Zeigefinger 67 %/.test(el("fingerLoadBars").children[3].textContent));
+  assert.strictEqual(el("sameFingerTotal").textContent, "1");
+  assert.strictEqual(el("sameFingerPairs").textContent, "R1C1 ↔ R2C1: 1");
+});
+
+test("Fingerlast: index.html enthält alle Elemente der Anzeige", () => {
+  const html = read("index.html");
+  for (const id of ["fingerLoad", "fingerLoadHalves", "fingerLoadBars", "sameFingerTotal", "sameFingerPairs"]) {
+    assert.ok(html.includes(`id="${id}"`), id);
+  }
 });
 
 test("WPM: gleitendes 60-s-Fenster mit 5 Anschlägen pro Wort", () => {
@@ -2876,7 +3005,7 @@ function fakeDom() {
   const byId = {};
   const make = (tag = "div") => {
     const el = {
-      tagName: tag.toUpperCase(), children: [], listeners: {}, style: {}, dataset: {}, disabled: false,
+      tagName: tag.toUpperCase(), children: [], listeners: {}, style: { setProperty(k, v) { this[k] = v; } }, dataset: {}, disabled: false,
       value: "", textContent: "", className: "", title: "", type: "", options: [], selectedIndex: 0,
       get innerHTML() { return ""; }, set innerHTML(_) { this.children = []; },
       appendChild(child) { this.children.push(child); return child; },

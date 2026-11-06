@@ -118,6 +118,15 @@ test("Verlötete Schalter: Spalte 6 nur im Daumen, ungültige Werte abgelehnt", 
   }
 });
 
+test("Fingerzuordnung: sechs Finger-Spalten mit gültigen Fingern, links gespiegelt zu rechts", () => {
+  const ids = ["pinky", "ring", "middle", "index"];
+  for (const p of [L, R]) {
+    assert.strictEqual(p.fingerCols.length, D.NUM_COLS - 1);
+    assert.ok(p.fingerCols.every(f => ids.includes(f)), p.id);
+  }
+  assert.deepStrictEqual([...L.fingerCols], [...R.fingerCols].reverse());
+});
+
 test("Daumen-Cluster: 6 Tasten in Zeile 5 ohne fehlende Position, jede einmal", () => {
   for (const p of [L, R]) {
     const ids = p.thumbDefs.map(d => `${d.r}_${d.c}`);

@@ -67,6 +67,41 @@ function updateTypingStatsUI() {
   const totalEl = document.getElementById("liveKeyTotal");
   if (wpmEl) wpmEl.textContent = String(computeWpm(stats, Date.now()));
   if (totalEl) totalEl.textContent = String(stats.total);
+  updateFingerLoadUI();
+}
+
+function formatShare(share) {
+  return `${(share * 100).toFixed(share > 0 && share < 0.1 ? 1 : 0)} %`;
+}
+
+function keyPositionLabel(id) {
+  const [r, c] = id.split("_");
+  return `R${r}C${c}`;
+}
+
+// Anteil je Hälfte und je Finger der bearbeiteten Hälfte, dazu die häufigsten Folgen eines Fingers
+function updateFingerLoadUI() {
+  const halvesEl = document.getElementById("fingerLoadHalves");
+  const barsEl = document.getElementById("fingerLoadBars");
+  const totalEl = document.getElementById("sameFingerTotal");
+  const pairsEl = document.getElementById("sameFingerPairs");
+  if (!halvesEl || !barsEl || !totalEl || !pairsEl) return;
+  const sides = Dactyl.sidesInDisplayOrder();
+  halvesEl.textContent = halfLoad(sides.map(side => ({ side, stats: typingStatsFor(side) })))
+    .map(h => `${SIDE_PROFILES[h.side].label}: ${formatShare(h.share)}`).join(" · ");
+  const stats = typingStatsFor(editSide);
+  barsEl.textContent = "";
+  for (const f of fingerLoad(stats)) {
+    const row = document.createElement("span");
+    row.className = "finger-load-row";
+    row.title = `${FINGER_LABELS[f.finger]}: ${f.count} Anschläge`;
+    row.textContent = `${FINGER_LABELS[f.finger]} ${formatShare(f.share)}`;
+    row.style.setProperty("--finger-share", String(Math.round(f.share * 100)));
+    barsEl.appendChild(row);
+  }
+  totalEl.textContent = String(stats.sameFingerTotal);
+  pairsEl.textContent = topSameFingerPairs(stats)
+    .map(p => `${keyPositionLabel(p.a)} ↔ ${keyPositionLabel(p.b)}: ${p.count}`).join(" · ");
 }
 
 function onTypingStatsChanged(side = editSide) {

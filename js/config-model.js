@@ -676,6 +676,55 @@ const WPM_WINDOW_MS = 60000;
 const CHARS_PER_WORD = 5;
 const HEAT_LEVELS = 5;
 
+// Finger der Hände von außen nach innen, danach der Daumen (Reihenfolge der Anzeige)
+const FINGER_IDS = ["pinky", "ring", "middle", "index", "thumb"];
+const FINGER_LABELS = { pinky: "Kleiner Finger", ring: "Ringfinger", middle: "Mittelfinger", index: "Zeigefinger", thumb: "Daumen" };
+const SAME_FINGER_TOP = 5;
+// Größter Abstand zweier Anschläge, der noch eine Folge ergibt; nach einer längeren Pause beginnt eine neue
+const SAME_FINGER_MAX_GAP_MS = 1000;
+
+// Finger der Taste: Daumenzeile (Zeile 5) und Spalte 6 sind der Daumen, sonst gilt profile.fingerCols
+function fingerOfKey(r, c, profile) {
+  if (!profile || !isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS) || !isPhysicalKey(r, c, profile)) return null;
+  if (r >= NUM_ROWS - 1 || c >= NUM_COLS - 1) return "thumb";
+  const finger = Array.isArray(profile.fingerCols) ? profile.fingerCols[c] : null;
+  return FINGER_IDS.includes(finger) ? finger : null;
+}
+
+// Eine Folge zählt nur für zwei verschiedene Tasten desselben Fingers; der Daumen ist ausgenommen
+// (Space und Backspace nacheinander sind normal). Die Folge ist ungerichtet: "a|b" mit a < b.
+function sameFingerPairKey(idA, idB, profile) {
+  const parse = id => {
+    const m = /^(\d+)_(\d+)$/.exec(id);
+    return m ? [Number(m[1]), Number(m[2])] : null;
+  };
+  const a = parse(idA), b = parse(idB);
+  if (!a || !b || idA === idB) return null;
+  const finger = fingerOfKey(a[0], a[1], profile);
+  if (!finger || finger === "thumb" || finger !== fingerOfKey(b[0], b[1], profile)) return null;
+  const order = (a[0] - b[0]) || (a[1] - b[1]);
+  return order < 0 ? `${idA}|${idB}` : `${idB}|${idA}`;
+}
+
+// Folgen aus gespeicherten Daten: nur gültige, ungerichtete Paare verschiedener Tasten eines Fingers
+function sanitizeSameFinger(stored, profile) {
+  const pairs = {};
+  let total = 0;
+  const src = stored && typeof stored === "object" && !Array.isArray(stored)
+    && Object.prototype.hasOwnProperty.call(stored, "sameFinger") ? stored.sameFinger : null;
+  const raw = src && typeof src === "object" && !Array.isArray(src)
+    && src.pairs && typeof src.pairs === "object" && !Array.isArray(src.pairs) ? src.pairs : null;
+  if (raw) {
+    for (const [key, n] of Object.entries(raw)) {
+      const m = /^(\d+_\d+)\|(\d+_\d+)$/.exec(key);
+      if (!m || !Number.isSafeInteger(n) || n <= 0 || sameFingerPairKey(m[1], m[2], profile) !== key) continue;
+      pairs[key] = n;
+      total += n;
+    }
+  }
+  return { pairs, total };
+}
+
 // Zähler je Taste aus gespeicherten Daten, nur physische Tasten der Hälfte
 function sanitizeKeyCounts(counts, profile) {
   const out = {};
@@ -693,11 +742,16 @@ function sanitizeKeyCounts(counts, profile) {
   return { counts: out, total };
 }
 
-// stored: { "r_c": n, layers: { "<ebene>": { "r_c": n } } }. Die Gesamtzähler bleiben oben, so liest eine
-// ältere App-Version sie weiter (sie verwirft den Schlüssel "layers"); die alte Form hat nur "r_c"-Schlüssel.
+// stored: { "r_c": n, layers: { "<ebene>": { "r_c": n } }, sameFinger: { pairs: { "r_c|r_c": n } } }. Die
+// Gesamtzähler bleiben oben, so liest eine ältere App-Version sie weiter (sie verwirft die Schlüssel "layers"
+// und "sameFinger"); die alte Form hat nur "r_c"-Schlüssel, dann sind die Folgen leer.
 function createTypingStats(stored, profile) {
   const base = sanitizeKeyCounts(stored, profile);
-  const stats = { counts: base.counts, total: base.total, layerCounts: [], recent: [], profile };
+  const same = sanitizeSameFinger(stored, profile);
+  const stats = {
+    counts: base.counts, total: base.total, layerCounts: [], recent: [], profile,
+    sameFingerPairs: same.pairs, sameFingerTotal: same.total, lastKeyId: null, lastKeyMs: 0
+  };
   for (let l = 0; l < NUM_LAYERS; l++) stats.layerCounts.push({});
   const layers = stored && typeof stored === "object" && !Array.isArray(stored)
     && Object.prototype.hasOwnProperty.call(stored, "layers") ? stored.layers : null;
@@ -716,7 +770,9 @@ function serializeTypingStats(stats) {
   stats.layerCounts.forEach((counts, l) => {
     if (Object.keys(counts).length) layers[l] = counts;
   });
-  return { ...stats.counts, layers };
+  const out = { ...stats.counts, layers };
+  if (stats.sameFingerTotal > 0) out.sameFinger = { pairs: { ...stats.sameFingerPairs } };
+  return out;
 }
 
 // layer: Ebene beim Drücken (KEY_PRESS / SPLIT_KEY); ohne gültige Ebene zählt die Taste nur gesamt
@@ -725,6 +781,14 @@ function recordKeyPress(stats, r, c, nowMs, layer) {
   const id = `${r}_${c}`;
   stats.counts[id] = (stats.counts[id] || 0) + 1;
   stats.total++;
+  const withinGap = !(nowMs - stats.lastKeyMs > SAME_FINGER_MAX_GAP_MS); // ohne Zeitstempel zählt die Folge
+  const pairKey = stats.lastKeyId && withinGap ? sameFingerPairKey(stats.lastKeyId, id, stats.profile) : null;
+  if (pairKey) {
+    stats.sameFingerPairs[pairKey] = (stats.sameFingerPairs[pairKey] || 0) + 1;
+    stats.sameFingerTotal++;
+  }
+  stats.lastKeyId = id;
+  stats.lastKeyMs = nowMs;
   if (isValidIndex(layer, NUM_LAYERS)) {
     const layerCounts = stats.layerCounts[layer];
     layerCounts[id] = (layerCounts[id] || 0) + 1;
@@ -732,6 +796,36 @@ function recordKeyPress(stats, r, c, nowMs, layer) {
   stats.recent.push(nowMs);
   pruneRecentPresses(stats, nowMs);
   return true;
+}
+
+// Anschläge und Anteil je Finger der Hälfte (Reihenfolge FINGER_IDS); der Anteil bezieht sich auf die Hälfte
+function fingerLoad(stats) {
+  const counts = Object.fromEntries(FINGER_IDS.map(f => [f, 0]));
+  for (const [id, n] of Object.entries(stats.counts)) {
+    const [r, c] = id.split("_").map(Number);
+    const finger = fingerOfKey(r, c, stats.profile);
+    if (finger) counts[finger] += n;
+  }
+  return FINGER_IDS.map(finger => ({
+    finger, count: counts[finger], share: stats.total ? counts[finger] / stats.total : 0
+  }));
+}
+
+// Anteil jeder Hälfte an allen Anschlägen; entries: [{ side, stats }]
+function halfLoad(entries) {
+  const sum = entries.reduce((acc, e) => acc + e.stats.total, 0);
+  return entries.map(e => ({ side: e.side, count: e.stats.total, share: sum ? e.stats.total / sum : 0 }));
+}
+
+// Die häufigsten Folgen zweier Tasten eines Fingers: [{ a, b, count }], absteigend, bei Gleichstand nach Schlüssel
+function topSameFingerPairs(stats, limit = SAME_FINGER_TOP) {
+  return Object.entries(stats.sameFingerPairs)
+    .sort((x, y) => (y[1] - x[1]) || (x[0] < y[0] ? -1 : 1))
+    .slice(0, limit)
+    .map(([key, count]) => {
+      const [a, b] = key.split("|");
+      return { a, b, count };
+    });
 }
 
 // Zähler für die Heatmap: alle Ebenen (layer null) oder nur eine Ebene

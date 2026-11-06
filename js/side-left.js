@@ -57,6 +57,8 @@
     cssClass: "left-half",
     displayOrder: 0,
     exportPrefix: "left_",
+    // Finger je Spalte 0..5 der Zeilen 0..4 (Spalte 0 außen); Zeile 5 und Spalte 6 sind der Daumen
+    fingerCols: ["pinky", "pinky", "ring", "middle", "index", "index"],
     // Linke Hand: Finger-Cluster links, Daumen-Cluster rechts (Spiegelbild der rechten Hand)
     thumbsFirst: false,
     thumbDefs: [

@@ -69,6 +69,8 @@ static KeyPair userKeyPairs[MAX_KEY_PAIRS];
 
 // Tasten-Überschreibungen (nur der Master, wie dactyl_right.ino)
 #define DACTYL_KEY_OVERRIDES
+// Dynamisches Makro (nur der Master, wie dactyl_right.ino)
+#define DACTYL_DYNAMIC_MACRO
 #include "../dactyl_right/DactylKeyOverride.h"
 static uint8_t numKeyOverrides = 0;
 static KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES];
@@ -168,6 +170,7 @@ void resetState() {
   numMacros = 0;
   for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
   macroRun = {};
+  bleKeyboard.dynMacro = DynamicMacro();
   lastRepeatAction = 0;
   testRemoteTakesRepeat = false;
   testRemoteCalls.clear();
@@ -7013,6 +7016,339 @@ TEST(test_alt_repeat_is_no_combo_hold_action) {
   assert(numCombos == 0);
   handleConfigCommand("ADD_COMBO 2 0 2 1 0 363", false);          // KEY_PRESS ist erlaubt
   assert(numCombos == 1);
+}
+
+
+// -----------------------------------------------------------------------------
+// Dynamisches Makro (DM_REC, DM_PLAY): Aufnahme im RAM des Masters
+// -----------------------------------------------------------------------------
+static void dmTap(uint8_t r, uint8_t c) { pressKey(r, c); releaseKey(r, c); }
+static int dmSerialCount(const char *line) {
+  int n = 0;
+  for (const auto &l : Serial.outputLines) if (l == line) n++;
+  return n;
+}
+static void dmMapKeys() {
+  KEYMAP[0][0][0] = ACT_DM_REC;
+  KEYMAP[0][0][1] = ACT_DM_PLAY;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'b';
+}
+
+TEST(test_dynamic_macro_records_and_plays_back) {
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dmTap(0, 0);                                    // DM_REC: Aufnahme an
+  assert(bleKeyboard.dynMacro.recording);
+  dmTap(2, 1);
+  dmTap(2, 2);
+  dmTap(0, 0);                                    // DM_REC: Aufnahme aus
+  assert(!bleKeyboard.dynMacro.recording);
+  const DynamicMacro &dm = bleKeyboard.dynMacro;
+  assert(dm.length == 4);
+  assert(dm.steps[0].type == MACRO_STEP_DOWN && dm.steps[0].code == 'a');
+  assert(dm.steps[1].type == MACRO_STEP_UP && dm.steps[1].code == 'a');
+  assert(dm.steps[2].type == MACRO_STEP_DOWN && dm.steps[2].code == 'b');
+  assert(dm.steps[3].type == MACRO_STEP_UP && dm.steps[3].code == 'b');
+
+  bleKeyboard.keyEvents.clear();
+  setMillis(2000);
+  dmTap(0, 1);                                    // DM_PLAY
+  runTicks(2200);
+  std::vector<int> expected = { 'a', -'a', 'b', -'b' };
+  assert(bleKeyboard.keyEvents == expected);
+  assert(!macroRun.active && bleKeyboard.pressedKeys.empty());
+  assert(dm.length == 4);                         // das Abspielen verändert den Slot nicht
+
+  // Eine zweite Wiedergabe liefert dieselbe Folge
+  bleKeyboard.keyEvents.clear();
+  setMillis(3000);
+  dmTap(0, 1);
+  runTicks(3200);
+  assert(bleKeyboard.keyEvents == expected);
+}
+
+TEST(test_dynamic_macro_reports_recording_state_on_serial) {
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dynamicMacroService();
+  assert(dmSerialCount("DM_REC:0") == 0 && dmSerialCount("DM_REC:1") == 0);   // Ruhestand: keine Zeile beim Start
+  dmTap(0, 0);
+  dynamicMacroService();
+  dynamicMacroService();
+  assert(dmSerialCount("DM_REC:1") == 1);          // eine Zeile je Änderung, keine Wiederholung
+  dmTap(0, 0);
+  dynamicMacroService();
+  assert(dmSerialCount("DM_REC:0") == 1);
+  // Nie über BLE: keine Benachrichtigung enthält die Zeile
+  for (const auto &n : mockChar.notifications) assert(n.find("DM_REC:") == std::string::npos);
+}
+
+TEST(test_dynamic_macro_stops_at_step_limit) {
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dmTap(0, 0);
+  dynamicMacroService();
+  assert(dmSerialCount("DM_REC:1") == 1);
+  for (int i = 0; i < 20; i++) dmTap(2, 1);       // 40 Schritte, nur 32 passen
+  const DynamicMacro &dm = bleKeyboard.dynMacro;
+  assert(dm.length == MAX_MACRO_STEPS);
+  assert(!dm.recording);                          // am Limit endet die Aufnahme
+  dynamicMacroService();
+  assert(dmSerialCount("DM_REC:0") == 1);         // die App sieht das Ende am Limit
+  dmTap(2, 1);
+  assert(dm.length == MAX_MACRO_STEPS);
+
+  // Der volle Slot lässt sich abspielen
+  bleKeyboard.keyEvents.clear();
+  setMillis(2000);
+  dmTap(0, 1);
+  runTicks(4000);
+  assert(bleKeyboard.keyEvents.size() == MAX_MACRO_STEPS);
+}
+
+TEST(test_dynamic_macro_does_not_record_its_own_keys) {
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dmTap(0, 0);
+  dmTap(0, 1);                                    // DM_PLAY während der Aufnahme beendet sie, ohne abzuspielen
+  assert(!bleKeyboard.dynMacro.recording);
+  assert(bleKeyboard.dynMacro.length == 0);
+  assert(!macroRun.active);
+  assert(bleKeyboard.keyEvents.empty());
+
+  // Aufnahme mit Tasten dazwischen: weder DM_REC noch DM_PLAY landen im Slot
+  dmTap(0, 0);
+  dmTap(2, 1);
+  dmTap(0, 0);
+  const DynamicMacro &dm = bleKeyboard.dynMacro;
+  assert(dm.length == 2);
+  for (int i = 0; i < dm.length; i++) assert(dm.steps[i].code == 'a');
+
+  // Eine neue Aufnahme ersetzt den Slot
+  dmTap(0, 0);
+  dmTap(2, 2);
+  dmTap(0, 0);
+  assert(dm.length == 2 && dm.steps[0].code == 'b');
+
+  // DM_PLAY mit leerem Slot sendet nichts
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dmTap(0, 1);
+  runTicks(1100);
+  assert(bleKeyboard.keyEvents.empty());
+}
+
+TEST(test_dynamic_macro_slot_is_ram_only_and_cleared) {
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dmTap(0, 0);
+  dmTap(2, 1);
+  dmTap(0, 0);
+  assert(bleKeyboard.dynMacro.length == 2);
+  // Nicht in GET_CONFIG, nicht im NVS
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  for (const auto &n : mockChar.notifications) assert(n.find("DM_") == std::string::npos && n.find("MACRO_DATA:{\"i\":0") == std::string::npos);
+  assert(Preferences::bytesStore.find("macros") == Preferences::bytesStore.end() || Preferences::bytesStore["macros"].empty());
+  // Config Mode und Neustart (neuer Zustand) leeren den Slot
+  dynamicMacroReset();
+  assert(bleKeyboard.dynMacro.length == 0 && !bleKeyboard.dynMacro.recording);
+  DynamicMacro fresh;                             // Zustand nach einem Neustart
+  assert(fresh.length == 0 && !fresh.recording);
+
+  // Aufnahme läuft, dann Reset: die Aufnahme endet ohne Rest
+  dmTap(0, 0);
+  dmTap(2, 1);
+  dynamicMacroReset();
+  assert(!bleKeyboard.dynMacro.recording && bleKeyboard.dynMacro.length == 0);
+  dmTap(2, 1);
+  assert(bleKeyboard.dynMacro.length == 0);
+}
+
+TEST(test_dynamic_macro_needs_host_and_ignores_config_mode) {
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  bleKeyboard.connected = false;
+  dmTap(0, 0);                                    // ohne Mac geschieht nichts
+  assert(!bleKeyboard.dynMacro.recording);
+  bleKeyboard.connected = true;
+  isConfigMode = true;
+  dmTap(0, 0);
+  assert(!bleKeyboard.dynMacro.recording);
+  isConfigMode = false;
+}
+
+TEST(test_dynamic_macro_keys_as_hold_and_double_tap_action) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = ACT_DM_REC;
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1300);                                // Tapping-Term überschritten: Hold löst DM_REC aus
+  processDeferredKeys(1300);
+  assert(bleKeyboard.dynMacro.recording);
+  releaseKey(2, 1);
+  assert(bleKeyboard.dynMacro.recording);         // Loslassen beendet nichts
+}
+
+TEST(test_dynamic_macro_is_no_combo_action) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 364", false);   // ACT_DM_REC
+  assert(numCombos == 0);
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 365", false);   // ACT_DM_PLAY
+  assert(numCombos == 0);
+}
+
+TEST(test_dynamic_macro_release_all_closes_open_keys) {
+  resetState();
+  setMillis(1000);
+  bleKeyboard.dynMacro.startRecording();
+  bleKeyboard.press((uint8_t)'a');
+  bleKeyboard.releaseAll();                       // z. B. Combo: alle Tasten gelöst
+  const DynamicMacro &dm = bleKeyboard.dynMacro;
+  assert(dm.length == 2 && dm.steps[1].type == MACRO_STEP_UP && dm.steps[1].code == 'a');
+  bleKeyboard.press((uint8_t)'a');                // derselbe Code ist wieder aufnehmbar
+  assert(dm.length == 3);
+}
+
+
+TEST(test_dynamic_macro_stop_keeps_key_held_across_it_open) {
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dmTap(0, 0);
+  pressKey(2, 1);                                 // 'a' gedrückt, DOWN aufgenommen
+  dmTap(0, 0);                                    // Aufnahme endet bei gehaltener Taste
+  releaseKey(2, 1);                               // dieses Loslassen gehört nicht mehr in den Slot
+  const DynamicMacro &dm = bleKeyboard.dynMacro;
+  assert(dm.length == 1 && dm.steps[0].type == MACRO_STEP_DOWN && dm.steps[0].code == 'a');
+  assert(dmSerialCount("DM_REC:1") == 0);          // keine der DM-Tasten erscheint im Slot
+  for (int i = 0; i < dm.length; i++) assert(dm.steps[i].code != 0 && dm.steps[i].code < 0xB0);
+  // Das Abspielen lässt das offene DOWN am Ende los
+  bleKeyboard.keyEvents.clear();
+  setMillis(2000);
+  dmTap(0, 1);
+  runTicks(2200);
+  std::vector<int> expected = { 'a', -'a' };
+  assert(bleKeyboard.keyEvents == expected);
+}
+
+TEST(test_dynamic_macro_as_double_tap_action) {
+  resetState();
+  KEYMAP[0][2][4] = 'l';
+  DTAPMAP[0][2][4] = ACT_DM_REC;
+  tapKeyAt(2, 4, 1000, 1050);
+  setMillis(1100);
+  keyState[2][4] = true; onMatrixKeyChange(2, 4, true);
+  keyState[2][4] = false; onMatrixKeyChange(2, 4, false);
+  runTicks(1600);
+  assert(bleKeyboard.dynMacro.recording);          // Doppel-Tipp startet die Aufnahme
+  assert(bleKeyboard.keyEvents.empty());           // kein Tap 'l'
+}
+
+TEST(test_dynamic_macro_key_as_buffered_combo_candidate) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_DM_REC;
+  KEYMAP[0][2][2] = 'k';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(!bleKeyboard.dynMacro.recording);         // gepuffert
+  runTicks(1000 + comboTimeoutMs);
+  assert(bleKeyboard.dynMacro.recording);          // Combo-Fenster abgelaufen: Aktion läuft
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1200);
+  assert(bleKeyboard.dynMacro.recording);          // das Loslassen schaltet nicht erneut um
+
+  // Schnelles Loslassen vor dem Ablauf des Fensters führt die Aktion einmal aus
+  resetState();
+  KEYMAP[0][2][1] = ACT_DM_REC;
+  KEYMAP[0][2][2] = 'k';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  setMillis(1010);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.dynMacro.recording);
+}
+
+TEST(test_dynamic_macro_does_not_start_while_a_macro_runs) {
+  resetState();
+  dmMapKeys();
+  KEYMAP[0][2][3] = ACT_MACRO_BASE + 0;
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 120 0", false);   // TAP 'x'
+  handleConfigCommand("ADD_MACRO_STEP 4 0 500", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 121 0", false);   // TAP 'y'
+  setMillis(1000);
+  dmTap(2, 3);                                    // Benutzer-Makro läuft (Pause)
+  assert(macroRun.active);
+  dmTap(0, 0);                                    // DM_REC darf nicht aufnehmen
+  assert(!bleKeyboard.dynMacro.recording);
+  runTicks(1700);
+  assert(bleKeyboard.dynMacro.length == 0);       // die Tasten des Makros stehen nicht im Slot
+  dmTap(0, 1);                                    // DM_PLAY mit leerem Slot
+  assert(!macroRun.active && bleKeyboard.keyEvents.size() == 4);
+}
+
+TEST(test_dynamic_macro_playback_stops_in_config_mode_and_ends_recording_without_host) {
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dmTap(0, 0);
+  dmTap(2, 1);
+  dmTap(2, 2);
+  dmTap(0, 0);
+  assert(bleKeyboard.dynMacro.length == 4);
+  bleKeyboard.keyEvents.clear();
+  setMillis(2000);
+  dmTap(0, 1);
+  assert(macroRun.active && macroRun.index == DM_SLOT_INDEX);
+  // Config Mode während des Abspielens: wie enterConfigMode() endet das Makro und der Slot ist leer
+  stopMacro(false);
+  dynamicMacroReset();
+  assert(!macroRun.active && bleKeyboard.dynMacro.length == 0);
+  size_t n = bleKeyboard.keyEvents.size();
+  runTicks(2300);
+  assert(bleKeyboard.keyEvents.size() == n);       // kein Schritt läuft nach
+
+  // Aufnahme endet, wenn der Mac fehlt oder der Config Mode beginnt
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dmTap(0, 0);
+  assert(bleKeyboard.dynMacro.recording);
+  bleKeyboard.connected = false;
+  dynamicMacroService();
+  assert(!bleKeyboard.dynMacro.recording);
+  bleKeyboard.connected = true;
+  dmTap(0, 0);
+  isConfigMode = true;
+  dynamicMacroService();
+  assert(!bleKeyboard.dynMacro.recording);
+  isConfigMode = false;
+}
+
+TEST(test_dynamic_macro_get_info_reports_the_state_again) {
+  resetState();
+  dmMapKeys();
+  setMillis(1000);
+  dmTap(0, 0);
+  dynamicMacroService();
+  assert(dmSerialCount("DM_REC:1") == 1);
+  dynamicMacroService();
+  assert(dmSerialCount("DM_REC:1") == 1);
+  handleConfigCommand("GET_INFO", false);          // neue Verbindung der App
+  dynamicMacroService();
+  assert(dmSerialCount("DM_REC:1") == 2);
 }
 
 int main() {

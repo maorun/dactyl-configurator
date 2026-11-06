@@ -89,6 +89,10 @@
 // Alternate repeat: wiederholt das Gegenteil der zuletzt ausgeführten Aktion (Links <-> Rechts, Hoch <-> Runter, ...);
 // ohne Gegenteil sendet die Taste nichts. Gehaltene Modifier bleiben wirksam.
 #define ACT_ALT_REPEAT           0x16B
+// Dynamisches Makro (nur Master): DM_REC startet und beendet die Aufnahme der Tastendrücke beider Hälften in einen
+// RAM-Slot (höchstens MAX_MACRO_STEPS Schritte), DM_PLAY spielt ihn mit der Makro-Engine ab (DactylDynamicMacro.h)
+#define ACT_DM_REC               0x16C
+#define ACT_DM_PLAY              0x16D
 // One-Shot-Ebene (OSL_0 .. OSL_7): Tippen merkt die Ebene für den nächsten Tastendruck beider Hälften vor, danach
 // ist sie wieder gelöst; ein zweites Tippen nimmt die Vormerkung zurück; Halten wirkt wie MO_n und merkt nichts vor
 #define ACT_OSL_BASE             0x180
@@ -175,3 +179,4 @@ inline uint16_t altRepeatAction(uint16_t a) {
 }
 
 inline bool isRepeatKeyAction(uint16_t a) { return a == ACT_REPEAT || a == ACT_ALT_REPEAT; }
+inline bool isDynamicMacroAction(uint16_t a) { return a == ACT_DM_REC || a == ACT_DM_PLAY; }

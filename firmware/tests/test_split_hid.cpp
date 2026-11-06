@@ -3508,6 +3508,68 @@ TEST(test_process_rx_release_all_after_osl_in_the_same_round_keeps_the_clear) {
   assert(oslCalls == 1 && oslLast.code == 0);
 }
 
+
+// Dynamisches Makro: der Master nimmt die Tasten beider Hälften auf (DactylDynamicMacro.h)
+TEST(test_dynamic_macro_records_both_halves) {
+  Kbd k("Dactyl Keyboard", "Dactyl DIY", 100);
+  k.dynMacro.startRecording();
+  left(k, SPLIT_OP_KEY_PRESS, 'a');
+  k.press((uint8_t)'b');
+  left(k, SPLIT_OP_KEY_RELEASE, 'a');
+  k.release((uint8_t)'b');
+  const DynamicMacro &dm = k.dynMacro;
+  assert(dm.length == 4);
+  assert(dm.steps[0].type == MACRO_STEP_DOWN && dm.steps[0].code == 'a');
+  assert(dm.steps[1].type == MACRO_STEP_DOWN && dm.steps[1].code == 'b');
+  assert(dm.steps[2].type == MACRO_STEP_UP && dm.steps[2].code == 'a');
+  assert(dm.steps[3].type == MACRO_STEP_UP && dm.steps[3].code == 'b');
+}
+
+TEST(test_dynamic_macro_same_code_on_both_halves_counts_once) {
+  Kbd k("Dactyl Keyboard", "Dactyl DIY", 100);
+  k.dynMacro.startRecording();
+  left(k, SPLIT_OP_KEY_PRESS, 0x81);              // Shift links
+  k.press((uint8_t)0x81);                         // Shift rechts
+  left(k, SPLIT_OP_KEY_RELEASE, 0x81);            // rechts hält noch: kein UP
+  assert(k.dynMacro.length == 1);
+  k.release((uint8_t)0x81);                       // jetzt hält keine Hälfte mehr
+  assert(k.dynMacro.length == 2 && k.dynMacro.steps[1].type == MACRO_STEP_UP);
+}
+
+TEST(test_dynamic_macro_ignores_keys_without_recording) {
+  Kbd k("Dactyl Keyboard", "Dactyl DIY", 100);
+  left(k, SPLIT_OP_KEY_PRESS, 'a');
+  k.press((uint8_t)'b');
+  assert(k.dynMacro.length == 0);
+  // Eine Taste, die schon vor der Aufnahme gehalten wird, erzeugt kein UP
+  k.dynMacro.startRecording();
+  left(k, SPLIT_OP_KEY_RELEASE, 'a');
+  k.release((uint8_t)'b');
+  assert(k.dynMacro.length == 0);
+}
+
+TEST(test_dynamic_macro_left_write_and_host_loss) {
+  Kbd k("Dactyl Keyboard", "Dactyl DIY", 100);
+  k.dynMacro.startRecording();
+  left(k, SPLIT_OP_KEY_WRITE, 'x');
+  assert(k.dynMacro.length == 2);
+  left(k, SPLIT_OP_KEY_PRESS, 'y');
+  k.splitResetForHostLoss();                      // Mac weg: offene Tasten schließen, Aufnahme endet
+  assert(!k.dynMacro.recording);
+  assert(k.dynMacro.length == 4 && k.dynMacro.steps[3].type == MACRO_STEP_UP && k.dynMacro.steps[3].code == 'y');
+}
+
+TEST(test_dynamic_macro_release_all_keeps_left_held_key_open) {
+  Kbd k("Dactyl Keyboard", "Dactyl DIY", 100);
+  k.dynMacro.startRecording();
+  left(k, SPLIT_OP_KEY_PRESS, 'l');
+  k.press((uint8_t)'r');
+  k.releaseAll();                                 // rechts los, links hält 'l' weiter
+  assert(k.dynMacro.length == 3 && k.dynMacro.steps[2].code == 'r' && k.dynMacro.steps[2].type == MACRO_STEP_UP);
+  left(k, SPLIT_OP_KEY_RELEASE, 'l');
+  assert(k.dynMacro.length == 4 && k.dynMacro.steps[3].code == 'l');
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Split HID Protocol Test Suite" << std::endl;

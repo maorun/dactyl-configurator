@@ -284,6 +284,7 @@ KEY_TO_CPP = {
     "OSM_LCTRL": "ACT_OSM_LCTRL", "OSM_LSHIFT": "ACT_OSM_LSHIFT", "OSM_LALT": "ACT_OSM_LALT",
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
     "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "REPEAT": "ACT_REPEAT", "ALT_REPEAT": "ACT_ALT_REPEAT",
+    "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -549,6 +550,9 @@ ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCT
 # Mausbewegung braucht eine gehaltene Taste mit Beschleunigung; eine Combo führt sie nicht aus
 MOUSE_MOVE_CPP = {"ACT_MOUSE_UP", "ACT_MOUSE_DOWN", "ACT_MOUSE_LEFT_MOVE", "ACT_MOUSE_RIGHT_MOVE"}
 
+# Dynamisches Makro (Aufnahme im RAM des Masters): braucht eine Taste, keine Combo; links ohne Wirkung
+DYNAMIC_MACRO_CPP = {"ACT_DM_REC", "ACT_DM_PLAY"}
+
 def generate_combos_cpp(combos):
     if combos is None:
         combos = []
@@ -577,6 +581,8 @@ def generate_combos_cpp(combos):
             raise ValueError("Combos unterstützen keine Makros.")
         if act in MOUSE_MOVE_CPP:
             raise ValueError("Combos unterstützen keine Mausbewegung.")
+        if act in DYNAMIC_MACRO_CPP:
+            raise ValueError("Combos unterstützen keine dynamischen Makros.")
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts
         if beh != 0 and act == "ACT_LAYER_LOCK":
             raise ValueError("Layer Lock funktioniert nur mit dem Verhalten \"Einzeltaste senden\".")
@@ -946,6 +952,8 @@ def validate_config(config, side="R"):
                 cell_tap_term(cell, f"R{r_idx}C{c_idx} in Ebene {l_idx}")
                 if side == "L" and (r_idx, c_idx) in ABSENT_KEYS["L"] and any(a not in ("", "NONE", "0") for a in cell_actions(cell)):
                     raise ValueError(f"Taste R{r_idx}C{c_idx} existiert auf der linken Hälfte nicht (Ebene {l_idx}).")
+                if side == "L" and any(code_to_cpp(a) in DYNAMIC_MACRO_CPP for a in cell_actions(cell)):
+                    raise ValueError(f"Dynamische Makros (DM_REC, DM_PLAY) gelten nur für die rechte Hälfte (Master), Taste R{r_idx}C{c_idx} in Ebene {l_idx}.")
     # Codegen prüft Combos und Einstellungen vollständig (Bereiche identisch zur Firmware)
     generate_combos_cpp(config.get("combos"))
     generate_key_pairs_cpp(config.get("keyPairs"))

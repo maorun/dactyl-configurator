@@ -144,6 +144,11 @@ body {
   display: none;
 }
 
+.dm-rec-pill {
+  color: var(--danger, #ef4444);
+  background: rgba(239, 68, 68, 0.12);
+}
+
 .split-link-pill[hidden] {
   display: none;
 }

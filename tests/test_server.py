@@ -68,6 +68,8 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertEqual(server.code_to_cpp("CAPS_WORD"), "ACT_CAPS_WORD")
         self.assertEqual(server.code_to_cpp("REPEAT"), "ACT_REPEAT")
         self.assertEqual(server.code_to_cpp("ALT_REPEAT"), "ACT_ALT_REPEAT")
+        self.assertEqual(server.code_to_cpp("DM_REC"), "ACT_DM_REC")
+        self.assertEqual(server.code_to_cpp("DM_PLAY"), "ACT_DM_PLAY")
         self.assertEqual(server.code_to_cpp("NONE"), "0")
         self.assertEqual(server.code_to_cpp(""), "0")
 
@@ -627,6 +629,35 @@ class TestServerAndCodegen(unittest.TestCase):
             self.assertIn("ACT_", server.generate_combos_cpp([{**combo, "behavior": "KEY_PRESS"}]))
         self.assertIn("KEY_LEFT_SHIFT", server.generate_combos_cpp([
             {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "MODIFIER_HOLD", "action": "KEY_LEFT_SHIFT"}]))
+
+    def test_dynamic_macro_codes_match_firmware(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_DM_REC\s+0x16C")
+        self.assertRegex(common, r"#define ACT_DM_PLAY\s+0x16D")
+
+    def test_dynamic_macro_is_no_combo_action(self):
+        for action in ("DM_REC", "DM_PLAY"):
+            for behavior in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
+                combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": behavior, "action": action}
+                with self.subTest(action=action, behavior=behavior), self.assertRaises(ValueError):
+                    server.generate_combos_cpp([combo])
+
+    def test_dynamic_macro_keys_render_on_master_and_are_rejected_on_left(self):
+        layer = [[{"tap": "NONE"}] * 7 for _ in range(6)]
+        layer[2] = list(layer[2])
+        layer[2][1] = {"tap": "DM_REC", "hold": "NONE"}
+        layer[2][2] = "DM_PLAY"
+        server.validate_config({"layers": [layer]}, "R")
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [layer]}, "L")
+        # auch als Halte- oder Doppel-Tipp-Aktion
+        layer2 = [[{"tap": "NONE"}] * 7 for _ in range(6)]
+        layer2[2] = list(layer2[2])
+        layer2[2][1] = {"tap": "KEY_A", "hold": "DM_PLAY"}
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [layer2]}, "L")
+        server.validate_config({"layers": [layer2]}, "R")
 
     def test_macro_constants_match_firmware(self):
         with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:

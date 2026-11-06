@@ -205,6 +205,7 @@ Keys in the matrix use `uint16_t` action codes:
 | `0x168` | Caps Word (`CAPS_WORD`) | Toggles Caps Word; see "One-Shot Modifiers and Caps Word" |
 | `0x169` | Repeat (`REPEAT`) | Runs the last resolved action again, also across both halves; see "Repeat the last action" |
 | `0x16B` | Alternate Repeat (`ALT_REPEAT`) | Runs the opposite of the last resolved action (`altRepeatAction`), also across both halves; see `FEATURES.md`, section "Alternate repeat" |
+| `0x16C` .. `0x16D` | Dynamic Macro (`DM_REC`, `DM_PLAY`) | Records the keys of both halves into one RAM slot on the master and plays it back; see "Dynamic macro" |
 | `0x170` .. `0x17F` | Macro (`MACRO_0`..`MACRO_15`) | Plays a sequence of tap, down, up and pause steps; index into `userMacros[]`; see "Macros" |
 
 ### Key Pairs (`userKeyPairs`)
@@ -233,6 +234,10 @@ Keys in the matrix use `uint16_t` action codes:
 - Details: `FEATURES.md`, section "Repeat the last action". Read it only before you change this feature.
 - Each half runs its own repeat. The master sends `REPEAT_RUN` to the left half only when the left half acted last.
 - `ALT_REPEAT` uses the same ops with a flag (`REPEAT` code 4, `REPEAT_RUN` code 2). The half that executes forms the opposite with `altRepeatAction`. Details: `FEATURES.md`, section "Alternate repeat".
+
+### Dynamic macro (`DactylDynamicMacro.h`)
+- Details: `FEATURES.md`, section "Dynamic macro". Read it only before you change this feature.
+- The slot lives only on the master, only in RAM, and is never in the NVS or in `GET_CONFIG` (it can hold a password). `DM_REC:0|1` goes only over USB serial, never over BLE. Never add the slot to `dactyl_left.ino`.
 
 ### Mod-Tap / Layer-Tap (`HOLDMAP`)
 - Details: `FEATURES.md`, section "Mod-Tap / Layer-Tap". Read it only before you change this feature.

@@ -203,6 +203,10 @@ function setupEventListeners() {
       alert("Combos unterstützen keine One-Shot-Ebene. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
+    if (isDynamicMacroCode(action)) {
+      alert("Combos unterstützen keine dynamischen Makros. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
     if (behavior !== "KEY_PRESS" && action === "LAYER_LOCK") {
       alert("Layer Lock funktioniert nur mit dem Verhalten \"Einzeltaste senden\".");
       return;

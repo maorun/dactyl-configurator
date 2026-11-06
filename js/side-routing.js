@@ -294,6 +294,16 @@
     }
   }
 
+  // DM_REC-Zeile ("DM_REC:0" oder "DM_REC:1"): Aufnahmestand des dynamischen Makros; nur der Master hat den Slot.
+  // Rückgabe true/false oder undefined bei einer fremden oder ungültigen Zeile.
+  function parseDmRecLine(line, lineSide) {
+    const D = root.Dactyl;
+    if (typeof line !== "string") return undefined;
+    const m = /^DM_REC:([01])\s*$/.exec(line);
+    if (!m || lineSide !== D.getMasterSide()) return undefined;
+    return m[1] === "1";
+  }
+
   // Anzeige: Pill nur bei aktivem Caps Lock
   function describeHostLeds(leds) {
     if (!leds) return { capsOn: false, title: "" };
@@ -365,7 +375,7 @@
 
   root.Dactyl = Object.assign(root.Dactyl || {}, {
     parseDiagLine, describeDiag, summarizeDiag, NORMAL_RESET_REASONS,
-    parseSplitFwLine, createFirmwareVersions, parseHostLeds, parseHostLedsLine, describeHostLeds, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
+    parseSplitFwLine, createFirmwareVersions, parseHostLeds, parseHostLedsLine, parseDmRecLine, describeHostLeds, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
     parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil
   });

@@ -313,6 +313,7 @@ inline int esp_ota_mark_app_valid_cancel_rollback() { return 0; }
 
 // Keycodes & Report-Typen direkt aus der Firmware (keine doppelte Pflege im Mock)
 #include "../dactyl_right/DactylKeycodes.h"
+#include "../dactyl_right/DactylDynamicMacro.h"
 
 // Media-Report als 16-Bit-Wert (Bitposition wie im Consumer-Report-Descriptor)
 inline uint16_t mediaBits(const MediaKeyReport k) { return (uint16_t)(k[0] | (k[1] << 8)); }
@@ -364,8 +365,11 @@ public:
   }
   std::vector<uint8_t> pressHistory; // jeder press() an den Host, wird von releaseAll() nicht geleert
   std::vector<int> keyEvents;        // +code = press, -code = release, in Aufrufreihenfolge
-  void press(uint8_t k) { pressedKeys.push_back(k); pressHistory.push_back(k); keyEvents.push_back(k); }
+  // Wie SplitArbitratedKeyboard: der Master nimmt die Tastencodes für DM_REC auf (DactylDynamicMacro.h)
+  DynamicMacro dynMacro;
+  void press(uint8_t k) { dynMacro.noteDown(k); pressedKeys.push_back(k); pressHistory.push_back(k); keyEvents.push_back(k); }
   void release(uint8_t k) {
+    dynMacro.noteUp(k);
     keyEvents.push_back(-(int)k);
     auto it = std::find(pressedKeys.begin(), pressedKeys.end(), k);
     if (it != pressedKeys.end()) pressedKeys.erase(it);
@@ -387,6 +391,7 @@ public:
   void mouseMove(int8_t x, int8_t y) { mouseMoves.push_back({x, y}); }
 
   void releaseAll() {
+    dynMacro.noteReleaseAll([](uint8_t) { return false; });
     pressedKeys.clear();
     pressedMediaKeys.clear();
     writtenMediaKeys.clear();

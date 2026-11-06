@@ -533,6 +533,16 @@ def validate_combo_layer_mask(value):
         return COMBO_ALL_LAYERS
     return validate_int(value, 1, COMBO_ALL_LAYERS, "layerMask")
 
+COMBO_WINDOW_MIN = 10
+COMBO_WINDOW_MAX = 500
+COMBO_NO_KEY = 0xFF
+
+def validate_combo_window(value):
+    """Eigenes Zeitfenster einer Combo in ms. Fehlt es (null), gilt comboTimeoutMs (Firmware: 0)."""
+    if value is None:
+        return 0
+    return validate_int(value, COMBO_WINDOW_MIN, COMBO_WINDOW_MAX, "windowMs")
+
 # One-Shot-, Caps-Word- und Repeat-Aktionen (Codes > 0xFF): als Combo nur mit KEY_PRESS
 ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD", "ACT_REPEAT", "ACT_ALT_REPEAT", "ACT_LAYER_LOCK"} | {f"(ACT_OSL_BASE + {n})" for n in range(8)}
 
@@ -553,6 +563,13 @@ def generate_combos_cpp(combos):
             raise ValueError("Ungültiger Combo-Eintrag.")
         r1, c1 = validate_combo_key(cb.get("key1"), "key1")
         r2, c2 = validate_combo_key(cb.get("key2"), "key2")
+        # Dritte Taste (optional): muss sich von den ersten beiden unterscheiden
+        r3, c3 = COMBO_NO_KEY, COMBO_NO_KEY
+        if cb.get("key3") is not None:
+            r3, c3 = validate_combo_key(cb.get("key3"), "key3")
+            if (r3, c3) in ((r1, c1), (r2, c2)):
+                raise ValueError("Combo: Die dritte Taste muss sich von den ersten beiden unterscheiden.")
+        window = validate_combo_window(cb.get("windowMs"))
         beh = beh_map.get(cb.get("behavior"), 0)
         action = cb.get("action", "0")
         act = code_to_cpp(action if isinstance(action, str) else "0")
@@ -569,8 +586,11 @@ def generate_combos_cpp(combos):
             raise ValueError("Modifier Hold unterstützt keine One-Shot-, Caps-Word-, Repeat- oder Layer-Lock-Aktion.")
         # layerMask: Bit i = die Combo gilt auf Ebene i; fehlend = alle Ebenen
         mask = validate_combo_layer_mask(cb.get("layerMask"))
-        # KeyCombo: r1, c1, r2, c2, behavior, action[, layerMask]; ohne Maske (alle Ebenen) bleibt die Zeile wie bisher
-        extra = "" if mask == COMBO_ALL_LAYERS else f", {mask}"
+        # KeyCombo: r1, c1, r2, c2, behavior, action[, layerMask[, r3, c3, windowMs]]; ohne Zusatzwerte bleibt die Zeile wie bisher
+        if r3 != COMBO_NO_KEY or window:
+            extra = f", {mask}, {r3}, {c3}, {window}"
+        else:
+            extra = "" if mask == COMBO_ALL_LAYERS else f", {mask}"
         cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act}{extra} }}")
     lines = [
         "// [[[START_COMBOS]]]",
@@ -935,7 +955,9 @@ def validate_config(config, side="R"):
     generate_macros_cpp(config.get("macros"))
     generate_settings_cpp(config.get("settings"), side)
     for cb in config.get("combos") or []:
-        for field in ("key1", "key2"):
+        for field in ("key1", "key2", "key3"):
+            if cb.get(field) is None:
+                continue
             key = (cb[field]["r"], cb[field]["c"])
             if key in ABSENT_KEYS[side]:
                 raise ValueError(f"Combo-Taste R{key[0]}C{key[1]} existiert auf dieser Hälfte nicht.")

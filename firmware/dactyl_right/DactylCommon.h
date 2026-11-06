@@ -102,13 +102,20 @@
 // (r1, c1, r2, c2, behavior, 1 Byte Padding, action als 16 Bit little endian); das neue Format "combos_v2" steht in DactylLogic.h (COMBO_NVS_*).
 // layerMask: Bit i = die Combo gilt auf Ebene i. Standard alle Ebenen (0xFF). Ein Druck außerhalb der Maske
 // wird nicht gepuffert, die Combo löst dort nie aus.
+// Dritte Taste (r3, c3): 0xFF/0xFF = keine, die Combo hat zwei Tasten. windowMs: eigenes Zeitfenster in ms,
+// 0 = globales comboTimeoutMs. Bei drei Tasten müssen alle Drücke in dieses Fenster fallen (spätester minus frühester).
 #define COMBO_ALL_LAYERS 0xFF
+#define COMBO_NO_KEY     0xFF
+#define COMBO_WINDOW_MIN 10
+#define COMBO_WINDOW_MAX 500
 struct KeyCombo {
   uint8_t r1, c1;
   uint8_t r2, c2;
   uint8_t behavior; // 0 = KEY_PRESS, 1 = MODIFIER_HOLD, 2 = LAYER_TOGGLE
   uint16_t action;
   uint8_t layerMask = COMBO_ALL_LAYERS;
+  uint8_t r3 = COMBO_NO_KEY, c3 = COMBO_NO_KEY;
+  uint16_t windowMs = 0;
 };
 
 // Separater flüchtiger Runtime-Zustand für Tasten-Chording

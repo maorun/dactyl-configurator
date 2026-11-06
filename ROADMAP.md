@@ -30,15 +30,6 @@ Rules for this file:
 - **Goal:** Build a complete config from the `GET_CONFIG` snapshot of the half, including the settings from `DEVICE_INFO`. Show the layout diff against the local config. After a confirmation, apply it as a snapshot pending change with the flags `pairs` and `macros`, like an import. A snapshot with an invalid line applies nothing.
 - **Acceptance test:** A test feeds a complete `GET_CONFIG` output and expects the same config as the source. A test with an invalid list line expects no change.
 
-### Three-key combos with their own window
-
-- **Rank:** Feature model. Total 21/40 (typing 5, configuration 4, harmony 7, safety 5). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h` (`KeyCombo`, `MAX_COMBOS`), `firmware/dactyl_right/DactylLogic.h` (`isComboCandidateKey`, combo buffer), `firmware/dactyl_right/DactylVersion.h`, `server.py`, `js/editor.js` (combo table), `js/config-model.js`.
-- **Problem:** A combo has exactly two keys and uses the global `comboTimeoutMs`. Fast typists need a short window for combos on letter keys and a longer window for combos on thumb keys.
-- **Goal:** Add an optional third key and an optional window per combo (`0` = `comboTimeoutMs`). Use the `combos_v2` NVS format (see `FEATURES.md`, "Combos per layer"): it has reserved fields for the third key (`r3`, `c3`) and the window, so no new format is needed. Keep the old 8-byte `combos_data` format readable. Extend `ADD_COMBO` and `COMBO_DATA` with optional values after the layer mask. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test triggers a three-key combo only when all three keys arrive within the window of that combo. A test loads the old NVS format without data loss.
-
 ### Record macros on the keyboard (`DM_REC`, `DM_PLAY`)
 
 - **Rank:** Feature model. Total 21/40 (typing 5, configuration 4, harmony 7, safety 5). Effort M. Estimate.

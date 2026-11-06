@@ -25,6 +25,10 @@ const SETTINGS_RANGES = {
 const COMBO_BEHAVIORS = ["KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"];
 // Ebenenmaske einer Combo: Bit i = die Combo gilt auf Ebene i. Fehlt das Feld, gilt sie auf allen Ebenen.
 const COMBO_ALL_LAYERS = 0xFF;
+// Eigenes Zeitfenster einer Combo in ms; fehlt das Feld, gilt comboTimeoutMs. Dritte Taste: optionales Feld key3.
+const COMBO_WINDOW_MIN = 10;
+const COMBO_WINDOW_MAX = 500;
+const COMBO_NO_KEY = 0xFF;
 
 function isValidComboLayerMask(v) {
   return Number.isInteger(v) && v >= 1 && v <= COMBO_ALL_LAYERS;
@@ -33,6 +37,30 @@ function isValidComboLayerMask(v) {
 // Maske einer Combo (fehlend oder ungültig = alle Ebenen)
 function comboLayerMask(cb) {
   return cb && isValidComboLayerMask(cb.layerMask) ? cb.layerMask : COMBO_ALL_LAYERS;
+}
+
+function isValidComboWindow(v) {
+  return Number.isInteger(v) && v >= COMBO_WINDOW_MIN && v <= COMBO_WINDOW_MAX;
+}
+
+// Eigenes Fenster einer Combo in ms (fehlend oder ungültig = 0, also comboTimeoutMs)
+function comboWindowMs(cb) {
+  return cb && isValidComboWindow(cb.windowMs) ? cb.windowMs : 0;
+}
+
+function isValidComboKey(key) {
+  return !!key && typeof key === "object" && isValidIndex(key.r, NUM_ROWS) && isValidIndex(key.c, NUM_COLS);
+}
+
+// Dritte Taste der Combo (fehlend oder ungültig = keine)
+function comboThirdKey(cb) {
+  return cb && isValidComboKey(cb.key3) ? cb.key3 : null;
+}
+
+// Tasten der Combo als Liste: zwei oder drei
+function comboKeys(cb) {
+  const third = comboThirdKey(cb);
+  return third ? [cb.key1, cb.key2, third] : [cb.key1, cb.key2];
 }
 
 // Ebenen der Maske als aufsteigende Liste, z. B. 0b101 -> [0, 2]
@@ -544,6 +572,14 @@ function validateConfigShape(cfg, profile) {
       if (cb.layerMask !== undefined && cb.layerMask !== null && !isValidComboLayerMask(cb.layerMask)) {
         throw new Error(`Combo ${i + 1} hat eine ungültige Ebenenmaske (1..${COMBO_ALL_LAYERS} erwartet).`);
       }
+      if (cb.key3 !== undefined && cb.key3 !== null) {
+        if (!isValidComboKey(cb.key3)) throw new Error(`Combo ${i + 1} hat eine ungültige dritte Taste (key3).`);
+        const same = k => k.r === cb.key3.r && k.c === cb.key3.c;
+        if (same(cb.key1) || same(cb.key2)) throw new Error(`Combo ${i + 1}: Die dritte Taste muss sich von den ersten beiden unterscheiden.`);
+      }
+      if (cb.windowMs !== undefined && cb.windowMs !== null && !isValidComboWindow(cb.windowMs)) {
+        throw new Error(`Combo ${i + 1} hat ein ungültiges Zeitfenster (${COMBO_WINDOW_MIN}..${COMBO_WINDOW_MAX} ms erwartet).`);
+      }
     });
   }
   if (cfg.keyPairs !== undefined) {
@@ -633,10 +669,16 @@ function normalizeConfig(cfg, profile) {
     ? cfg.combos.filter(cb => cb && cb.key1 && cb.key2 &&
         isValidIndex(cb.key1.r, NUM_ROWS) && isValidIndex(cb.key1.c, NUM_COLS) &&
         isValidIndex(cb.key2.r, NUM_ROWS) && isValidIndex(cb.key2.c, NUM_COLS)).slice(0, MAX_COMBOS)
-        // Eine ungültige Maske wird zu "alle Ebenen"; die Maske für alle Ebenen steht nicht in der Datei
+        // Eine ungültige Maske wird zu "alle Ebenen"; die Maske für alle Ebenen steht nicht in der Datei.
+        // Eine ungültige oder doppelte dritte Taste und ein ungültiges Fenster entfallen (zwei Tasten, globales Fenster).
         .map(cb => {
-          const { layerMask, ...rest } = cb;
-          return isValidComboLayerMask(layerMask) && layerMask !== COMBO_ALL_LAYERS ? { ...rest, layerMask } : rest;
+          const { layerMask, key3, windowMs, ...rest } = cb;
+          const out = isValidComboLayerMask(layerMask) && layerMask !== COMBO_ALL_LAYERS ? { ...rest, layerMask } : rest;
+          const distinct = isValidComboKey(key3) && !(key3.r === cb.key1.r && key3.c === cb.key1.c) &&
+            !(key3.r === cb.key2.r && key3.c === cb.key2.c);
+          if (distinct) out.key3 = key3;
+          if (isValidComboWindow(windowMs)) out.windowMs = windowMs;
+          return out;
         })
     : [];
   cfg.keyPairs = Array.isArray(cfg.keyPairs)
@@ -915,16 +957,24 @@ function captureListLine(snapshot, line) {
     const count = snapshot.counts[kind];
     const list = snapshot[kind];
     if (count === null || data.o !== list.length || !Array.isArray(data.e) || list.length + data.e.length > count ||
-        !data.e.every(e => isCombo ? (nums(e, 6, t => t[4] <= 2) || nums(e, 7, t => t[4] <= 2 && isValidComboLayerMask(t[6])))
+        !data.e.every(e => isCombo ? (nums(e, 6, t => t[4] <= 2) || nums(e, 7, t => t[4] <= 2 && isValidComboLayerMask(t[6])) ||
+            nums(e, 10, t => t[4] <= 2 && isValidComboLayerMask(t[6]) && isDeviceComboThirdAndWindow(t)))
           : isOverride ? nums(e, 3, t => t[0] >= 1 && t[0] <= 15) : nums(e, 2))) return fail();
-    // Firmware vor der Ebenenmaske sendet 6 Werte je Combo: sie gilt auf allen Ebenen
-    list.push(...(isCombo ? data.e.map(e => (e.length === 6 ? [...e, COMBO_ALL_LAYERS] : e)) : data.e));
+    // Firmware vor der Ebenenmaske sendet 6 Werte je Combo (alle Ebenen), vor Stand 24 sieben (zwei Tasten, globales
+    // Fenster). Alle Einträge werden auf zehn Werte ergänzt: ..., Maske, r3, c3, Fenster.
+    list.push(...(isCombo ? data.e.map(e => [...e, ...[COMBO_ALL_LAYERS, COMBO_NO_KEY, COMBO_NO_KEY, 0].slice(e.length - 6)]) : data.e));
   } catch (_) { return fail(); }
   return true;
 }
 
 // "absent": das Gerät sendet keine Listen (Firmware vor Stand 5). "complete": alle Listen vollständig gelesen.
 // "incomplete": Listen begonnen, aber eine Zeile fehlt oder war ungültig.
+// Dritte Taste und Fenster eines Combo-Eintrags vom Gerät: keine Taste (255, 255) oder eine Taste in der Matrix, Fenster 0..500
+function isDeviceComboThirdAndWindow(t) {
+  const none = t[7] === COMBO_NO_KEY && t[8] === COMBO_NO_KEY;
+  return (none || (t[7] < NUM_ROWS && t[8] < NUM_COLS)) && t[9] <= COMBO_WINDOW_MAX;
+}
+
 function snapshotListsState(snapshot) {
   if (!snapshot) return "absent";
   const c = snapshot.counts;
@@ -947,8 +997,11 @@ function snapshotListsKnown(snapshot) {
 
 // Lokale Listen als Zahlen-Tupel, so wie die Firmware sie sendet
 function localComboTuples(cfg) {
-  return (cfg.combos || []).slice(0, MAX_COMBOS).map(cb => [cb.key1.r, cb.key1.c, cb.key2.r, cb.key2.c,
-    COMBO_BEHAVIOR_CODES[cb.behavior] ?? 0, actionCodeToNumeric(cb.action), comboLayerMask(cb)]);
+  return (cfg.combos || []).slice(0, MAX_COMBOS).map(cb => {
+    const third = comboThirdKey(cb);
+    return [cb.key1.r, cb.key1.c, cb.key2.r, cb.key2.c, COMBO_BEHAVIOR_CODES[cb.behavior] ?? 0, actionCodeToNumeric(cb.action),
+      comboLayerMask(cb), third ? third.r : COMBO_NO_KEY, third ? third.c : COMBO_NO_KEY, comboWindowMs(cb)];
+  });
 }
 
 function localPairTuples(cfg) {
@@ -971,7 +1024,9 @@ function describeComboTuple(t) {
   const behavior = ["", " (Modifier halten)", " (Ebene umschalten)"][t[4]] || "";
   const mask = t[6] === undefined ? COMBO_ALL_LAYERS : t[6];
   const layers = mask === COMBO_ALL_LAYERS ? "" : ` (${comboMaskLayers(mask).length === 1 ? "Ebene" : "Ebenen"} ${comboMaskLayers(mask).join(", ")})`;
-  return `R${t[0]}C${t[1]} + R${t[2]}C${t[3]} → ${findDefinitionByCode(t[5]).label}${behavior}${layers}`;
+  const third = t[7] !== undefined && t[7] !== COMBO_NO_KEY && t[8] !== COMBO_NO_KEY ? ` + R${t[7]}C${t[8]}` : "";
+  const window = t[9] ? ` (Fenster ${t[9]} ms)` : "";
+  return `R${t[0]}C${t[1]} + R${t[2]}C${t[3]}${third} → ${findDefinitionByCode(t[5]).label}${behavior}${layers}${window}`;
 }
 
 function describePairTuple(t) {
@@ -1179,7 +1234,7 @@ function lintLayerAction(code) {
 // Eine Combo kann nur auslösen, wenn beide Tasten an der Hälfte existieren
 function lintComboCanFire(cb, profile) {
   return !!cb && typeof cb === "object" && !!cb.key1 && !!cb.key2 &&
-    isWiredSwitch(cb.key1.r, cb.key1.c, profile) && isWiredSwitch(cb.key2.r, cb.key2.c, profile);
+    comboKeys(cb).every(k => isWiredSwitch(k.r, k.c, profile));
 }
 
 function lintLayerName(layers) {
@@ -1428,19 +1483,31 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
     combos.forEach((cb, i) => {
       // Nur Combos, die auslösen können: Koordinaten als Text ("2") oder fehlende Tasten sind keine Dopplung
       if (!lintComboCanFire(cb, profiles[side])) return;
-      const ids = [`${cb.key1.r}_${cb.key1.c}`, `${cb.key2.r}_${cb.key2.c}`].sort().join("|");
+      const ids = comboKeys(cb).map(k => `${k.r}_${k.c}`).sort().join("|");
       const earlier = (seen.get(ids) || []).find(e => (e.mask & comboLayerMask(cb)) !== 0);
       if (earlier) {
-        add("warn", side, "combo-duplicate", `Combo ${earlier.index + 1} und Combo ${i + 1} nutzen dieselben zwei Tasten. Beide lösen gleichzeitig aus.`);
+        add("warn", side, "combo-duplicate", `Combo ${earlier.index + 1} und Combo ${i + 1} nutzen dieselben ${comboKeys(cb).length === 3 ? "drei" : "zwei"} Tasten. Beide lösen gleichzeitig aus.`);
       } else {
         if (!seen.has(ids)) seen.set(ids, []);
         seen.get(ids).push({ index: i, mask: comboLayerMask(cb) });
       }
     });
+    // Eine Combo mit zwei Tasten, die in einer Combo mit drei Tasten enthalten ist, löst vorab aus: beide Combos feuern
+    combos.forEach((three, j) => {
+      if (!lintComboCanFire(three, profiles[side]) || comboKeys(three).length !== 3) return;
+      const ids3 = comboKeys(three).map(k => `${k.r}_${k.c}`);
+      combos.forEach((two, i) => {
+        if (i === j || !lintComboCanFire(two, profiles[side]) || comboKeys(two).length !== 2) return;
+        if ((comboLayerMask(two) & comboLayerMask(three)) === 0) return;
+        if (!comboKeys(two).every(k => ids3.includes(`${k.r}_${k.c}`))) return;
+        add("warn", side, "combo-subset",
+          `Combo ${i + 1} nutzt zwei Tasten von Combo ${j + 1}. Beide lösen aus, wenn alle drei Tasten im Fenster gedrückt werden.`);
+      });
+    });
     combos.forEach((cb, i) => {
       // Eine Taste, die es an der Hälfte nicht gibt, meldet schon "absent-key-action"; die Combo löst nie aus
       if (!lintComboCanFire(cb, profiles[side])) return;
-      for (const key of [cb.key1, cb.key2]) {
+      for (const key of comboKeys(cb)) {
         const layers = [];
         for (let l = 0; l < NUM_LAYERS; l++) {
           // Nur auf Ebenen der Maske hält die Combo die Taste zurück

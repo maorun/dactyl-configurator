@@ -35,7 +35,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              createTypingStats, recordKeyPress, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
-             COMBO_ALL_LAYERS, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
+             COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
              SIDE_PROFILES,
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
@@ -4060,7 +4060,7 @@ test("Combo-Ebenenmaske: Geräte-Snapshot liest 6 Werte (alte Firmware) und 7 We
   const snap = api.createDeviceSnapshot();
   assert.ok(api.captureListLine(snap, "COMBO_COUNT:2"));
   assert.ok(api.captureListLine(snap, 'COMBO_DATA:{"o":0,"e":[[2,1,2,2,0,177],[3,1,3,2,1,128,6]]}'));
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(snap.combos)), [[2, 1, 2, 2, 0, 177, 255], [3, 1, 3, 2, 1, 128, 6]]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(snap.combos)), [[2, 1, 2, 2, 0, 177, 255, 255, 255, 0], [3, 1, 3, 2, 1, 128, 6, 255, 255, 0]]);
   for (const bad of ['[[2,1,2,2,0,177,0]]', '[[2,1,2,2,0,177,256]]', '[[2,1,2,2,0,177,1,1]]']) {
     const s2 = api.createDeviceSnapshot();
     api.captureListLine(s2, "COMBO_COUNT:1");
@@ -4093,6 +4093,133 @@ asyncTests.push(["Combo-Ebenenmaske: Sync hängt die Maske an ADD_COMBO, nur wen
   assert.ok(adds[1].endsWith(" 5"), adds[1]);
   assert.strictEqual(adds[1].split(" ").length, 8, adds[1]);
 }]);
+
+test("Combo mit dritter Taste und Fenster: Normalisierung behält gültige Werte und verwirft ungültige", () => {
+  const cfg = JSON.parse(JSON.stringify(R.defaultConfig));
+  const base = { behavior: "KEY_PRESS", action: "KEY_ESC", key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 } };
+  cfg.combos = [
+    { ...base },                                                           // zwei Tasten, globales Fenster
+    { ...base, key3: { r: 2, c: 3, label: "L" }, windowMs: 90 },           // drei Tasten, eigenes Fenster
+    { ...base, windowMs: 120 },                                            // zwei Tasten, eigenes Fenster
+    { ...base, key3: { r: 2, c: 1 }, windowMs: 5 },                        // dritte Taste doppelt, Fenster zu klein
+    { ...base, key3: { r: 9, c: 0 }, windowMs: 501 },                      // dritte Taste außerhalb, Fenster zu groß
+    { ...base, key3: "x", windowMs: "40" }                                 // falsche Typen
+  ];
+  const n = api.normalizeConfig(cfg, R);
+  assert.ok(!("key3" in n.combos[0]) && !("windowMs" in n.combos[0]));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(n.combos[1].key3)), { r: 2, c: 3, label: "L" });
+  assert.strictEqual(n.combos[1].windowMs, 90);
+  assert.ok(!("key3" in n.combos[2]) && n.combos[2].windowMs === 120);
+  for (const i of [3, 4, 5]) assert.ok(!("key3" in n.combos[i]) && !("windowMs" in n.combos[i]), `Combo ${i}`);
+});
+
+test("Combo mit dritter Taste und Fenster: Config-Prüfung weist ungültige Werte ab", () => {
+  const make = extra => {
+    const cfg = JSON.parse(JSON.stringify(R.defaultConfig));
+    cfg.combos = [{ behavior: "KEY_PRESS", action: "KEY_ESC", key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, ...extra }];
+    return cfg;
+  };
+  for (const ok of [{}, { key3: { r: 2, c: 3 } }, { windowMs: 10 }, { windowMs: 500 }, { key3: { r: 2, c: 3 }, windowMs: 60 }, { key3: null, windowMs: null }]) {
+    api.validateConfigShape(make(ok));
+  }
+  for (const bad of [{ key3: { r: 2, c: 1 } }, { key3: { r: 2, c: 2 } }, { key3: { r: 6, c: 0 } }, { key3: { r: 0, c: 7 } },
+    { key3: "x" }, { windowMs: 9 }, { windowMs: 501 }, { windowMs: "40" }, { windowMs: 40.5 }]) {
+    assert.throws(() => api.validateConfigShape(make(bad)), /Combo 1/, JSON.stringify(bad));
+  }
+});
+
+test("Combo mit dritter Taste und Fenster: Geräte-Snapshot liest 6, 7 und 10 Werte", () => {
+  const snap = api.createDeviceSnapshot();
+  assert.ok(api.captureListLine(snap, "COMBO_COUNT:3"));
+  assert.ok(api.captureListLine(snap, 'COMBO_DATA:{"o":0,"e":[[2,1,2,2,0,177],[3,1,3,2,1,128,6],[4,1,4,2,0,97,255,4,3,90]]}'));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(snap.combos)), [
+    [2, 1, 2, 2, 0, 177, 255, 255, 255, 0], [3, 1, 3, 2, 1, 128, 6, 255, 255, 0], [4, 1, 4, 2, 0, 97, 255, 4, 3, 90]]);
+  for (const bad of ['[[2,1,2,2,0,177,255,2,3]]', '[[2,1,2,2,0,177,255,9,3,0]]', '[[2,1,2,2,0,177,255,2,9,0]]',
+    '[[2,1,2,2,0,177,255,2,3,501]]', '[[2,1,2,2,0,177,255,255,3,0]]', '[[2,1,2,2,0,177,255,2,3,0,1]]']) {
+    const s2 = api.createDeviceSnapshot();
+    api.captureListLine(s2, "COMBO_COUNT:1");
+    api.captureListLine(s2, `COMBO_DATA:{"o":0,"e":${bad}}`);
+    assert.strictEqual(api.snapshotListsState(s2), "incomplete", bad);
+  }
+});
+
+test("Combo mit dritter Taste und Fenster: Layout-Diff vergleicht dritte Taste und Fenster", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap = snapshotWithLists(cfg);
+  assert.strictEqual(api.diffKeymap(cfg, snap, R).lists.combos.length, 0);
+  cfg.combos[0].key3 = { r: 2, c: 4, label: "x" };
+  cfg.combos[0].windowMs = 80;
+  const d = api.diffKeymap(cfg, snap, R).lists;
+  assert.strictEqual(d.combos.length, 1);
+  assert.ok(d.combos[0].local.includes("R2C4") && d.combos[0].local.includes("80 ms"), d.combos[0].local);
+  assert.ok(!d.combos[0].device.includes("80 ms"), d.combos[0].device);
+  // Nur das Fenster ändert sich
+  const cfg2 = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap2 = snapshotWithLists(cfg2);
+  cfg2.combos[0].windowMs = 60;
+  assert.strictEqual(api.diffKeymap(cfg2, snap2, R).lists.combos.length, 1);
+});
+
+asyncTests.push(["Combo mit dritter Taste und Fenster: Sync sendet r3 c3 und Fenster nur bei Bedarf", async () => {
+  const { w, sent } = fullSyncHarness(okReply);
+  const base = { behavior: "KEY_PRESS", action: "KEY_ESC" };
+  w.cfgRef.combos = [
+    { ...base, key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 } },                                              // wie bisher
+    { ...base, key1: { r: 1, c: 0 }, key2: { r: 1, c: 1 }, key3: { r: 1, c: 2 } },                        // drei Tasten
+    { ...base, key1: { r: 2, c: 0 }, key2: { r: 2, c: 1 }, windowMs: 120 },                               // eigenes Fenster
+    { ...base, key1: { r: 3, c: 0 }, key2: { r: 3, c: 1 }, key3: { r: 3, c: 2 }, windowMs: 90, layerMask: 5 }
+  ];
+  await w.write();
+  const adds = sent.filter(c => c.startsWith("ADD_COMBO "));
+  assert.strictEqual(adds.length, 4);
+  assert.ok(adds[0].endsWith(" 0 177") || adds[0].split(" ").length === 7, adds[0]);
+  assert.ok(adds[1].endsWith(" 255 1 2 0"), adds[1]);
+  assert.ok(adds[2].endsWith(" 255 255 255 120"), adds[2]);
+  assert.ok(adds[3].endsWith(" 5 3 2 90"), adds[3]);
+}]);
+
+test("Combo mit dritter Taste: Layout-Prüfung erkennt Dopplungen über drei Tasten und Maske der Taste", () => {
+  const cfg = lintCfg();
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_B");
+  cfg.combos[1].key3 = { r: 2, c: 3 };
+  // Zwei Tasten und drei Tasten sind verschiedene Combos
+  assert.deepStrictEqual(lintCodes(lintBoth(cfg), "combo-duplicate"), []);
+  lintCombo(cfg, [2, 3], [2, 1], "KEY_PRESS", "KEY_C");
+  cfg.combos[2].key3 = { r: 2, c: 2 };                       // dieselben drei Tasten in anderer Reihenfolge
+  assert.strictEqual(lintCodes(lintBoth(cfg), "combo-duplicate").length, 1);
+});
+
+test("Combo mit dritter Taste: Layout-Prüfung warnt, wenn eine Zwei-Tasten-Combo in einer Drei-Tasten-Combo steckt", () => {
+  const cfg = lintCfg();
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_B");
+  cfg.combos[1].key3 = { r: 2, c: 3 };
+  const found = lintCodes(lintBoth(cfg), "combo-subset");
+  assert.strictEqual(found.length, 1);
+  assert.ok(found[0].message.startsWith("Combo 1 nutzt zwei Tasten von Combo 2"), found[0].message);
+  assert.strictEqual(found[0].level, "warn");
+  // Getrennte Ebenenmasken: keine gemeinsame Ebene, keine Warnung
+  cfg.combos[0].layerMask = 0b0001;
+  cfg.combos[1].layerMask = 0b0010;
+  assert.deepStrictEqual(lintCodes(lintBoth(cfg), "combo-subset"), []);
+  // Nur ein Teil der Tasten gemeinsam
+  const other = lintCfg();
+  lintCombo(other, [2, 1], [2, 5], "KEY_PRESS", "KEY_ESC");
+  lintCombo(other, [2, 1], [2, 2], "KEY_PRESS", "KEY_B");
+  other.combos[1].key3 = { r: 2, c: 3 };
+  assert.deepStrictEqual(lintCodes(lintBoth(other), "combo-subset"), []);
+});
+
+test("Combo mit dritter Taste: comboKeys liefert zwei oder drei Tasten", () => {
+  const two = { key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 } };
+  assert.strictEqual(api.comboKeys(two).length, 2);
+  assert.strictEqual(api.comboKeys({ ...two, key3: { r: 0, c: 2 } }).length, 3);
+  assert.strictEqual(api.comboKeys({ ...two, key3: { r: 9, c: 2 } }).length, 2);
+  assert.strictEqual(api.comboWindowMs({ ...two, windowMs: 70 }), 70);
+  assert.strictEqual(api.comboWindowMs({ ...two, windowMs: 5 }), 0);
+  assert.strictEqual(api.comboWindowMs(two), 0);
+});
 
 test("Layout-Prüfung: Combos über dieselben Tasten mit getrennten Ebenen sind keine Dopplung", () => {
   const cfg = lintCfg();

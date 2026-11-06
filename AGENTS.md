@@ -242,7 +242,7 @@ Keys in the matrix use `uint16_t` action codes:
 
 ### Combos per layer (`KeyCombo.layerMask`)
 - Details: `FEATURES.md`, section "Combos per layer". Read it only before you change this feature.
-- Each combo has a layer mask (default `0xFF`). `ADD_COMBO` and `COMBO_DATA` carry it as optional last value. NVS key `combos_v2` replaces `combos_data`; the old 8-byte format stays readable. Keep the reserved bytes of `combos_v2` for the three-key combo.
+- Each combo has a layer mask (default `0xFF`), an optional third key (`r3`, `c3`, `0xFF` = none) and an optional own window (`windowMs`, `0` = `comboTimeoutMs`). `ADD_COMBO` and `COMBO_DATA` carry them as optional last values. NVS key `combos_v2` replaces `combos_data`; the old 8-byte format stays readable. Keep the record size of `combos_v2` (12 bytes). Details: `FEATURES.md`, section "Combos per layer" (own subsection "Three-key combos and own window").
 
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 - Details: `FEATURES.md`, section "Tap-Dance / Double-Tap". Read it only before you change this feature.

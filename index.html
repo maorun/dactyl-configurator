@@ -329,6 +329,7 @@
                 <th>Ausgelöste Aktion</th>
                 <th>Verhalten</th>
                 <th>Ebenen</th>
+                <th>Fenster</th>
                 <th>Aktionen</th>
               </tr>
             </thead>
@@ -830,6 +831,18 @@
               <label for="comboKey2Select">Taste 2:</label>
               <select id="comboKey2Select" class="form-control"></select>
             </div>
+          </div>
+
+          <div class="form-group">
+            <label for="comboKey3Select">Taste 3 (optional):</label>
+            <select id="comboKey3Select" class="form-control"></select>
+            <small class="form-hint">Mit dritter Taste löst die Combo erst aus, wenn alle drei Tasten im Zeitfenster gedrückt sind.</small>
+          </div>
+
+          <div class="form-group">
+            <label for="comboWindowInput">Eigenes Zeitfenster (Millisekunden, leer = globales Combo-Zeitfenster):</label>
+            <input type="number" id="comboWindowInput" class="form-control" min="10" max="500" placeholder="Global">
+            <small class="form-hint">Kurz für Combos auf Buchstaben, länger für Daumentasten. Gilt nur für diese Combo.</small>
           </div>
 
           <div class="form-group">

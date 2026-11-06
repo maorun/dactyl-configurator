@@ -406,6 +406,9 @@ async function runAutoSync(options) {
 const DEVICE_SNAPSHOT_TIMEOUT_MS = 8000;
 // Nach einem Timeout verwirft die App späte GET_CONFIG-Zeilen dieser Hälfte noch so lange (oder bis CONFIG_SYNC_DONE)
 const DEVICE_SNAPSHOT_DRAIN_MS = 30000;
+// Hälfte, deren Konfiguration "Vom ESP32 laden" gerade liest oder im Dialog zeigt (null = kein Ladevorgang).
+// handleSerialLine übernimmt DEVICE_INFO-Einstellungen dieser Hälfte erst nach der Bestätigung.
+let deviceLoadSide = null;
 // Laufende Abfrage: { side, snapshot, finish, stale }. Solange sie besteht, übernimmt handleSerialLine die Daten nicht.
 // stale = true: Abfrage abgelaufen, späte Zeilen werden nur noch verworfen.
 let deviceSnapshotRead = null;
@@ -418,6 +421,15 @@ function captureDeviceSnapshotLine(line, side) {
   if (!read || side !== read.side) return false;
   const prefix = line.substring(0, line.indexOf(":") + 1);
   const isDone = line.startsWith("CONFIG_SYNC_DONE");
+  // Komplettes Laden: DEVICE_INFO zusätzlich in den Snapshot legen. Die Zeile geht weiter an den normalen Handler
+  // (Firmwarestand, Split-Link, Einstellungen): false = nicht verbraucht.
+  if (read.withInfo && !read.stale && prefix === "DEVICE_INFO:") {
+    try {
+      const info = JSON.parse(line.substring(prefix.length));
+      if (info && typeof info === "object" && !Array.isArray(info)) read.snapshot.info = info;
+    } catch (_) {}
+    return false;
+  }
   if (read.stale) {
     if (isDone) read.finish(null);
     return isDone || prefix === "LAYER_NAMES:" || !!MATRIX_DATA_FIELDS[prefix] || captureListLine(createDeviceSnapshot(), line);
@@ -444,13 +456,15 @@ function captureDeviceSnapshotLine(line, side) {
 }
 
 // Liest die Belegung der verbundenen Hälfte. Rückgabe: Snapshot oder null (Timeout, Sendefehler, unvollständig).
-async function readDeviceSnapshot(side) {
+// withInfo: fragt vorher GET_INFO ab und legt DEVICE_INFO in snapshot.info ab (für das komplette Laden).
+async function readDeviceSnapshot(side, withInfo = false) {
   if (deviceSnapshotRead) return null;
   let timer = null;
   let read = null;
   const result = new Promise(resolve => {
     read = {
       side,
+      withInfo,
       // Weg der Abfrage ("ble" oder "usb"): fällt genau dieser Weg weg, endet die Abfrage
       route: Dactyl.routeCommand(side, connectionState()),
       snapshot: createDeviceSnapshot(),
@@ -471,7 +485,9 @@ async function readDeviceSnapshot(side) {
       timer = setTimeout(() => read.finish(null), DEVICE_SNAPSHOT_DRAIN_MS);
     }, DEVICE_SNAPSHOT_TIMEOUT_MS);
   });
-  if (!(await sendDeviceCommand("GET_CONFIG", side))) read.finish(null);
+  // Die Antwort auf GET_INFO kommt vor den GET_CONFIG-Zeilen (gleicher Weg, gleiche Reihenfolge)
+  const infoSent = !withInfo || await sendDeviceCommand("GET_INFO", side);
+  if (!infoSent || !(await sendDeviceCommand("GET_CONFIG", side))) read.finish(null);
   return result;
 }
 
@@ -488,7 +504,7 @@ function abortDeviceSnapshotReadIfDisconnected() {
 }
 
 // Zeigt den Diff im Dialog. Rückgabe: true = übertragen, false = abbrechen.
-function showSyncDiffDialog(profile, diff) {
+function showSyncDiffDialog(profile, diff, options = {}) {
   const modal = document.getElementById("syncDiffModal");
   const summary = document.getElementById("syncDiffSummary");
   const list = document.getElementById("syncDiffList");
@@ -499,18 +515,31 @@ function showSyncDiffDialog(profile, diff) {
 
   const lists = diff.lists || { known: false, combos: [], pairs: [], overrides: [], macros: [] };
   const listCount = lists.combos.length + lists.pairs.length + lists.overrides.length + lists.macros.length;
-  const total = diff.keys.length + diff.names.length + listCount;
+  const settingsRows = options.settingsRows || [];
+  const total = diff.keys.length + diff.names.length + listCount + settingsRows.length;
   const listsHint = lists.known ? ""
     : lists.state === "incomplete" ? " Combos, Tastenpaare und Makros kamen unvollständig an und sind nicht verglichen."
     : " Combos, Tastenpaare und Makros vergleicht die Firmware dieses Geräts nicht: Hälfte flashen.";
+  const loading = options.mode === "load";
   const what = lists.known ? "Tasten, Ebenen-Namen, Combos, Tastenpaare und Makros" : "Tasten und Ebenen-Namen";
   summary.textContent = total === 0
     ? `${what} der ${profile.label} sind auf dem Gerät gleich.${listsHint}`
     : `${diff.keys.length} Taste(n), ${diff.names.length} Ebenen-Name(n)` +
       (lists.known ? `, ${lists.combos.length} Combo(s), ${lists.pairs.length} Tastenpaar(e), ${lists.overrides.length} Überschreibung(en) und ${lists.macros.length} Makro(s)` : "") +
-      ` der ${profile.label} ändern sich.` + listsHint;
+      (settingsRows.length ? `, ${settingsRows.length} Einstellung(en)` : "") +
+      ` der ${profile.label} ${loading ? "ändern sich beim Laden" : "ändern sich"}.` + listsHint;
+  const hint = document.getElementById("syncDiffHint");
+  if (hint) {
+    hint.textContent = loading
+      ? "Links steht die lokale Belegung, rechts die Belegung auf dem Gerät. Beim Laden ersetzt die Geräte-Belegung die lokale (Rückgängig über die vorgemerkten Änderungen)."
+      : "Links steht die Belegung auf dem Gerät, rechts die neue Belegung. Combos und Tastenpaare werden ohne Vergleich übertragen.";
+  }
+  btnConfirm.textContent = loading ? "Laden" : "Übertragen";
   list.replaceChildren();
-  const addRow = (where, before, after) => {
+  // Beim Laden steht links die lokale Belegung und rechts die Geräte-Belegung, die sie ersetzt
+  const addRow = (where, deviceText, localText) => {
+    const before = loading ? localText : deviceText;
+    const after = loading ? deviceText : localText;
     const li = document.createElement("li");
     const pos = document.createElement("strong");
     pos.textContent = where;
@@ -523,6 +552,7 @@ function showSyncDiffDialog(profile, diff) {
     li.append(pos, " ", from, " → ", to);
     list.appendChild(li);
   };
+  for (const row of settingsRows) addRow(row.where, row.device, row.local);
   for (const n of diff.names) addRow(`Name Ebene ${n.l}:`, n.device, n.local);
   for (const row of [...lists.combos, ...lists.pairs, ...lists.overrides, ...lists.macros]) addRow(`${row.where}:`, row.device, row.local);
   for (const k of diff.keys) addRow(`Ebene ${k.l} R${k.r}C${k.c}:`, describeKeyActions(k.device), describeKeyActions(k.local));
@@ -578,19 +608,89 @@ async function writeConfigWithDiff() {
   if (confirmed) return writeConfigToESP32({ autoDisconnectAfter: false, expectedSide: side });
 }
 
+// "Vom ESP32 laden": baut aus GET_CONFIG und DEVICE_INFO der verbundenen Hälfte eine komplette Config, zeigt den
+// Diff gegen die lokale Config und ersetzt sie nach der Bestätigung (Snapshot-Änderung wie ein Import).
+// Ein Snapshot mit einer ungültigen oder fehlenden Zeile ändert nichts.
 async function readConfigFromESP32() {
   // Während des Diffs würden die GET_CONFIG-Zeilen den Snapshot verfälschen oder den Vergleich veralten lassen
   if (diffFlowActive || deviceSnapshotRead) {
     showToast("Der Vergleich vor dem Speichern läuft noch. Bitte danach erneut laden.");
     return;
   }
-  if (bleConfigChar) {
-    await sendBleCommand("GET_CONFIG");
-    showToast("Konfigurations-Anfrage per Bluetooth an ESP32 gesendet...");
-  } else if (serialPort && serialPort.writable) {
-    await sendSerialCommand("GET_CONFIG");
-    showToast("Konfigurations-Anfrage per USB an ESP32 gesendet...");
-  } else {
-    alert("Keine Verbindung zum ESP32 aktiv! Bitte verbinde erst Bluetooth Live-Sync oder USB Live-Monitor.");
+  if (isAutoSyncing || isConnectingBle) {
+    showToast("Eine Übertragung oder ein Verbindungsaufbau läuft noch. Bitte danach erneut laden.");
+    return;
   }
+  const side = connectedSide();
+  if (!side) {
+    alert("Keine Verbindung zum ESP32 aktiv! Bitte verbinde erst Bluetooth Live-Sync oder USB Live-Monitor.");
+    return;
+  }
+  if (side !== editSide) {
+    showToast(`Verbunden ist die ${SIDE_PROFILES[side].label}. Wechsle zu dieser Hälfte, um ihre Belegung zu laden.`, 6000);
+    return;
+  }
+  const profile = SIDE_PROFILES[side];
+  diffFlowActive = true;
+  deviceLoadSide = side;
+  let built = null;
+  let confirmed = false;
+  try {
+    showToast(`📥 Lese die komplette Konfiguration der ${profile.label}...`);
+    const snapshot = await readDeviceSnapshot(side, true);
+    if (connectedSide() !== side || side !== editSide) {
+      showToast(`Verbindung zur ${profile.label} unterbrochen. Nichts geladen.`, 6000);
+      return;
+    }
+    if (!snapshot) {
+      alert(`Die Konfiguration der ${profile.label} konnte nicht gelesen werden. Nichts geändert.`);
+      return;
+    }
+    built = buildConfigFromSnapshot(snapshot, configFor(side), profile);
+    if (built.error) {
+      alert(`${built.error} Nichts geändert.`);
+      return;
+    }
+    confirmed = await showSyncDiffDialog(profile, diffKeymap(configFor(side), snapshot, profile),
+      { mode: "load", settingsRows: diffSettings(built.config.settings, configFor(side).settings) });
+  } finally {
+    diffFlowActive = false;
+    deviceLoadSide = null;
+  }
+  if (!confirmed) {
+    showToast("Laden abgebrochen. Die lokale Belegung bleibt unverändert.");
+    return;
+  }
+  if (side !== editSide) {
+    showToast("Die bearbeitete Hälfte hat gewechselt. Nichts geladen.", 6000);
+    return;
+  }
+  applyDeviceConfig(built.config, profile);
+}
+
+// Ersetzt die Config der bearbeiteten Hälfte durch die vom Gerät gelesene (Snapshot-Änderung mit Rückgängig)
+function applyDeviceConfig(config, profile) {
+  const oldConfig = JSON.parse(JSON.stringify(currentConfig));
+  const rerender = () => {
+    applySettingsToInputs(currentConfig.settings);
+    renderLayerButtons();
+    renderMatrix();
+    renderCombosTable();
+    if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+    saveConfigToServer();
+  };
+  currentConfig = config;
+  rerender();
+  markPendingSync({
+    type: "device_load",
+    snapshot: true,
+    pairs: true,
+    macros: true,
+    title: "Konfiguration vom Gerät geladen",
+    description: `Komplette Konfiguration der ${profile.label} gelesen`,
+    revert: () => {
+      currentConfig = oldConfig;
+      rerender();
+    }
+  });
 }

@@ -40,7 +40,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              applyLayerOperation, transparentLayer, isUndoBlocked,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell, keyTapTerm,
-             createDeviceSnapshot, captureListLine, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
+             createDeviceSnapshot, captureListLine, buildConfigFromSnapshot, settingsFromDeviceInfo, deviceNameFromInfo, diffSettings, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
              removeKeyPairAt, KEYCODES, UMLAUT_LABELS, ONE_SHOT_LABELS, holdSublabel,
@@ -985,6 +985,120 @@ test("Layout-Diff: Überschreibungen des Masters werden verglichen, ohne Zähler
   assert.strictEqual(api.snapshotListsState(snapOld), "incomplete");
 });
 
+// Komplettes Laden vom Gerät: GET_CONFIG-Zeilen (mit Ebenenmaske) und DEVICE_INFO ergeben dieselbe Config
+function deviceLinesFor(cfg) {
+  const lines = [];
+  const combos = cfg.combos.map(cb => [cb.key1.r, cb.key1.c, cb.key2.r, cb.key2.c,
+    { KEY_PRESS: 0, MODIFIER_HOLD: 1, LAYER_TOGGLE: 2 }[cb.behavior], api.actionCodeToNumeric(cb.action), api.comboLayerMask(cb)]);
+  lines.push("COMBO_COUNT:" + combos.length);
+  for (let o = 0; o < combos.length; o += 4) lines.push("COMBO_DATA:" + JSON.stringify({ o, e: combos.slice(o, o + 4) }));
+  return [...lines, ...listLines({ ...cfg, combos: [] }).filter(l => !l.startsWith("COMBO"))];
+}
+
+function deviceSnapshotFor(cfg, info) {
+  const snap = snapshotOf(cfg);
+  for (const line of deviceLinesFor(cfg)) assert.ok(api.captureListLine(snap, line), line);
+  snap.info = info || null;
+  return snap;
+}
+
+test("Komplettes Laden: vollständige GET_CONFIG-Ausgabe ergibt dieselbe Config wie die Quelle", () => {
+  const source = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  source.layerNames[3] = "Spiele";
+  source.layers[1][2][3] = { label: "J", tap: "KEY_J", hold: "KEY_LEFT_CTRL", dtap: "KEY_ESC", tapTerm: 250 };
+  source.keyPairs = [{ first: "KEY_LEFT_ALT", second: "KEY_A" }, { first: "KEY_B", second: "KEY_C" }];
+  source.keyOverrides = [{ mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" }];
+  source.macros = [{ name: "Makro 0", steps: [{ type: "tap", code: "KEY_A" }, { type: "pause", ms: 100 }, { type: "down", code: "KEY_LEFT_SHIFT" }] },
+                   { name: "Makro 1", steps: [] }];
+  source.combos = [
+    { id: "combo-1", name: "x", key1: { r: 2, c: 1, label: "J" }, key2: { r: 2, c: 2, label: "K" }, behavior: "KEY_PRESS", action: "KEY_ESC", actionLabel: "ESC" },
+    { id: "combo-2", name: "y", key1: { r: 1, c: 1, label: "U" }, key2: { r: 1, c: 2, label: "I" }, behavior: "LAYER_TOGGLE", action: "TG_2", actionLabel: "TG2", layerMask: 0b101 }
+  ];
+  source.settings = { ...source.settings, debounceMs: 7, comboTimeoutMs: 55, tappingTermMs: 180, holdTapMode: 1, quickTapMs: 120,
+    requirePriorIdleMs: 90, chordalHold: 1, capsLed: 1, standbyTimeoutMinutes: 10, sleepTimeoutMinutes: 90, deviceName: "Mein Dactyl",
+    triLayers: [{ a: 1, b: 2, target: 3 }] };
+  const snap = deviceSnapshotFor(source, {
+    name: "Mein Dactyl", debounce_ms: 7, combo_timeout_ms: 55, tapping_term_ms: 180, hold_tap_mode: 1, quick_tap_ms: 120,
+    require_prior_idle_ms: 90, chordal_hold: 1, caps_led: 1, standby_timeout: 10, sleep_timeout: 90, tri_layer: [[1, 2, 3]]
+  });
+  // TERM_DATA (eigener Tapping-Term) kommt wie bei der Firmware in snapshot.term
+  const term = Array.from({ length: 6 }, () => Array(7).fill(0));
+  term[2][3] = 250;
+  api.captureMatrixData(snap, "term", { l: 1, k: term });
+  const local = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const built = api.buildConfigFromSnapshot(snap, local, R);
+  assert.strictEqual(built.error, undefined);
+  const plain = v => JSON.parse(JSON.stringify(v));
+  const got = plain(built.config);
+  const want = plain(source);
+  assert.deepStrictEqual(got.layerNames, want.layerNames);
+  assert.deepStrictEqual(got.keyPairs, want.keyPairs);
+  assert.deepStrictEqual(got.keyOverrides, want.keyOverrides);
+  assert.deepStrictEqual(got.macros, want.macros);
+  assert.deepStrictEqual(got.settings, want.settings);
+  assert.deepStrictEqual(got.combos.map(c => [c.key1.r, c.key1.c, c.key2.r, c.key2.c, c.behavior, c.action, c.layerMask]),
+    want.combos.map(c => [c.key1.r, c.key1.c, c.key2.r, c.key2.c, c.behavior, c.action, c.layerMask]));
+  for (let l = 0; l < 8; l++) for (let r = 0; r < 6; r++) for (let c = 0; c < 7; c++) {
+    if (!api.isPhysicalKey(r, c, R)) continue;
+    assert.deepStrictEqual(plain(api.keyToNumericActions(got.layers[l][r][c])), plain(api.keyToNumericActions(want.layers[l][r][c])), `L${l}R${r}C${c}`);
+    assert.strictEqual(api.keyTapTerm(got.layers[l][r][c]), api.keyTapTerm(want.layers[l][r][c]), `Term L${l}R${r}C${c}`);
+  }
+  // Die gelesene Config ist gültig und liefert gegen das Gerät keinen Unterschied
+  api.validateConfigShape(plain(built.config), R);
+  const d = api.diffKeymap(built.config, snap, R);
+  assert.strictEqual(d.keys.length + d.names.length + d.lists.combos.length + d.lists.pairs.length + d.lists.overrides.length + d.lists.macros.length, 0);
+});
+
+test("deviceNameFromInfo: gleiche Namensregel für Laden und DEVICE_INFO-Handler", () => {
+  assert.strictEqual(api.deviceNameFromInfo({ name: "My Config Board", config_mode: 0 }), "My Config Board");
+  assert.strictEqual(api.deviceNameFromInfo({ name: "Dactyl Config", config_mode: 1 }), "");
+  assert.strictEqual(api.deviceNameFromInfo({ name: "Dactyl Config" }), "");
+  assert.strictEqual(api.deviceNameFromInfo({ name: "Dactyl" }), "Dactyl");
+  assert.strictEqual(api.deviceNameFromInfo({}), "");
+  assert.ok(/deviceNameFromInfo\(info\)/.test(require("fs").readFileSync(require("path").join(__dirname, "..", "js", "serial.js"), "utf8")),
+    "js/serial.js nutzt deviceNameFromInfo");
+});
+
+test("Komplettes Laden: eine ungültige Listenzeile ergibt keine Config", () => {
+  const local = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const before = JSON.stringify(local);
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  for (const bad of ['PAIR_DATA:{"o":0,"e":[[1]]}', "PAIR_COUNT:99", 'MACRO_DATA:{"i":0,"n":1,"o":0,"s":[[9,1,0]]}',
+                     'COMBO_DATA:{"o":0,"e":[[0,0,0,1,3,4,255]]}', 'OVERRIDE_DATA:nonsense']) {
+    const snap = deviceSnapshotFor(cfg, null);
+    assert.strictEqual(api.captureListLine(snap, bad), true, bad);
+    const built = api.buildConfigFromSnapshot(snap, local, R);
+    assert.ok(built.error, bad);
+    assert.strictEqual(built.config, undefined, bad);
+  }
+  // Fehlende Zeile, ältere Firmware ohne Listen und unvollständige Matrix
+  const lost = snapshotOf(cfg);
+  for (const line of deviceLinesFor(cfg).filter(l => !l.startsWith("PAIR_DATA"))) api.captureListLine(lost, line);
+  assert.ok(api.buildConfigFromSnapshot(lost, local, R).error);
+  assert.ok(api.buildConfigFromSnapshot(snapshotOf(cfg), local, R).error.includes("flashen"));
+  const noMatrix = api.createDeviceSnapshot();
+  assert.ok(api.buildConfigFromSnapshot(noMatrix, local, R).error);
+  assert.strictEqual(JSON.stringify(local), before);
+});
+
+test("Komplettes Laden: Einstellungen ohne DEVICE_INFO-Feld bleiben, die linke Hälfte trägt keine Überschreibungen", () => {
+  const base = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  base.settings.debounceMs = 9;
+  const s = api.settingsFromDeviceInfo({ combo_timeout_ms: 60, name: "Dactyl Config" }, base.settings);
+  assert.strictEqual(s.debounceMs, 9);
+  assert.strictEqual(s.comboTimeoutMs, 60);
+  assert.strictEqual(s.deviceName, base.settings.deviceName);
+  // Ein Name mit "Config" im Tastaturmodus bleibt erhalten; im Config-Modus gilt der Config-Name nicht
+  assert.strictEqual(api.settingsFromDeviceInfo({ name: "My Config Board", config_mode: 0 }, base.settings).deviceName, "My Config Board");
+  assert.strictEqual(api.settingsFromDeviceInfo({ name: "Dactyl Config", config_mode: 1 }, base.settings).deviceName, base.settings.deviceName);
+  const L = api.SIDE_PROFILES.L;
+  const leftCfg = api.normalizeConfig(JSON.parse(JSON.stringify(L.defaultConfig)), L);
+  const built = api.buildConfigFromSnapshot(deviceSnapshotFor(leftCfg, {}), leftCfg, L);
+  assert.strictEqual(built.error, undefined);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(built.config.keyOverrides)), []);
+});
+
 test("Layout-Diff: ein zusätzliches Makro auf dem Gerät erscheint", () => {
   const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
   cfg.macros = [];
@@ -1083,6 +1197,7 @@ function serialLineHarness(conn = {}) {
   vm.runInContext(`${code}
 ${read("js/side-routing.js")}
 var editSide = "R", activeLayerIndex = 0, serialSide = null, isAutoSyncing = false, bleConfigChar = null;
+var deviceLoadSide = null, deviceSnapshotRead = null;
 const configs = { R: normalizeConfig(JSON.parse(JSON.stringify(SIDE_PROFILES.R.defaultConfig)), SIDE_PROFILES.R),
                   L: normalizeConfig(JSON.parse(JSON.stringify(SIDE_PROFILES.L.defaultConfig)), SIDE_PROFILES.L) };
 const tests = { R: createMatrixTest(SIDE_PROFILES.R), L: createMatrixTest(SIDE_PROFILES.L) };
@@ -1123,7 +1238,9 @@ this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
     warns: calls.warns, handle: (...a) => s.handle(...a), settingOf: (side, k) => s.settingOf(side, k), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
     layerCounts: (side, l) => plain(s.layerCounts(side, l)), hostCaps: () => s.hostCaps(),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
-    set snapshotActive(v) { s.snapshotActive = v; }
+    set snapshotActive(v) { s.snapshotActive = v; },
+    setLoadSide(v) { vm.runInContext("deviceLoadSide = " + JSON.stringify(v), s); },
+    setStaleRead(v) { vm.runInContext("deviceSnapshotRead = " + JSON.stringify(v), s); }
   };
 }
 
@@ -1209,6 +1326,28 @@ test("serial.js: DEVICE_INFO der nicht bearbeiteten Hälfte ändert die Tri-Laye
   s.handle(info("R"), "R", "usb");
   assert.deepStrictEqual(s.calls.tri, ['[{"a":1,"b":2,"target":3}]']);
   assert.strictEqual(s.triOf("R"), '[{"a":1,"b":2,"target":3}]');
+});
+
+test("serial.js: DEVICE_INFO ändert während des kompletten Ladens die lokalen Einstellungen nicht", () => {
+  const s = serialLineHarness();
+  s.setLoadSide("R");
+  s.handle('DEVICE_INFO:{"side":"R","fw":22,"chordal_hold":1,"debounce_ms":9,"tri_layer":[[1,2,3]]}', "R", "usb");
+  assert.strictEqual(s.settingOf("R", "chordalHold"), 0);
+  assert.strictEqual(s.settingOf("R", "debounceMs"), 5);
+  assert.strictEqual(s.triOf("R"), "[]");
+  assert.deepStrictEqual(s.calls.tri, []);
+  // Das Laden der anderen Hälfte hält diese Hälfte nicht zurück
+  s.setLoadSide("L");
+  s.handle('DEVICE_INFO:{"side":"R","fw":22,"chordal_hold":1}', "R", "usb");
+  assert.strictEqual(s.settingOf("R", "chordalHold"), 1);
+  s.setLoadSide(null);
+  // Späte Antwort nach dem Timeout (Abfrage besteht noch und verwirft Zeilen): Einstellungen bleiben unverändert
+  s.setStaleRead({ side: "R", withInfo: true, stale: true });
+  s.handle('DEVICE_INFO:{"side":"R","fw":22,"debounce_ms":9}', "R", "usb");
+  assert.strictEqual(s.settingOf("R", "debounceMs"), 5);
+  s.setStaleRead(null);
+  s.handle('DEVICE_INFO:{"side":"R","fw":22,"debounce_ms":9}', "R", "usb");
+  assert.strictEqual(s.settingOf("R", "debounceMs"), 9);
 });
 
 test("serial.js: chordal_hold in DEVICE_INFO setzt die Einstellung der gemeldeten Hälfte", () => {
@@ -1392,9 +1531,9 @@ function diffFlowHarness() {
   const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
   const h = {
     NUM_LAYERS: 8, MATRIX_DATA_FIELDS: api.MATRIX_DATA_FIELDS, captureMatrixData: api.captureMatrixData,
-    isDeviceSnapshotComplete: api.isDeviceSnapshotComplete, createDeviceSnapshot: api.createDeviceSnapshot, captureListLine: api.captureListLine,
+    diffSettings: api.diffSettings, isDeviceSnapshotComplete: api.isDeviceSnapshotComplete, createDeviceSnapshot: api.createDeviceSnapshot, captureListLine: api.captureListLine,
     diffKeymap: api.diffKeymap, SIDE_PROFILES: api.SIDE_PROFILES, isAutoSyncing: false,
-    side: "R", via: "usb", alsoBle: false, sendOk: true, confirmAnswer: false, dialogAnswer: null,
+    isConnectingBle: false, side: "R", via: "usb", alsoBle: false, sendOk: true, confirmAnswer: false, dialogAnswer: null,
     Dactyl: { routeCommand: (side, conn) => conn.bleUp && conn.bleSide === side ? "ble"
       : (conn.serialUp && conn.serialSide === side ? "usb" : null) },
     setTimeout: (fn, ms) => { timers.push({ fn, ms, done: false }); return timers.length - 1; },
@@ -1403,14 +1542,14 @@ function diffFlowHarness() {
   };
   vm.createContext(h);
   vm.runInContext(`${section("js/config-sync.js", "const DEVICE_SNAPSHOT_TIMEOUT_MS", "// Zeigt den Diff im Dialog")}
-    ${section("js/config-sync.js", '// "Auf ESP32 speichern": zuerst', "  if (bleConfigChar) {")}
-    }
+    ${section("js/config-sync.js", '// "Auf ESP32 speichern": zuerst', "// Ersetzt die Config der bearbeiteten Hälfte durch die vom Gerät gelesene")}
     ${section("js/config-sync.js", "// One-Shot-Auto-Sync (BLE-Verbindung", "// =============================================================================\n// Layout-Diff")}
     ${section("js/config-sync.js", "// Nach einer BLE- oder USB-Trennung", "// Zeigt den Diff im Dialog")}
     this.capture = captureDeviceSnapshotLine; this.write = writeConfigWithDiff; this.load = readConfigFromESP32;
     this.autoSync = runAutoSync; this.abort = abortDeviceSnapshotReadIfDisconnected;
     this.state = () => ({ read: deviceSnapshotRead, active: diffFlowActive });`, h);
   h.bleConfigChar = null; h.serialPort = null;
+  h.editSide = "R"; h.applied = []; h.buildConfigFromSnapshot = api.buildConfigFromSnapshot; h.applyDeviceConfig = (config) => h.applied.push(config);
   h.connectedSide = () => h.side;
   // h.side über h.via ("usb"/"ble"); alsoBle = dieselbe Hälfte zusätzlich per BLE (BLE hat Vorrang)
   h.connectionState = () => ({
@@ -1422,7 +1561,7 @@ function diffFlowHarness() {
   h.sendDeviceCommand = async (cmd, side) => { calls.sent.push(`${side}:${cmd}`); return h.sendOk; };
   h.writeConfigToESP32 = async (opts) => { calls.writes++; calls.lastWrite = opts; };
   h.confirm = () => { calls.confirms++; return h.confirmAnswer; };
-  h.showSyncDiffDialog = (profile, diff) => { calls.dialogs.push(diff); return new Promise(r => { h.dialogAnswer = r; }); };
+  h.showSyncDiffDialog = (profile, diff, options) => { calls.dialogs.push(diff); calls.options = options; return new Promise(r => { h.dialogAnswer = r; }); };
   h.alert = () => {};
   const fire = (ms) => { const t = timers.find(x => !x.done && x.ms === ms); assert.ok(t, `kein Timer ${ms}`); t.done = true; t.fn(); };
   const flush = () => new Promise(r => setImmediate(r));
@@ -1535,6 +1674,229 @@ asyncTests.push(["Layout-Diff: späte Zeilen nach dem Timeout ändern die lokale
   fire(8000);
   await run3;
   assert.strictEqual(calls.writes, 1);
+}]);
+
+asyncTests.push(["Komplettes Laden: Wechsel der bearbeiteten Hälfte bei offenem Dialog übernimmt nichts", async () => {
+  const { h, calls, cfg, flush, sendDevice } = diffFlowHarness();
+  const run = h.load();
+  await flush();
+  h.capture('DEVICE_INFO:{"side":"R"}', "R");
+  sendDevice("R", JSON.parse(JSON.stringify(cfg)));
+  await flush();
+  assert.strictEqual(calls.dialogs.length, 1);
+  h.editSide = "L";
+  h.dialogAnswer(true);
+  await run;
+  assert.strictEqual(h.applied.length, 0);
+  assert.ok(calls.toasts.some(t => t.includes("Hälfte hat gewechselt")));
+  assert.strictEqual(h.state().active, false);
+}]);
+
+asyncTests.push(["Komplettes Laden: Diff, Bestätigung übernimmt die Gerätedaten; Abbrechen ändert nichts", async () => {
+  const { h, calls, cfg, flush, sendDevice } = diffFlowHarness();
+  const device = JSON.parse(JSON.stringify(cfg));
+  device.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  device.layerNames[1] = "Gerät";
+  const run = h.load();
+  await flush();
+  assert.deepStrictEqual(calls.sent, ["R:GET_INFO", "R:GET_CONFIG"]);
+  // DEVICE_INFO geht in den Snapshot und weiter an den normalen Handler (false = nicht verbraucht)
+  assert.strictEqual(h.capture('DEVICE_INFO:{"side":"R","debounce_ms":11}', "R"), false);
+  sendDevice("R", device);
+  await flush();
+  assert.strictEqual(calls.dialogs.length, 1);
+  assert.strictEqual(calls.dialogs[0].lists.pairs.length, 1);
+  assert.strictEqual(calls.dialogs[0].names.length, 1);
+  assert.strictEqual(h.applied.length, 0);
+  // Der Dialog zeigt auch die geänderte Einstellung (Gerät 11 ms, lokal Standard)
+  assert.ok(calls.options.settingsRows.some(r => r.where.includes("debounceMs") && r.device === "11"));
+  h.dialogAnswer(true);
+  await run;
+  assert.strictEqual(h.applied.length, 1);
+  assert.strictEqual(h.applied[0].layerNames[1], "Gerät");
+  assert.strictEqual(h.applied[0].settings.debounceMs, 11);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(h.applied[0].keyPairs)), device.keyPairs);
+  assert.strictEqual(calls.writes, 0);
+  assert.strictEqual(h.state().active, false);
+
+  const second = diffFlowHarness();
+  const run2 = second.h.load();
+  await second.flush();
+  second.h.capture('DEVICE_INFO:{"side":"R"}', "R");
+  second.sendDevice("R", device);
+  await second.flush();
+  second.h.dialogAnswer(false);
+  await run2;
+  assert.strictEqual(second.h.applied.length, 0);
+}]);
+
+asyncTests.push(["Komplettes Laden: eine wiederholte DEVICE_INFO-Zeile ersetzt die erste; eine späte nach dem Timeout verändert nichts", async () => {
+  const { h, cfg, flush, sendDevice, fire, calls } = diffFlowHarness();
+  const run = h.load();
+  await flush();
+  h.capture('DEVICE_INFO:{"side":"R","debounce_ms":11}', "R");
+  h.capture('DEVICE_INFO:{"side":"R","debounce_ms":13}', "R");
+  sendDevice("R", cfg);
+  await flush();
+  assert.ok(calls.options.settingsRows.some(r => r.where.includes("debounceMs") && r.device === "13"));
+  h.dialogAnswer(false);
+  await run;
+
+  const t = diffFlowHarness();
+  const run2 = t.h.load();
+  await t.flush();
+  t.fire(8000);
+  await run2;
+  // Späte Zeile: verbraucht wird nur die Datenzeile, die DEVICE_INFO geht an den Handler (serial.js hält sie zurück)
+  assert.strictEqual(t.h.capture('DEVICE_INFO:{"side":"R","debounce_ms":15}', "R"), false);
+  assert.strictEqual(t.h.applied.length, 0);
+}]);
+
+asyncTests.push(["Komplettes Laden: ohne DEVICE_INFO, bei Sendefehler von GET_INFO und beim Wechsel der Hälfte wird nichts übernommen", async () => {
+  // Gültiger GET_CONFIG-Strom, aber keine DEVICE_INFO-Antwort
+  const a = diffFlowHarness();
+  const alerts = [];
+  a.h.alert = (m) => alerts.push(m);
+  const runA = a.h.load();
+  await a.flush();
+  a.sendDevice("R", a.cfg);
+  await a.flush();
+  await runA;
+  assert.strictEqual(a.calls.dialogs.length, 0);
+  assert.strictEqual(a.h.applied.length, 0);
+  assert.ok(alerts[0].includes("DEVICE_INFO"));
+
+  // GET_INFO lässt sich nicht senden: kein GET_CONFIG, nichts übernommen
+  const b = diffFlowHarness();
+  const balerts = [];
+  b.h.alert = (m) => balerts.push(m);
+  b.h.sendOk = false;
+  await b.h.load();
+  assert.deepStrictEqual(b.calls.sent, ["R:GET_INFO"]);
+  assert.strictEqual(b.h.applied.length, 0);
+  assert.strictEqual(balerts.length, 1);
+  assert.strictEqual(b.h.state().active, false);
+
+  // Verbunden ist die andere Hälfte: keine Abfrage
+  const c = diffFlowHarness();
+  c.h.side = "L";
+  await c.h.load();
+  assert.deepStrictEqual(c.calls.sent, []);
+  assert.strictEqual(c.h.applied.length, 0);
+
+  // Wechsel der bearbeiteten Hälfte im offenen Dialog: nichts übernommen, eigener Hinweis
+  const d = diffFlowHarness();
+  const runD = d.h.load();
+  await d.flush();
+  d.h.capture('DEVICE_INFO:{"side":"R"}', "R");
+  d.sendDevice("R", d.cfg);
+  await d.flush();
+  d.h.editSide = "L";
+  d.h.dialogAnswer(true);
+  await runD;
+  assert.strictEqual(d.h.applied.length, 0);
+  assert.ok(d.calls.toasts.some(x => x.includes("gewechselt")));
+}]);
+
+test("Komplettes Laden: applyDeviceConfig ersetzt die Config, merkt sie als Snapshot vor und macht sie rückgängig", () => {
+  const cfgOld = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const cfgNew = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfgNew.layerNames[2] = "Gerät";
+  const changes = [];
+  const env = { JSON, currentConfig: cfgOld, selectedKey: null, changes, SIDE_PROFILES: api.SIDE_PROFILES,
+    applySettingsToInputs() {}, renderLayerButtons() {}, renderMatrix() {}, renderCombosTable() {}, updateInspector() {}, saveConfigToServer() {},
+    markPendingSync: (c) => changes.push(c) };
+  vm.createContext(env);
+  vm.runInContext(`${section("js/config-sync.js", "// Ersetzt die Config der bearbeiteten Hälfte", "\n}\n") }\n}
+    this.apply = applyDeviceConfig; this.cur = () => currentConfig;`, env);
+  env.apply(cfgNew, R);
+  assert.strictEqual(env.cur().layerNames[2], "Gerät");
+  assert.strictEqual(changes.length, 1);
+  assert.strictEqual(changes[0].snapshot, true);
+  assert.strictEqual(changes[0].pairs, true);
+  assert.strictEqual(changes[0].macros, true);
+  changes[0].revert();
+  assert.notStrictEqual(env.cur().layerNames[2], "Gerät");
+});
+
+test("Komplettes Laden: diffSettings listet geänderte Einstellungen und Tri-Layer-Regeln", () => {
+  const a = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R).settings;
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.diffSettings(a, { ...a }))), []);
+  const b = { ...a, debounceMs: a.debounceMs + 1, capsLed: 1, triLayers: [{ a: 1, b: 2, target: 3 }] };
+  const rows = JSON.parse(JSON.stringify(api.diffSettings(b, a)));
+  assert.deepStrictEqual(rows.map(r => r.where), ["Einstellung debounceMs:", "Einstellung triLayers:", "Einstellung capsLed:"].sort((x, y) => rows.findIndex(r => r.where === x) - rows.findIndex(r => r.where === y)));
+  assert.strictEqual(rows.length, 3);
+  assert.strictEqual(rows.find(r => r.where.includes("debounceMs")).device, String(b.debounceMs));
+});
+
+test("Komplettes Laden: Überschreibungen und Combo-Namen bleiben lokal, wenn das Gerät sie nicht meldet oder gleich hat", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.keyOverrides = [{ mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" }];
+  const device = JSON.parse(JSON.stringify(cfg));
+  delete device.keyOverrides;           // Master vor Stand 7: kein OVERRIDE_COUNT
+  const built = api.buildConfigFromSnapshot(deviceSnapshotFor(device, { side: "R" }), cfg, R);
+  assert.strictEqual(built.error, undefined);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(built.config.keyOverrides)), JSON.parse(JSON.stringify(cfg.keyOverrides)));
+  // Gleiche Combo: Id und Name bleiben; geänderte Combo: neuer Name
+  cfg.combos[0].name = "Mein Combo";
+  const same = api.buildConfigFromSnapshot(deviceSnapshotFor(cfg, { side: "R" }), cfg, R);
+  assert.strictEqual(same.config.combos[0].name, "Mein Combo");
+  assert.strictEqual(same.config.combos[0].id, cfg.combos[0].id);
+  const other = JSON.parse(JSON.stringify(cfg));
+  other.combos[0].action = "KEY_Q";
+  const changed = api.buildConfigFromSnapshot(deviceSnapshotFor(other, { side: "R" }), cfg, R);
+  assert.notStrictEqual(changed.config.combos[0].name, "Mein Combo");
+});
+
+asyncTests.push(["Komplettes Laden: während einer Übertragung startet keine Abfrage", async () => {
+  const { h, calls } = diffFlowHarness();
+  h.isAutoSyncing = true;
+  await h.load();
+  assert.deepStrictEqual(calls.sent, []);
+  assert.strictEqual(h.state().active, false);
+}]);
+
+test("Komplettes Laden: ein lokaler Makro-Name bleibt bei gleichen Schritten, sonst gilt der Standardname", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.macros = [{ name: "Gruß", steps: [{ type: "tap", code: "KEY_A" }] }, { name: "Alt", steps: [{ type: "tap", code: "KEY_B" }] }];
+  const device = JSON.parse(JSON.stringify(cfg));
+  device.macros[1].steps = [{ type: "tap", code: "KEY_C" }];
+  const built = api.buildConfigFromSnapshot(deviceSnapshotFor(device, { side: "R" }), cfg, R);
+  assert.strictEqual(built.error, undefined);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(built.config.macros.map(m => m.name))), ["Gruß", "Makro 1"]);
+});
+
+asyncTests.push(["Komplettes Laden: ungültige Listenzeile oder Timeout übernimmt nichts", async () => {
+  const { h, calls, cfg, flush, sendDevice } = diffFlowHarness();
+  const alerts = [];
+  h.alert = (m) => alerts.push(m);
+  const device = JSON.parse(JSON.stringify(cfg));
+  device.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  const run = h.load();
+  await flush();
+  // Eine ungültige Paar-Zeile mitten im Strom: der Snapshot ist unvollständig
+  h.capture("PAIR_COUNT:1", "R");
+  h.capture('PAIR_DATA:{"o":0,"e":[[1]]}', "R");
+  sendDevice("R", device);
+  await flush();
+  await run;
+  assert.strictEqual(calls.dialogs.length, 0);
+  assert.strictEqual(h.applied.length, 0);
+  assert.strictEqual(alerts.length, 1);
+  assert.ok(alerts[0].includes("Nichts geändert"));
+  assert.strictEqual(h.state().active, false);
+
+  // Timeout: nichts übernommen, späte Zeilen werden verworfen
+  const t = diffFlowHarness();
+  const talerts = [];
+  t.h.alert = (m) => talerts.push(m);
+  const run2 = t.h.load();
+  await t.flush();
+  t.fire(8000);
+  await run2;
+  assert.strictEqual(t.h.applied.length, 0);
+  assert.strictEqual(talerts.length, 1);
+  assert.strictEqual(t.h.capture("CONFIG_SYNC_DONE", "R"), true);
 }]);
 
 asyncTests.push(["Layout-Diff: Verwerfen nach Timeout blockiert Laden und meldet einen zweiten Klick", async () => {

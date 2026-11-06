@@ -413,7 +413,12 @@ function handleSerialLine(line, side = null, transport = "ble") {
       if (nameText) nameText.textContent = `${devName} (${sideLabel})`;
       if (statusText) statusText.textContent = `Verbunden: ${devName} (${sideLabel})`;
       // Felder zeigen immer die bearbeitete Hälfte: Werte der anderen Hälfte nur in deren Config übernehmen
-      const setInput = (id, v) => { if (!isEditSide) return; const el = document.getElementById(id); if (el) el.value = String(v); };
+      // "Vom ESP32 laden" (bis zum Schließen des Dialogs): die Einstellungen (Felder und Config) ändern sich erst nach der Bestätigung
+      // Auch eine abgelaufene Abfrage hält die Einstellungen zurück, solange sie späte Zeilen verwirft (deviceSnapshotRead)
+      const holdSettings = (typeof deviceLoadSide !== "undefined" && deviceLoadSide === lineSide) ||
+        (typeof deviceSnapshotRead !== "undefined" && !!deviceSnapshotRead && deviceSnapshotRead.withInfo && deviceSnapshotRead.side === lineSide);
+      const settingsTarget = holdSettings ? null : cfg.settings;
+      const setInput = (id, v) => { if (!isEditSide || holdSettings) return; const el = document.getElementById(id); if (el) el.value = String(v); };
 
       if (info.config_mode !== undefined) {
         updateConfigModeUI(!!info.config_mode, isAutoSyncing);
@@ -423,53 +428,54 @@ function handleSerialLine(line, side = null, transport = "ble") {
       }
       if (info.standby_timeout !== undefined) {
         setInput("standbyTimeoutSelect", info.standby_timeout);
-        if (cfg.settings) cfg.settings.standbyTimeoutMinutes = info.standby_timeout;
+        if (settingsTarget) settingsTarget.standbyTimeoutMinutes = info.standby_timeout;
       }
       if (info.sleep_timeout !== undefined) {
         setInput("sleepTimeoutSelect", info.sleep_timeout);
-        if (cfg.settings) cfg.settings.sleepTimeoutMinutes = info.sleep_timeout;
+        if (settingsTarget) settingsTarget.sleepTimeoutMinutes = info.sleep_timeout;
       }
       if (info.debounce_ms !== undefined) {
         setInput("debounceInput", info.debounce_ms);
-        if (cfg.settings) cfg.settings.debounceMs = info.debounce_ms;
+        if (settingsTarget) settingsTarget.debounceMs = info.debounce_ms;
       }
       if (info.combo_timeout_ms !== undefined) {
         setInput("comboTimeoutInput", info.combo_timeout_ms);
-        if (cfg.settings) cfg.settings.comboTimeoutMs = info.combo_timeout_ms;
+        if (settingsTarget) settingsTarget.comboTimeoutMs = info.combo_timeout_ms;
       }
       if (info.tapping_term_ms !== undefined) {
         setInput("tappingTermInput", info.tapping_term_ms);
-        if (cfg.settings) cfg.settings.tappingTermMs = info.tapping_term_ms;
+        if (settingsTarget) settingsTarget.tappingTermMs = info.tapping_term_ms;
       }
       if (info.hold_tap_mode !== undefined) {
         setInput("holdTapModeSelect", info.hold_tap_mode);
-        if (cfg.settings) cfg.settings.holdTapMode = info.hold_tap_mode;
+        if (settingsTarget) settingsTarget.holdTapMode = info.hold_tap_mode;
       }
       if (info.quick_tap_ms !== undefined) {
         setInput("quickTapInput", info.quick_tap_ms);
-        if (cfg.settings) cfg.settings.quickTapMs = info.quick_tap_ms;
+        if (settingsTarget) settingsTarget.quickTapMs = info.quick_tap_ms;
       }
       if (info.require_prior_idle_ms !== undefined) {
         setInput("priorIdleInput", info.require_prior_idle_ms);
-        if (cfg.settings) cfg.settings.requirePriorIdleMs = info.require_prior_idle_ms;
+        if (settingsTarget) settingsTarget.requirePriorIdleMs = info.require_prior_idle_ms;
       }
       if (info.chordal_hold !== undefined) {
         setInput("chordalHoldSelect", info.chordal_hold);
-        if (cfg.settings) cfg.settings.chordalHold = info.chordal_hold;
+        if (settingsTarget) settingsTarget.chordalHold = info.chordal_hold;
       }
       if (Array.isArray(info.tri_layer)) {
         const rules = normalizeTriLayers(info.tri_layer.map(r => Array.isArray(r) ? { a: r[0], b: r[1], target: r[2] } : null));
-        if (isEditSide) applyTriLayersToInputs(rules);
-        if (cfg.settings) cfg.settings.triLayers = rules;
+        if (isEditSide && !holdSettings) applyTriLayersToInputs(rules);
+        if (settingsTarget) settingsTarget.triLayers = rules;
       }
       if (info.caps_led === 0 || info.caps_led === 1) {
-        if (isEditSide) { const el = document.getElementById("capsLedCheckbox"); if (el) el.checked = info.caps_led === 1; }
-        if (cfg.settings) cfg.settings.capsLed = info.caps_led;
+        if (isEditSide && !holdSettings) { const el = document.getElementById("capsLedCheckbox"); if (el) el.checked = info.caps_led === 1; }
+        if (settingsTarget) settingsTarget.capsLed = info.caps_led;
       }
       if (info.host_leds !== undefined && transport === "usb" && lineSide === Dactyl.getMasterSide()) noteHostLeds(Dactyl.parseHostLeds(info.host_leds));
-      if (info.name && !info.name.includes("Config")) {
-        setInput("deviceNameInput", info.name);
-        if (cfg.settings) cfg.settings.deviceName = info.name;
+      const infoName = deviceNameFromInfo(info);
+      if (infoName) {
+        setInput("deviceNameInput", infoName);
+        if (settingsTarget) settingsTarget.deviceName = infoName;
       }
       showToast(`Tastatur erkannt: ${devName} (${sideLabel})`);
     } catch (e) {

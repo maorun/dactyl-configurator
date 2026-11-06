@@ -521,7 +521,7 @@
                 <button id="btnWriteConfig" class="btn btn-outline" style="border-color: #10b981; color: #6ee7b7;" title="Aktuelle Tastenbelegung per Bluetooth oder USB sofort im ESP32 NVS speichern (ohne Flashen)">
                   <span class="btn-icon">⚡</span> Auf ESP32 speichern
                 </button>
-                <button id="btnReadConfig" class="btn btn-outline" style="border-color: #8b5cf6; color: #c4b5fd;" title="Gespeicherte Tastenbelegung & Ebenen-Namen aus dem ESP32 NVS auslesen">
+                <button id="btnReadConfig" class="btn btn-outline" style="border-color: #8b5cf6; color: #c4b5fd;" title="Komplette Konfiguration (Tasten, Ebenen-Namen, Combos, Tastenpaare, Überschreibungen, Makros, Einstellungen) aus dem ESP32 lesen">
                   <span class="btn-icon">📥</span> Vom ESP32 laden
                 </button>
               </div>
@@ -911,7 +911,7 @@
         </div>
         <div class="modal-body">
           <p id="syncDiffSummary"></p>
-          <p class="sync-diff-hint">Links steht die Belegung auf dem Gerät, rechts die neue Belegung. Combos und Tastenpaare werden ohne Vergleich übertragen.</p>
+          <p class="sync-diff-hint" id="syncDiffHint">Links steht die Belegung auf dem Gerät, rechts die neue Belegung. Combos und Tastenpaare werden ohne Vergleich übertragen.</p>
           <ul id="syncDiffList" class="sync-diff-list"></ul>
           <div id="syncDiffLintSection" style="display: none;">
             <p class="sync-diff-hint"><strong>Layout-Prüfung (beide Hälften):</strong> Diese Warnungen blockieren die Übertragung nicht.</p>

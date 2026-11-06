@@ -45,6 +45,7 @@ static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
 static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
+static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
@@ -178,6 +179,7 @@ void resetState() {
   comboTimeoutMs = 40;
   tappingTermMs = 200;
   quickTapMs = 0;
+  requirePriorIdleMs = 0;
   chordalHold = 0;
   tapTermsCompiledIn = false;
   holdTapMode = 0;
@@ -304,13 +306,13 @@ TEST(test_security_ble_command_rejection) {
   testLeftFw = -1;
   handleConfigCommand("GET_INFO", true);
   assert(mockChar.value.find("\"left_fw\":-1" + linkTail) != std::string::npos);
-  // Größte Zahlen in left_link (je 10 Stellen) mit langem Namen: gültig abgeschlossen, im Puffer (448) und
+  // Größte Zahlen in left_link (je 10 Stellen) mit langem Namen: gültig abgeschlossen, im Puffer (768) und
   // unter dem BLE-Attributlimit (512)
   testLeftLink = "{\"up\":1,\"ms\":4294967295,\"ever\":1,\"losses\":4294967295,\"rx_dropped\":4294967295,\"key_dropped\":4294967295,\"rssi\":-127,\"rssi_min\":-127}";
   testLeftFw = 65535;
   handleConfigCommand("GET_INFO", true);
   std::string maxTail = std::string(",\"left_fw\":65535,\"left_link\":") + testLeftLink + "}";
-  assert(mockChar.value.size() < 448 && mockChar.value.size() > maxTail.size());
+  assert(mockChar.value.size() < 512 && mockChar.value.size() > maxTail.size());
   assert(mockChar.value.compare(mockChar.value.size() - maxTail.size(), maxTail.size(), maxTail) == 0);
   testLeftLink = "null";                       // Config Mode oder ESP-NOW nicht gestartet (deviceInfoLeftLink)
   handleConfigCommand("GET_INFO", true);
@@ -6313,6 +6315,199 @@ TEST(test_osl_action_range_is_distinct_from_other_ranges) {
   assert(ACT_OSL_BASE == 0x180 && NUM_OSL_ACTIONS == 8);
   assert(isOslAction(0x180) && isOslAction(0x187) && !isOslAction(0x188) && !isOslAction(0x17F));
   assert(ACT_OSL_BASE > ACT_MACRO_BASE + MAX_MACROS - 1);
+}
+
+// Hold nur nach einer Tipp-Pause (requirePriorIdleMs): Mod-Tap kurz nach dem letzten Tastendruck ist sofort ein Tipp
+TEST(test_prior_idle_press_within_window_resolves_tap) {
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 2, 1000, 1040);                 // vorheriger Tastendruck
+  setMillis(1100);                            // 100 ms nach dem Druck (< requirePriorIdleMs)
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1100);
+  assert(countPresses('a') == 1);             // sofort Tipp, ohne Wartezeit
+  setMillis(1500);                            // Halten über den Tapping-Term: keine Halte-Aktion
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 0);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_prior_idle_window_boundary) {
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 2, 1000, 1040);                 // Druck bei 1000
+  setMillis(1149);                            // 149 ms: innerhalb
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1149);
+  assert(countPresses('a') == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1160);
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 2, 1000, 1040);
+  setMillis(1150);                            // genau requirePriorIdleMs: nicht mehr innerhalb
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1150);
+  assert(countPresses('a') == 0);             // unentschieden
+  setMillis(1400);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1450);
+}
+
+TEST(test_prior_idle_longer_pause_gives_normal_hold) {
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 2, 1000, 1040);
+  setMillis(1500);                            // 500 ms Pause
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1500);
+  assert(countPresses('a') == 0);             // noch unentschieden
+  setMillis(1750);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 1);   // normaler Hold nach dem Tapping-Term
+  assert(countPresses('a') == 0);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1800);
+}
+
+TEST(test_prior_idle_key_of_other_half_counts) {
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  notePriorKeyPress(1050);                    // Druck der anderen Hälfte (Split-Ereignis)
+  setMillis(1100);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1100);
+  assert(countPresses('a') == 1);             // Tipp sofort
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+  // Ohne die Meldung der anderen Hälfte bleibt die Taste unentschieden
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  setMillis(1100);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1100);
+  assert(countPresses('a') == 0);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+}
+
+TEST(test_prior_idle_zero_keeps_old_behavior) {
+  resetState();
+  requirePriorIdleMs = 0;
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  tapKeyAt(2, 2, 1000, 1040);
+  setMillis(1050);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1050);
+  assert(countPresses('a') == 0);             // unentschieden wie zuvor
+  setMillis(1300);
+  processDeferredKeys(millis());
+  assert(countPresses(KEY_LEFT_CTRL) == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1350);
+}
+
+TEST(test_prior_idle_layer_tap_and_double_tap_are_exempt) {
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = ACT_MO_BASE + 1;         // Layer-Tap: behält die Entscheidung
+  tapKeyAt(2, 2, 1000, 1040);
+  setMillis(1100);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1100);
+  assert(countPresses('a') == 0);             // unentschieden
+  setMillis(1350);
+  processDeferredKeys(millis());
+  assert(getActiveLayer() == 1);              // Hold
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1400);
+  // Taste mit Doppel-Tipp-Aktion
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  DTAPMAP[0][2][1] = 'd';
+  tapKeyAt(2, 2, 1000, 1040);
+  setMillis(1100);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1100);
+  assert(tapHold[2][1].pending);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+}
+
+TEST(test_prior_idle_later_press_and_wrap_do_not_count) {
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  // Ein Druck, der nach der Scan-Zeit der Taste vermerkt wurde (zurückgehaltene Taste läuft später), zählt nicht
+  notePriorKeyPress(1100);
+  assert(!priorKeyRecent(1050));
+  assert(priorKeyRecent(1100) && priorKeyRecent(1249) && !priorKeyRecent(1250));
+  // Ein älterer Zeitpunkt überschreibt einen neueren nicht
+  notePriorKeyPress(1000);
+  assert(priorKeyRecent(1249));
+  // Nach über 24 Tagen ohne Druck wird die 32-Bit-Differenz negativ: kein "kurz davor"
+  resetTapHold();
+  notePriorKeyPress(1000);
+  assert(!priorKeyRecent(1000UL + 0x80000000UL + 5UL));
+  // Zeitumbruch von millis(): der Abstand bleibt richtig
+  resetTapHold();
+  notePriorKeyPress(0xFFFFFFF0UL);
+  assert(priorKeyRecent(0x10UL) && !priorKeyRecent(0xFFFFFFF0UL + 150UL));
+  // Zurückgehaltene Taste: Scan-Zeit 1050, der Druck der anderen Hälfte kam später (1100): die Taste bleibt unentschieden
+  resetState();
+  requirePriorIdleMs = 150;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  notePriorKeyPress(1100);
+  setMillis(1120);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1050);
+  assert(countPresses('a') == 0);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1130);
+}
+
+TEST(test_prior_idle_reset_clears_last_press) {
+  resetState();
+  requirePriorIdleMs = 150;
+  notePriorKeyPress(1000);
+  resetTapHold();
+  assert(!priorKeyValid && !priorKeyRecent(1010));
+}
+
+TEST(test_prior_idle_command_nvs_and_info) {
+  resetState();
+  handleConfigCommand("SET_PRIOR_IDLE 501", false);
+  assert(mockChar.value == "ERR ARGS SET_PRIOR_IDLE 501");
+  handleConfigCommand("SET_PRIOR_IDLE -1", false);
+  assert(mockChar.value == "ERR ARGS SET_PRIOR_IDLE -1");
+  handleConfigCommand("SET_PRIOR_IDLE abc", false);
+  assert(mockChar.value == "ERR ARGS SET_PRIOR_IDLE abc");
+  assert(requirePriorIdleMs == 0);
+  handleConfigCommand("SET_PRIOR_IDLE 500", false);
+  assert(mockChar.value == "OK SET_PRIOR_IDLE 500");
+  handleConfigCommand("SET_PRIOR_IDLE 120", false);
+  assert(mockChar.value == "OK SET_PRIOR_IDLE 120");
+  assert(requirePriorIdleMs == 120);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"require_prior_idle_ms\":120") != std::string::npos);
+  requirePriorIdleMs = 0;
+  loadKeymapFromNVS();
+  assert(requirePriorIdleMs == 120);
+  Preferences::uintStore["prior_idle"] = 900;  // außerhalb des Bereichs
+  requirePriorIdleMs = 0;
+  loadKeymapFromNVS();
+  assert(requirePriorIdleMs == 0);
+  handleConfigCommand("SET_PRIOR_IDLE 0", false);
+  assert(mockChar.value == "OK SET_PRIOR_IDLE 0");
 }
 
 int main() {

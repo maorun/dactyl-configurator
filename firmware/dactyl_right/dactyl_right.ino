@@ -112,6 +112,7 @@ uint8_t debounceMs = 5;
 uint16_t comboTimeoutMs = 40;
 uint16_t tappingTermMs = 200;
 uint16_t quickTapMs = 0;
+uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
 uint8_t holdTapMode = 0;
 uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
@@ -658,6 +659,8 @@ static void onSplitApplied(const SplitHidEvent &ev) {
 
 // Matrix-Position der linken Hälfte für den Live-Monitor der App (nur USB-Serial, nie über BLE)
 static void onSplitKeyEvent(const SplitHidEvent &ev) {
+  // Auch eine linke Taste ohne HID-Druck (Mod-Tap-Halten, Ebene) zählt als letzter Tastendruck
+  if (splitKeyEventPressed(ev.code)) notePriorKeyPress(millis());
   Serial.printf("SPLIT_KEY:{\"r\":%u,\"c\":%u,\"pressed\":%d,\"layer\":%u}\n",
     splitKeyEventRow(ev.code), splitKeyEventCol(ev.code), splitKeyEventPressed(ev.code) ? 1 : 0,
     splitKeyEventLayer(ev.code));
@@ -667,6 +670,8 @@ static void onSplitKeyEvent(const SplitHidEvent &ev) {
 // eigene Einzel-Tipps zuerst senden, damit die Zeichen in der Reihenfolge der Anschläge ankommen
 static void onSplitBeforeLeftPress(const SplitHidEvent &ev) {
   (void)ev;
+  // Hold nur nach einer Tipp-Pause: ein Druck der linken Hälfte zählt als letzter Tastendruck
+  notePriorKeyPress(millis());
   // Ein linker Druck zählt für eine gehaltene OSL-Taste dieser Hälfte: beim Loslassen merkt sie nichts vor
   oslUsed |= oslHeld;
   // GET_INFO über BLE hält den Mutex kurz; ohne ihn bleibt die alte Reihenfolge, mit Hinweis

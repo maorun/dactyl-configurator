@@ -676,6 +676,12 @@
           <small class="form-hint">Drückst du eine Mod-Tap-Taste innerhalb dieser Zeit nach ihrem Tipp erneut, gilt sie sofort als gehaltener Tipp. Der Host wiederholt das Zeichen. Erfordert Firmware-Version 15 oder neuer.</small>
         </div>
 
+        <div class="form-group">
+          <label for="priorIdleInput">Hold nur nach Tipp-Pause (Millisekunden, 0 = aus):</label>
+          <input type="number" id="priorIdleInput" class="form-control" value="0" min="0" max="500">
+          <small class="form-hint">Drückst du eine Mod-Tap-Taste weniger als diese Zeit nach dem letzten Tastendruck (beide Hälften), gilt sie sofort als Tipp. So lösen schnell getippte Buchstaben keinen Modifier aus. Layer-Tap-Tasten (MO_n) bleiben unverändert. Erfordert Firmware-Version 22 oder neuer.</small>
+        </div>
+
         <div class="form-group" id="capsLedGroup">
           <label for="capsLedCheckbox">
             <input type="checkbox" id="capsLedCheckbox"> Onboard-LED zeigt Caps Lock (nur rechte Hälfte)

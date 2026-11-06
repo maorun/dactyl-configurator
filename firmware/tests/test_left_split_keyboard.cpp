@@ -53,6 +53,7 @@ static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
 static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
+static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
@@ -1024,6 +1025,42 @@ TEST(test_chordal_hold_on_left_half) {
   keyState[3][0] = false; onMatrixKeyChange(3, 0, false);
   drain();
   chordalHold = 0;
+}
+
+// Übergabe der Master-Druckzeit vom Empfangs-Callback an loop()
+TEST(test_master_prior_press_handoff) {
+  MasterPriorPress m = {};
+  unsigned long ms = 0;
+  assert(!masterPriorPressTake(m, ms));        // nichts empfangen
+  masterPriorPressNote(m, 1234);
+  assert(masterPriorPressTake(m, ms) && ms == 1234);
+  assert(!masterPriorPressTake(m, ms));        // verbraucht
+  masterPriorPressNote(m, 2000);
+  masterPriorPressNote(m, 2100);               // zwei Pakete vor dem Lesen: die neuere Zeit gilt
+  assert(masterPriorPressTake(m, ms) && ms == 2100);
+}
+
+// Hold nur nach einer Tipp-Pause auf der linken Hälfte: ein Druck der anderen Hälfte (Meldung des Masters) zählt
+TEST(test_prior_idle_on_left_half_counts_master_press) {
+  requirePriorIdleMs = 150;
+  KEYMAP[0][3][0] = 'z';
+  HOLDMAP[0][3][0] = KEY_LEFT_SHIFT;
+  unsigned long t = millis();
+  notePriorKeyPress(t);                       // Master-Taste kurz davor
+  advanceMillis(60);
+  keyState[3][0] = true; onMatrixKeyChange(3, 0, true);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() >= 1 && is(ev[0], SPLIT_OP_KEY_PRESS, 'z'));   // sofort Tipp
+  keyState[3][0] = false; onMatrixKeyChange(3, 0, false);
+  drain();
+  // Längere Pause: Taste bleibt unentschieden
+  advanceMillis(400);
+  keyState[3][0] = true; onMatrixKeyChange(3, 0, true);
+  ev = drain();
+  assert(ev.empty());
+  keyState[3][0] = false; onMatrixKeyChange(3, 0, false);
+  drain();
+  requirePriorIdleMs = 0;
 }
 
 int main() {

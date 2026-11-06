@@ -77,6 +77,7 @@ uint8_t debounceMs = 5;
 uint16_t comboTimeoutMs = 40;
 uint16_t tappingTermMs = 200;
 uint16_t quickTapMs = 0;
+uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
 uint8_t holdTapMode = 0;
 uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
@@ -375,6 +376,9 @@ static volatile uint32_t callbackSeq = 0;
 
 // Vom Empfangs-Callback (Wi-Fi-Task) gesetzt: Am Master wurde getippt (SPLIT_OP_ACTIVITY)
 static volatile bool masterActivityReceived = false;
+// Vom Empfangs-Callback gesetzt: Am Master wurde eine Mod-Tap-Taste gedrückt (HOLD_PENDING 1), Zeit des Pakets.
+// Hold nur nach einer Tipp-Pause: das ist der einzige Druck des Masters, den die linke Hälfte sieht (ACTIVITY ist gedrosselt).
+static MasterPriorPress masterPriorPress = {};
 // Vom Empfangs-Callback gesetzt: Der Master geht in den Deep Sleep (SPLIT_OP_SLEEP)
 static volatile bool masterSleepRequested = false;
 static SplitDisconnectedSleep leftDisconnectedSleep = {};
@@ -434,7 +438,11 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
   if (ev.op == SPLIT_OP_ACTIVITY) masterActivityReceived = true;
   else if (ev.op == SPLIT_OP_SLEEP) masterSleepRequested = true;
   else if (ev.op == SPLIT_OP_TAP_FLUSH) masterTapFlushRequested = true;
-  else if (ev.op == SPLIT_OP_HOLD_PENDING) masterHoldNote(masterHold, ev.code != 0, millis());
+  else if (ev.op == SPLIT_OP_HOLD_PENDING) {
+    unsigned long nowMs = millis();
+    if (ev.code != 0) masterPriorPressNote(masterPriorPress, nowMs);
+    masterHoldNote(masterHold, ev.code != 0, nowMs);
+  }
   else if (ev.op == SPLIT_OP_HOLD_RESOLVE) masterHoldResolveRequested = true;
   else if (ev.op == SPLIT_OP_REPEAT_RUN) splitRxPush(masterRepeatRing, ev);
   else if (ev.op == SPLIT_OP_OSL) __atomic_store_n(&masterOslWord, 0x10000u | ev.code, __ATOMIC_RELEASE);
@@ -810,6 +818,8 @@ void loop() {
   if (scanMutexTaken) {
     unsigned long now = millis();
     processMasterRepeat();
+    unsigned long masterPressMs;
+    if (masterPriorPressTake(masterPriorPress, masterPressMs)) notePriorKeyPress(masterPressMs);
     // Zurückgehaltene Änderungen ausführen: der Master hat entschieden (HOLD_PENDING 0) oder die Zeitgrenze ist um.
     // Die neue Ebene des Masters wird vorher übernommen: der Empfangs-Callback legt sie nur in den Briefkasten, ohne
     // diesen Schritt liefe die Taste noch auf der alten Ebene (Reihenfolge: DactylLeftLogic.h, leftReplayHeld).

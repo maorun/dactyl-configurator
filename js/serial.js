@@ -449,6 +449,10 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("quickTapInput", info.quick_tap_ms);
         if (cfg.settings) cfg.settings.quickTapMs = info.quick_tap_ms;
       }
+      if (info.require_prior_idle_ms !== undefined) {
+        setInput("priorIdleInput", info.require_prior_idle_ms);
+        if (cfg.settings) cfg.settings.requirePriorIdleMs = info.require_prior_idle_ms;
+      }
       if (info.chordal_hold !== undefined) {
         setInput("chordalHoldSelect", info.chordal_hold);
         if (cfg.settings) cfg.settings.chordalHold = info.chordal_hold;

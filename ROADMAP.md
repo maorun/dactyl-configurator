@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Hold only after a typing pause
-
-- **Rank:** Feature model. Total 22/40 (typing 7, configuration 2, harmony 7, safety 6). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (tap/hold resolution, `holdTapMode`), `firmware/dactyl_right/DactylSplitHid.h` (`SPLIT_OP_HOLD_PENDING`), `firmware/dactyl_right/DactylVersion.h`, `server.py`, `js/editor.js`.
-- **Problem:** Home row mods give wrong modifiers during fast typing, because a rolled key press resolves a Mod-Tap key as hold.
-- **Goal:** Add a setting per half `requirePriorIdleMs` (0..500 ms, default 0 = off). A Mod-Tap key that is pressed less than this time after the last key press of either half resolves as tap at once. The last key press of the other half comes from the split events that already arrive. Layer-Tap keys with `MO_n` keep their behavior.
-- **Acceptance test:** A firmware test presses a key and then a Mod-Tap key within the time and expects the tap. A test with a longer pause expects the normal hold decision. A test with a key of the other half also expects the tap.
-
 ### Alternate repeat (`ALT_REPEAT`)
 
 - **Rank:** Feature model. Total 22/40 (typing 5, configuration 2, harmony 8, safety 7). Effort S. Estimate.

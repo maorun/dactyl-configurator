@@ -22,7 +22,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, chordalHold, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -162,6 +162,9 @@ void processOtaTimeout() {
 // Quick-Tap-Term (Mod-Tap): 0 = aus; sonst gilt ein erneuter Druck derselben Mod-Tap-Taste innerhalb dieser Zeit
 // nach ihrem Tipp sofort als gehaltener Tipp (der Host wiederholt das Zeichen)
 #define QUICK_TAP_MAX_MS 500
+// Hold nur nach einer Tipp-Pause (requirePriorIdleMs): 0 = aus; sonst gilt eine Mod-Tap-Taste, die weniger als diese Zeit
+// nach dem letzten Tastendruck gedrückt wird, sofort als Tipp. Layer-Tap mit MO_n ist ausgenommen.
+#define PRIOR_IDLE_MAX_MS 500
 // Opposite-Hand-Regel (chordalHold): 0 = aus, 1 = an. Die Daumenreihe (letzte Matrixzeile) ist ausgenommen.
 #define CHORDAL_THUMB_ROW (NUM_ROWS - 1)
 // Eigener Tapping-Term je Taste (TAPTERMMAP, je Ebene): 0 = Wert der Hälfte (tappingTermMs)
@@ -1373,6 +1376,25 @@ TapHoldKey tapHold[NUM_ROWS][NUM_COLS];
 bool quickTapValid[NUM_ROWS][NUM_COLS];
 unsigned long quickTapAt[NUM_ROWS][NUM_COLS];
 bool quickTapHeld[NUM_ROWS][NUM_COLS];   // Der laufende Druck gilt als gehaltener Tipp
+// Hold nur nach einer Tipp-Pause: Zeitpunkt des letzten Tastendrucks einer der beiden Hälften
+bool priorKeyValid = false;
+unsigned long priorKeyAt = 0;
+
+// Einen Tastendruck vormerken (eigene Matrix oder Meldung der anderen Hälfte). Ein späterer Zeitpunkt gewinnt.
+void notePriorKeyPress(unsigned long at) {
+  if (!priorKeyValid || (int32_t)(uint32_t)(at - priorKeyAt) > 0) priorKeyAt = at;
+  priorKeyValid = true;
+}
+
+// true, wenn ein Druck zur Zeit now weniger als requirePriorIdleMs nach dem letzten Tastendruck liegt.
+// Nur ein Tastendruck vor oder zur Zeit now zählt: ein zurückgehaltener Druck, der später mit seiner Scan-Zeit läuft,
+// darf einen späteren Druck der anderen Hälfte nicht als "davor" sehen. 32-Bit-Differenz: nach über 24 Tagen ohne
+// Tastendruck wird sie negativ und gilt nicht als kurz davor.
+bool priorKeyRecent(unsigned long now) {
+  if (requirePriorIdleMs == 0 || !priorKeyValid) return false;
+  int32_t since = (int32_t)(uint32_t)(now - priorKeyAt);
+  return since >= 0 && since < (int32_t)requirePriorIdleMs;
+}
 
 // Wirksamer Tapping-Term: der eigene Wert der Taste, sonst der Wert der Hälfte
 static inline uint16_t effectiveTapTerm(uint16_t keyTerm) {
@@ -1388,6 +1410,8 @@ void resetTapHold() {
       quickTapHeld[r][c] = false;
     }
   }
+  priorKeyValid = false;
+  priorKeyAt = 0;
   resetDeferredQueue();
 }
 
@@ -1752,6 +1776,9 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     keyPressTime[r][c] = now;
     keySentToHost[r][c] = false;
     capsWordBuffered[r][c] = false;
+    // Hold nur nach einer Tipp-Pause: Abstand zum letzten Druck beider Hälften vor dem Vormerken dieses Drucks prüfen
+    bool priorRecent = priorKeyRecent(now);
+    notePriorKeyPress(now);
     // Modus 0 (holdOnOtherKeyPress): Ein weiterer Tastendruck entscheidet offene Mod-Tap-Tasten sofort als Hold
     if (holdTapMode == HOLD_MODE_OTHER_KEY_PRESS) {
       resolvePendingTapHoldsAsHold(r, c);
@@ -1779,6 +1806,15 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     quickTapValid[r][c] = false;
     if (quickTap) {
       quickTapHeld[r][c] = true;
+      tapHoldDtap[r][c] = 0;
+      dispatchPress(r, c, tapAct, layer);
+      return;
+    }
+    // Hold nur nach einer Tipp-Pause: ein Mod-Tap-Druck kurz nach dem letzten Tastendruck (beider Hälften) ist sofort ein
+    // Tipp. Layer-Tap mit MO_n und Tasten mit Doppel-Tipp-Aktion behalten ihre Entscheidung.
+    bool priorIdleTap = holdAct != 0 && dtapAct == 0 && tapAct != 0 &&
+                        !(holdAct >= ACT_MO_BASE && holdAct < ACT_MO_BASE + NUM_LAYERS) && priorRecent;
+    if (priorIdleTap) {
       tapHoldDtap[r][c] = 0;
       dispatchPress(r, c, tapAct, layer);
       return;
@@ -2101,6 +2137,10 @@ void loadKeymapFromNVS() {
     uint16_t qt = preferences.getUShort("quick_tap", 0);
     if (qt <= QUICK_TAP_MAX_MS) quickTapMs = qt;
   }
+  if (preferences.isKey("prior_idle")) {
+    uint16_t pi = preferences.getUShort("prior_idle", 0);
+    if (pi <= PRIOR_IDLE_MAX_MS) requirePriorIdleMs = pi;
+  }
   if (preferences.isKey("chordal")) {
     uint8_t ch = preferences.getUChar("chordal", 0);
     if (ch <= 1) chordalHold = ch;
@@ -2363,6 +2403,15 @@ bool saveChordalHoldToNVS(uint8_t on) {
   preferences.end();
   if (ok) chordalHold = on;
   Serial.printf("NVS: Chordal-Hold %s: %u\n", ok ? "gespeichert" : "FEHLER", on);
+  return ok;
+}
+
+bool saveRequirePriorIdleToNVS(uint16_t ms) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUShort("prior_idle", ms) > 0;
+  preferences.end();
+  if (ok) requirePriorIdleMs = ms;
+  Serial.printf("NVS: Hold nach Tipp-Pause %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
   return ok;
 }
 
@@ -2955,6 +3004,17 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_PRIOR_IDLE ")) {
+    int pi = cmd.substring(15).toInt();
+    String arg = cmd.substring(15);
+    arg.trim();
+    bool digits = arg.length() > 0 && arg.length() <= 3;
+    for (unsigned i = 0; digits && i < arg.length(); i++) digits = arg.charAt(i) >= '0' && arg.charAt(i) <= '9';
+    if (digits && pi >= 0 && pi <= PRIOR_IDLE_MAX_MS) {
+      sendConfigNotification(saveRequirePriorIdleToNVS((uint16_t)pi) ? "OK SET_PRIOR_IDLE " + String(pi) : String("ERR NVS SET_PRIOR_IDLE"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
 #ifdef DEVICE_INFO_HOST_LEDS_BITS
   } else if (cmd.startsWith("SET_CAPS_LED ")) {
     String arg = cmd.substring(13);
@@ -3132,12 +3192,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
 #endif
     char buf[768];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"chordal_hold\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"require_prior_idle_ms\":%u,\"chordal_hold\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)chordalHold, triJson, hostJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, triJson, hostJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

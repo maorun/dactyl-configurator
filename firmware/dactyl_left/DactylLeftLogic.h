@@ -300,6 +300,29 @@ inline bool masterHoldPending(const MasterHoldState &m, unsigned long nowMs) {
   return splitHoldPendingValid(pending, m.sinceMs, nowMs);
 }
 
+// Druck einer Mod-Tap-Taste am Master (HOLD_PENDING 1) für "Hold nur nach einer Tipp-Pause" (requirePriorIdleMs):
+// der Empfangs-Callback schreibt die Zeit vor dem Flag, loop() liest das Flag und danach die Zeit. Ein Paket zwischen
+// beiden Lesevorgängen liefert höchstens eine neuere Zeit und ein zweites Flag (dieselbe Taste, ohne Folge).
+struct MasterPriorPress {
+  volatile bool seen;
+  volatile unsigned long ms;
+};
+
+inline void masterPriorPressNote(MasterPriorPress &m, unsigned long nowMs) {
+  m.ms = nowMs;
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  m.seen = true;
+}
+
+// true und die Zeit des Drucks, wenn seit dem letzten Aufruf einer eintraf
+inline bool masterPriorPressTake(MasterPriorPress &m, unsigned long &outMs) {
+  if (!m.seen) return false;
+  m.seen = false;
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+  outMs = m.ms;
+  return true;
+}
+
 // Zurückgehaltene linke Änderungen ausführen, in der Reihenfolge, die den Zustand des Masters nicht überholt:
 // 1. Den Stand "Master wartet" zuerst lesen. Meldet er 0, kam die Ebene des Masters schon vorher im Briefkasten an
 //    (der Master sendet die Ebene vor der 0).

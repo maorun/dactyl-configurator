@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Read the complete configuration from the device
-
-- **Rank:** Feature model. Total 22/40 (typing 0, configuration 8, harmony 8, safety 6). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/config-sync.js` (`readConfigFromESP32`, `captureDeviceSnapshotLine`), `js/config-model.js` (`captureListLine`), `index.html`, `tests/test_app_logic.js`.
-- **Problem:** "Vom ESP32 laden" takes only the key matrices and the layer names. `GET_CONFIG` also sends combos, key pairs, key overrides and macros, but the app ignores them. A user who lost the local config cannot get the complete layout back.
-- **Goal:** Build a complete config from the `GET_CONFIG` snapshot of the half, including the settings from `DEVICE_INFO`. Show the layout diff against the local config. After a confirmation, apply it as a snapshot pending change with the flags `pairs` and `macros`, like an import. A snapshot with an invalid line applies nothing.
-- **Acceptance test:** A test feeds a complete `GET_CONFIG` output and expects the same config as the source. A test with an invalid list line expects no change.
-
 ### Record macros on the keyboard (`DM_REC`, `DM_PLAY`)
 
 - **Rank:** Feature model. Total 21/40 (typing 5, configuration 4, harmony 7, safety 5). Effort M. Estimate.

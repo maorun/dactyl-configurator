@@ -912,7 +912,9 @@ function maxKeyCount(stats, layer = null) {
 function createDeviceSnapshot() {
   return {
     names: null, tap: [], hold: [], dtap: [], term: [],
-    counts: { combos: null, pairs: null, macros: null, overrides: null }, combos: [], pairs: [], macros: [], overrides: [], macroLens: [], listsBroken: false
+    counts: { combos: null, pairs: null, macros: null, overrides: null }, combos: [], pairs: [], macros: [], overrides: [], macroLens: [], listsBroken: false,
+    // DEVICE_INFO der Hälfte (nur beim Laden der kompletten Config gelesen), sonst null
+    info: null
   };
 }
 
@@ -1126,6 +1128,124 @@ function diffLists(cfg, snapshot) {
   const deviceMacros = Array.from({ length: snapshot.counts.macros }, (_, i) => snapshot.macros[i]);
   compare(out.macros, "Makro", deviceMacros, localMacroSteps(cfg), describeMacroSteps);
   return out;
+}
+
+// Einstellungen aus DEVICE_INFO; fehlende Felder behalten den Wert aus base (Firmware ohne das Feld)
+function settingsFromDeviceInfo(info, base) {
+  const out = { ...(base || {}) };
+  if (!info || typeof info !== "object") return out;
+  const map = {
+    standby_timeout: "standbyTimeoutMinutes", sleep_timeout: "sleepTimeoutMinutes", debounce_ms: "debounceMs",
+    combo_timeout_ms: "comboTimeoutMs", tapping_term_ms: "tappingTermMs", hold_tap_mode: "holdTapMode",
+    quick_tap_ms: "quickTapMs", require_prior_idle_ms: "requirePriorIdleMs", chordal_hold: "chordalHold"
+  };
+  for (const [key, field] of Object.entries(map)) if (info[key] !== undefined) out[field] = info[key];
+  if (Array.isArray(info.tri_layer)) {
+    out.triLayers = info.tri_layer.map(r => Array.isArray(r) ? { a: r[0], b: r[1], target: r[2] } : null);
+  }
+  if (info.caps_led === 0 || info.caps_led === 1) out.capsLed = info.caps_led;
+  const name = deviceNameFromInfo(info);
+  if (name) out.deviceName = name;
+  return out;
+}
+
+// Gerätename aus DEVICE_INFO; im Config-Modus meldet das Gerät den Config-Namen ("Dactyl Config"):
+// config_mode entscheidet, sonst der Name. Leer, wenn kein echter Gerätename vorliegt.
+function deviceNameFromInfo(info) {
+  if (!info || typeof info.name !== "string" || !info.name) return "";
+  const inConfigMode = info.config_mode !== undefined ? !!info.config_mode : info.name.includes("Config");
+  return inConfigMode ? "" : info.name;
+}
+
+// Unterschiede der Einstellungen (Gerät gegen lokal) als Zeilen { where, device, local } für den Diff-Dialog
+function diffSettings(deviceSettings, localSettings) {
+  const rows = [];
+  const text = v => typeof v === "object" && v !== null ? JSON.stringify(v) : String(v);
+  const keys = new Set([...Object.keys(deviceSettings || {}), ...Object.keys(localSettings || {})]);
+  for (const key of keys) {
+    const d = (deviceSettings || {})[key];
+    const l = (localSettings || {})[key];
+    if (JSON.stringify(d) !== JSON.stringify(l)) rows.push({ where: `Einstellung ${key}:`, device: text(d), local: text(l) });
+  }
+  return rows;
+}
+
+// Baut aus dem GET_CONFIG-Snapshot einer Hälfte eine vollständige Config (Tasten, Ebenen-Namen, Combos,
+// Tastenpaare, Überschreibungen, Makros und Einstellungen aus DEVICE_INFO). baseCfg liefert nur Einstellungen,
+// die das Gerät nicht meldet. Rückgabe: { config } oder { error }; bei jedem Fehler entsteht keine Config.
+function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
+  if (!isDeviceSnapshotComplete(snapshot)) return { error: "Die Belegung kam unvollständig an." };
+  const state = snapshotListsState(snapshot);
+  if (state === "absent") return { error: "Die Firmware dieser Hälfte sendet keine Combos, Tastenpaare und Makros: Hälfte flashen." };
+  if (state !== "complete") return { error: "Combos, Tastenpaare oder Makros kamen unvollständig oder ungültig an." };
+  if (!snapshot.info) return { error: "Die Geräte-Informationen (DEVICE_INFO) fehlen." };
+  const tapOf = code => findDefinitionByCode(code).tap;
+  const layers = Array.from({ length: NUM_LAYERS }, () => transparentLayer());
+  for (let l = 0; l < NUM_LAYERS; l++) {
+    for (const field of ["tap", "hold", "dtap", "term"]) {
+      if (field === "term" && !snapshot.term[l]) continue;
+      applyMatrixData(layers, field, { l, k: snapshot[field][l] });
+    }
+  }
+  const stepNames = Object.fromEntries(Object.entries(MACRO_STEP_TYPES).map(([name, id]) => [id, name]));
+  const layer0 = layers[0];
+  const cellLabel = (r, c) => (layer0[r] && layer0[r][c] && layer0[r][c].label) || `R${r}C${c}`;
+  const cfg = {
+    layers,
+    layerNames: snapshot.names.slice(0, NUM_LAYERS),
+    combos: snapshot.combos.map((t, i) => {
+      const action = tapOf(t[5]);
+      const actionLabel = findDefinitionByCode(t[5]).label;
+      const combo = {
+        id: `combo-${i + 1}`,
+        name: `${cellLabel(t[0], t[1])} + ${cellLabel(t[2], t[3])} -> ${actionLabel}`,
+        key1: { r: t[0], c: t[1], label: cellLabel(t[0], t[1]) },
+        key2: { r: t[2], c: t[3], label: cellLabel(t[2], t[3]) },
+        behavior: COMBO_BEHAVIORS[t[4]],
+        action,
+        actionLabel
+      };
+      if (t[6] !== COMBO_ALL_LAYERS) combo.layerMask = t[6];
+      return combo;
+    }),
+    keyPairs: snapshot.pairs.map(t => ({ first: tapOf(t[0]), second: tapOf(t[1]) })),
+    // Ohne OVERRIDE_COUNT (linke Hälfte oder Master vor Stand 7) kennt das Gerät keine Überschreibungen: die lokalen bleiben
+    keyOverrides: snapshot.counts.overrides === null
+      ? JSON.parse(JSON.stringify((baseCfg && baseCfg.keyOverrides) || []))
+      : snapshot.overrides.map(t => ({
+          mods: Object.keys(KEY_OVERRIDE_MODS).filter(m => t[0] & KEY_OVERRIDE_MODS[m]), key: tapOf(t[1]), replacement: tapOf(t[2])
+        })),
+    macros: Array.from({ length: snapshot.counts.macros }, (_, i) => ({
+      name: `Makro ${i}`,
+      steps: snapshot.macros[i].map(st => st[0] === MACRO_STEP_TYPES.pause
+        ? { type: "pause", ms: st[2] } : { type: stepNames[st[0]], code: tapOf(st[1]) })
+    })),
+    settings: settingsFromDeviceInfo(snapshot.info, baseCfg && baseCfg.settings)
+  };
+  // Das Gerät speichert keine Combo-Namen: ein lokaler Combo mit gleichem Index und gleichen Werten behält Id und Namen
+  const localCombos = (baseCfg && Array.isArray(baseCfg.combos)) ? baseCfg.combos : [];
+  const localTuples = baseCfg ? localComboTuples(baseCfg) : [];
+  cfg.combos.forEach((cb, i) => {
+    const local = localCombos[i];
+    if (local && JSON.stringify(localTuples[i]) === JSON.stringify(snapshot.combos[i])) {
+      cb.id = local.id; cb.name = local.name; cb.key1 = { ...cb.key1, label: local.key1.label }; cb.key2 = { ...cb.key2, label: local.key2.label };
+      if (local.actionLabel) cb.actionLabel = local.actionLabel;
+    }
+  });
+  // Das Gerät speichert keine Makro-Namen: der lokale Name bleibt, wenn das lokale Makro mit gleichem Index dieselben Schritte hat
+  const localMacros = (baseCfg && Array.isArray(baseCfg.macros)) ? baseCfg.macros : [];
+  cfg.macros.forEach((m, i) => {
+    const local = localMacros[i];
+    if (local && isValidMacro(local) && JSON.stringify(local.steps.map(normalizeMacroStep)) === JSON.stringify(m.steps)) {
+      m.name = local.name;
+    }
+  });
+  try {
+    validateConfigShape(cfg, profile);
+    return { config: normalizeConfig(cfg, profile) };
+  } catch (e) {
+    return { error: `Die Gerätedaten sind ungültig: ${e.message}` };
+  }
 }
 
 // Kurztext einer Tastenbelegung, z. B. "A · Halten: LEFT_CTRL · 2×: B"

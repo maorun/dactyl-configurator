@@ -16,6 +16,7 @@ const SETTINGS_RANGES = {
   tappingTermMs: [100, 500, 200],
   holdTapMode: [0, 2, 0],
   quickTapMs: [0, 500, 0],
+  chordalHold: [0, 1, 0],
   capsLed: [0, 1, 0],
   standbyTimeoutMinutes: [0, 120, 5],
   sleepTimeoutMinutes: [0, 240, 60]
@@ -661,6 +662,7 @@ function normalizeConfig(cfg, profile) {
     tappingTermMs: clampSetting("tappingTermMs", s.tappingTermMs ?? 200),
     holdTapMode: clampSetting("holdTapMode", s.holdTapMode ?? 0),
     quickTapMs: clampSetting("quickTapMs", s.quickTapMs ?? 0),
+    chordalHold: clampSetting("chordalHold", s.chordalHold ?? 0),
     triLayers: normalizeTriLayers(s.triLayers),
     capsLed: clampSetting("capsLed", s.capsLed ?? 0),
     standbyTimeoutMinutes: clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5),

@@ -115,6 +115,12 @@ class TestServerAndCodegen(unittest.TestCase):
             server.generate_settings_cpp({"quickTapMs": 501})
         with self.assertRaises(ValueError):
             server.generate_settings_cpp({"quickTapMs": -1})
+        self.assertIn("uint8_t chordalHold = 0;", server.generate_settings_cpp({}))
+        self.assertIn("uint8_t chordalHold = 1;", server.generate_settings_cpp({"chordalHold": 1}))
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"chordalHold": 2})
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"chordalHold": -1})
         self.assertIn("uint8_t holdTapMode = 1;", server.generate_settings_cpp({"holdTapMode": 1}))
         self.assertIn("uint8_t holdTapMode = 2;", server.generate_settings_cpp({"holdTapMode": 2}))
         self.assertIn("uint8_t holdTapMode = 0;", server.generate_settings_cpp({}))

@@ -53,6 +53,7 @@ static uint8_t debounceMs = 5;
 static uint16_t comboTimeoutMs = 40;
 static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
+static uint8_t chordalHold = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t numTriLayers = 0;
@@ -991,6 +992,38 @@ TEST(test_split_keyboard_standby_exit_grace_period) {
   assert(bleKeyboard.isConnected());
   std::vector<SplitHidEvent> ev = drain();
   assert(ev.size() == 1 && is(ev[0], SPLIT_OP_RELEASE_ALL, 0));
+}
+
+// Die linke Hälfte nutzt dieselbe Regel: Taste derselben Hälfte -> Tipp, Daumenreihe (Zeile 5) -> holdTapMode
+TEST(test_chordal_hold_on_left_half) {
+  chordalHold = 1;
+  holdTapMode = 0;
+  KEYMAP[0][3][0] = 'z';
+  HOLDMAP[0][3][0] = KEY_LEFT_SHIFT;
+  KEYMAP[0][2][1] = 'a';
+  keyState[3][0] = true; onMatrixKeyChange(3, 0, true);
+  advanceMillis(20);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() >= 3);
+  assert(is(ev[0], SPLIT_OP_KEY_PRESS, 'z') && is(ev[1], SPLIT_OP_KEY_RELEASE, 'z') && is(ev[2], SPLIT_OP_KEY_PRESS, 'a'));
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  keyState[3][0] = false; onMatrixKeyChange(3, 0, false);
+  drain();
+
+  KEYMAP[0][3][0] = 'z';
+  HOLDMAP[0][3][0] = KEY_LEFT_SHIFT;
+  KEYMAP[0][5][3] = ' ';
+  keyState[3][0] = true; onMatrixKeyChange(3, 0, true);
+  advanceMillis(20);
+  keyState[5][3] = true; onMatrixKeyChange(5, 3, true);   // Daumenreihe: Hold
+  ev = drain();
+  assert(ev.size() >= 2);
+  assert(is(ev[0], SPLIT_OP_KEY_PRESS, KEY_LEFT_SHIFT) && is(ev[1], SPLIT_OP_KEY_PRESS, ' '));
+  keyState[5][3] = false; onMatrixKeyChange(5, 3, false);
+  keyState[3][0] = false; onMatrixKeyChange(3, 0, false);
+  drain();
+  chordalHold = 0;
 }
 
 int main() {

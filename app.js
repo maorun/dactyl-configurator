@@ -447,6 +447,7 @@ function applySettingsToInputs(settings) {
   setVal("tappingTermInput", settings.tappingTermMs);
   setVal("holdTapModeSelect", settings.holdTapMode ?? 0);
   setVal("quickTapInput", settings.quickTapMs ?? 0);
+  setVal("chordalHoldSelect", settings.chordalHold ?? 0);
   applyTriLayersToInputs(settings.triLayers);
   const capsLed = document.getElementById("capsLedCheckbox");
   if (capsLed) capsLed.checked = !!settings.capsLed;

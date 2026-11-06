@@ -22,7 +22,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, chordalHold, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -162,6 +162,8 @@ void processOtaTimeout() {
 // Quick-Tap-Term (Mod-Tap): 0 = aus; sonst gilt ein erneuter Druck derselben Mod-Tap-Taste innerhalb dieser Zeit
 // nach ihrem Tipp sofort als gehaltener Tipp (der Host wiederholt das Zeichen)
 #define QUICK_TAP_MAX_MS 500
+// Opposite-Hand-Regel (chordalHold): 0 = aus, 1 = an. Die Daumenreihe (letzte Matrixzeile) ist ausgenommen.
+#define CHORDAL_THUMB_ROW (NUM_ROWS - 1)
 // Eigener Tapping-Term je Taste (TAPTERMMAP, je Ebene): 0 = Wert der Hälfte (tappingTermMs)
 
 // -----------------------------------------------------------------------------
@@ -1452,6 +1454,36 @@ void resolvePendingTapHoldsAsHold(uint8_t exceptR, uint8_t exceptC) {
   }
 }
 
+// Opposite-Hand-Regel (chordalHold): Ein Druck (r, c) derselben Hälfte entscheidet offene Mod-Tap-Tasten sofort als Tipp.
+// Ausgenommen sind die Daumenreihe (gedrückte Taste und Mod-Tap-Taste), Layer-Tap mit MO_n und Tasten mit Doppel-Tipp-Aktion:
+// sie behalten die Entscheidung von holdTapMode. Ein Druck der anderen Hälfte läuft nicht hierüber (HOLD_RESOLVE).
+void resolvePendingTapHoldsAsTapSameHalf(uint8_t r, uint8_t c, unsigned long now) {
+  if (!chordalHold || r >= CHORDAL_THUMB_ROW) return;
+  // Zeit und Ebene des Drucks gelten nur für diese Prüfung (Combo-Fenster). Der Aufrufer kann den Druck danach noch
+  // puffern: dann dürfen beide Werte nicht bleiben, sonst paart checkUserCombos() die gepufferte Taste mit der offenen.
+  unsigned long savedTime = keyPressTime[r][c];
+  uint8_t savedLayer = comboPressLayer1[r][c];
+  keyPressTime[r][c] = now;
+  comboPressLayer1[r][c] = (uint8_t)(getActiveLayer() + 1);
+  for (int pr = 0; pr < CHORDAL_THUMB_ROW; pr++) {
+    for (int pc = 0; pc < NUM_COLS; pc++) {
+      if (pr == r && pc == c) continue;
+      TapHoldKey &k = tapHold[pr][pc];
+      if (!k.pending || tapHoldDtap[pr][pc] != 0 || k.tapAction == 0) continue;
+      // Tapping-Term schon erreicht (Tick lief noch nicht): die Taste ist Hold, die Regel ändert das nicht
+      if ((unsigned long)(now - k.pressTime) >= effectiveTapTerm(k.term)) continue;
+      if (k.holdAction >= ACT_MO_BASE && k.holdAction < ACT_MO_BASE + NUM_LAYERS) continue;
+      // Beide Tasten bilden eine Combo im Fenster: checkUserCombos() löst sie im selben Scan aus; der Tipp darf nicht vorher raus
+      if (hasPressedComboPartnerInWindow(pr, pc)) continue;
+      k.pending = false;
+      dispatchPress(pr, pc, k.tapAction, k.layer);
+      dispatchRelease(pr, pc, k.tapAction);
+    }
+  }
+  keyPressTime[r][c] = savedTime;
+  comboPressLayer1[r][c] = savedLayer;
+}
+
 // true, wenn eine Mod-Tap-Taste noch unentschieden ist (links und rechts: SPLIT_OP_HOLD_PENDING an die andere Hälfte)
 bool anyTapHoldPending() {
   for (int r = 0; r < NUM_ROWS; r++) {
@@ -1472,7 +1504,14 @@ void resolveAllPendingTapHoldsAsHold() {
 void replayDeferredQueue() {
   if (isReplayingDeferredQueue) return;
   isReplayingDeferredQueue = true;
-  while (deferredQueue.count > 0 && !anyTapHoldPending()) {
+  while (deferredQueue.count > 0) {
+    if (anyTapHoldPending()) {
+      // chordalHold: ein gepufferter Druck derselben Hälfte entscheidet die offene Mod-Tap-Taste als Tipp
+      const DeferredKeyEvent &next = deferredQueue.items[deferredQueue.head];
+      if (!chordalHold || !next.pressed) break;
+      resolvePendingTapHoldsAsTapSameHalf(next.row, next.col, next.time);
+      if (anyTapHoldPending()) break;
+    }
     DeferredKeyEvent ev;
     if (!deferredQueuePop(ev)) break;
     applyMatrixKeyChange(ev.row, ev.col, ev.pressed, ev.time);
@@ -1534,6 +1573,11 @@ void tapHoldTick(unsigned long now) {
 // gibt ihre Scan-Zeit mit, damit Tapping-Term und Combo-Fenster die echten Abstände sehen.
 void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long now) {
   if (isPressed) {
+    // chordalHold: offene Mod-Tap-Tasten derselben Hälfte sofort als Tipp entscheiden, vor der Entscheidung von holdTapMode
+    if (chordalHold && !isReplayingDeferredQueue && anyTapHoldPending()) {
+      resolvePendingTapHoldsAsTapSameHalf(r, c, now);
+      if (!anyTapHoldPending() && deferredQueue.count > 0) replayDeferredQueue();
+    }
     // In permissiveHold oder tapPreferred nachfolgende Tastendrücke puffern, solange eine Mod-Tap-Taste wartet
     if (holdTapMode != HOLD_MODE_OTHER_KEY_PRESS && !isReplayingDeferredQueue && anyTapHoldPending()) {
       if (deferredQueuePush(r, c, true, now)) {
@@ -1897,6 +1941,10 @@ void loadKeymapFromNVS() {
     uint16_t qt = preferences.getUShort("quick_tap", 0);
     if (qt <= QUICK_TAP_MAX_MS) quickTapMs = qt;
   }
+  if (preferences.isKey("chordal")) {
+    uint8_t ch = preferences.getUChar("chordal", 0);
+    if (ch <= 1) chordalHold = ch;
+  }
   if (preferences.isKey("hold_mode")) {
     uint8_t hm = preferences.getUChar("hold_mode", 0);
     if (hm <= HOLD_MODE_TAP_PREFERRED) holdTapMode = hm;
@@ -2066,8 +2114,8 @@ void loadKeymapFromNVS() {
       }
     }
   }
-  Serial.printf("NVS: Timeouts & Settings geladen: Standby=%u Min, DeepSleep=%u Min, Debounce=%u ms, ComboTO=%u ms, TappingTerm=%u ms, HoldMode=%u, Name='%s'\n",
-    standbyTimeoutMinutes, deepSleepTimeoutMinutes, debounceMs, comboTimeoutMs, tappingTermMs, holdTapMode, deviceName.c_str());
+  Serial.printf("NVS: Timeouts & Settings geladen: Standby=%u Min, DeepSleep=%u Min, Debounce=%u ms, ComboTO=%u ms, TappingTerm=%u ms, HoldMode=%u, ChordalHold=%u, Name='%s'\n",
+    standbyTimeoutMinutes, deepSleepTimeoutMinutes, debounceMs, comboTimeoutMs, tappingTermMs, holdTapMode, (unsigned)chordalHold, deviceName.c_str());
   preferences.end();
 }
 
@@ -2146,6 +2194,15 @@ bool saveTriLayerToNVS(const uint8_t* rules, uint8_t n) {
     numTriLayers = n;
   }
   Serial.printf("NVS: Tri-Layer %s: %u Regeln\n", ok ? "gespeichert" : "FEHLER", n);
+  return ok;
+}
+
+bool saveChordalHoldToNVS(uint8_t on) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("chordal", on) > 0;
+  preferences.end();
+  if (ok) chordalHold = on;
+  Serial.printf("NVS: Chordal-Hold %s: %u\n", ok ? "gespeichert" : "FEHLER", on);
   return ok;
 }
 
@@ -2719,6 +2776,14 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_CHORDAL_HOLD ")) {
+    String arg = cmd.substring(17);
+    arg.trim();
+    if (arg == "0" || arg == "1") {
+      sendConfigNotification(saveChordalHoldToNVS(arg == "1" ? 1 : 0) ? "OK SET_CHORDAL_HOLD " + arg : String("ERR NVS SET_CHORDAL_HOLD"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd.startsWith("SET_QUICK_TAP ")) {
     int qt = cmd.substring(14).toInt();
     String arg = cmd.substring(14);
@@ -2907,12 +2972,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
 #endif
     char buf[768];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"chordal_hold\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, (unsigned)quickTapMs, triJson, hostJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)chordalHold, triJson, hostJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

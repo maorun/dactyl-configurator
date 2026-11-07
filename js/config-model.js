@@ -818,6 +818,95 @@ function applyLayerOperation(layers, op, source, target) {
   return next;
 }
 
+// Tauscht zwei Zellen einer Ebene (Ziehen einer Taste auf eine andere). Gibt eine neue Ebene zurück;
+// null bei ungültigen Koordinaten oder gleicher Zelle. Die Eingabe bleibt unverändert.
+function swapLayerKeys(layer, r1, c1, r2, c2) {
+  if (!Array.isArray(layer)) return null;
+  if (!isValidIndex(r1, NUM_ROWS) || !isValidIndex(r2, NUM_ROWS)) return null;
+  if (!isValidIndex(c1, NUM_COLS) || !isValidIndex(c2, NUM_COLS)) return null;
+  if (r1 === r2 && c1 === c2) return null;
+  const next = JSON.parse(JSON.stringify(layer));
+  while (next.length < NUM_ROWS) next.push([]);
+  for (const r of [r1, r2]) {
+    while (next[r].length < NUM_COLS) next[r].push({ label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" });
+  }
+  [next[r1][c1], next[r2][c2]] = [next[r2][c2], next[r1][c1]];
+  return next;
+}
+
+// Nutzlast eines Tasten-Ziehens ("<Hälfte>:<Zeile>:<Spalte>"); null bei jedem anderen Text
+function parseKeyDragPayload(text) {
+  const m = /^([A-Za-z]+):(\d+):(\d+)$/.exec(String(text || ""));
+  return m ? { side: m[1], r: Number(m[2]), c: Number(m[3]) } : null;
+}
+
+// Neue Position einer Auswahl, nachdem zwei Zellen getauscht wurden: nur die beiden Zellen wandern
+function swappedSelectionPosition(pos, r1, c1, r2, c2) {
+  if (!pos) return pos;
+  if (pos.r === r1 && pos.c === c1) return { ...pos, r: r2, c: c2 };
+  if (pos.r === r2 && pos.c === c2) return { ...pos, r: r1, c: c1 };
+  return pos;
+}
+
+// Links/rechts-Paare, die beim Spiegeln einer Ebene die Seite wechseln
+const MIRROR_CODE_PAIRS = [
+  ["KEY_LEFT_CTRL", "KEY_RIGHT_CTRL"], ["KEY_LEFT_SHIFT", "KEY_RIGHT_SHIFT"],
+  ["KEY_LEFT_ALT", "KEY_RIGHT_ALT"], ["KEY_LEFT_GUI", "KEY_RIGHT_GUI"],
+  ["KEY_LEFT_ARROW", "KEY_RIGHT_ARROW"], ["KEY_LEFT_BRACKET", "KEY_RIGHT_BRACKET"],
+  ["OSM_LCTRL", "OSM_RCTRL"], ["OSM_LSHIFT", "OSM_RSHIFT"], ["OSM_LALT", "OSM_RALT"], ["OSM_LGUI", "OSM_RGUI"],
+  ["MOUSE_LEFT_MOVE", "MOUSE_RIGHT_MOVE"], ["MOUSE_WHEEL_LEFT", "MOUSE_WHEEL_RIGHT"]
+];
+const MIRROR_CODE_MAP = (() => {
+  const map = {};
+  for (const [a, b] of MIRROR_CODE_PAIRS) { map[a] = b; map[b] = a; }
+  return map;
+})();
+
+function mirrorActionCode(code) {
+  return typeof code === "string" && Object.prototype.hasOwnProperty.call(MIRROR_CODE_MAP, code) ? MIRROR_CODE_MAP[code] : code;
+}
+
+// Gespiegelte Position einer Taste: Finger-Spalte c -> 5 - c, Daumentasten nach Raster (thumbDefs, Spalte g -> 4 - g)
+function mirrorKeyPosition(r, c, srcProfile, dstProfile) {
+  if (r < 5) return c < 6 ? { r, c: 5 - c } : null;
+  const src = srcProfile.thumbDefs.find(t => t.r === r && t.c === c);
+  if (!src) return null;
+  const dst = dstProfile.thumbDefs.find(t => t.row === src.row && Number(t.col) === 4 - Number(src.col));
+  return dst ? { r: dst.r, c: dst.c } : null;
+}
+
+// Spiegelt eine Ebene der Hälfte srcProfile auf die andere Hälfte dstProfile. Gibt eine neue Ebene zurück
+// (nicht belegte Zielpositionen transparent); fehlende Tasten beider Hälften werden übersprungen. PAIR_n und MACRO_n
+// entfallen (Listen je Hälfte), ebenso Master-Aktionen (HOST_n, DM_REC, DM_PLAY) auf einer Zielhälfte ohne Master.
+function mirrorLayerAcrossSides(layer, srcProfile, dstProfile) {
+  if (!Array.isArray(layer) || !srcProfile || !dstProfile || srcProfile === dstProfile) return null;
+  const next = transparentLayer();
+  for (let r = 0; r < NUM_ROWS; r++) {
+    for (let c = 0; c < NUM_COLS; c++) {
+      if (!isPhysicalKey(r, c, srcProfile)) continue;
+      const pos = mirrorKeyPosition(r, c, srcProfile, dstProfile);
+      if (!pos || !isPhysicalKey(pos.r, pos.c, dstProfile)) continue;
+      const cell = layer[r] && layer[r][c];
+      if (!cell || typeof cell !== "object") continue;
+      const out = JSON.parse(JSON.stringify(normalizeKeyCell(cell)));
+      const originalTap = out.tap;
+      for (const field of ["tap", "hold", "dtap"]) {
+        out[field] = mirrorActionCode(out[field]);
+        // Tastenpaare und Makros sind Listen je Hälfte: der Index würde auf der Zielhälfte etwas anderes meinen
+        if (pairIndexFromCode(out[field]) >= 0 || macroIndexFromCode(out[field]) >= 0) out[field] = "NONE";
+        // Host-Slots und dynamische Makros hat nur der Master; die andere Hälfte lehnt sie ab
+        if (!dstProfile.master && (isBleHostCode(out[field]) || isDynamicMacroCode(out[field]))) out[field] = "NONE";
+      }
+      if (out.tap !== originalTap) {
+        const def = findDefinitionByCode(actionCodeToNumeric(out.tap));
+        out.label = (def && def.tap !== "NONE" ? def.label : out.tap.replace("KEY_", "")).slice(0, 16);
+      }
+      next[pos.r][pos.c] = out;
+    }
+  }
+  return next;
+}
+
 // Ein Snapshot (Preset, Import, Ebenen-Werkzeug) ersetzt ganze Bereiche: ältere Änderungen davor und der
 // Snapshot selbst (falls nicht der jüngste) dürfen nicht einzeln rückgängig gemacht werden.
 function isUndoBlocked(changes, idx) {

@@ -87,6 +87,72 @@ function applyLayerToolFromUI() {
   });
 }
 
+// Hälfte, von der gerade eine Taste gezogen wird (null = kein Ziehen)
+let keyDragSource = null;
+
+// Spiegelt die aktive Ebene der bearbeiteten Hälfte auf die andere Hälfte (ersetzt dort die ganze Ebene)
+function mirrorActiveLayerToOtherSide() {
+  const srcSide = editSide;
+  const dstSide = Dactyl.SIDE_IDS.find(id => id !== srcSide);
+  if (!dstSide) return;
+  const layer = activeLayerIndex;
+  const dstCfg = configFor(dstSide);
+  const mirrored = mirrorLayerAcrossSides(configFor(srcSide).layers[layer] || transparentLayer(), SIDE_PROFILES[srcSide], SIDE_PROFILES[dstSide]);
+  if (!mirrored) {
+    showToast("Die Ebene kann nicht gespiegelt werden.");
+    return;
+  }
+  const names = currentConfig.layerNames || DEFAULT_LAYER_NAMES;
+  const label = `L${layer} (${names[layer] || `Layer ${layer}`})`;
+  if (!confirm(`Ebene ${label} von ${SIDE_PROFILES[srcSide].label} auf ${SIDE_PROFILES[dstSide].label} spiegeln? Die Ebene dort wird ersetzt.`)) return;
+  const oldLayers = dstCfg.layers;
+  const layers = JSON.parse(JSON.stringify(oldLayers));
+  while (layers.length <= layer) layers.push(transparentLayer());
+  layers[layer] = mirrored;
+  setConfigFor(dstSide, Object.assign({}, dstCfg, { layers }));
+  saveConfigToServer(dstSide);
+  markPendingSync({
+    type: "layer_mirror",
+    snapshot: true,
+    title: "Ebene gespiegelt",
+    description: `${label}: ${SIDE_PROFILES[srcSide].label} ➔ ${SIDE_PROFILES[dstSide].label}`,
+    // Schreibt in die Zielhälfte, nicht in currentConfig: darum auch für eine nicht bearbeitete Hälfte gültig
+    sideRevert: true,
+    revert: () => {
+      setConfigFor(dstSide, Object.assign({}, configFor(dstSide), { layers: oldLayers }));
+      saveConfigToServer(dstSide);
+      renderMatrix();
+    }
+  }, dstSide);
+  renderMatrix();
+  showToast(`Ebene auf ${SIDE_PROFILES[dstSide].label} gespiegelt.`);
+}
+
+// Ziehen einer Taste auf eine andere derselben Hälfte und Ebene: tauscht beide Zellen
+function swapKeysByDrag(fromR, fromC, toR, toC) {
+  const targetLayer = activeLayerIndex;
+  const next = swapLayerKeys(currentConfig.layers[targetLayer], fromR, fromC, toR, toC);
+  if (!next) return;
+  currentConfig.layers[targetLayer] = next;
+  if (selectedKey && selectedKey.side === editSide) selectedKey = swappedSelectionPosition(selectedKey, fromR, fromC, toR, toC);
+  renderMatrix();
+  if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+  saveConfigToServer();
+  markPendingSync({
+    type: "key_swap",
+    title: "Tasten getauscht",
+    description: `Ebene ${targetLayer}: R${fromR}C${fromC} ⇄ R${toR}C${toC}`,
+    // Tauscht dieselben Zellen erneut; spätere Änderungen an anderen Tasten der Ebene bleiben erhalten
+    revert: () => {
+      const restored = swapLayerKeys(currentConfig.layers[targetLayer], fromR, fromC, toR, toC);
+      if (restored) currentConfig.layers[targetLayer] = restored;
+      renderMatrix();
+      if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+      saveConfigToServer();
+    }
+  });
+}
+
 function updateLayerNameInput() {
   updateLayerToolTargets();
   const input = document.getElementById("layerNameInput");
@@ -201,6 +267,8 @@ function initUI() {
   const btnLayerTool = document.getElementById("btnApplyLayerTool");
   if (layerToolOp) layerToolOp.addEventListener("change", updateLayerToolTargets);
   if (btnLayerTool) btnLayerTool.addEventListener("click", applyLayerToolFromUI);
+  const btnMirror = document.getElementById("btnMirrorLayer");
+  if (btnMirror) btnMirror.addEventListener("click", mirrorActiveLayerToOtherSide);
 
   // Connect Serial Button (USB Monitor)
   const btnConnect = document.getElementById("btnConnect");
@@ -1223,6 +1291,29 @@ function createKeycapElement(r, c, side, keyData, isThumb = false) {
     cfgBadge.className = "config-combo-badge";
     cfgBadge.textContent = "CFG";
     keyEl.appendChild(cfgBadge);
+  }
+
+  // Ziehen auf eine andere Taste derselben Hälfte tauscht beide Zellen (nur die bearbeitete Hälfte)
+  if (side === editSide) {
+    keyEl.draggable = true;
+    keyEl.addEventListener("dragstart", e => {
+      keyDragSource = side;
+      e.dataTransfer.setData("text/plain", `${side}:${r}:${c}`);
+      e.dataTransfer.effectAllowed = "move";
+    });
+    keyEl.addEventListener("dragover", e => {
+      // Der Browser verbirgt die Nutzlast beim Ziehen; darum merkt sich dragstart die Quell-Hälfte
+      if (keyDragSource === side) e.preventDefault();
+      else e.dataTransfer.dropEffect = "none";
+    });
+    keyEl.addEventListener("dragend", () => { keyDragSource = null; });
+    keyEl.addEventListener("drop", e => {
+      e.preventDefault();
+      const payload = parseKeyDragPayload(e.dataTransfer.getData("text/plain"));
+      keyDragSource = null;
+      if (!payload || payload.side !== side) return;
+      swapKeysByDrag(payload.r, payload.c, r, c);
+    });
   }
 
   keyEl.addEventListener("click", () => {

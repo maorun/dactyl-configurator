@@ -351,8 +351,9 @@ function markPendingSync(changeOrSummary = "", side = editSide) {
         type: changeOrSummary.type || "general",
         title: changeOrSummary.title || "Änderung",
         description: changeOrSummary.description || "",
-        // Revert-Closures schreiben in currentConfig und gelten nur für die bearbeitete Hälfte
-        revert: null,
+        // Revert-Closures schreiben in currentConfig und gelten nur für die bearbeitete Hälfte;
+        // nur eine Closure mit sideRevert schreibt selbst in die richtige Hälfte
+        revert: changeOrSummary.sideRevert && typeof changeOrSummary.revert === "function" ? changeOrSummary.revert : null,
         snapshot: !!changeOrSummary.snapshot,
         pairs: !!changeOrSummary.pairs,
         macros: !!changeOrSummary.macros

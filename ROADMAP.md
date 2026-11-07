@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Drag-and-drop key swap and cross-half layer mirror in the editor
-
-- **Rank:** Feature model. Total 23/40 (typing 2, configuration 8, harmony 6, safety 7). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js`, `js/editor.js`, `js/editor-events.js`, `index.html`.
-- **Problem:** Swapping two keys on a layer or mirroring a navigation or symbol layer to the other half requires manual edits for each key.
-- **Goal:** Add `swapLayerKeys(layer, r1, c1, r2, c2)` and `mirrorLayerAcrossSides(layer, srcProfile, dstProfile)` in `js/config-model.js`. Allow dragging a keycap onto another keycap in the matrix to swap their cells, and add a layer tool button to mirror the active layer to the other half (swapping `LEFT_*` and `RIGHT_*` modifiers and left/right arrows, and skipping absent keys).
-- **Acceptance test:** Unit tests in `tests/test_app_logic.js` verify key swapping, modifier and arrow mirroring, absent-key safety and undo snapshot restoration.
-
 ### One-shot modifier and one-shot layer timeout (`oneShotTimeoutMs`)
 
 - **Rank:** Feature model. Total 23/40 (typing 5, configuration 3, harmony 7, safety 8). Effort S. Estimate.

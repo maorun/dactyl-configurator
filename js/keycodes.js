@@ -77,7 +77,8 @@ const KEYCODES = [
     { code: "ALT_REPEAT", label: "Alt Repeat (Gegenteil der letzten Aktion)", char: "" },
     { code: "DM_REC", label: "Makro aufnehmen (Start/Stopp, nur Master)", char: "" },
     { code: "DM_PLAY", label: "Aufgenommenes Makro abspielen (nur Master)", char: "" },
-    { code: "LEADER", label: "Leader-Taste (Sequenz mit bis zu 4 Tasten)", char: "" }
+    { code: "LEADER", label: "Leader-Taste (Sequenz mit bis zu 4 Tasten)", char: "" },
+    { code: "KEY_LOCK", label: "Key Lock (nächste Taste bleibt gedrückt)", char: "" }
   ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
@@ -284,6 +285,7 @@ const ACTION_TO_NUMERIC = {
   "DM_REC": 0x16C,
   "DM_PLAY": 0x16D,
   "LEADER": 0x16E,
+  "KEY_LOCK": 0x16F,
 
   // Mouse Actions (0x130..0x13A)
   "MOUSE_LEFT": 0x130,
@@ -320,12 +322,17 @@ const ONE_SHOT_LABELS = {
   OSM_LCTRL: "OS Ctrl", OSM_LSHIFT: "OS Shift", OSM_LALT: "OS Alt", OSM_LGUI: "OS Cmd",
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
   CAPS_WORD: "CapsWd", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
-  DM_REC: "DM Rec", DM_PLAY: "DM Play", LEADER: "Leader"
+  DM_REC: "DM Rec", DM_PLAY: "DM Play", LEADER: "Leader", KEY_LOCK: "KeyLock"
 };
 
 // true für die Leader-Taste (keine Combo-Aktion)
 function isLeaderCode(code) {
   return /^(ACT_)?LEADER$/.test(String(code || ""));
+}
+
+// true für Key Lock (keine Combo-Aktion)
+function isKeyLockCode(code) {
+  return /^(ACT_)?KEY_LOCK$/.test(String(code || ""));
 }
 
 // true für dynamische Makros DM_REC und DM_PLAY (nur Master, keine Combo-Aktion)

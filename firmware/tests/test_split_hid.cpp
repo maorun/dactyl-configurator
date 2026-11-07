@@ -101,11 +101,14 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_HOLD_RESOLVE),
     makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0xFF, 5),   // x = 5, y = -1
     makeSplitOslEvent(0x04, 0x02),                     // One-Shot-Ebene 2 vorgemerkt, Ebene 1 des Empfängers verbraucht
+    makeSplitHidEvent(SPLIT_OP_KEY_LOCK),
+    makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a', 1),     // sperrbarer Tastendruck
+    makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 1, 1),     // sperrbarer Mausdruck
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
   // ACTIVITY, TAP_FLUSH, REPEAT_RUN und SLEEP sind die einzigen Ops nur der Rückrichtung. Jede dieser vier fehlt,
-  // vier Ops stehen doppelt: die Anzahl der Einträge ist SPLIT_OP_COUNT - 4 + 4.
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 4 + 4);
+  // vier Ops stehen doppelt, KEY_PRESS und MOUSE_PRESS kommen zusätzlich mit arg 1 vor: SPLIT_OP_COUNT - 4 + 4 + 2.
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 4 + 4 + 2);
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
     if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP) continue;
     bool seen = false;
@@ -141,6 +144,11 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 2, 1),
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE, 1),
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE, 0, 1),
+    makeSplitHidEvent(SPLIT_OP_KEY_LOCK, 1),
+    makeSplitHidEvent(SPLIT_OP_KEY_LOCK, 0, 1),
+    makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a', 2),       // arg nur 0 oder 1
+    makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 1, 2),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_RELEASE, 1, 1),
     makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0x0100, 0),  // REPORT ohne Toggle-Bits
     makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0x0100, 1),  // Ebene 0 rastet nie ein
     makeSplitHidEvent(SPLIT_OP_LAYER_STATE, 0, -1),      // Master-Form kommt nie von links
@@ -1882,7 +1890,7 @@ TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
   assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25);
-  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_COUNT == 28);
+  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_COUNT == 29);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -3599,6 +3607,129 @@ TEST(test_dynamic_macro_release_all_keeps_left_held_key_open) {
   assert(k.dynMacro.length == 3 && k.dynMacro.steps[2].code == 'r' && k.dynMacro.steps[2].type == MACRO_STEP_UP);
   left(k, SPLIT_OP_KEY_RELEASE, 'l');
   assert(k.dynMacro.length == 4 && k.dynMacro.steps[3].code == 'l');
+}
+
+// -----------------------------------------------------------------------------
+// Key lock (SPLIT_OP_KEY_LOCK, DactylKeyLock.h)
+// -----------------------------------------------------------------------------
+TEST(test_key_lock_left_mouse_button_stays_held_and_second_press_releases) {
+  Kbd k;
+  left(k, SPLIT_OP_KEY_LOCK);
+  left(k, SPLIT_OP_MOUSE_PRESS, 1, 1);
+  left(k, SPLIT_OP_MOUSE_RELEASE, 1);
+  assert((k.log == Log{"BP1"}));            // das Loslassen erreicht den Report nicht
+  left(k, SPLIT_OP_MOUSE_PRESS, 1, 1);      // zweiter Druck löst
+  assert((k.log == Log{"BP1", "BR1"}));
+  left(k, SPLIT_OP_MOUSE_RELEASE, 1);
+  assert((k.log == Log{"BP1", "BR1"}));
+  left(k, SPLIT_OP_MOUSE_PRESS, 1, 1);      // wieder normal, nichts vorgemerkt
+  left(k, SPLIT_OP_MOUSE_RELEASE, 1);
+  assert((k.log == Log{"BP1", "BR1", "BP1", "BR1"}));
+}
+
+TEST(test_key_lock_right_arm_locks_left_key_and_right_key) {
+  Kbd k;
+  k.keyLockArm();
+  left(k, SPLIT_OP_KEY_PRESS, 'a', 1);
+  left(k, SPLIT_OP_KEY_RELEASE, 'a');
+  assert((k.log == Log{"P97"}));
+  k.pressLockable((uint8_t)'a');            // rechts: zweiter Druck löst
+  assert((k.log == Log{"P97", "R97"}));
+  k.release((uint8_t)'a');
+  assert((k.log == Log{"P97", "R97"}));
+  // rechts sperren, links lösen
+  Kbd r;
+  r.keyLockArm();
+  r.pressLockable((uint8_t)'b');
+  r.release((uint8_t)'b');
+  assert((r.log == Log{"P98"}));
+  left(r, SPLIT_OP_KEY_PRESS, 'b', 1);
+  assert((r.log == Log{"P98", "R98"}));
+  left(r, SPLIT_OP_KEY_RELEASE, 'b');
+  assert((r.log == Log{"P98", "R98"}));
+}
+
+TEST(test_key_lock_press_without_lock_arg_is_not_locked) {
+  Kbd k;
+  left(k, SPLIT_OP_KEY_LOCK);
+  left(k, SPLIT_OP_KEY_PRESS, 'a', 0);      // arg 0 = Makro oder Tastenpaar: nie gesperrt
+  left(k, SPLIT_OP_KEY_RELEASE, 'a');
+  assert((k.log == Log{"P97", "R97"}));
+  left(k, SPLIT_OP_KEY_PRESS, 'b', 1);      // die Vormerkung gilt noch
+  left(k, SPLIT_OP_KEY_RELEASE, 'b');
+  assert((k.log == Log{"P97", "R97", "P98"}));
+}
+
+TEST(test_key_lock_is_released_after_link_timeout) {
+  Kbd k;
+  left(k, SPLIT_OP_KEY_LOCK, 0, 0, 100);
+  left(k, SPLIT_OP_MOUSE_PRESS, 1, 1, 100);
+  left(k, SPLIT_OP_MOUSE_RELEASE, 1, 0, 100);
+  assert((k.log == Log{"BP1"}));
+  bool lost = splitCheckLinkTimeout(k.splitLeft, 100 + SPLIT_LINK_TIMEOUT_MS + 1, k);
+  assert(lost);
+  assert((k.log == Log{"BP1", "BR1"}));      // der Link-Ausfall löst die gesperrte Taste
+  // Danach wirkt die Taste wieder normal
+  left(k, SPLIT_OP_MOUSE_PRESS, 1, 0, 5000);
+  left(k, SPLIT_OP_MOUSE_RELEASE, 1, 0, 5000);
+  assert((k.log == Log{"BP1", "BR1", "BP1", "BR1"}));
+}
+
+TEST(test_key_lock_is_released_after_link_timeout_keeping_other_half_input) {
+  Kbd k;
+  k.press((uint8_t)'q');                    // rechts gehalten
+  left(k, SPLIT_OP_KEY_LOCK, 0, 0, 100);
+  left(k, SPLIT_OP_KEY_PRESS, 'q', 1, 100);  // links derselbe Code: gesperrt
+  left(k, SPLIT_OP_KEY_RELEASE, 'q', 0, 100);
+  k.log.clear();
+  splitCheckLinkTimeout(k.splitLeft, 100 + SPLIT_LINK_TIMEOUT_MS + 1, k);
+  for (const std::string &l : k.log) assert(l != "R113");   // rechts hält 'q' noch
+}
+
+TEST(test_key_lock_release_all_of_left_releases_locked_inputs) {
+  Kbd k;
+  left(k, SPLIT_OP_KEY_LOCK);
+  left(k, SPLIT_OP_KEY_PRESS, 'a', 1);
+  left(k, SPLIT_OP_KEY_RELEASE, 'a');
+  left(k, SPLIT_OP_RELEASE_ALL);
+  assert((k.log == Log{"P97", "R97"}));
+}
+
+TEST(test_key_lock_host_loss_and_right_release_all_clear_locks) {
+  Kbd k;
+  k.keyLockArm();
+  k.pressLockable((uint8_t)'a');
+  k.release((uint8_t)'a');
+  k.splitResetForHostLoss();
+  assert((k.log == Log{"P97", "ALL"}));
+  k.log.clear();
+  k.press((uint8_t)'a');                    // nach dem Verlust ist nichts mehr gesperrt
+  k.release((uint8_t)'a');
+  assert((k.log == Log{"P97", "R97"}));
+  Kbd r;
+  r.keyLockArm();
+  r.releaseAll();                           // auch die Vormerkung entfällt
+  r.press((uint8_t)'a');
+  r.release((uint8_t)'a');
+  assert((r.log == Log{"ALL", "P97", "R97"}));
+}
+
+TEST(test_key_lock_release_all_by_standby_keeps_physically_held_input) {
+  Kbd k;
+  k.keyLockArm();
+  k.pressLockable((uint8_t)'a');
+  k.release((uint8_t)'a');                  // gesperrt
+  k.press((uint8_t)'b');                    // physisch gehalten, nicht gesperrt
+  k.keyLockReleaseAll();
+  assert((k.log == Log{"P97", "P98", "R97"}));
+}
+
+TEST(test_key_lock_is_not_retried_and_lockable_ops_are_validated) {
+  assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_KEY_LOCK)));   // Vormerken ist idempotent
+  SplitHidEvent out;
+  assert(parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_KEY_LOCK), out));
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_KEY_LOCK, 0, 1), out));
+  assert(!splitIsPressOp(SPLIT_OP_KEY_LOCK));
 }
 
 int main() {

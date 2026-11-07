@@ -460,8 +460,14 @@ static LeaderState leaderState;
 bool leaderConsumed[NUM_ROWS][NUM_COLS];
 // Leader-Taste als Combo-Kandidat: die Erfassung beginnt erst, wenn keine Combo sie verbraucht (Loslassen oder Combo-Fenster)
 bool leaderBuffered[NUM_ROWS][NUM_COLS];
+// Key-Lock-Taste als Combo-Kandidat: die Vormerkung beginnt erst, wenn keine Combo sie verbraucht (Loslassen oder Combo-Fenster)
+bool keyLockBuffered[NUM_ROWS][NUM_COLS];
 
 void leaderReset() { leaderState.reset(); }
+
+// Alle gesperrten Eingaben lösen und die Vormerkung löschen (Standby); RELEASE_ALL, Link-Ausfall, Host-Verlust
+// und Config Mode erledigen das in SplitArbitratedKeyboard selbst
+void keyLockReleaseAll() { bleKeyboard.keyLockReleaseAll(); }
 
 // Alle Vormerkungen löschen (RELEASE_ALL, Link-Ausfall, Verlust des Hosts, Config Mode)
 void oslClearAll() {
@@ -1240,7 +1246,8 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
     // Aktionen mit eigener Ausgabe an den Host (Tastenpaar, Makro, Umlaut, Repeat, dynamisches Makro, One-Shot, Caps Word,
     // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
     if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
-        isDynamicMacroAction(action) || isOneShotAction(action) || action == ACT_CAPS_WORD || action == ACT_LEADER) {
+        isDynamicMacroAction(action) || isOneShotAction(action) || action == ACT_CAPS_WORD || action == ACT_LEADER ||
+        action == ACT_KEY_LOCK) {
       leaderState.reset();
     }
     return false;
@@ -1265,6 +1272,7 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
   // Ein Merker ohne Loslassen (Combo, RELEASE_ALL) darf das Loslassen dieses Drucks nicht verschlucken
   leaderConsumed[r][c] = false;
   leaderBuffered[r][c] = false;
+  keyLockBuffered[r][c] = false;
   // Leader: eine Taste der laufenden Erfassung sendet nichts und zählt nicht für Repeat
   if (leaderConsumeKey(r, c, action)) {
     // Nur die Anzeige: die Live-Ansicht sieht den Druck wie sein KEY_RELEASE; an den Host geht nichts
@@ -1355,9 +1363,9 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
 
     if (!isConfigMode && bleKeyboard.isConnected()) {
       if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
-        if (action == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
-        else if (action == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
-        else if (action == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
+        if (action == 0x130) bleKeyboard.mousePressLockable(MOUSE_BUTTON_LEFT);
+        else if (action == 0x131) bleKeyboard.mousePressLockable(MOUSE_BUTTON_RIGHT);
+        else if (action == 0x132) bleKeyboard.mousePressLockable(MOUSE_BUTTON_MIDDLE);
         else { wheelSend(action, 1); wheelHoldStart(r, c, action, millis()); }
         keySentToHost[r][c] = true;
       }
@@ -1398,6 +1406,17 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         startMacro(action, millis());
         keySentToHost[r][c] = true;
       }
+    }
+  } else if (action == ACT_KEY_LOCK) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Key Lock\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
+    sendConfigNotification(String(buf));
+    Serial.printf("Key Lock gedrückt: [R%d, C%d] (L%d)\n", r, c, currentLayer);
+    // Die Taste sendet nichts; ohne Mac oder im Config Mode merkt sie nichts vor.
+    // Als Combo-Kandidat gepuffert: eine ausgelöste Combo darf keine Vormerkung zurücklassen
+    if (!isConfigMode && bleKeyboard.isConnected() && !isConfigComboSuppressed(r, c)) {
+      if (isComboCandidateKey(r, c)) keyLockBuffered[r][c] = true;
+      else { bleKeyboard.keyLockArm(); keySentToHost[r][c] = true; }
     }
   } else if (action == ACT_LEADER) {
     char buf[128];
@@ -1497,7 +1516,7 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
       // Wenn die Taste Teil einer definierten Combo ist, puffern wir das Senden um comboTimeoutMs,
       // damit beim Drücken des Chords (z. B. J+K) kein Buchstabe vorab gesendet wird!
       if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
-        bleKeyboard.press((uint8_t)action);
+        bleKeyboard.pressLockable((uint8_t)action);
         keySentToHost[r][c] = true;
       }
     }
@@ -1590,6 +1609,14 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         sendUmlaut(action);
       }
     }
+  } else if (action == ACT_KEY_LOCK) {
+    // Die Vormerkung begann beim Drücken; nur ein gepufferter Combo-Kandidat (schneller Einzeltipp) merkt sie jetzt vor
+    if (keySentToHost[r][c]) {
+      keySentToHost[r][c] = false;
+    } else if (keyLockBuffered[r][c] && !isConfigMode && bleKeyboard.isConnected() && !wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
+      bleKeyboard.keyLockArm();
+    }
+    keyLockBuffered[r][c] = false;
   } else if (action == ACT_LEADER) {
     // Die Erfassung begann beim Drücken; nur ein gepufferter Combo-Kandidat (schneller Einzeltipp) beginnt sie jetzt
     if (keySentToHost[r][c]) {
@@ -1634,7 +1661,7 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
       } else if (!wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
         // Wenn die Taste vor Ablauf des Combo-Timeouts losgelassen wurde (schneller Einzeltipp)
         // UND nicht gerade Teil einer ausgelösten Combo war:
-        bleKeyboard.press((uint8_t)action);
+        bleKeyboard.pressLockable((uint8_t)action);
         delay(5);
         bleKeyboard.release((uint8_t)action);
       }
@@ -1955,7 +1982,7 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
     uint16_t act = k.holdAction;
     if (isComboCandidateKey(r, c)) recordRepeatAction(act);
     if (act > 0 && act <= 0xFF) {
-      bleKeyboard.press((uint8_t)act);
+      bleKeyboard.pressLockable((uint8_t)act);
       keySentToHost[r][c] = true;
     } else if (isKeyPairAction(act)) {
       if (pressKeyPair(act)) keySentToHost[r][c] = true;
@@ -1967,6 +1994,10 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       keySentToHost[r][c] = true;
     } else if (isDynamicMacroAction(act)) {
       dynamicMacroPress(act, millis());
+      keySentToHost[r][c] = true;
+    } else if (act == ACT_KEY_LOCK) {
+      if (keyLockBuffered[r][c]) bleKeyboard.keyLockArm();
+      keyLockBuffered[r][c] = false;
       keySentToHost[r][c] = true;
     } else if (act == ACT_LEADER) {
       if (leaderBuffered[r][c]) leaderState.start(millis());
@@ -1981,9 +2012,9 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       capsWordBuffered[r][c] = false;
       keySentToHost[r][c] = true;
     } else if (act >= 0x130 && act <= 0x132) {
-      if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
-      else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
-      else bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
+      if (act == 0x130) bleKeyboard.mousePressLockable(MOUSE_BUTTON_LEFT);
+      else if (act == 0x131) bleKeyboard.mousePressLockable(MOUSE_BUTTON_RIGHT);
+      else bleKeyboard.mousePressLockable(MOUSE_BUTTON_MIDDLE);
       keySentToHost[r][c] = true;
     } else if (isWheelAction(act)) {
       wheelSend(act, 1);
@@ -2354,7 +2385,7 @@ void processDeferredKeys(unsigned long now) {
             uint16_t act = pressedAction[r][c];
             recordRepeatAction(act);
             if (act > 0 && act <= 0xFF) {
-              bleKeyboard.press((uint8_t)act);
+              bleKeyboard.pressLockable((uint8_t)act);
               keySentToHost[r][c] = true;
             } else if (isKeyPairAction(act)) {
               if (pressKeyPair(act)) keySentToHost[r][c] = true;
@@ -2366,6 +2397,10 @@ void processDeferredKeys(unsigned long now) {
               keySentToHost[r][c] = true;
             } else if (isDynamicMacroAction(act)) {
               dynamicMacroPress(act, now);
+              keySentToHost[r][c] = true;
+            } else if (act == ACT_KEY_LOCK) {
+              if (keyLockBuffered[r][c]) bleKeyboard.keyLockArm();
+              keyLockBuffered[r][c] = false;
               keySentToHost[r][c] = true;
             } else if (act == ACT_LEADER) {
               if (leaderBuffered[r][c]) leaderState.start(now);
@@ -2379,9 +2414,9 @@ void processDeferredKeys(unsigned long now) {
               capsWordBuffered[r][c] = false;
               keySentToHost[r][c] = true;
             } else if (isMouseKeyAction(act)) {
-              if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
-              else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
-              else if (act == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
+              if (act == 0x130) bleKeyboard.mousePressLockable(MOUSE_BUTTON_LEFT);
+              else if (act == 0x131) bleKeyboard.mousePressLockable(MOUSE_BUTTON_RIGHT);
+              else if (act == 0x132) bleKeyboard.mousePressLockable(MOUSE_BUTTON_MIDDLE);
               else { wheelSend(act, 1); wheelHoldStart(r, c, act, now); }
               keySentToHost[r][c] = true;
             } else if (isMouseMoveAction(act)) {
@@ -3667,7 +3702,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;

@@ -737,6 +737,7 @@ function validateConfigShape(cfg, profile) {
   if ((cfg.combos || []).some(cb => cb && isOslCode(cb.action))) throw new Error("Combos unterstützen keine One-Shot-Ebene.");
   if ((cfg.combos || []).some(cb => cb && isDynamicMacroCode(cb.action))) throw new Error("Combos unterstützen keine dynamischen Makros.");
   if ((cfg.combos || []).some(cb => cb && isLeaderCode(cb.action))) throw new Error("Combos unterstützen kein Leader.");
+  if ((cfg.combos || []).some(cb => cb && isKeyLockCode(cb.action))) throw new Error("Combos unterstützen kein Key Lock.");
   // Den Slot hat nur der Master: auf der anderen Hälfte tun DM_REC und DM_PLAY nichts (wie validate_config in server.py)
   if (profile && !profile.master && Array.isArray(cfg.layers) &&
       cfg.layers.some(layer => Array.isArray(layer) && layer.some(row => Array.isArray(row) && row.some(cell => {

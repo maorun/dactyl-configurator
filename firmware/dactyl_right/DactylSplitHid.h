@@ -14,6 +14,7 @@
 #include "DactylOneShot.h"  // One-Shot-Modifier und Caps Word (Zustand auf dem Master)
 #include "DactylKeyOverride.h" // Tasten-Überschreibungen (Modifier + Taste ergibt eine andere Taste)
 #include "DactylDynamicMacro.h" // Aufnahme eines dynamischen Makros (ACT_DM_REC)
+#include "DactylKeyLock.h"     // Key lock (ACT_KEY_LOCK)
 #include "DactylCommon.h"      // HoldTapMode, Aktionscodes, KeyCombo, KeyPair
 #include "DactylVersion.h"  // DACTYL_FW_VERSION (SPLIT_OP_FW_VERSION)
 
@@ -96,7 +97,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_MOUSE_MOVE = 25,   // arg = X-Schritt (int8), code = Y-Schritt (int8 in Bits 0..7); -128 und (0, 0) sind ungültig
   SPLIT_OP_SLEEP = 26,        // nur Master -> links: Master geht in Deep Sleep, linke Hälfte legt sich ebenfalls schlafen, ohne Werte
   SPLIT_OP_OSL = 27,          // beide Richtungen: One-Shot-Ebenen des Absenders (code Bits 0..7 = vorgemerkte Ebenen, Bits 8..15 = verbrauchte Vormerkungen des Empfängers), arg 0
-  SPLIT_OP_COUNT = 28
+  SPLIT_OP_KEY_LOCK = 28,     // links -> Master: KEY_LOCK vormerken (ohne Werte); KEY_PRESS und MOUSE_PRESS mit arg 1 sind sperrbar
+  SPLIT_OP_COUNT = 29
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -167,6 +169,8 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
     case SPLIT_OP_RELEASE_ALL:
       return ev.code == 0 && ev.arg == 0;
     case SPLIT_OP_KEY_PRESS:
+      // arg 1 = Druck einer physischen Taste, den KEY_LOCK sperren darf (nicht aus Makro, Tastenpaar, Umlaut)
+      return ev.code >= 1 && ev.code <= 0xFF && (ev.arg == 0 || ev.arg == 1);
     case SPLIT_OP_KEY_RELEASE:
     case SPLIT_OP_KEY_WRITE:
       return ev.code >= 1 && ev.code <= 0xFF && ev.arg == 0;
@@ -175,6 +179,7 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
     case SPLIT_OP_MEDIA_WRITE:
       return ev.arg >= 0 && ev.arg <= 0x0F && splitMediaEventBits(ev) != 0;
     case SPLIT_OP_MOUSE_PRESS:
+      return ev.code >= 1 && ev.code <= 0x07 && (ev.arg == 0 || ev.arg == 1);
     case SPLIT_OP_MOUSE_RELEASE:
     case SPLIT_OP_MOUSE_CLICK:
       return ev.code >= 1 && ev.code <= 0x07 && ev.arg == 0;
@@ -186,6 +191,7 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
     case SPLIT_OP_ONE_SHOT_RELEASE:
       return ev.code >= 1 && ev.code <= 0xFF && ev.arg == 0;
     case SPLIT_OP_CAPS_WORD_TOGGLE:
+    case SPLIT_OP_KEY_LOCK:
       return ev.code == 0 && ev.arg == 0;
     case SPLIT_OP_LAYER_STATE:
       return isValidSplitLayerEvent(ev);
@@ -1147,11 +1153,18 @@ struct SplitHidSink {
   virtual void leftOneShotPress(uint8_t mask) = 0;
   virtual void leftOneShotRelease(uint8_t mask, bool arm) = 0;
   virtual void leftCapsWordToggle() = 0;
+  // Key lock (DactylKeyLock.h). Ohne Überschreibung wirkt ein sperrbarer Druck wie ein gewöhnlicher.
+  virtual void leftKeyPressLockable(uint8_t code) { leftKeyPress(code); }
+  virtual void leftMousePressLockable(uint8_t buttons) { leftMousePress(buttons); }
+  virtual void leftKeyLockArm() {}
+  // RELEASE_ALL, Link-Ausfall und Überlauf des Empfangsrings lösen alle gesperrten Eingaben
+  virtual void leftKeyLockRelease() {}
   virtual ~SplitHidSink() {}
 };
 
 // Löst alles, was die linke Hälfte gedrückt hält, und nur das
 inline void splitReleaseHeld(SplitLeftHeld &h, SplitHidSink &sink) {
+  sink.leftKeyLockRelease();
   SplitHeldSet held = h.set;
   splitSetClear(h.set);
   for (int code = 1; code < 256; code++) {
@@ -1221,7 +1234,8 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
     case SPLIT_OP_KEY_PRESS:
       if (splitSetHasKey(s, code8)) return false;
       splitSetKey(s, code8, true);
-      sink.leftKeyPress(code8);
+      if (ev.arg == 1) sink.leftKeyPressLockable(code8);
+      else sink.leftKeyPress(code8);
       return true;
     case SPLIT_OP_KEY_RELEASE:
       if (!splitSetHasKey(s, code8)) return false;
@@ -1235,7 +1249,10 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
       sink.leftKeyRelease(code8);
       return true;
     case SPLIT_OP_RELEASE_ALL:
-      if (!splitSetAny(s)) return false;
+      if (!splitSetAny(s)) {
+        sink.leftKeyLockRelease();   // gesperrte Eingaben löst auch ein RELEASE_ALL ohne gehaltene Eingabe
+        return false;
+      }
       splitReleaseHeld(h, sink);
       return true;
     case SPLIT_OP_MEDIA_PRESS: {
@@ -1261,7 +1278,8 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
       uint8_t add = (uint8_t)(code8 & ~s.mouse);
       if (!add) return false;
       s.mouse |= add;
-      sink.leftMousePress(add);
+      if (ev.arg == 1) sink.leftMousePressLockable(add);
+      else sink.leftMousePress(add);
       return true;
     }
     case SPLIT_OP_MOUSE_RELEASE: {
@@ -1298,6 +1316,9 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
     }
     case SPLIT_OP_CAPS_WORD_TOGGLE:
       sink.leftCapsWordToggle();
+      return true;
+    case SPLIT_OP_KEY_LOCK:
+      sink.leftKeyLockArm();
       return true;
     default:
       return false;
@@ -1655,6 +1676,9 @@ public:
   // Dynamisches Makro: nimmt die Tastencodes beider Hälften auf, solange recording gilt (DactylDynamicMacro.h)
   DynamicMacro dynMacro = {};
 
+  // Key lock: vorgemerkte und gesperrte Eingaben beider Hälften (DactylKeyLock.h)
+  KeyLockState keyLock = {};
+
   // --- Rechte Hälfte (DactylLogic.h) ---
   size_t press(uint8_t k) {
     dynMacro.noteDown(k);
@@ -1675,6 +1699,8 @@ public:
   }
   size_t release(uint8_t k) {
     splitSetKey(right, k, false);
+    // Eine gesperrte Taste bleibt im Report; ihr zweiter Druck hat sie schon gelöst
+    if (klOnRelease(keyLock, k)) return 1;
     // Das Loslassen zählt erst, wenn auch die linke Hälfte den Code nicht mehr hält
     if (!splitSetHasKey(splitLeft.set, k)) dynMacro.noteUp(k);
     if (overrideRelease(ovrRight, k)) return 1;
@@ -1713,12 +1739,18 @@ public:
   }
   void mouseRelease(uint8_t b) {
     right.mouse &= (uint8_t)~b;
-    uint8_t rel = (uint8_t)(b & ~splitLeft.set.mouse);
+    uint8_t rel = (uint8_t)(b & ~splitLeft.set.mouse & ~lockedMouseOnRelease(b));
     if (rel) Hid::mouseRelease(rel);
   }
   void mouseClick(uint8_t b) {
     // Ein Klick löste einen von der anderen Hälfte gehaltenen Button
     if (b & splitLeft.set.mouse) return;
+    // Mit vorgemerktem KEY_LOCK sperrt auch ein schneller Klick den Button
+    if (keyLock.armed) {
+      mousePressLockable(b);
+      mouseRelease(b);
+      return;
+    }
     uint8_t mods = oneShotModsForInput(oneShot, heldOneShot(), altInReport());
     uint8_t added = beginMods(mods);
     Hid::mouseClick(b);
@@ -1735,7 +1767,57 @@ public:
     if (rel) oneShotKeyUp(oneShot, rel, true);
   }
   void capsWordToggle() { oneShot.capsWord = !oneShot.capsWord; }
+
+  // --- Key lock (DactylKeyLock.h) ---
+  void keyLockArm() { klArm(keyLock); }
+  // Druck einer Taste, die KEY_LOCK sperren darf. Der zweite Druck einer gesperrten Taste löst sie.
+  size_t pressLockable(uint8_t k) {
+    if (klOnPress(keyLock, k) != KL_PRESS_UNLOCK) return press(k);
+    splitSetKey(right, k, true);
+    if (!overrideRelease(ovrRight, k)) unlockKey(k, splitLeft.set);
+    return 1;
+  }
+  void mousePressLockable(uint8_t b) {
+    uint8_t unlocked = lockMouseBits(b);
+    uint8_t normal = (uint8_t)(b & ~unlocked);
+    if (unlocked) {
+      right.mouse |= unlocked;
+      uint8_t rel = (uint8_t)(unlocked & ~splitLeft.set.mouse);
+      if (rel) Hid::mouseRelease(rel);
+    }
+    if (normal) mousePress(normal);
+  }
+  // Alle gesperrten Eingaben lösen (Standby, RELEASE_ALL, Link-Ausfall) und die Vormerkung löschen.
+  // Physisch noch gehaltene Eingaben (KL_HELD) bleiben im Report; ihr Loslassen sendet dann normal.
+  void keyLockReleaseAll() {
+    uint8_t mouse = 0;
+    uint8_t locked[32] = {};
+    bool anyKey = false;
+    for (int id = 0; id < KEY_LOCK_IDS; id++) {
+      if (keyLock.slot[id] != KL_ON) continue;
+      if (id >= KEY_LOCK_MOUSE_BASE) {
+        mouse |= (uint8_t)(1u << (id - KEY_LOCK_MOUSE_BASE));
+      } else {
+        locked[id >> 3] |= (uint8_t)(1u << (id & 7));
+        anyKey = true;
+      }
+    }
+    klReset(keyLock);
+    if (!anyKey && !mouse) return;
+    for (int code = 1; code < 256; code++) {
+      if (!((locked[code >> 3] >> (code & 7)) & 1)) continue;
+      uint8_t k = (uint8_t)code;
+      if (overrideRelease(ovrRight, k) || overrideRelease(ovrLeft, k)) continue;
+      if (splitSetHasKey(right, k) || splitSetHasKey(splitLeft.set, k)) continue;
+      dynMacro.noteUp(k);
+      releaseKeepingShift(k, right);
+    }
+    uint8_t rel = (uint8_t)(mouse & ~right.mouse & ~splitLeft.set.mouse);
+    if (rel) Hid::mouseRelease(rel);
+  }
+
   void releaseAll() {
+    klReset(keyLock);
     // Eine gehaltene One-Shot-Taste gilt danach als gelöst, ohne etwas vorzumerken (Combo hat sie verbraucht)
     if (right.oneShot) oneShotKeyUp(oneShot, right.oneShot, false);
     splitSetClear(right);
@@ -1761,6 +1843,7 @@ public:
     dynMacro.noteReleaseAll([](uint8_t) { return false; });
     dynMacro.stopRecording();  // ohne Mac erreicht keine Taste mehr den Report
     oneShotReset(oneShot);
+    klReset(keyLock);
     Hid::releaseAll();
   }
 
@@ -1784,7 +1867,24 @@ public:
     }
     pressWithMods(code, mods);
   }
+  void leftKeyPressLockable(uint8_t code) override {
+    if (klOnPress(keyLock, code) != KL_PRESS_UNLOCK) {
+      leftKeyPress(code);
+      return;
+    }
+    if (!overrideRelease(ovrLeft, code)) unlockKey(code, right);
+  }
+  void leftMousePressLockable(uint8_t b) override {
+    uint8_t unlocked = lockMouseBits(b);
+    uint8_t normal = (uint8_t)(b & ~unlocked);
+    uint8_t rel = (uint8_t)(unlocked & ~right.mouse);
+    if (rel) Hid::mouseRelease(rel);
+    if (normal) leftMousePress(normal);
+  }
+  void leftKeyLockArm() override { klArm(keyLock); }
+  void leftKeyLockRelease() override { keyLockReleaseAll(); }
   void leftKeyRelease(uint8_t code) override {
+    if (klOnRelease(keyLock, code)) return;
     if (!splitSetHasKey(right, code)) dynMacro.noteUp(code);
     if (overrideRelease(ovrLeft, code)) return;
     if (!splitSetHasKey(right, code) && !overrideReplacementActive(code)) releaseKeepingShift(code, right);
@@ -1807,7 +1907,7 @@ public:
     endMods(added);
   }
   void leftMouseRelease(uint8_t b) override {
-    uint8_t rel = (uint8_t)(b & ~right.mouse);
+    uint8_t rel = (uint8_t)(b & ~right.mouse & ~lockedMouseOnRelease(b));
     if (rel) Hid::mouseRelease(rel);
   }
   void leftMouseClick(uint8_t b) override {
@@ -1825,6 +1925,33 @@ public:
 
 private:
   SplitHeldSet right = {};
+
+  // Der zweite Druck einer gesperrten Taste: im Report lösen, außer die andere Hälfte hält denselben Code
+  void unlockKey(uint8_t k, const SplitHeldSet &other) {
+    if (splitSetHasKey(other, k)) return;
+    dynMacro.noteUp(k);
+    releaseKeepingShift(k, other);
+  }
+  // Maus-Buttons der Maske b: gesperrte lösen (zweiter Druck), sonst ggf. sperren. Liefert die gelösten Bits.
+  uint8_t lockMouseBits(uint8_t b) {
+    uint8_t unlocked = 0;
+    for (uint8_t bit = 0; bit < 3; bit++) {
+      if ((b & (1u << bit)) && klOnPress(keyLock, (uint16_t)(KEY_LOCK_MOUSE_BASE + bit)) == KL_PRESS_UNLOCK) {
+        unlocked |= (uint8_t)(1u << bit);
+      }
+    }
+    return unlocked;
+  }
+  // Maus-Buttons der Maske b, die beim Loslassen gesperrt bleiben
+  uint8_t lockedMouseOnRelease(uint8_t b) {
+    uint8_t locked = 0;
+    for (uint8_t bit = 0; bit < 3; bit++) {
+      if ((b & (1u << bit)) && klOnRelease(keyLock, (uint16_t)(KEY_LOCK_MOUSE_BASE + bit))) {
+        locked |= (uint8_t)(1u << bit);
+      }
+    }
+    return locked;
+  }
 
   // Aktive Überschreibung je gedrückter Taste und Hälfte: gesendete Ersatztaste und die Modifier, die für sie
   // aus dem Report genommen wurden (Bit i = Code 0x80 + i). repl 0 = keine Überschreibung aktiv.

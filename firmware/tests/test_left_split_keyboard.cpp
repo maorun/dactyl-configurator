@@ -121,7 +121,7 @@ static void resetState() {
   numKeyPairs = 0;
   numLeaderSeqs = 0;
   leaderReset();
-  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) leaderConsumed[r][c] = leaderBuffered[r][c] = false;
+  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) leaderConsumed[r][c] = leaderBuffered[r][c] = keyLockBuffered[r][c] = false;
   numMacros = 0;
   for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
   macroRun = {};
@@ -159,7 +159,10 @@ static std::vector<SplitHidEvent> drain() {
 }
 
 static bool is(const SplitHidEvent &ev, uint8_t op, uint16_t code, int8_t arg = 0) {
-  return ev.op == op && ev.code == code && ev.arg == arg;
+  // Ein Druck einer physischen Taste trägt arg 1 (sperrbar für KEY_LOCK); die Tests unten prüfen arg gezielt
+  bool lockableOp = op == SPLIT_OP_KEY_PRESS || op == SPLIT_OP_MOUSE_PRESS;
+  bool argOk = ev.arg == arg || (lockableOp && arg == 0 && ev.arg == 1);
+  return ev.op == op && ev.code == code && argOk;
 }
 
 static void tap(uint8_t r, uint8_t c) {
@@ -1131,6 +1134,32 @@ TEST(test_prior_idle_on_left_half_counts_master_press) {
   keyState[3][0] = false; onMatrixKeyChange(3, 0, false);
   drain();
   requirePriorIdleMs = 0;
+}
+
+TEST(test_left_key_lock_sends_arm_and_lockable_presses) {
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = ACT_MOUSE_LEFT;
+  KEYMAP[0][2][3] = ACT_MACRO_BASE;
+  tap(0, 0);
+  tap(2, 1);
+  tap(2, 2);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 5);
+  assert(ev[0].op == SPLIT_OP_KEY_LOCK && ev[0].code == 0 && ev[0].arg == 0);
+  assert(ev[1].op == SPLIT_OP_KEY_PRESS && ev[1].code == 'a' && ev[1].arg == 1);
+  assert(ev[2].op == SPLIT_OP_KEY_RELEASE && ev[2].code == 'a');
+  assert(ev[3].op == SPLIT_OP_MOUSE_PRESS && ev[3].code == MOUSE_BUTTON_LEFT && ev[3].arg == 1);
+  assert(ev[4].op == SPLIT_OP_MOUSE_RELEASE);
+  for (const SplitHidEvent &e : ev) assert(isValidSplitHidEvent(e));
+}
+
+TEST(test_left_key_lock_without_master_arms_nothing) {
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  setMillis(millis() + SPLIT_LINK_DOWN_MS * 3);   // kein Sende-Ergebnis mehr: der Master gilt als weg
+  assert(!bleKeyboard.isConnected());
+  tap(0, 0);
+  assert(drain().empty());
 }
 
 int main() {

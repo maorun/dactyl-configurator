@@ -104,6 +104,9 @@
 // Leader-Taste: danach sammelt die Hälfte bis zu LEADER_MAX_KEYS Tasten (Zeitlimit leaderTimeoutMs je Taste); eine passende
 // Folge aus userLeaderSeqs[] führt ihre Aktion aus, ohne Treffer passiert nichts. Die Tasten der Folge senden nichts.
 #define ACT_LEADER               0x16E
+// Key lock: die nächste gedrückte Taste, Medientaste oder Maustaste beider Hälften bleibt nach dem Loslassen gedrückt;
+// ein zweiter Druck derselben Eingabe löst sie (DactylKeyLock.h). Ebenen-Tasten, KEY_LOCK selbst und Makros sperrt sie nicht.
+#define ACT_KEY_LOCK             0x16F
 // One-Shot-Ebene (OSL_0 .. OSL_7): Tippen merkt die Ebene für den nächsten Tastendruck beider Hälften vor, danach
 // ist sie wieder gelöst; ein zweites Tippen nimmt die Vormerkung zurück; Halten wirkt wie MO_n und merkt nichts vor
 #define ACT_OSL_BASE             0x180

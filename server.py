@@ -284,7 +284,7 @@ KEY_TO_CPP = {
     "OSM_LCTRL": "ACT_OSM_LCTRL", "OSM_LSHIFT": "ACT_OSM_LSHIFT", "OSM_LALT": "ACT_OSM_LALT",
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
     "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "REPEAT": "ACT_REPEAT", "ALT_REPEAT": "ACT_ALT_REPEAT",
-    "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY", "LEADER": "ACT_LEADER",
+    "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY", "LEADER": "ACT_LEADER", "KEY_LOCK": "ACT_KEY_LOCK",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -569,6 +569,9 @@ DYNAMIC_MACRO_CPP = {"ACT_DM_REC", "ACT_DM_PLAY"}
 # Die Leader-Taste startet eine Sequenz auf einer Taste; als Combo-Aktion ergibt sie nichts
 LEADER_CPP = {"ACT_LEADER"}
 
+# Key Lock merkt die nächste Eingabe vor; als Combo-Aktion ergibt es nichts
+KEY_LOCK_CPP = {"ACT_KEY_LOCK"}
+
 def generate_combos_cpp(combos):
     if combos is None:
         combos = []
@@ -601,6 +604,8 @@ def generate_combos_cpp(combos):
             raise ValueError("Combos unterstützen keine dynamischen Makros.")
         if act in LEADER_CPP:
             raise ValueError("Combos unterstützen kein Leader.")
+        if act in KEY_LOCK_CPP:
+            raise ValueError("Combos unterstützen kein Key Lock.")
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts
         if beh != 0 and act == "ACT_LAYER_LOCK":
             raise ValueError("Layer Lock funktioniert nur mit dem Verhalten \"Einzeltaste senden\".")

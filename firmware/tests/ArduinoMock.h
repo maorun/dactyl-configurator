@@ -314,6 +314,7 @@ inline int esp_ota_mark_app_valid_cancel_rollback() { return 0; }
 // Keycodes & Report-Typen direkt aus der Firmware (keine doppelte Pflege im Mock)
 #include "../dactyl_right/DactylKeycodes.h"
 #include "../dactyl_right/DactylDynamicMacro.h"
+#include "../dactyl_right/DactylKeyLock.h"
 
 // Media-Report als 16-Bit-Wert (Bitposition wie im Consumer-Report-Descriptor)
 inline uint32_t mediaBits(const MediaKeyReport k) { return mediaReportBits(k); }
@@ -368,7 +369,37 @@ public:
   // Wie SplitArbitratedKeyboard: der Master nimmt die Tastencodes für DM_REC auf (DactylDynamicMacro.h)
   DynamicMacro dynMacro;
   void press(uint8_t k) { dynMacro.noteDown(k); pressedKeys.push_back(k); pressHistory.push_back(k); keyEvents.push_back(k); }
+  // Key lock wie SplitArbitratedKeyboard (DactylKeyLock.h): eine gesperrte Taste bleibt nach dem Loslassen gedrückt
+  KeyLockState keyLock = {};
+  void pressLockable(uint8_t k) {
+    if (klOnPress(keyLock, k) == KL_PRESS_UNLOCK) { releaseNow(k); return; }
+    press(k);
+  }
+  void mousePressLockable(uint8_t b) {
+    uint8_t unlocked = 0;
+    for (uint8_t bit = 0; bit < 3; bit++)
+      if ((b & (1u << bit)) && klOnPress(keyLock, KEY_LOCK_MOUSE_BASE + bit) == KL_PRESS_UNLOCK) unlocked |= (uint8_t)(1u << bit);
+    mouseButtons &= (uint8_t)~unlocked;
+    if (b & ~unlocked) mouseButtons |= (uint8_t)(b & ~unlocked);
+  }
+  void keyLockArm() { klArm(keyLock); keyLockArms++; }
+  int keyLockArms = 0;
+  void keyLockReleaseAll() {
+    for (int id = 0; id < KEY_LOCK_IDS; id++) {
+      if (keyLock.slot[id] != KL_ON) continue;
+      if (id >= KEY_LOCK_MOUSE_BASE) mouseButtons &= (uint8_t)~(1u << (id - KEY_LOCK_MOUSE_BASE));
+      else releaseNow((uint8_t)id);
+    }
+    klReset(keyLock);
+  }
+  void releaseNow(uint8_t k) {
+    dynMacro.noteUp(k);
+    keyEvents.push_back(-(int)k);
+    auto it = std::find(pressedKeys.begin(), pressedKeys.end(), k);
+    if (it != pressedKeys.end()) pressedKeys.erase(it);
+  }
   void release(uint8_t k) {
+    if (klOnRelease(keyLock, k)) return;
     dynMacro.noteUp(k);
     keyEvents.push_back(-(int)k);
     auto it = std::find(pressedKeys.begin(), pressedKeys.end(), k);
@@ -384,7 +415,11 @@ public:
   void write(const MediaKeyReport k) { writtenMediaKeys.push_back(mediaBits(k)); }
 
   void mousePress(uint8_t btn) { mouseButtons |= btn; }
-  void mouseRelease(uint8_t btn) { mouseButtons &= ~btn; }
+  void mouseRelease(uint8_t btn) {
+    for (uint8_t bit = 0; bit < 3; bit++)
+      if ((btn & (1u << bit)) && klOnRelease(keyLock, KEY_LOCK_MOUSE_BASE + bit)) btn &= (uint8_t)~(1u << bit);
+    mouseButtons &= ~btn;
+  }
   void mouseClick(uint8_t btn) { clickedMouseButtons.push_back(btn); }
   void mouseScroll(int8_t wheel) { mouseScrolls.push_back(wheel); }
   std::vector<int8_t> mousePans;
@@ -393,6 +428,7 @@ public:
   void mouseMove(int8_t x, int8_t y) { mouseMoves.push_back({x, y}); }
 
   void releaseAll() {
+    klReset(keyLock);
     dynMacro.noteReleaseAll([](uint8_t) { return false; });
     pressedKeys.clear();
     pressedMediaKeys.clear();

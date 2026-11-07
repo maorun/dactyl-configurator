@@ -541,6 +541,26 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertRegex(common, rf"#define LEADER_MAX_KEYS\s+{server.LEADER_MAX_KEYS}\b")
         self.assertEqual(server.code_to_cpp("LEADER"), "ACT_LEADER")
 
+    def test_key_lock_code_matches_firmware_and_roundtrips(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_KEY_LOCK\s+0x16F")
+        self.assertEqual(server.code_to_cpp("KEY_LOCK"), "ACT_KEY_LOCK")
+        self.assertEqual(server.code_to_cpp("ACT_KEY_LOCK"), "ACT_KEY_LOCK")
+        with open(server.DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["layers"][0][2][1] = {"tap": "KEY_LOCK"}
+        server.validate_config(cfg, "R")
+        ino = server.render_ino(cfg, "R") if hasattr(server, "render_ino") else None
+        if ino is not None:
+            self.assertIn("ACT_KEY_LOCK", ino)
+
+    def test_key_lock_is_no_combo_action(self):
+        for behavior in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
+            combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": behavior, "action": "KEY_LOCK"}
+            with self.assertRaises(ValueError):
+                server.generate_combos_cpp([combo])
+
     def test_leader_codegen(self):
         cpp = server.generate_leader_cpp([
             {"keys": ["KEY_A", "KEY_B"], "action": "MACRO_0"},

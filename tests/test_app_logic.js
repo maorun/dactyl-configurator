@@ -51,7 +51,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode,
+             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -5189,6 +5189,33 @@ test("Layout-Prüfung: LAYER_LOCK zählt als Rückweg und rastet die Ebene ein",
   const common = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylCommon.h"), "utf8");
   assert.match(common, /#define ACT_LAYER_LOCK\s+0x16A/);
   assert.strictEqual(api.keyToNumericActions({ tap: "LAYER_LOCK" }).tapCode, 0x16A);
+});
+
+test("Key Lock: Code passt zur Firmware, Tastenpalette, Label und Rundlauf über die Konfiguration", () => {
+  const common = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylCommon.h"), "utf8");
+  assert.match(common, /#define ACT_KEY_LOCK\s+0x16F/);
+  assert.strictEqual(api.actionCodeToNumeric("KEY_LOCK"), 0x16F);
+  assert.strictEqual(api.keyToNumericActions({ tap: "KEY_LOCK" }).tapCode, 0x16F);
+  assert.ok(api.isKeyLockCode("KEY_LOCK") && api.isKeyLockCode("ACT_KEY_LOCK") && !api.isKeyLockCode("LEADER") && !api.isKeyLockCode(""));
+  assert.ok(api.KEYCODES.some(g => g.keys.some(k => k.code === "KEY_LOCK")));
+  assert.strictEqual(api.ONE_SHOT_LABELS.KEY_LOCK, "KeyLock");
+  assert.ok(api.isOneShotOrCapsWordCode("KEY_LOCK"));
+  // Rundlauf: eine Taste mit KEY_LOCK übersteht normalizeConfig und die Validierung beider Hälften
+  const copy = o => JSON.parse(JSON.stringify(o));
+  for (const profile of [R, L]) {
+    const cfg = copy(profile.defaultConfig);
+    cfg.layers[0][2][1] = { tap: "KEY_LOCK" };
+    const norm = api.normalizeConfig(cfg, profile);
+    assert.strictEqual(norm.layers[0][2][1].tap, "KEY_LOCK");
+    api.validateConfigShape(norm, profile);
+  }
+});
+
+test("Key Lock: Combos lehnen die Aktion ab", () => {
+  const copy = o => JSON.parse(JSON.stringify(o));
+  const cfg = copy(R.defaultConfig);
+  cfg.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "KEY_LOCK" }];
+  assert.throws(() => api.validateConfigShape(cfg, R), /Key Lock/);
 });
 
 test("One-Shot-Ebene: Codes passen zu Firmware und server.py, Combos lehnen sie ab", () => {

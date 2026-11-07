@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Retro Tap for Mod-Tap and Layer-Tap (`retroTap`)
-
-- **Rank:** Feature model. Total 26/40 (typing 7, configuration 3, harmony 8, safety 8). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylSplitHid.h`, `firmware/dactyl_right/DactylVersion.h`, `js/config-model.js`, `server.py`.
-- **Problem:** When a user holds a Mod-Tap or Layer-Tap key past `tappingTermMs` without pressing another key, the release sends nothing. A slow tap is lost.
-- **Goal:** Add the setting `retroTap` (`0` or `1`, default `0`) per half (`SET_RETRO_TAP`, NVS key `retro_tap`, `DEVICE_INFO` field `rt`). When enabled, releasing a Mod-Tap or Layer-Tap key that resolved as hold without any key press on either half in between taps its tap action on release. Any key press on either half cancels the Retro Tap for open holds. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test holds a Mod-Tap key past `tappingTermMs` with `retroTap = 1`, releases it without another key press and expects the tap action; a second test presses another key during the hold and expects no tap on release.
-
 ### Swap hands (`SWAP_HANDS`)
 
 - **Rank:** Feature model. Total 26/40 (typing 7, configuration 2, harmony 9, safety 8). Effort M. Estimate.

@@ -106,11 +106,11 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 1, 1),     // sperrbarer Mausdruck
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
-  // ACTIVITY, TAP_FLUSH, REPEAT_RUN und SLEEP sind die einzigen Ops nur der Rückrichtung. Jede dieser vier fehlt,
-  // vier Ops stehen doppelt, KEY_PRESS und MOUSE_PRESS kommen zusätzlich mit arg 1 vor: SPLIT_OP_COUNT - 4 + 4 + 2.
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 4 + 4 + 2);
+  // ACTIVITY, TAP_FLUSH, REPEAT_RUN, SLEEP und MASTER_PRESS sind die einzigen Ops nur der Rückrichtung. Jede dieser fünf
+  // fehlt, vier Ops stehen doppelt, KEY_PRESS und MOUSE_PRESS kommen zusätzlich mit arg 1 vor: SPLIT_OP_COUNT - 5 + 4 + 2.
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 5 + 4 + 2);
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
-    if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP) continue;
+    if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP || op == SPLIT_OP_MASTER_PRESS) continue;
     bool seen = false;
     for (const SplitHidEvent &ev : ok) if (ev.op == op) seen = true;
     assert(seen); // jede Op links -> Master kommt vor: ein neuer Op-Wert ohne Eintrag fällt auf
@@ -1890,7 +1890,7 @@ TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
   assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25);
-  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_COUNT == 29);
+  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_COUNT == 30);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -3732,6 +3732,21 @@ TEST(test_key_lock_is_not_retried_and_lockable_ops_are_validated) {
   assert(!splitIsPressOp(SPLIT_OP_KEY_LOCK));
 }
 
+TEST(test_master_press_packet_accepts_only_master_without_args) {
+  assert(SPLIT_OP_MASTER_PRESS == 29); // append-only: Nummer nie ändern
+  SplitHidEvent out;
+  assert(parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_MASTER_PRESS), out) && out.op == SPLIT_OP_MASTER_PRESS);
+  assert(!parseMaster(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_MASTER_PRESS), out));
+  assert(!parseMaster(nullptr, makeSplitHidEvent(SPLIT_OP_MASTER_PRESS), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_MASTER_PRESS), out, 3));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_MASTER_PRESS), out, 5));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_MASTER_PRESS, 1), out));
+  assert(!parseMaster(SPLIT_MASTER_MAC, makeSplitHidEvent(SPLIT_OP_MASTER_PRESS, 0, 1), out));
+  // Die linke Hälfte sendet kein MASTER_PRESS an den Master; es ist kein Druck-Op
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_MASTER_PRESS), out));
+  assert(!splitIsPressOp(SPLIT_OP_MASTER_PRESS));
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Split HID Protocol Test Suite" << std::endl;
@@ -3740,3 +3755,4 @@ int main() {
   std::cout << "\nRan " << testsRun << " tests. All " << testsPassed << " passed successfully!" << std::endl;
   return (testsRun == testsPassed) ? 0 : 1;
 }
+

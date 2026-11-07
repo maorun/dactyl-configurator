@@ -79,6 +79,7 @@ uint16_t tappingTermMs = 200;
 uint16_t quickTapMs = 0;
 uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
+uint8_t retroTap = 0;
 uint8_t autoShift = 0;
 uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
@@ -448,6 +449,7 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
   if (info == nullptr || !parseSplitMasterPacket(info->src_addr, data, len, ev)) return;
   if (ev.op == SPLIT_OP_ACTIVITY) masterActivityReceived = true;
   else if (ev.op == SPLIT_OP_SLEEP) masterSleepRequested = true;
+  else if (ev.op == SPLIT_OP_MASTER_PRESS) masterPriorPressNote(masterPriorPress, millis());
   else if (ev.op == SPLIT_OP_TAP_FLUSH) masterTapFlushRequested = true;
   else if (ev.op == SPLIT_OP_HOLD_PENDING) {
     unsigned long nowMs = millis();

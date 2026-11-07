@@ -47,6 +47,7 @@ static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
 static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
+static uint8_t retroTap = 0;
 static uint8_t autoShift = 0;
 static uint16_t autoShiftMs = 175;
 static uint16_t leaderTimeoutMs = 1000;
@@ -196,6 +197,7 @@ void resetState() {
   quickTapMs = 0;
   requirePriorIdleMs = 0;
   chordalHold = 0;
+  retroTap = 0;
   autoShift = 0;
   autoShiftMs = 175;
   tapTermsCompiledIn = false;
@@ -4849,6 +4851,191 @@ TEST(test_chordal_hold_same_half_resolves_tap) {
   assert(countPresses('a') == 1 && countPresses('b') == 1);
 }
 
+// Retro Tap: Halten über den Tapping-Term ohne weiteren Tastendruck, Loslassen sendet den Tipp nach
+TEST(test_retro_tap_sends_tap_on_release_after_hold) {
+  resetState();
+  retroTap = 1;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  tapHoldTick(1300);
+  assert(countPresses(KEY_LEFT_CTRL) == 1);
+  setMillis(1500);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(countPresses('a') == 1);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_retro_tap_off_sends_nothing_on_release) {
+  resetState();
+  retroTap = 0;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  tapHoldTick(1300);
+  setMillis(1500);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(countPresses('a') == 0);
+}
+
+TEST(test_retro_tap_cancelled_by_key_press_during_hold) {
+  resetState();
+  retroTap = 1;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  tapHoldTick(1300);
+  setMillis(1350);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1350);
+  setMillis(1400);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1400);
+  setMillis(1500);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(countPresses('b') == 1);
+  assert(countPresses('a') == 0);
+}
+
+TEST(test_retro_tap_cancelled_by_press_of_other_half) {
+  resetState();
+  retroTap = 1;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  tapHoldTick(1300);
+  notePriorKeyPress(1350); // Druck der anderen Hälfte
+  setMillis(1500);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(countPresses('a') == 0);
+}
+
+// Retro Tap: Ausnahmen (Halte-Aktion gleich Tipp, Doppel-Tipp, ohne Tipp-Aktion) senden nichts nach; Layer-Tap MO_n sendet den Tipp nach
+TEST(test_retro_tap_exception_hold_equals_tap) {
+  resetState();
+  retroTap = 1;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = 'a';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  tapHoldTick(1300);
+  size_t n = countPresses('a');
+  setMillis(1500);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(countPresses('a') == n); // kein zusätzlicher Tipp
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_retro_tap_exception_double_tap_key) {
+  resetState();
+  retroTap = 1;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  DTAPMAP[0][2][1] = 'd';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  tapHoldTick(1300);
+  setMillis(1500);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(countPresses('a') == 0);
+}
+
+TEST(test_retro_tap_exception_tap_action_zero) {
+  resetState();
+  retroTap = 1;
+  KEYMAP[0][2][1] = 0;
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  tapHoldTick(1300);
+  assert(countPresses(KEY_LEFT_CTRL) == 1);
+  size_t before = bleKeyboard.pressHistory.size();
+  setMillis(1500);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(bleKeyboard.pressHistory.size() == before);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_retro_tap_layer_tap_mo_sends_tap) {
+  resetState();
+  retroTap = 1;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = ACT_MO_2;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  tapHoldTick(1300);
+  assert(getActiveLayer() == 2);
+  setMillis(1500);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(getActiveLayer() == 0);
+  assert(countPresses('a') == 1);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+// Retro Tap: der nachgesendete Tipp verbraucht eine vorgemerkte One-Shot-Ebene wie jeder Tastendruck
+TEST(test_retro_tap_consumes_one_shot_layer_mark) {
+  resetState();
+  retroTap = 1;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1300);
+  tapHoldTick(1300);
+  oslHeld = 1 << 2;
+  oslUsed = 0;
+  setMillis(1500);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(countPresses('a') == 1);
+  assert((oslUsed & (1 << 2)) != 0);
+}
+
+// SET_RETRO_TAP: Argumente, NVS-Roundtrip und rt in DEVICE_INFO
+TEST(test_set_retro_tap_args_nvs_and_device_info) {
+  resetState();
+  handleConfigCommand("SET_RETRO_TAP 2", false);
+  assert(mockChar.value == "ERR ARGS SET_RETRO_TAP 2");
+  handleConfigCommand("SET_RETRO_TAP -1", false);
+  assert(mockChar.value == "ERR ARGS SET_RETRO_TAP -1");
+  handleConfigCommand("SET_RETRO_TAP abc", false);
+  assert(mockChar.value == "ERR ARGS SET_RETRO_TAP abc");
+  assert(retroTap == 0);
+  handleConfigCommand("SET_RETRO_TAP 1", false);
+  assert(mockChar.value == "OK SET_RETRO_TAP 1");
+  assert(retroTap == 1);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"rt\":1,") != std::string::npos);
+  // NVS-Roundtrip: Neustart liest den gespeicherten Wert
+  retroTap = 0;
+  loadKeymapFromNVS();
+  assert(retroTap == 1);
+  handleConfigCommand("SET_RETRO_TAP 0", false);
+  assert(mockChar.value == "OK SET_RETRO_TAP 0");
+  retroTap = 1;
+  loadKeymapFromNVS();
+  assert(retroTap == 0);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"rt\":0,") != std::string::npos);
+  // Ungültiger NVS-Wert wird ignoriert
+  preferences.begin("dactyl", false);
+  preferences.putUChar("retro_tap", 7);
+  preferences.end();
+  retroTap = 0;
+  loadKeymapFromNVS();
+  assert(retroTap == 0);
+}
+
 TEST(test_chordal_hold_applies_in_every_hold_tap_mode) {
   for (uint8_t mode = 0; mode <= 2; mode++) {
     resetState();
@@ -6829,7 +7016,7 @@ TEST(test_prior_idle_command_nvs_and_info) {
   assert(mockChar.value == "OK SET_PRIOR_IDLE 120");
   assert(requirePriorIdleMs == 120);
   handleConfigCommand("GET_INFO", false);
-  assert(mockChar.value.find("\"require_prior_idle_ms\":120") != std::string::npos);
+  assert(mockChar.value.find("\"pi\":120") != std::string::npos);
   requirePriorIdleMs = 0;
   loadKeymapFromNVS();
   assert(requirePriorIdleMs == 120);

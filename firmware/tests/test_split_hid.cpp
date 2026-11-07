@@ -450,7 +450,7 @@ TEST(test_left_release_keeps_key_held_by_right) {
 
 TEST(test_media_and_mouse_arbitration) {
   Kbd k;
-  const uint8_t vol[2] = {0x20, 0};
+  const uint8_t vol[3] = {0x20, 0, 0};
   left(k, SPLIT_OP_MEDIA_PRESS, 0x0020);
   k.press(vol);
   k.release(vol);                     // links hält die Media-Taste

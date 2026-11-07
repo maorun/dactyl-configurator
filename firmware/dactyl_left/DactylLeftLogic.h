@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include "../dactyl_right/DactylMatrixConstants.h"
 #include "../dactyl_right/DactylSplitHid.h"
+#include "../dactyl_right/DactylDebounce.h"
 
 #define LEFT_DEBOUNCE_MS 5
 
@@ -26,37 +27,21 @@ inline bool isRtcGpio(uint8_t gpio) {
 // Feste Basis-MAC der linken Hälfte (Wi-Fi-STA-MAC = Basis-MAC)
 #define LEFT_BASE_MAC SPLIT_LEFT_MAC
 
-struct DebouncedKey {
-  bool stable;
-  bool lastRaw;
-  unsigned long lastChangeMs;
-};
-
-static DebouncedKey leftKeys[LEFT_NUM_ROWS][LEFT_NUM_COLS] = {};
+static EagerDebounceKey leftKeys[LEFT_NUM_ROWS][LEFT_NUM_COLS] = {};
 
 void resetLeftKeys() {
   for (int r = 0; r < LEFT_NUM_ROWS; r++) {
-    for (int c = 0; c < LEFT_NUM_COLS; c++) {
-      leftKeys[r][c] = {false, false, 0};
-    }
+    for (int c = 0; c < LEFT_NUM_COLS; c++) eagerDebounceReset(leftKeys[r][c]);
   }
 }
 
-// Liefert true, wenn der Rohwert debounceMsArg lang stabil ist und vom gemeldeten Zustand abweicht.
-// Der neue Zustand steht danach in leftKeys[r][c].stable. Die Firmware übergibt debounceMs (NVS-Setting).
+// Eager debounce (DactylDebounce.h): a press is reported at once, a release after debounceMsArg of open contact.
+// Liefert true, wenn sich der gemeldete Zustand ändert. Der neue Zustand steht danach in leftKeys[r][c].stable.
 bool updateLeftKey(int r, int c, bool rawPressed, unsigned long nowMs, unsigned long debounceMsArg = LEFT_DEBOUNCE_MS) {
   if (r < 0 || r >= LEFT_NUM_ROWS || c < 0 || c >= LEFT_NUM_COLS) return false;
-  DebouncedKey &k = leftKeys[r][c];
-  if (rawPressed != k.lastRaw) {
-    k.lastRaw = rawPressed;
-    k.lastChangeMs = nowMs;
-    return false;
-  }
-  if (rawPressed != k.stable && (nowMs - k.lastChangeMs) >= debounceMsArg) {
-    k.stable = rawPressed;
-    return true;
-  }
-  return false;
+  EagerDebounceKey &k = leftKeys[r][c];
+  bool before = k.stable;
+  return eagerDebounceUpdate(k, rawPressed, nowMs, debounceMsArg) != before;
 }
 
 // Sendewarteschlange: genau ein Paket ist unterwegs. Ein fehlgeschlagenes Paket wird bis zu

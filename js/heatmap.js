@@ -102,6 +102,60 @@ function updateFingerLoadUI() {
   totalEl.textContent = String(stats.sameFingerTotal);
   pairsEl.textContent = topSameFingerPairs(stats)
     .map(p => `${keyPositionLabel(p.a)} ↔ ${keyPositionLabel(p.b)}: ${p.count}`).join(" · ");
+  updateErgonomicSwapsUI(stats);
+}
+
+// Liste der Tausch-Vorschläge für Ebene 0; baut nur neu, wenn sich die Vorschläge ändern (der Timer ruft oft auf)
+// Positionen getauschter Vorschläge je Hälfte: ihre Zähler gehören zur alten Taste, bis die Statistik zurückgesetzt wird
+const ergonomicSwappedPositions = new Map();
+
+function ergonomicSwappedFor(side) {
+  if (!ergonomicSwappedPositions.has(side)) ergonomicSwappedPositions.set(side, new Set());
+  return ergonomicSwappedPositions.get(side);
+}
+
+function updateErgonomicSwapsUI(stats) {
+  const listEl = document.getElementById("ergonomicSwaps");
+  if (!listEl) return;
+  const cellLabel = pos => {
+    const cell = currentConfig.layers[0][pos.r][pos.c];
+    return `${keyPositionLabel(`${pos.r}_${pos.c}`)} ${(cell && cell.label) || ""}`.trim();
+  };
+  const swaps = suggestErgonomicSwaps(stats, currentConfig, activeProfile(), undefined, ergonomicSwappedFor(editSide)).map(s => ({
+    ...s, text: `${cellLabel(s.from)} (${s.fromCount}) ⇄ ${cellLabel(s.to)} (${s.toCount}) · ${s.reason}`
+  }));
+  const signature = JSON.stringify(swaps);
+  if (listEl.dataset.signature === signature) return;
+  listEl.dataset.signature = signature;
+  listEl.textContent = "";
+  if (!swaps.length) {
+    listEl.textContent = "Keine Vorschläge (zu wenige Anschläge oder keine freie Grundreihen-Taste).";
+    return;
+  }
+  for (const s of swaps) {
+    const row = document.createElement("div");
+    row.className = "ergonomic-swap-row";
+    const text = document.createElement("span");
+    text.textContent = s.text;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hand-btn";
+    btn.textContent = "Tauschen";
+    btn.title = "Tauscht beide Tasten auf Ebene 0 (als ausstehende Änderung, mit Rückgängig)";
+    btn.addEventListener("click", () => {
+      const side = editSide;
+      const ids = [`${s.from.r}_${s.from.c}`, `${s.to.r}_${s.to.c}`];
+      const swapped = swapKeysByDrag(s.from.r, s.from.c, s.to.r, s.to.c, 0, () => {
+        for (const id of ids) ergonomicSwappedFor(side).delete(id);
+        updateFingerLoadUI();
+      });
+      if (!swapped) return;
+      for (const id of ids) ergonomicSwappedFor(side).add(id);
+      updateFingerLoadUI();
+    });
+    row.append(text, btn);
+    listEl.appendChild(row);
+  }
 }
 
 function onTypingStatsChanged(side = editSide) {
@@ -134,6 +188,7 @@ function initHeatmapUI() {
     reset.addEventListener("click", () => {
       const profile = activeProfile();
       if (!confirm(`Tasten-Statistik (Heatmap & Anschläge) der ${profile.label} zurücksetzen?`)) return;
+      ergonomicSwappedFor(editSide).clear();
       sideStore.save(editSide, { typingStats: createTypingStats(null, profile) });
       if (heatmapSaveTimer) saveHeatmapNow();
       try { localStorage.removeItem(profile.heatmapStorageKey); } catch (e) {}

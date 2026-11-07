@@ -23,14 +23,7 @@ Rules for this file:
 
 ## Priority 4
 
-### Heatmap-guided ergonomic swap suggestions (`suggestErgonomicSwaps`)
-
-- **Rank:** Feature model. Total 17/40 (typing 3, configuration 6, harmony 4, safety 4). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js`, `js/heatmap.js`, `index.html`.
-- **Problem:** The heatmap and finger-load bars show overloaded pinky columns and frequent same-finger bigrams, but do not point out which Layer 0 keys should trade places.
-- **Goal:** Add `suggestErgonomicSwaps(stats, config, profile)` in `js/config-model.js` and a list in the heatmap panel that ranks up to 5 swaps between high-count keys on high-effort positions (outer pinky column, top row, or same-finger bigram pairs) and low-count keys on home-row index, middle or ring positions, leaving modifiers and layer keys untouched.
-- **Acceptance test:** Unit tests in `tests/test_app_logic.js` verify that high-frequency outer keys are paired with low-frequency home-row keys and that modifiers, layer keys and absent keys are excluded.
+No open entry.
 
 ## Priority 5
 

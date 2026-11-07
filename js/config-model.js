@@ -1314,6 +1314,57 @@ function topSameFingerPairs(stats, limit = SAME_FINGER_TOP) {
     });
 }
 
+const ERGONOMIC_SWAP_LIMIT = 5;
+const ERGONOMIC_HOME_ROW = 2;
+const ERGONOMIC_EASY_FINGERS = ["index", "middle", "ring"];
+
+// Tausch-Vorschläge für Ebene 0 aus der Heatmap: häufige Tasten auf anstrengenden Plätzen (kleiner Finger außen,
+// obere Reihe, Taste einer häufigen Folge desselben Fingers) tauschen mit seltenen Tasten der Grundreihe unter
+// Zeige-, Mittel- oder Ringfinger. Nur einfache Tasten ohne Halte- und Doppel-Tipp-Aktion zählen; Modifier,
+// Layer-Tasten, Makros, Paare und fehlende Tasten bleiben unberührt. Jede Position kommt höchstens einmal vor.
+// exclude (Set von "r_c"): Positionen, die schon getauscht wurden; ihre Zähler gehören noch zur alten Taste.
+// Liefert höchstens min(limit, ERGONOMIC_SWAP_LIMIT) Einträge { from, to, fromCount, toCount, reason }, größter Gewinn zuerst.
+function suggestErgonomicSwaps(stats, config, profile, limit = ERGONOMIC_SWAP_LIMIT, exclude = null) {
+  if (!stats || !stats.counts || !config || !profile) return [];
+  // Zähler der Ebene 0, sobald es welche gibt (ältere Daten kennen nur die Gesamtzähler)
+  const layer0 = Array.isArray(stats.layerCounts) ? stats.layerCounts[0] : null;
+  const counts = layer0 && Object.keys(layer0).length ? layer0 : stats.counts;
+  const cells = [];
+  for (let r = 0; r < NUM_ROWS; r++) {
+    for (let c = 0; c < NUM_COLS; c++) {
+      const finger = fingerOfKey(r, c, profile);
+      if (!finger || (exclude && exclude.has(`${r}_${c}`))) continue;
+      const a = lintCellAt(config, 0, r, c);
+      if (!isStandardKeyOrModifier(a.tap) || isModifierKeyCode(a.tap) || a.hold !== "NONE" || a.dtap !== "NONE") continue;
+      cells.push({ r, c, finger, count: counts[`${r}_${c}`] || 0 });
+    }
+  }
+  const pairKeys = new Set();
+  for (const p of topSameFingerPairs(stats)) { pairKeys.add(p.a); pairKeys.add(p.b); }
+  const reasonOf = k => {
+    if (k.r === ERGONOMIC_HOME_ROW && ERGONOMIC_EASY_FINGERS.includes(k.finger)) return null; // schon gut platziert
+    if (k.finger === "pinky") return "Kleiner Finger";
+    if (k.r === 0) return "Obere Reihe";
+    return pairKeys.has(`${k.r}_${k.c}`) ? "Häufige Folge desselben Fingers" : null;
+  };
+  const high = cells.map(k => ({ ...k, reason: reasonOf(k) })).filter(k => k.reason && k.count > 0)
+    .sort((x, y) => (y.count - x.count) || (x.r - y.r) || (x.c - y.c));
+  const low = cells.filter(k => k.r === ERGONOMIC_HOME_ROW && ERGONOMIC_EASY_FINGERS.includes(k.finger))
+    .sort((x, y) => (x.count - y.count) || (x.c - y.c));
+  const used = new Set();
+  const swaps = [];
+  for (const h of high) {
+    if (swaps.length >= Math.min(limit, ERGONOMIC_SWAP_LIMIT)) break;
+    if (used.has(`${h.r}_${h.c}`)) continue;
+    const t = low.find(l => !used.has(`${l.r}_${l.c}`) && l.count < h.count);
+    if (!t) continue;
+    used.add(`${h.r}_${h.c}`);
+    used.add(`${t.r}_${t.c}`);
+    swaps.push({ from: { r: h.r, c: h.c }, to: { r: t.r, c: t.c }, fromCount: h.count, toCount: t.count, reason: h.reason });
+  }
+  return swaps;
+}
+
 // Alt-Repeat-Paare aus den häufigsten Folgen eines Fingers: je Folge a|b die Richtungen a → b und b → a, damit die
 // Alt-Repeat-Taste (eines anderen Fingers) die zweite Taste der Folge ersetzt. Tasten kommen aus der Tap-Aktion der
 // Ebene 0 (normale Taste oder Modifier, 1..255). Vorhandene Auslöser, doppelte und ungültige Richtungen entfallen,

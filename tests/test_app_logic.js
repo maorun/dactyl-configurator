@@ -32,7 +32,7 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTriLayers, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
-             createTypingStats, recordKeyPress, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
+             createTypingStats, recordKeyPress, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
              COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
@@ -916,6 +916,23 @@ test("Editor: Revert von Tausch und Spiegeln stellt den alten Stand wieder her",
   assert.strictEqual(box.currentConfig.layers[0][1][1].tap, "KEY_LEFT_SHIFT");
   assert.strictEqual(box.currentConfig.layers[0][2][2].tap, "KEY_A");
   assert.strictEqual(box.currentConfig.layers[0][3][3].tap, "KEY_Z");
+  // Ebene 0 tauschen, während Ebene 3 aktiv ist: Rückgabe true, Auswahl bleibt, onRevert läuft nach dem Revert
+  box.activeLayerIndex = 3;
+  box.selectedKey = { side: "R", r: 1, c: 1 };
+  let reverted = 0;
+  box.onRevert = () => { reverted++; };
+  box.currentConfig.layers[0][1][1] = { label: "Q", tap: "KEY_Q", hold: "NONE", dtap: "NONE" };
+  assert.strictEqual(vm.runInContext("swapKeysByDrag(1, 1, 2, 2, 0, onRevert)", box), true);
+  assert.strictEqual(box.currentConfig.layers[0][2][2].tap, "KEY_Q");
+  assert.deepStrictEqual({ ...box.selectedKey }, { side: "R", r: 1, c: 1 });
+  changes[changes.length - 1].revert();
+  assert.strictEqual(reverted, 1);
+  assert.strictEqual(box.currentConfig.layers[0][1][1].tap, "KEY_Q");
+  // Fehlende Ebene und gleiche Zelle ändern nichts und melden false
+  const before = changes.length;
+  assert.strictEqual(vm.runInContext("swapKeysByDrag(1, 1, 2, 2, 9)", box), false);
+  assert.strictEqual(vm.runInContext("swapKeysByDrag(1, 1, 1, 1, 0)", box), false);
+  assert.strictEqual(changes.length, before);
 });
 
 test("Ebene spiegeln: fehlende Tasten werden übersprungen", () => {
@@ -7543,6 +7560,99 @@ test("Tapping-Term-Assistent: Perzentil, Klemmung und unvollständige Paare", ()
   const wrap = [];
   for (let i = 0; i < 25; i++) wrap.push(ev(0, 0, true, (0xFFFFFFFF - 2000 + i * 400) >>> 0), ev(0, 0, false, (0xFFFFFFFF - 2000 + i * 400 + 90) >>> 0));
   assert.strictEqual(api.computeTimingRecommendations(wrap).stats.holdP95, 90);
+});
+
+function ergoConfig(overrides = {}) {
+  const layer = [];
+  for (let r = 0; r < 6; r++) layer.push(Array.from({ length: 7 }, (_, c) => ({ label: "k", tap: (r < 5 && c < 6) ? "KEY_A" : "NONE", hold: "NONE", dtap: "NONE" })));
+  for (const [id, cell] of Object.entries(overrides)) { const [r, c] = id.split("_").map(Number); layer[r][c] = { hold: "NONE", dtap: "NONE", ...cell }; }
+  return { layers: [layer] };
+}
+function ergoStats(counts) {
+  const s = api.createTypingStats(null, R);
+  for (const [id, n] of Object.entries(counts)) { const [r, c] = id.split("_").map(Number); for (let i = 0; i < n; i++) api.recordKeyPress(s, r, c, 0); }
+  return s;
+}
+
+test("Tausch-Vorschläge: häufige Außentasten tauschen mit seltenen Grundreihen-Tasten", () => {
+  // Rechts: Spalte 5 und 4 = kleiner Finger, Spalten 0..1 Zeigefinger, Zeile 2 = Grundreihe
+  const stats = ergoStats({ "1_5": 50, "0_2": 30, "2_0": 5, "2_2": 1, "2_3": 2 });
+  const swaps = api.suggestErgonomicSwaps(stats, ergoConfig(), R);
+  const pairs = JSON.parse(JSON.stringify(swaps.slice(0, 2).map(s => [s.from, s.to])));
+  assert.deepStrictEqual(pairs, [[{ r: 1, c: 5 }, { r: 2, c: 1 }], [{ r: 0, c: 2 }, { r: 2, c: 2 }]]);
+  assert.strictEqual(swaps[0].fromCount, 50);
+  assert.ok(swaps.every(s => s.to.r === 2 && s.fromCount > s.toCount));
+  assert.strictEqual(new Set(swaps.flatMap(s => [`${s.from.r}_${s.from.c}`, `${s.to.r}_${s.to.c}`])).size, swaps.length * 2);
+});
+
+test("Tausch-Vorschläge: Modifier, Layer-Tasten, Hold-Tasten und fehlende Tasten bleiben außen vor", () => {
+  const stats = ergoStats({ "1_5": 50, "0_5": 40, "0_4": 30, "3_4": 20, "4_0": 99, "5_3": 99 });
+  const cfg = ergoConfig({
+    "1_5": { tap: "KEY_LEFT_SHIFT" }, "0_5": { tap: "MO_1" }, "0_4": { tap: "KEY_A", hold: "KEY_LEFT_CTRL" },
+    "2_1": { tap: "MO_1" }, "2_0": { tap: "NONE" }
+  });
+  const swaps = api.suggestErgonomicSwaps(stats, cfg, R);
+  const ids = Array.from(swaps.flatMap(s => [`${s.from.r}_${s.from.c}`, `${s.to.r}_${s.to.c}`]));
+  for (const bad of ["1_5", "0_5", "0_4", "2_1", "2_0", "4_0", "5_3"]) assert.ok(!ids.includes(bad), bad);
+  assert.strictEqual(ids[0], "3_4");
+  assert.strictEqual(api.suggestErgonomicSwaps(ergoStats({}), ergoConfig(), R).length, 0);
+});
+
+test("Tausch-Vorschläge: Obergrenze, links gilt das Profil der linken Hälfte", () => {
+  const counts = {};
+  for (let c = 0; c < 6; c++) { counts[`0_${c}`] = 100 + c; counts[`2_${c}`] = c; }
+  const swaps = api.suggestErgonomicSwaps(ergoStats(counts), ergoConfig(), R);
+  // Die Grundreihe hat rechts vier Ziele (Zeige-, Mittel-, Ringfinger); die Obergrenze 5 gilt zusätzlich
+  assert.strictEqual(swaps.length, 4);
+  assert.strictEqual(api.suggestErgonomicSwaps(ergoStats(counts), ergoConfig(), R, 2).length, 2);
+  assert.strictEqual(api.suggestErgonomicSwaps(ergoStats(counts), ergoConfig(), R, 99).length, 4);
+  assert.ok(swaps.every(s => s.from.r === 0));
+  assert.ok(swaps.every((s, i) => i === 0 || swaps[i - 1].fromCount >= s.fromCount));
+  // Links ist Spalte 0 der kleine Finger und Spalte 4 ein Zeigefinger
+  const ls = api.createTypingStats(null, L);
+  for (let i = 0; i < 9; i++) api.recordKeyPress(ls, 3, 0, 0);
+  const left = api.suggestErgonomicSwaps(ls, ergoConfig({ "3_6": { tap: "NONE" } }), L);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(left[0].from)), { r: 3, c: 0 });
+  assert.ok(["index", "middle", "ring"].includes(api.fingerOfKey(left[0].to.r, left[0].to.c, L)));
+});
+
+test("Tausch-Vorschläge: Grenze fünf, Folgen-Grund, Ausschluss und Zähler 0", () => {
+  // Grundreihe hat vier Ziele (zweimal Zeigefinger, Mittel-, Ringfinger); die Obergrenze 5 bleibt eine Schranke
+  const counts = {};
+  for (let c = 0; c < 6; c++) { counts[`0_${c}`] = 100 + c; counts[`2_${c}`] = c; }
+  const s = ergoStats(counts);
+  const cfg = ergoConfig();
+  const wide = api.suggestErgonomicSwaps(s, cfg, R, 99);
+  assert.ok(wide.length <= 5);
+  assert.ok(wide.every(x => x.reason === "Obere Reihe" || x.reason === "Kleiner Finger"));
+  // Ausgeschlossene Positionen tauchen nicht auf
+  const first = wide[0];
+  const ex = new Set([`${first.from.r}_${first.from.c}`, `${first.to.r}_${first.to.c}`]);
+  const again = api.suggestErgonomicSwaps(s, cfg, R, 5, ex);
+  assert.ok(again.every(x => !ex.has(`${x.from.r}_${x.from.c}`) && !ex.has(`${x.to.r}_${x.to.c}`)));
+  // Folge desselben Fingers: 3_1 und 3_0 (Zeigefinger) abwechselnd, 3_1 häufiger
+  const t = api.createTypingStats(null, R);
+  let ms = 0;
+  for (let i = 0; i < 6; i++) { api.recordKeyPress(t, 3, 1, ms += 10); api.recordKeyPress(t, 3, 0, ms += 10); api.recordKeyPress(t, 3, 1, ms += 10); }
+  const seq = api.suggestErgonomicSwaps(t, cfg, R);
+  assert.strictEqual(seq[0].reason, "Häufige Folge desselben Fingers");
+  assert.strictEqual(seq[0].from.r, 3);
+  // Taste mit Zähler 0 ist keine Quelle; Grundreihen-Taste unter dem Zeigefinger ist keine Quelle
+  assert.strictEqual(api.suggestErgonomicSwaps(ergoStats({ "2_0": 50 }), cfg, R).length, 0);
+  assert.strictEqual(api.suggestErgonomicSwaps(ergoStats({ "1_0": 0 }), cfg, R).length, 0);
+});
+
+test("Tausch-Vorschläge: Zähler der Ebene 0 zählen, Gesamtzähler nur als Rückfall", () => {
+  const s = api.createTypingStats(null, R);
+  for (let i = 0; i < 30; i++) api.recordKeyPress(s, 1, 5, i, 3); // Ebene 3 zählt nicht für Ebene 0
+  for (let i = 0; i < 10; i++) api.recordKeyPress(s, 0, 4, 100 + i, 0);
+  const swaps = api.suggestErgonomicSwaps(s, ergoConfig(), R);
+  assert.strictEqual(swaps.length > 0, true);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(swaps[0].from)), { r: 0, c: 4 });
+  assert.strictEqual(swaps[0].fromCount, 10);
+  // Ohne Ebenenzähler (ältere Daten) gelten die Gesamtzähler
+  const legacy = api.createTypingStats({ "1_5": 30 }, R);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.suggestErgonomicSwaps(legacy, ergoConfig(), R)[0].from)), { r: 1, c: 5 });
 });
 
 (async () => {

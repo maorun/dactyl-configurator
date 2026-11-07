@@ -1568,6 +1568,46 @@ TEST(test_one_shot_left_press_retry_is_idempotent) {
   assert(k.oneShot.armed == OS_SHIFT);
 }
 
+TEST(test_one_shot_modifier_expires_after_timeout_without_key) {
+  Kbd k;
+  k.oneShotPress(OS_SHIFT);
+  k.oneShotRelease(OS_SHIFT);
+  assert(k.oneShot.armed == OS_SHIFT);
+  assert(!oneShotExpire(k.oneShot, 1000, 1500)); // stempelt die Vormerkung
+  assert(!oneShotExpire(k.oneShot, 2499, 1500));
+  assert(k.oneShot.armed == OS_SHIFT);
+  assert(oneShotExpire(k.oneShot, 2600, 1500));
+  assert(k.oneShot.armed == 0);
+  k.log.clear();
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"P97"})); // ohne Shift
+}
+
+TEST(test_one_shot_modifier_never_expires_when_timeout_is_zero) {
+  Kbd k;
+  k.oneShotPress(OS_SHIFT);
+  k.oneShotRelease(OS_SHIFT);
+  assert(!oneShotExpire(k.oneShot, 1000, 0));
+  assert(!oneShotExpire(k.oneShot, 900000, 0));
+  assert(k.oneShot.armed == OS_SHIFT);
+}
+
+TEST(test_one_shot_modifier_consumed_before_timeout_does_not_expire) {
+  Kbd k;
+  k.oneShotPress(OS_SHIFT);
+  k.oneShotRelease(OS_SHIFT);
+  assert(!oneShotExpire(k.oneShot, 1000, 1500));
+  k.press((uint8_t)'a');
+  assert(k.oneShot.armed == 0);
+  assert(!oneShotExpire(k.oneShot, 3000, 1500));
+  // Eine neue Vormerkung startet die Frist neu
+  k.oneShotPress(OS_CTRL);
+  k.oneShotRelease(OS_CTRL);
+  assert(!oneShotExpire(k.oneShot, 3100, 1500));
+  assert(!oneShotExpire(k.oneShot, 4500, 1500));
+  assert(oneShotExpire(k.oneShot, 4700, 1500));
+}
+
 TEST(test_host_loss_clears_one_shot_and_caps_word) {
   Kbd k;
   k.oneShotPress(OS_SHIFT);

@@ -36,6 +36,8 @@ struct OneShotState {
   bool capsWord;
   bool sentenceCase;
   uint8_t sentenceStage;  // 0 = nichts, 1 = Satzzeichen gesehen, 2 = danach Leertaste(n) gesehen
+  uint8_t seenArmed;      // armed beim letzten oneShotExpire(): ein anderer Wert startet die Frist neu
+  unsigned long armedMs;  // Zeitpunkt, an dem oneShotExpire() die aktuelle Vormerkung zuerst sah
 };
 
 inline void oneShotReset(OneShotState &s) {
@@ -43,6 +45,8 @@ inline void oneShotReset(OneShotState &s) {
   s.capsWord = false;
   s.sentenceCase = false;
   s.sentenceStage = 0;
+  s.seenArmed = 0;
+  s.armedMs = 0;
 }
 
 inline void oneShotKeyDown(OneShotState &s, uint8_t mask) {
@@ -56,6 +60,20 @@ inline void oneShotKeyUp(OneShotState &s, uint8_t mask, bool arm) {
   if (arm) s.armed |= (uint8_t)(mask & ~s.used & ~s.cancel);
   s.used &= (uint8_t)~mask;
   s.cancel &= (uint8_t)~mask;
+}
+
+// Zeitlimit der Vormerkung (oneShotTimeoutMs, 0 = aus): ohne verbrauchenden Druck verfällt sie nach timeoutMs. Der Aufruf
+// aus loop() stempelt jede Änderung der Vormerkung; eine neue Vormerkung startet die Frist für alle neu. Gehaltene Tasten
+// und Caps Word bleiben unberührt. Liefert true, wenn eine Vormerkung verfallen ist.
+inline bool oneShotExpire(OneShotState &s, unsigned long now, uint16_t timeoutMs) {
+  if (s.armed != s.seenArmed) {
+    s.seenArmed = s.armed;
+    s.armedMs = now;
+    return false;
+  }
+  if (timeoutMs == 0 || s.armed == 0 || (unsigned long)(now - s.armedMs) < timeoutMs) return false;
+  s.armed = s.seenArmed = 0;
+  return true;
 }
 
 inline bool isModifierCode(uint8_t code) {

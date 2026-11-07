@@ -845,6 +845,19 @@ class TestServerAndCodegen(unittest.TestCase):
             with open(os.path.join(base, ino), encoding="utf-8") as f:
                 self.assertIn("uint16_t leaderTimeoutMs", f.read(), ino)
 
+    def test_one_shot_timeout_setting(self):
+        self.assertEqual(server.SETTINGS_RANGES["oneShotTimeoutMs"], (0, 10000, 0))
+        self.assertIn("uint16_t oneShotTimeoutMs = 0;", server.generate_settings_cpp({}))
+        self.assertIn("uint16_t oneShotTimeoutMs = 1500;", server.generate_settings_cpp({"oneShotTimeoutMs": 1500}))
+        self.assertIn("uint16_t oneShotTimeoutMs = 500;", server.generate_settings_cpp({"oneShotTimeoutMs": 500}))
+        for bad in (1, 499, 10001, -1, "x", True):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_settings_cpp({"oneShotTimeoutMs": bad})
+        base = os.path.dirname(os.path.abspath(server.__file__))
+        for ino in ("firmware/dactyl_right/dactyl_right.ino", "firmware/dactyl_left/dactyl_left.ino"):
+            with open(os.path.join(base, ino), encoding="utf-8") as f:
+                self.assertIn("uint16_t oneShotTimeoutMs", f.read(), ino)
+
     def test_leader_is_no_combo_action(self):
         for behavior in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
             combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": behavior, "action": "LEADER"}

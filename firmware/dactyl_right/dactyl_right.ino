@@ -118,6 +118,7 @@ uint8_t retroTap = 0;
 uint8_t autoShift = 0;
 uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
+uint16_t oneShotTimeoutMs = 0;
 uint8_t holdTapMode = 0;
 uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
 uint8_t numTriLayers = 0;
@@ -1022,6 +1023,9 @@ void setup() {
 
 void loop() {
   hostLedsService(bleKeyboard.hostLeds);
+  // oneShotTimeoutMs: unverbrauchte Vormerkungen (Modifier und Ebenen) verfallen, auch ohne Funk-Peer
+  oneShotExpire(bleKeyboard.oneShot, millis(), oneShotTimeoutMs);
+  oslExpireLocal(millis());
   dynamicMacroService();
   // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende
   const uint32_t diagLoopStartUs = micros();

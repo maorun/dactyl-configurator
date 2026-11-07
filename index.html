@@ -752,6 +752,12 @@
         </div>
 
         <div class="form-group">
+          <label for="oneShotTimeoutInput">One-Shot-Zeitlimit (Millisekunden, 0 = aus, sonst 500 bis 10000):</label>
+          <input type="number" id="oneShotTimeoutInput" class="form-control" value="0" min="0" max="10000">
+          <small class="form-hint">Eine vorgemerkte One-Shot-Umschalttaste (<code>OSM_*</code>) oder One-Shot-Ebene (<code>OSL_n</code>) verfällt nach dieser Zeit ohne Tastendruck. Werte von 1 bis 499 gelten als 500. Erfordert Firmware-Version 37 oder neuer.</small>
+        </div>
+
+        <div class="form-group">
           <label for="priorIdleInput">Hold nur nach Tipp-Pause (Millisekunden, 0 = aus):</label>
           <input type="number" id="priorIdleInput" class="form-control" value="0" min="0" max="500">
           <small class="form-hint">Drückst du eine Mod-Tap-Taste weniger als diese Zeit nach dem letzten Tastendruck (beide Hälften), gilt sie sofort als Tipp. So lösen schnell getippte Buchstaben keinen Modifier aus. Layer-Tap-Tasten (MO_n) bleiben unverändert. Erfordert Firmware-Version 22 oder neuer.</small>

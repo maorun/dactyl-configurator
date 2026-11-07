@@ -84,6 +84,7 @@ uint8_t retroTap = 0;
 uint8_t autoShift = 0;
 uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
+uint16_t oneShotTimeoutMs = 0;
 uint8_t holdTapMode = 0;
 uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
 uint8_t numTriLayers = 0;
@@ -831,6 +832,8 @@ void setup() {
 }
 
 void loop() {
+  // oneShotTimeoutMs: eine unverbrauchte One-Shot-Ebene verfällt (die Modifier führt der Master)
+  oslExpireLocal(millis());
   // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende
   const uint32_t diagLoopStartUs = micros();
   static unsigned long lastHeartbeat = 0;

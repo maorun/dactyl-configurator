@@ -51,6 +51,7 @@ static uint8_t retroTap = 0;
 static uint8_t autoShift = 0;
 static uint16_t autoShiftMs = 175;
 static uint16_t leaderTimeoutMs = 1000;
+static uint16_t oneShotTimeoutMs = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t capsLedEnabled = 0;
@@ -181,6 +182,9 @@ void resetState() {
   numLeaderSeqs = 0;
   for (int i = 0; i < MAX_LEADER_SEQS; i++) userLeaderSeqs[i] = { { 0, 0, 0, 0 }, 0 };
   leaderTimeoutMs = 1000;
+  oneShotTimeoutMs = 0;
+  oslSeenArmed = 0;
+  oslArmedMs = 0;
   leaderReset();
   for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) leaderConsumed[r][c] = leaderBuffered[r][c] = false;
   numKeyOverrides = 0;
@@ -335,7 +339,9 @@ TEST(test_security_ble_command_rejection) {
   // unter dem BLE-Attributlimit (512)
   testLeftLink = "{\"up\":1,\"ms\":4294967295,\"ever\":1,\"losses\":4294967295,\"rx_dropped\":4294967295,\"key_dropped\":4294967295,\"rssi\":-127,\"rssi_min\":-127}";
   testLeftFw = 65535;
+  oneShotTimeoutMs = 10000;                    // größtes "ot"-Feld
   handleConfigCommand("GET_INFO", true);
+  oneShotTimeoutMs = 0;
   std::string maxTail = std::string(",\"left_fw\":65535,\"left_link\":") + testLeftLink + "}";
   assert(mockChar.value.size() < 512 && mockChar.value.size() > maxTail.size());
   assert(mockChar.value.compare(mockChar.value.size() - maxTail.size(), maxTail.size(), maxTail) == 0);
@@ -6610,6 +6616,61 @@ TEST(test_osl_tap_arms_layer_for_one_key_press_then_releases) {
   pressKey(2, 1, false);
 }
 
+TEST(test_osl_expires_after_timeout_without_key) {
+  resetState();
+  oneShotTimeoutMs = 1500;
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[2][2][1] = 'x';
+  tapOsl(5, 0);
+  oslExpireLocal(1100); // stempelt die Vormerkung
+  assert(oslArmed == (1 << 2));
+  oslExpireLocal(2599);
+  assert(oslArmed == (1 << 2)); // 1500 ms noch nicht erreicht
+  oslExpireLocal(2600);
+  assert(oslArmed == 0 && getActiveLayer() == 0);
+  setMillis(2800);
+  pressKey(2, 1, true);
+  assert(pressedAction[2][1] == 'a');
+  pressKey(2, 1, false);
+}
+
+TEST(test_osl_never_expires_when_timeout_is_zero) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  tapOsl(5, 0);
+  oslExpireLocal(1100);
+  oslExpireLocal(900000);
+  assert(oslArmed == (1 << 2) && getActiveLayer() == 2);
+}
+
+TEST(test_osl_timeout_survives_millis_wrap) {
+  resetState();
+  oneShotTimeoutMs = 1500;
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  tapOsl(5, 0);
+  oslExpireLocal(0xFFFFFF00UL);  // stempelt kurz vor dem Überlauf
+  oslExpireLocal(0xFFFFFF00UL + 1000UL);
+  assert(oslArmed == (1 << 2));
+  oslExpireLocal((unsigned long)(0xFFFFFF00UL + 1600UL));  // nach dem Überlauf
+  assert(oslArmed == 0);
+}
+
+TEST(test_osl_consumed_before_timeout_stays_consumed) {
+  resetState();
+  oneShotTimeoutMs = 1500;
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[2][2][1] = 'x';
+  tapOsl(5, 0);
+  oslExpireLocal(1100);
+  pressKey(2, 1, true);
+  assert(pressedAction[2][1] == 'x' && oslArmed == 0);
+  pressKey(2, 1, false);
+  oslExpireLocal(5000);
+  assert(oslArmed == 0 && getActiveLayer() == 0);
+}
+
 TEST(test_osl_layer_holds_for_the_whole_key_press_even_after_consumption) {
   resetState();
   KEYMAP[0][5][0] = ACT_OSL_BASE + 3;
@@ -8108,6 +8169,42 @@ TEST(test_leader_timeout_command_and_device_info) {
   handleConfigCommand("GET_INFO", false);
   assert(mockChar.value.back() == '}' && mockChar.value.find("\"config_mode\":") != std::string::npos);
   deviceName = DEFAULT_DEVICE_NAME;
+}
+
+TEST(test_one_shot_timeout_command_and_device_info) {
+  resetState();
+  handleConfigCommand("SET_ONESHOT_TIMEOUT 1500", false);
+  assert(mockChar.value == "OK SET_ONESHOT_TIMEOUT 1500" && oneShotTimeoutMs == 1500);
+  handleConfigCommand("SET_ONESHOT_TIMEOUT 0", false);
+  assert(mockChar.value == "OK SET_ONESHOT_TIMEOUT 0" && oneShotTimeoutMs == 0);
+  handleConfigCommand("SET_ONESHOT_TIMEOUT 500", false);
+  handleConfigCommand("SET_ONESHOT_TIMEOUT 10000", false);
+  assert(mockChar.value == "OK SET_ONESHOT_TIMEOUT 10000" && oneShotTimeoutMs == 10000);
+  const char *bad[] = { "SET_ONESHOT_TIMEOUT 1", "SET_ONESHOT_TIMEOUT 499", "SET_ONESHOT_TIMEOUT 10001", "SET_ONESHOT_TIMEOUT x", "SET_ONESHOT_TIMEOUT -5", "SET_ONESHOT_TIMEOUT 1e3", "SET_ONESHOT_TIMEOUT 123456" };
+  for (const char *c : bad) {
+    handleConfigCommand(c, false);
+    assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  }
+  assert(oneShotTimeoutMs == 10000);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"ot\":10000") != std::string::npos);
+  oneShotTimeoutMs = 0;
+  loadKeymapFromNVS();
+  assert(oneShotTimeoutMs == 10000);              // aus dem NVS geladen
+}
+
+TEST(test_one_shot_timeout_nvs_rejects_invalid_values) {
+  resetState();
+  oneShotTimeoutMs = 1500;
+  const uint32_t bad[] = { 1, 499, 10001, 65535 };
+  for (uint32_t v : bad) {
+    Preferences::uintStore["osm_to"] = v;
+    loadKeymapFromNVS();
+    assert(oneShotTimeoutMs == 1500);           // ungültiger Wert ändert nichts
+  }
+  Preferences::uintStore["osm_to"] = 0;
+  loadKeymapFromNVS();
+  assert(oneShotTimeoutMs == 0);
 }
 
 TEST(test_leader_is_no_combo_action) {

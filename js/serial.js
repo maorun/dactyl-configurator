@@ -494,6 +494,10 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("leaderTimeoutInput", info.leader_timeout_ms);
         if (settingsTarget) settingsTarget.leaderTimeoutMs = info.leader_timeout_ms;
       }
+      if (info.ot !== undefined) {
+        setInput("oneShotTimeoutInput", info.ot);
+        if (settingsTarget) settingsTarget.oneShotTimeoutMs = info.ot;
+      }
       // Firmware ab Version 31 meldet "pi", ältere "require_prior_idle_ms"
       const priorIdle = info.pi !== undefined ? info.pi : info.require_prior_idle_ms;
       if (priorIdle !== undefined) {

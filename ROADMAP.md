@@ -23,14 +23,6 @@ Rules for this file:
 
 ## Priority 4
 
-### Key lock (`KEY_LOCK`)
-
-- **Rank:** Feature model. Total 19/40 (typing 4, configuration 2, harmony 7, safety 6). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h` (new action code), `firmware/dactyl_right/DactylLogic.h` (action dispatch, key release), `firmware/dactyl_right/DactylBleComposite.h` (`releaseAll`), `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** A long drag with a mouse button key, a held `Shift` for a selection or a held game key needs a finger for the whole time.
-- **Goal:** Add the action `KEY_LOCK`. After it, the next key press of either half stays held after the release of the key. A second press of the same key releases it. Layer keys, `KEY_LOCK` itself and macros are not locked. `RELEASE_ALL`, a link timeout, a host loss, standby and config mode release each locked key. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test presses `KEY_LOCK`, then a mouse button key, releases it and expects the button still held; a second press releases it. A test checks the release after a link timeout and that a layer key is not locked.
 
 ### BLE host slots
 

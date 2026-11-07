@@ -8847,6 +8847,160 @@ TEST(test_fw_version_increased_for_report_map_change) {
   assert(DACTYL_FW_VERSION >= 28);
 }
 
+// -----------------------------------------------------------------------------
+// Key lock (ACT_KEY_LOCK)
+// -----------------------------------------------------------------------------
+static void klTap(uint8_t r, uint8_t c) { pressKey(r, c); releaseKey(r, c); }
+
+TEST(test_key_lock_keeps_mouse_button_held_and_second_press_releases) {
+  resetState();
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  KEYMAP[0][2][1] = ACT_MOUSE_LEFT;
+  klTap(0, 0);                                           // vormerken, sendet nichts
+  assert(bleKeyboard.mouseButtons == 0 && bleKeyboard.pressedKeys.empty() && bleKeyboard.pressHistory.empty());
+  pressKey(2, 1);
+  assert(bleKeyboard.mouseButtons == MOUSE_BUTTON_LEFT);
+  releaseKey(2, 1);
+  assert(bleKeyboard.mouseButtons == MOUSE_BUTTON_LEFT); // gesperrt: bleibt nach dem Loslassen gehalten
+  pressKey(2, 1);                                        // zweiter Druck löst
+  assert(bleKeyboard.mouseButtons == 0);
+  releaseKey(2, 1);
+  assert(bleKeyboard.mouseButtons == 0);
+  // Danach wirkt die Taste wieder normal und die Vormerkung ist verbraucht
+  pressKey(2, 1);
+  assert(bleKeyboard.mouseButtons == MOUSE_BUTTON_LEFT);
+  releaseKey(2, 1);
+  assert(bleKeyboard.mouseButtons == 0);
+}
+
+TEST(test_key_lock_keeps_key_held_across_halves_and_second_press_releases) {
+  resetState();
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  KEYMAP[0][2][1] = KEY_LEFT_SHIFT;
+  KEYMAP[0][2][2] = 'a';
+  klTap(0, 0);
+  pressKey(2, 1);
+  releaseKey(2, 1);
+  assert(std::count(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), KEY_LEFT_SHIFT) == 1);
+  klTap(2, 2);                                            // die nächste Taste ist nicht gesperrt
+  assert(std::count(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), 'a') == 0);
+  pressKey(2, 1);                                         // zweiter Druck
+  releaseKey(2, 1);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_key_lock_locks_only_the_next_input) {
+  resetState();
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'b';
+  klTap(0, 0);
+  pressKey(2, 1);
+  pressKey(2, 2);
+  releaseKey(2, 2);
+  releaseKey(2, 1);
+  assert(std::count(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), 'a') == 1);
+  assert(std::count(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), 'b') == 0);
+}
+
+TEST(test_key_lock_does_not_lock_layer_keys_itself_or_macros) {
+  resetState();
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  KEYMAP[0][1][0] = ACT_MO_1;
+  KEYMAP[0][1][1] = ACT_KEY_LOCK;
+  klTap(0, 0);
+  pressKey(1, 0);                                         // Ebene: nicht gesperrt, die Vormerkung bleibt
+  assert(getActiveLayer() == 1);
+  releaseKey(1, 0);
+  assert(getActiveLayer() == 0);                          // Ebene wieder gelöst
+  klTap(1, 1);                                            // KEY_LOCK selbst sperrt sich nicht
+  KEYMAP[0][2][1] = ACT_MOUSE_LEFT;
+  pressKey(2, 1);
+  releaseKey(2, 1);
+  assert(bleKeyboard.mouseButtons == MOUSE_BUTTON_LEFT);  // die Vormerkung galt noch für die nächste echte Eingabe
+  // Makro: seine Schritte sind nicht gesperrt
+  resetState();
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  KEYMAP[0][2][1] = ACT_MACRO_BASE;
+  userMacros[0][0] = { MACRO_STEP_TAP, 'x', 0 };
+  macroLengths[0] = 1;
+  numMacros = 1;
+  setMillis(1000);
+  klTap(0, 0);
+  pressKey(2, 1);
+  releaseKey(2, 1);
+  for (int i = 0; i < 6; i++) { setMillis(1000 + 50 * (i + 1)); macroTick(millis()); }
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_key_lock_is_released_by_release_all_and_host_loss) {
+  resetState();
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  KEYMAP[0][2][1] = ACT_MOUSE_LEFT;
+  klTap(0, 0);
+  klTap(2, 1);
+  assert(bleKeyboard.mouseButtons == MOUSE_BUTTON_LEFT);
+  bleKeyboard.releaseAll();
+  assert(bleKeyboard.mouseButtons == 0);
+  klTap(2, 1);                                            // die Sperre ist weg, die Vormerkung auch
+  assert(bleKeyboard.mouseButtons == 0);
+}
+
+TEST(test_key_lock_is_released_by_standby_and_release_all) {
+  resetState();
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  KEYMAP[0][2][1] = 'a';
+  klTap(0, 0);
+  klTap(2, 1);
+  assert(std::count(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), 'a') == 1);
+  keyLockReleaseAll();                                    // Standby
+  assert(bleKeyboard.pressedKeys.empty());
+  klTap(0, 0);
+  klTap(2, 1);
+  assert(bleKeyboard.pressedKeys.size() == 1);
+  bleKeyboard.releaseAll();                               // Config Mode ruft releaseAll() (dactyl_right.ino)
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_key_lock_without_host_arms_nothing) {
+  resetState();
+  KEYMAP[0][0][0] = ACT_KEY_LOCK;
+  KEYMAP[0][2][1] = 'a';
+  bleKeyboard.connected = false;
+  klTap(0, 0);
+  bleKeyboard.connected = true;
+  klTap(2, 1);
+  assert(bleKeyboard.pressedKeys.empty());                // normaler Tipp, nichts gesperrt
+}
+
+TEST(test_key_lock_is_no_combo_action_and_not_repeatable) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 367", false);  // ACT_KEY_LOCK
+  assert(numCombos == 0);
+  assert(!isRepeatableAction(ACT_KEY_LOCK));
+}
+
+TEST(test_key_lock_as_combo_candidate_arms_only_on_quick_tap) {
+  resetState();
+  numCombos = 1;
+  userCombos[0] = { 2, 1, 2, 2, 0, (uint16_t)'x' };
+  KEYMAP[0][2][1] = ACT_KEY_LOCK;
+  KEYMAP[0][2][2] = 'k';
+  KEYMAP[0][3][0] = ACT_MOUSE_LEFT;
+  setMillis(1000);
+  pressKey(2, 1, true);
+  pressKey(2, 2, true);
+  checkUserCombos();                                      // die Combo verbraucht beide Tasten
+  pressKey(2, 1, false);
+  pressKey(2, 2, false);
+  checkUserCombos();
+  numCombos = 0;
+  setMillis(2000);
+  pressKey(3, 0, true);
+  pressKey(3, 0, false);
+  assert(bleKeyboard.mouseButtons == 0);                  // keine Vormerkung zurückgeblieben
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

@@ -207,6 +207,10 @@ function setupEventListeners() {
       alert("Combos unterstützen kein Leader. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
+    if (isKeyLockCode(action)) {
+      alert("Combos unterstützen kein Key Lock. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
     if (isDynamicMacroCode(action)) {
       alert("Combos unterstützen keine dynamischen Makros. Bitte eine normale Taste mit der Aktion belegen.");
       return;

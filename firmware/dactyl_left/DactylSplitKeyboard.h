@@ -73,6 +73,11 @@ public:
     if (k) splitSetKey(held, k, true);
     return push(SPLIT_OP_KEY_PRESS, k);
   }
+  // Taste, die KEY_LOCK sperren darf: der Master wertet arg 1 aus (DactylKeyLock.h)
+  size_t pressLockable(uint8_t k) {
+    if (k) splitSetKey(held, k, true);
+    return k && pushEvent(makeSplitHidEvent(SPLIT_OP_KEY_PRESS, k, 1)) ? 1 : 0;
+  }
   size_t release(uint8_t k) {
     if (k) splitSetKey(held, k, false);
     return push(SPLIT_OP_KEY_RELEASE, k);
@@ -110,9 +115,13 @@ public:
     held.mouse &= (uint8_t)~b;
     push(SPLIT_OP_MOUSE_RELEASE, b);
   }
+  void mousePressLockable(uint8_t b) {
+    held.mouse |= b;
+    if (b) pushEvent(makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, b, 1));
+  }
   void mouseClick(uint8_t b) {
     if (b == 0 || (b & held.mouse)) return;
-    push(SPLIT_OP_MOUSE_PRESS, b);
+    pushEvent(makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, b, 1));
     push(SPLIT_OP_MOUSE_RELEASE, b);
   }
   void mouseScroll(int8_t wheel) {
@@ -140,6 +149,10 @@ public:
     push(SPLIT_OP_ONE_SHOT_RELEASE, mask);
   }
   void capsWordToggle() { pushEvent(makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE)); }
+
+  // Key lock: der Master führt Vormerkung und gesperrte Eingaben beider Hälften
+  void keyLockArm() { pushEvent(makeSplitHidEvent(SPLIT_OP_KEY_LOCK)); }
+  void keyLockReleaseAll() {}   // gesperrte Eingaben liegen auf dem Master; er löst sie bei Link-Ausfall und Standby
 
   void releaseAll() {
     splitSetClear(held);

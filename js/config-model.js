@@ -1216,6 +1216,30 @@ function sanitizeSameFinger(stored, profile) {
   return { pairs, total };
 }
 
+// Ungerichtetes Paar zweier verschiedener Tasten, kleinere Position zuerst ("r_c|r_c"); null bei gleicher Taste
+function bigramPairKey(idA, idB) {
+  if (idA === idB) return null;
+  const pos = id => id.split("_").map(Number);
+  const [a, b] = pos(idA), [c, d] = pos(idB);
+  return ((a - c) || (b - d)) < 0 ? `${idA}|${idB}` : `${idB}|${idA}`;
+}
+
+// Bigramme aus gespeicherten Daten: nur gültige, geordnete Paare physischer Tasten
+function sanitizeBigrams(stored, profile) {
+  const pairs = {};
+  const src = stored && typeof stored === "object" && !Array.isArray(stored)
+    && Object.prototype.hasOwnProperty.call(stored, "bigrams") ? stored.bigrams : null;
+  if (src && typeof src === "object" && !Array.isArray(src)) {
+    for (const [key, n] of Object.entries(src)) {
+      const m = /^(\d+_\d+)\|(\d+_\d+)$/.exec(key);
+      if (!m || !Number.isSafeInteger(n) || n <= 0 || bigramPairKey(m[1], m[2]) !== key) continue;
+      const ok = id => { const [r, c] = id.split("_").map(Number); return isValidIndex(r, NUM_ROWS) && isValidIndex(c, NUM_COLS) && isPhysicalKey(r, c, profile); };
+      if (ok(m[1]) && ok(m[2])) pairs[key] = n;
+    }
+  }
+  return pairs;
+}
+
 // Zähler je Taste aus gespeicherten Daten, nur physische Tasten der Hälfte
 function sanitizeKeyCounts(counts, profile) {
   const out = {};
@@ -1245,7 +1269,8 @@ function createTypingStats(stored, profile) {
   const stats = {
     counts: base.counts, total: base.total, layerCounts: [], recent: [], profile,
     sameFingerPairs: same.pairs, sameFingerTotal: same.total, lastKeyId: null, lastKeyMs: 0,
-    corrections: corrections.counts, lastTypedId: null, lastTypedMs: 0
+    corrections: corrections.counts, lastTypedId: null, lastTypedMs: 0,
+    bigrams: sanitizeBigrams(stored, profile), lastBigramId: null, lastBigramMs: 0
   };
   for (let l = 0; l < NUM_LAYERS; l++) stats.layerCounts.push({});
   const layers = stored && typeof stored === "object" && !Array.isArray(stored)
@@ -1268,6 +1293,7 @@ function serializeTypingStats(stats) {
   const out = { ...stats.counts, layers };
   if (stats.sameFingerTotal > 0) out.sameFinger = { pairs: { ...stats.sameFingerPairs } };
   if (Object.keys(stats.corrections).length) out.corrections = { ...stats.corrections };
+  if (Object.keys(stats.bigrams).length) out.bigrams = { ...stats.bigrams };
   return out;
 }
 
@@ -1286,6 +1312,13 @@ function recordKeyPress(stats, r, c, nowMs, layer, role = "typed") {
     stats.sameFingerPairs[pairKey] = (stats.sameFingerPairs[pairKey] || 0) + 1;
     stats.sameFingerTotal++;
   }
+  // Bigramm: zwei getippte Tasten der Hälfte nacheinander auf Ebene 0 (jede Folge, auch über Finger hinweg).
+  // Modifier, Ebenen-Tasten, Backspace und Tasten anderer Ebenen bilden kein Bigramm und beenden die Folge.
+  const onBase = role === "typed" && (!isValidIndex(layer, NUM_LAYERS) || layer === 0);
+  const bigramKey = onBase && stats.lastBigramId && !(nowMs - stats.lastBigramMs > SAME_FINGER_MAX_GAP_MS)
+    ? bigramPairKey(stats.lastBigramId, id) : null;
+  if (bigramKey) stats.bigrams[bigramKey] = (stats.bigrams[bigramKey] || 0) + 1;
+  if (role !== "silent") { stats.lastBigramId = onBase ? id : null; stats.lastBigramMs = nowMs; }
   stats.lastKeyId = id;
   stats.lastKeyMs = nowMs;
   if (role === "backspace") {
@@ -1385,6 +1418,34 @@ function suggestErgonomicSwaps(stats, config, profile, limit = ERGONOMIC_SWAP_LI
     swaps.push({ from: { r: h.r, c: h.c }, to: { r: t.r, c: t.c }, fromCount: h.count, toCount: t.count, reason: h.reason });
   }
   return swaps;
+}
+
+const COMBO_SUGGESTION_LIMIT = 5;
+
+// Zwei Tasten der Finger-Matrix liegen nebeneinander (auch diagonal); die Daumenzeile zählt nicht
+function areAdjacentFingerKeys(a, b) {
+  return a.r < 5 && b.r < 5 && Math.max(Math.abs(a.r - b.r), Math.abs(a.c - b.c)) === 1;
+}
+
+// Combo-Vorschläge aus den häufigsten Bigrammen: Paare benachbarter Tasten, die noch keine Combo nutzt (egal
+// welche Ebene, egal ob als Paar einer Drei-Tasten-Combo) und deren Tasten auf Ebene 0 eine Aktion tragen.
+// Liefert höchstens min(limit, COMBO_SUGGESTION_LIMIT) Einträge { a, b, count } mit a, b = { r, c }, häufigste zuerst.
+function suggestCombos(stats, config, profile, limit = COMBO_SUGGESTION_LIMIT) {
+  if (!stats || !stats.bigrams || !config || !profile) return [];
+  const used = new Set();
+  for (const cb of Array.isArray(config.combos) ? config.combos : []) {
+    const keys = comboKeys(cb).filter(isValidComboKey).map(k => `${k.r}_${k.c}`);
+    for (const x of keys) for (const y of keys) if (x !== y) used.add(`${x}|${y}`);
+  }
+  const posOf = id => { const [r, c] = id.split("_").map(Number); return { r, c }; };
+  return Object.entries(stats.bigrams)
+    .sort((x, y) => (y[1] - x[1]) || (x[0] < y[0] ? -1 : 1))
+    .map(([key, count]) => { const [ia, ib] = key.split("|"); return { ia, ib, a: posOf(ia), b: posOf(ib), count }; })
+    .filter(p => areAdjacentFingerKeys(p.a, p.b)
+      && !used.has(`${p.ia}|${p.ib}`)
+      && lintCellAt(config, 0, p.a.r, p.a.c).tap !== "NONE" && lintCellAt(config, 0, p.b.r, p.b.c).tap !== "NONE")
+    .slice(0, Math.min(limit, COMBO_SUGGESTION_LIMIT))
+    .map(p => ({ a: p.a, b: p.b, count: p.count }));
 }
 
 // Alt-Repeat-Paare aus den häufigsten Folgen eines Fingers: je Folge a|b die Richtungen a → b und b → a, damit die

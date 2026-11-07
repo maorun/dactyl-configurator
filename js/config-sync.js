@@ -106,7 +106,8 @@ async function writeConfigToESP32(options = {}) {
     const combos = cfg.combos.slice(0, MAX_COMBOS);
     const macros = (cfg.macros || []).slice(0, MAX_MACROS);
     const overrides = profile.master ? (cfg.keyOverrides || []).slice(0, MAX_KEY_OVERRIDES) : [];
-    const totalSteps = countSyncSteps(settingCommands.length, totalLayers, combos.length, macros.length, profile.master ? overrides.length : -1);
+    const leaderSeqs = (cfg.leaderSequences || []).slice(0, MAX_LEADER_SEQS);
+    const totalSteps = countSyncSteps(settingCommands.length, totalLayers, combos.length, macros.length, profile.master ? overrides.length : -1, leaderSeqs.length);
     const showProgressLabel = () => {
       if (progressLabel) progressLabel.textContent = syncProgressLabel(profile.label, completedSteps, totalSteps);
     };
@@ -219,6 +220,27 @@ async function writeConfigToESP32(options = {}) {
     }
     updateProgress();
 
+    // Leader-Sequenzen synchronisieren (beide Hälften; Firmware vor Stand 26 antwortet "ERR UNKNOWN": Hinweis zeigen
+    // und die Phase überspringen)
+    const leaderKnown = await sendConfirmed("CLEAR_LEADER", "CLEAR_LEADER", 3000, true);
+    if (leaderKnown !== "unknown") {
+      try {
+        for (const q of leaderSeqs) {
+          const keys = q.keys.map(actionCodeToNumeric).join(" ");
+          await sendConfirmed(`ADD_LEADER ${actionCodeToNumeric(q.action)} ${keys}`, "ADD_LEADER");
+          updateProgress();
+        }
+        await sendConfirmed("SAVE_LEADER", "SAVE_LEADER", 5000);
+      } catch (e) {
+        // CLEAR_LEADER hat die Liste im RAM schon geleert: bis zum Neustart gilt die Liste ohne Speichern nur teilweise
+        showToast(`⚠️ Die Leader-Folgen der ${profile.label} wurden nur teilweise übertragen und nicht gespeichert. Bitte erneut speichern.`, 9000);
+        throw e;
+      }
+    } else {
+      leaderSeqs.forEach(() => updateProgress());
+    }
+    updateProgress();
+
     // Nur die tatsächlich übertragenen Änderungen dieser Hälfte verwerfen
     const remaining = pendingFor(side).filter(c => !syncedChangeIds.has(c.id));
     if (remaining.length === 0) clearPendingSync(side);
@@ -311,6 +333,7 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_TRI_LAYER ${triLayerArgs(s.triLayers)}`, ack: "SET_TRI_LAYER", optional: true },
     // Caps-Lock-LED: nur die Hälfte mit dem Host-Dienst (Master) kennt den Befehl
     ...(profile.master ? [{ cmd: `SET_CAPS_LED ${clampSetting("capsLed", s.capsLed ?? 0)}`, ack: "SET_CAPS_LED", optional: true }] : []),
+    { cmd: `SET_LEADER_TIMEOUT ${clampSetting("leaderTimeoutMs", s.leaderTimeoutMs ?? 1000)}`, ack: "SET_LEADER_TIMEOUT", optional: true },
     { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true }
   ];
 }
@@ -335,9 +358,10 @@ function syncProgressLabel(sideLabel, done, total) {
 // Combos, SAVE_COMBOS, die Tastenpaar-Phase, je Makro ein Schritt und SAVE_MACROS.
 // Muss zu den updateProgress()-Aufrufen passen.
 // overrideCount: Zahl der Tasten-Überschreibungen des Masters; -1 = diese Hälfte hat keine Überschreibungen
-function countSyncSteps(settingCount, layerCount, comboCount, macroCount = 0, overrideCount = -1) {
+// leaderCount: Zahl der Leader-Sequenzen; die Phase zählt CLEAR_LEADER/ADD_LEADER/SAVE_LEADER als Sequenzen + 1
+function countSyncSteps(settingCount, layerCount, comboCount, macroCount = 0, overrideCount = -1, leaderCount = 0) {
   const overrideSteps = overrideCount < 0 ? 0 : overrideCount + 1;
-  return settingCount + NUM_LAYERS + layerCount * NUM_ROWS * NUM_COLS + 1 + comboCount + 1 + 1 + overrideSteps + macroCount + 1;
+  return settingCount + NUM_LAYERS + layerCount * NUM_ROWS * NUM_COLS + 1 + comboCount + 1 + 1 + overrideSteps + macroCount + 1 + leaderCount + 1;
 }
 
 // Live-Sync: jede vorgemerkte Änderung einer verbundenen Hälfte überträgt die vollständige Konfiguration
@@ -513,8 +537,8 @@ function showSyncDiffDialog(profile, diff, options = {}) {
   const btnClose = document.getElementById("btnCloseSyncDiff");
   if (!modal || !summary || !list || !btnConfirm || !btnCancel || !btnClose) return Promise.resolve(true);
 
-  const lists = diff.lists || { known: false, combos: [], pairs: [], overrides: [], macros: [] };
-  const listCount = lists.combos.length + lists.pairs.length + lists.overrides.length + lists.macros.length;
+  const lists = diff.lists || { known: false, combos: [], pairs: [], overrides: [], leader: [], macros: [] };
+  const listCount = lists.combos.length + lists.pairs.length + lists.overrides.length + lists.leader.length + lists.macros.length;
   const settingsRows = options.settingsRows || [];
   const total = diff.keys.length + diff.names.length + listCount + settingsRows.length;
   const listsHint = lists.known ? ""
@@ -525,7 +549,7 @@ function showSyncDiffDialog(profile, diff, options = {}) {
   summary.textContent = total === 0
     ? `${what} der ${profile.label} sind auf dem Gerät gleich.${listsHint}`
     : `${diff.keys.length} Taste(n), ${diff.names.length} Ebenen-Name(n)` +
-      (lists.known ? `, ${lists.combos.length} Combo(s), ${lists.pairs.length} Tastenpaar(e), ${lists.overrides.length} Überschreibung(en) und ${lists.macros.length} Makro(s)` : "") +
+      (lists.known ? `, ${lists.combos.length} Combo(s), ${lists.pairs.length} Tastenpaar(e), ${lists.overrides.length} Überschreibung(en), ${lists.leader.length} Leader-Sequenz(en) und ${lists.macros.length} Makro(s)` : "") +
       (settingsRows.length ? `, ${settingsRows.length} Einstellung(en)` : "") +
       ` der ${profile.label} ${loading ? "ändern sich beim Laden" : "ändern sich"}.` + listsHint;
   const hint = document.getElementById("syncDiffHint");
@@ -554,7 +578,7 @@ function showSyncDiffDialog(profile, diff, options = {}) {
   };
   for (const row of settingsRows) addRow(row.where, row.device, row.local);
   for (const n of diff.names) addRow(`Name Ebene ${n.l}:`, n.device, n.local);
-  for (const row of [...lists.combos, ...lists.pairs, ...lists.overrides, ...lists.macros]) addRow(`${row.where}:`, row.device, row.local);
+  for (const row of [...lists.combos, ...lists.pairs, ...lists.overrides, ...lists.leader, ...lists.macros]) addRow(`${row.where}:`, row.device, row.local);
   for (const k of diff.keys) addRow(`Ebene ${k.l} R${k.r}C${k.c}:`, describeKeyActions(k.device), describeKeyActions(k.local));
   list.style.display = total === 0 ? "none" : "";
   renderSyncDiffLint();

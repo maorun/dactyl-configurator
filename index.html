@@ -427,6 +427,36 @@
           </div>
         </div>
 
+        <!-- Leader-Sequenzen: nach LEADER lösen bis zu vier Tasten eine Aktion aus (beide Hälften) -->
+        <div id="leaderSection">
+          <div class="combos-header key-pairs-header">
+            <div>
+              <h3>Leader-Sequenzen (LEADER + bis zu 4 Tasten = Aktion)</h3>
+              <p class="subtitle">Nach der Taste <code>Leader</code> sammelt die Hälfte bis zu vier Tasten. Passt die Folge zu einer Sequenz, läuft deren Aktion (Taste, Tastenpaar oder Makro). Ohne Treffer oder nach Ablauf der Wartezeit passiert nichts. Die Tasten der Sequenz senden nichts an den Mac. Jede Hälfte hat ihre eigene Liste und braucht die Firmware ab Stand 26.</p>
+            </div>
+          </div>
+          <div class="combos-list-card" id="leaderCard">
+            <div class="key-pair-form">
+              <select id="leaderKeySelect0" class="form-control" title="1. Taste der Sequenz"></select>
+              <select id="leaderKeySelect1" class="form-control" title="2. Taste (optional)"></select>
+              <select id="leaderKeySelect2" class="form-control" title="3. Taste (optional)"></select>
+              <select id="leaderKeySelect3" class="form-control" title="4. Taste (optional)"></select>
+              <strong>→</strong>
+              <select id="leaderActionSelect" class="form-control" title="Aktion der Sequenz"></select>
+              <button id="btnAddLeader" class="btn btn-primary btn-sm" type="button">+ Sequenz hinzufügen</button>
+            </div>
+            <table class="combos-table">
+              <thead>
+                <tr><th>Nr.</th><th>Sequenz</th><th>Aktion</th><th>Aktionen</th></tr>
+              </thead>
+              <tbody id="leaderTableBody"></tbody>
+            </table>
+            <div class="empty-state" id="emptyLeaderState" style="display: none;">
+              <p>Noch keine Leader-Sequenzen definiert.</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Makros: eine Taste spielt eine Tastenfolge ab -->
         <div class="combos-header key-pairs-header">
           <div>
@@ -680,6 +710,12 @@
           <label for="quickTapInput">Quick-Tap (Millisekunden, 0 = aus):</label>
           <input type="number" id="quickTapInput" class="form-control" value="0" min="0" max="500">
           <small class="form-hint">Drückst du eine Mod-Tap-Taste innerhalb dieser Zeit nach ihrem Tipp erneut, gilt sie sofort als gehaltener Tipp. Der Host wiederholt das Zeichen. Erfordert Firmware-Version 15 oder neuer.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="leaderTimeoutInput">Leader-Wartezeit (Millisekunden):</label>
+          <input type="number" id="leaderTimeoutInput" class="form-control" value="1000" min="100" max="5000">
+          <small class="form-hint">So lange wartet die Hälfte nach <code>Leader</code> auf die nächste Taste der Sequenz. Danach bricht sie ab und sendet nichts. Erfordert Firmware-Version 26 oder neuer.</small>
         </div>
 
         <div class="form-group">
@@ -987,6 +1023,7 @@
   <script src="js/editor.js?v=6"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/key-overrides-ui.js?v=1"></script>
+  <script src="js/leader-ui.js?v=1"></script>
   <script src="js/macros-ui.js?v=2"></script>
   <script src="js/layout-profiles-ui.js?v=2"></script>
   <script src="js/flash-log.js?v=1"></script>

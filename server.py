@@ -284,7 +284,7 @@ KEY_TO_CPP = {
     "OSM_LCTRL": "ACT_OSM_LCTRL", "OSM_LSHIFT": "ACT_OSM_LSHIFT", "OSM_LALT": "ACT_OSM_LALT",
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
     "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "REPEAT": "ACT_REPEAT", "ALT_REPEAT": "ACT_ALT_REPEAT",
-    "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY",
+    "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY", "LEADER": "ACT_LEADER",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -364,6 +364,8 @@ def code_to_cpp(code):
 MAX_COMBOS = 16
 MAX_KEY_PAIRS = 16
 MAX_KEY_OVERRIDES = 16
+MAX_LEADER_SEQS = 16
+LEADER_MAX_KEYS = 4
 MAX_MACROS = 16
 MAX_MACRO_STEPS = 32
 MACRO_MAX_PAUSE_MS = 5000
@@ -383,7 +385,7 @@ STATIC_ALLOWLIST = {
     "/js/side-right.js": "js/side-right.js", "/js/side-left.js": "js/side-left.js",
 }
 # Module der Web-App (Reihenfolge in index.html)
-APP_MODULES = ("matrix-constants", "keycodes", "config-model", "editor", "key-pairs-ui", "key-overrides-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
+APP_MODULES = ("matrix-constants", "keycodes", "config-model", "editor", "key-pairs-ui", "key-overrides-ui", "leader-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
                "live-monitor", "heatmap", "matrix-test", "layout-lint-ui", "layer-sheet-ui", "practice-ui", "keyboard-hooks", "config-sync")
 STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 
@@ -394,6 +396,7 @@ SETTINGS_RANGES = {
     "tappingTermMs": (100, 500, 200),
     "holdTapMode": (0, 2, 0),
     "quickTapMs": (0, 500, 0),
+    "leaderTimeoutMs": (100, 5000, 1000),
     "requirePriorIdleMs": (0, 500, 0),
     "chordalHold": (0, 1, 0),
     "capsLed": (0, 1, 0),
@@ -553,6 +556,9 @@ MOUSE_MOVE_CPP = {"ACT_MOUSE_UP", "ACT_MOUSE_DOWN", "ACT_MOUSE_LEFT_MOVE", "ACT_
 # Dynamisches Makro (Aufnahme im RAM des Masters): braucht eine Taste, keine Combo; links ohne Wirkung
 DYNAMIC_MACRO_CPP = {"ACT_DM_REC", "ACT_DM_PLAY"}
 
+# Die Leader-Taste startet eine Sequenz auf einer Taste; als Combo-Aktion ergibt sie nichts
+LEADER_CPP = {"ACT_LEADER"}
+
 def generate_combos_cpp(combos):
     if combos is None:
         combos = []
@@ -583,6 +589,8 @@ def generate_combos_cpp(combos):
             raise ValueError("Combos unterstützen keine Mausbewegung.")
         if act in DYNAMIC_MACRO_CPP:
             raise ValueError("Combos unterstützen keine dynamischen Makros.")
+        if act in LEADER_CPP:
+            raise ValueError("Combos unterstützen kein Leader.")
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts
         if beh != 0 and act == "ACT_LAYER_LOCK":
             raise ValueError("Layer Lock funktioniert nur mit dem Verhalten \"Einzeltaste senden\".")
@@ -635,10 +643,12 @@ def standard_key_member_cpp(code, field, err_msg=None):
         raise ValueError(f"Feld '{field}' fehlt." if err_msg is None else err_msg)
     invalid = ValueError(f"Feld '{field}' muss eine normale Taste oder ein Modifier sein." if err_msg is None else err_msg)
     m = re.match(r"^KEY_(\d+)$", code)
-    if m:
+    # KEY_0 .. KEY_9 sind die Zifferntasten (KEY_TO_CPP), keine Zahlenwerte
+    if m and code not in KEY_TO_CPP:
         if not 1 <= int(m.group(1)) <= 0xFF:
             raise invalid
-        return m.group(1)
+        # Dezimal ausgeben: eine führende Null wäre in C++ ein Oktal-Literal (KEY_0200 ergäbe 0x80, einen Modifier)
+        return str(int(m.group(1)))
     if code not in KEY_TO_CPP and len(code) != 1:
         raise invalid
     cpp = code_to_cpp(code)
@@ -673,11 +683,11 @@ def key_override_mods_value(mods):
         value |= KEY_OVERRIDE_MODS[m]
     return value
 
-def key_override_member_cpp(code, field):
-    """Taste oder Ersatz einer Überschreibung: normale Taste 1..255, kein Modifier."""
-    cpp = standard_key_member_cpp(code, field, f"Tasten-Überschreibung: '{field}' muss eine normale Taste oder ein Modifier sein.")
+def key_override_member_cpp(code, field, feature="Tasten-Überschreibung"):
+    """Taste oder Ersatz einer Überschreibung oder Leader-Sequenz: normale Taste 1..255, kein Modifier."""
+    cpp = standard_key_member_cpp(code, field, f"{feature}: '{field}' muss eine normale Taste sein.")
     if cpp in MODIFIER_CPP_NAMES or (cpp.isdigit() and 0x80 <= int(cpp) <= 0x87):
-        raise ValueError(f"Tasten-Überschreibung: '{field}' darf kein Modifier sein.")
+        raise ValueError(f"{feature}: '{field}' darf kein Modifier sein.")
     return cpp
 
 def generate_key_overrides_cpp(overrides):
@@ -700,6 +710,84 @@ def generate_key_overrides_cpp(overrides):
         ",\n".join(entries) if entries else "  { 0, 0, 0 }",
         "};",
         "// [[[END_KEY_OVERRIDES]]]"
+    ]
+    return "\n".join(lines)
+
+def leader_action_cpp(code):
+    """Aktion einer Leader-Sequenz: normale Taste (kein Modifier), Tastenpaar PAIR_n oder Makro MACRO_n."""
+    if isinstance(code, str) and re.match(r"^(PAIR|MACRO)_\d{1,2}$", code):
+        cpp = code_to_cpp(code)
+        if cpp == "0":
+            raise ValueError(f"Leader-Sequenz: ungültige Aktion '{code}'.")
+        return cpp
+    return key_override_member_cpp(code, "action", "Leader-Sequenz")
+
+_KEYCODE_VALUES = None
+
+def keycode_values():
+    """Namen und Werte aus DactylKeycodes.h (KEY_RETURN = 0xB0, ...); leer, wenn die Datei fehlt."""
+    global _KEYCODE_VALUES
+    if _KEYCODE_VALUES is None:
+        values = {}
+        try:
+            path = os.path.join(os.path.dirname(INO_FILE), "DactylKeycodes.h")
+            with open(path, encoding="utf-8") as f:
+                for m in re.finditer(r"const\s+uint8_t\s+(KEY_[A-Z0-9_]+)\s*=\s*(0x[0-9A-Fa-f]+|\d+)\s*;", f.read()):
+                    values[m.group(1)] = int(m.group(2), 0)
+        except OSError:
+            pass
+        # Nur ein vollständiges Ergebnis merken: eine fehlende Datei beim ersten Aufruf soll nicht dauerhaft wirken
+        if values:
+            _KEYCODE_VALUES = values
+        else:
+            return values
+    return _KEYCODE_VALUES
+
+def leader_key_identity(cpp):
+    """Zahlenwert einer Taste aus ihrem C++-Ausdruck (Zahl, Name oder Zeichen-Literal)."""
+    if cpp.isdigit():
+        return int(cpp)
+    if cpp in keycode_values():
+        return keycode_values()[cpp]
+    if cpp.startswith("'") and cpp.endswith("'"):
+        body = cpp[1:-1]
+        if body in ("\\'", "\\\\"):
+            return ord(body[1])
+        if len(body) == 1:
+            return ord(body)
+    # Ein Name ohne Zahlenwert (DactylKeycodes.h fehlt): nicht auf den Text zurückfallen, KEY_RETURN und 176 wären ungleich
+    raise ValueError(f"Leader-Sequenz: Taste '{cpp}' hat keinen bekannten Zahlenwert.")
+
+def generate_leader_cpp(sequences):
+    if sequences is None:
+        sequences = []
+    if not isinstance(sequences, list):
+        raise ValueError("Ungültige Leader-Sequenzen: Liste erwartet.")
+    if len(sequences) > MAX_LEADER_SEQS:
+        raise ValueError(f"Zu viele Leader-Sequenzen: maximal {MAX_LEADER_SEQS} erlaubt.")
+    entries = []
+    seen = set()
+    for q in sequences:
+        if not isinstance(q, dict):
+            raise ValueError("Ungültiger Eintrag einer Leader-Sequenz.")
+        keys = q.get("keys")
+        if not isinstance(keys, list) or not 1 <= len(keys) <= LEADER_MAX_KEYS:
+            raise ValueError(f"Leader-Sequenz: 1..{LEADER_MAX_KEYS} Tasten erwartet.")
+        key_cpp = [key_override_member_cpp(k, "keys", "Leader-Sequenz") for k in keys]
+        # Gleiche Taste, andere Schreibweise (KEY_97 und "a"): nach dem Zahlenwert vergleichen
+        ident = tuple(leader_key_identity(k) for k in key_cpp)
+        if ident in seen:
+            raise ValueError("Zwei Leader-Sequenzen haben dieselben Tasten.")
+        seen.add(ident)
+        key_cpp += ["0"] * (LEADER_MAX_KEYS - len(key_cpp))
+        entries.append(f"  {{ {{{', '.join(key_cpp)}}}, {leader_action_cpp(q.get('action'))} }}")
+    lines = [
+        "// [[[START_LEADER]]]",
+        f"uint8_t numLeaderSeqs = {len(entries)};",
+        "LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS] = {",
+        ",\n".join(entries) if entries else "  { {0, 0, 0, 0}, 0 }",
+        "};",
+        "// [[[END_LEADER]]]"
     ]
     return "\n".join(lines)
 
@@ -812,6 +900,7 @@ def generate_settings_cpp(settings, side="R"):
         f'uint16_t quickTapMs = {values["quickTapMs"]};',
         f'uint16_t requirePriorIdleMs = {values["requirePriorIdleMs"]};',
         f'uint8_t chordalHold = {values["chordalHold"]};',
+        f'uint16_t leaderTimeoutMs = {values["leaderTimeoutMs"]};',
         f'uint8_t holdTapMode = {values["holdTapMode"]};',
         f'uint8_t triLayerRules[{TRI_LAYER_MAX_RULES * 3}] = {{ {", ".join(tri_flat)} }};',
         f"uint8_t numTriLayers = {len(tri_rules)};",
@@ -859,6 +948,8 @@ def render_ino_content(content, config, defaults_id=None, side="R"):
     if "keyPairs" in config:
         content = replace_marked_block(content, "KEY_PAIRS", generate_key_pairs_cpp(config.get("keyPairs")))
     # Nur der Master trägt Überschreibungen; der linken Vorlage fehlt der Block
+    if "leaderSequences" in config:
+        content = replace_marked_block(content, "LEADER", generate_leader_cpp(config.get("leaderSequences")))
     if "keyOverrides" in config and side == "R":
         content = replace_marked_block(content, "KEY_OVERRIDES", generate_key_overrides_cpp(config.get("keyOverrides")))
     if "macros" in config:
@@ -958,6 +1049,7 @@ def validate_config(config, side="R"):
     generate_combos_cpp(config.get("combos"))
     generate_key_pairs_cpp(config.get("keyPairs"))
     generate_key_overrides_cpp(config.get("keyOverrides"))
+    generate_leader_cpp(config.get("leaderSequences"))
     if side == "L" and config.get("keyOverrides"):
         raise ValueError("Tasten-Überschreibungen gelten nur für die rechte Hälfte (Master).")
     generate_macros_cpp(config.get("macros"))

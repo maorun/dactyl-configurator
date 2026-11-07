@@ -1,5 +1,6 @@
 #pragma once
 #include "DactylCommon.h"
+#include "DactylLeader.h"
 
 /*
  * =============================================================================
@@ -14,6 +15,7 @@
  *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], TAPTERMMAP[][][], layerNames[],
  *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
  *   nur Master (DACTYL_KEY_OVERRIDES): KeyOverride, userKeyOverrides[], numKeyOverrides (DactylKeyOverride.h),
+ *   MAX_LEADER_SEQS, LeaderSeq, userLeaderSeqs[], numLeaderSeqs, leaderTimeoutMs (Leader-Folgen, DactylLeader.h),
  *   MAX_MACROS, MAX_MACRO_STEPS, ACT_MACRO_BASE, MacroStep, userMacros[][], macroLengths[], numMacros,
  *   momentaryLayers[], toggleLayers[], keyState[][], pressedAction[][],
  *   (remoteMomentaryLayers definiert diese Datei: MO-Ebenen der anderen Hälfte)
@@ -446,8 +448,19 @@ void oslClearRemote() {
   oslAnnounce(before);
 }
 
+// Leader (ACT_LEADER): laufende Erfassung und die Tasten, die sie verbraucht hat. Eine verbrauchte Taste sendet weder beim
+// Drücken noch beim Loslassen etwas; ihr Merker gilt bis zum physischen Loslassen.
+static LeaderState leaderState;
+bool leaderConsumed[NUM_ROWS][NUM_COLS];
+// Leader-Taste als Combo-Kandidat: die Erfassung beginnt erst, wenn keine Combo sie verbraucht (Loslassen oder Combo-Fenster)
+bool leaderBuffered[NUM_ROWS][NUM_COLS];
+
+void leaderReset() { leaderState.reset(); }
+
 // Alle Vormerkungen löschen (RELEASE_ALL, Link-Ausfall, Verlust des Hosts, Config Mode)
 void oslClearAll() {
+  // Die Leader-Erfassung endet an denselben Stellen
+  leaderReset();
   uint8_t before = getActiveLayer();
   oslArmed = 0;
   // Die Vormerkungen der anderen Hälfte meldet diese Hälfte als verbraucht: sonst setzte deren Auffrischen sie wieder
@@ -624,7 +637,7 @@ uint8_t heldModifierMask() {
   };
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      if (!keySentToHost[r][c] || isActiveComboMember(r, c)) continue;
+      if (!keySentToHost[r][c] || isActiveComboMember(r, c) || leaderConsumed[r][c]) continue;   // eine verbrauchte Leader-Taste hält am Host nichts
       uint16_t act = pressedAction[r][c];
       const KeyPair* p = keyPairForAction(act);
       if (p) {
@@ -1099,9 +1112,87 @@ uint8_t applyLayerLock() {
   return getActiveLayer();
 }
 
+// -----------------------------------------------------------------------------
+// Leader-Folgen (ACT_LEADER): nach der Leader-Taste sammelt die Hälfte bis zu LEADER_MAX_KEYS Tasten
+// -----------------------------------------------------------------------------
+static inline unsigned long effectiveLeaderTimeout() {
+  return leaderTimeoutMs != 0 ? leaderTimeoutMs : LEADER_TIMEOUT_DEFAULT_MS;
+}
+
+// Die Aktion einer passenden Folge ausführen: Tastencode (Tipp), Tastenpaar (Tipp) oder Makro
+void leaderRunAction(uint16_t action) {
+  if (isConfigMode || !bleKeyboard.isConnected()) return;
+  if (isKeyPairAction(action)) tapKeyPair(action);
+  else if (isMacroAction(action)) startMacro(action, millis());
+  else if (leaderKeyCodeValid(action)) bleKeyboard.write((uint8_t)action);
+}
+
+// Zeit abgelaufen: eine Folge, die genau den erfassten Tasten entspricht (und länger weitergehen könnte), läuft jetzt;
+// sonst passiert nichts. Die Erfassung endet in jedem Fall.
+void leaderExpire(unsigned long now) {
+  if (!leaderState.timedOut(now, effectiveLeaderTimeout())) return;
+  int idx = leaderState.count > 0 ? leaderFindExact(userLeaderSeqs, numLeaderSeqs, leaderState.keys, leaderState.count) : -1;
+  uint16_t act = idx >= 0 ? userLeaderSeqs[idx].action : 0;
+  leaderState.reset();
+  if (act != 0) leaderRunAction(act);
+}
+
+bool anyTapHoldPending();
+bool anyDoubleTapWaiting();
+bool deferredKeysWaiting();
+
+// Solange eine Taste auf ihre Entscheidung wartet (Mod-Tap, Doppel-Tipp, Warteschlange), läuft die Erfassung nicht ab:
+// die wartende Taste wurde rechtzeitig gedrückt und läuft später mit ihrer Anschlagzeit (leaderConsumeKey)
+void leaderTick(unsigned long now) {
+  if (leaderState.active && !anyTapHoldPending() && !anyDoubleTapWaiting() && !deferredKeysWaiting()) leaderExpire(now);
+}
+
+// true, wenn die Taste von der Erfassung verbraucht wurde: sie sendet nichts. Layer-, Medien- und Modifier-Tasten laufen
+// durch und beenden die Erfassung nicht (z. B. eine Ebene halten, auf der die Folge liegt).
+bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
+  if (!leaderState.active) return false;
+  // Zeit des Anschlags, nicht der Ausführung: eine zurückgehaltene Taste (Deferred Queue) läuft später, ihr Abstand gilt
+  unsigned long now = keyPressTime[r][c];
+  if ((long)(now - leaderState.lastAt) < 0) now = leaderState.lastAt;
+  leaderExpire(now);
+  if (!leaderState.active) return false;
+  if (!leaderKeyCodeValid(action)) {
+    // Aktionen mit eigener Ausgabe an den Host (Tastenpaar, Makro, Umlaut, Repeat, dynamisches Makro, One-Shot, Caps Word,
+    // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
+    if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
+        isDynamicMacroAction(action) || isOneShotAction(action) || action == ACT_CAPS_WORD || action == ACT_LEADER) {
+      leaderState.reset();
+    }
+    return false;
+  }
+  int idx = -1;
+  LeaderResult res = leaderCapture(leaderState, userLeaderSeqs, numLeaderSeqs, (uint8_t)action, now, idx);
+  leaderConsumed[r][c] = true;
+  keySentToHost[r][c] = true;   // ein Combo-Kandidat sendet die Taste nach dem Combo-Fenster nicht nachträglich
+  if (res == LEADER_MATCH) {
+    uint16_t act = userLeaderSeqs[idx].action;
+    leaderState.reset();
+    leaderRunAction(act);
+  } else if (res == LEADER_ABORT) {
+    leaderState.reset();
+  }
+  return true;
+}
+
 static inline uint16_t effectiveTapTerm(uint16_t keyTerm);
 void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) {
   pressedAction[r][c] = action;
+  // Ein Merker ohne Loslassen (Combo, RELEASE_ALL) darf das Loslassen dieses Drucks nicht verschlucken
+  leaderConsumed[r][c] = false;
+  leaderBuffered[r][c] = false;
+  // Leader: eine Taste der laufenden Erfassung sendet nichts und zählt nicht für Repeat
+  if (leaderConsumeKey(r, c, action)) {
+    // Nur die Anzeige: die Live-Ansicht sieht den Druck wie sein KEY_RELEASE; an den Host geht nichts
+    char lbuf[128];
+    snprintf(lbuf, sizeof(lbuf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Leader-Folge\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
+    sendConfigNotification(String(lbuf));
+    return;
+  }
   // Ein Combo-Kandidat zählt erst, wenn seine Aktion gesendet wird (Release, Combo-Fenster, Halte-Entscheidung):
   // eine Combo verbraucht beide Tasten, ihre Einzelaktionen laufen nie
   // Solange beide Config-Combo-Tasten gehalten werden, geht von diesen Tasten nichts an den Host
@@ -1231,6 +1322,17 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         keySentToHost[r][c] = true;
       }
     }
+  } else if (action == ACT_LEADER) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Leader\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
+    sendConfigNotification(String(buf));
+    Serial.printf("Leader gedrückt: [R%d, C%d] (L%d)\n", r, c, currentLayer);
+    // Die Taste sendet nichts; ohne Mac oder im Config Mode beginnt keine Erfassung
+    if (!isConfigMode && bleKeyboard.isConnected() && !isConfigComboSuppressed(r, c)) {
+      // Als Combo-Kandidat gepuffert: eine ausgelöste Combo darf keine Erfassung zurücklassen, die die nächste Taste verschluckt
+      if (isComboCandidateKey(r, c)) leaderBuffered[r][c] = true;
+      else { leaderState.start(millis()); keySentToHost[r][c] = true; }
+    }
   } else if (isDynamicMacroAction(action)) {
     const char* dmName = action == ACT_DM_REC ? "DM Rec" : "DM Play";
     char buf[128];
@@ -1327,6 +1429,12 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
 
 void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
   pressedAction[r][c] = 0;
+  // Eine von Leader verbrauchte Taste sendet auch beim Loslassen nichts
+  if (leaderConsumed[r][c]) {
+    leaderConsumed[r][c] = false;
+    keySentToHost[r][c] = false;
+    return;
+  }
   // Ein Combo-Kandidat, der nie gesendet wurde, sendet beim schnellen Loslassen seine Aktion (Einzeltipp).
   // Erst jetzt zählt sie für Repeat; eine ausgelöste Combo verbraucht beide Tasten und zählt nie.
   if (!keySentToHost[r][c] && isComboCandidateKey(r, c) && !wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
@@ -1404,6 +1512,14 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         sendUmlaut(action);
       }
     }
+  } else if (action == ACT_LEADER) {
+    // Die Erfassung begann beim Drücken; nur ein gepufferter Combo-Kandidat (schneller Einzeltipp) beginnt sie jetzt
+    if (keySentToHost[r][c]) {
+      keySentToHost[r][c] = false;
+    } else if (leaderBuffered[r][c] && !isConfigMode && bleKeyboard.isConnected() && !wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
+      leaderState.start(millis());
+    }
+    leaderBuffered[r][c] = false;
   } else if (isDynamicMacroAction(action)) {
     // Die Aktion lief schon beim Drücken; nur ein gepufferter Combo-Kandidat führt sie jetzt aus
     if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -1506,6 +1622,7 @@ inline bool deferredQueuePop(DeferredKeyEvent &out) {
 void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long now);
 void replayDeferredQueue();
 bool anyTapHoldPending();
+bool deferredKeysWaiting() { return deferredQueue.count > 0; }
 
 struct TapHoldKey {
   bool pending;      // Gedrückt, Tap oder Hold noch nicht entschieden
@@ -1720,6 +1837,10 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       keySentToHost[r][c] = true;
     } else if (isDynamicMacroAction(act)) {
       dynamicMacroPress(act, millis());
+      keySentToHost[r][c] = true;
+    } else if (act == ACT_LEADER) {
+      if (leaderBuffered[r][c]) leaderState.start(millis());
+      leaderBuffered[r][c] = false;
       keySentToHost[r][c] = true;
     } else if (isRepeatKeyAction(act)) {
       repeatStartAt(r, c, act == ACT_ALT_REPEAT);
@@ -2054,6 +2175,7 @@ void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
 void processDeferredKeys(unsigned long now) {
   tapHoldTick(now);
   doubleTapTick(now);
+  leaderTick(now);
 
   // Gepufferte Combo-Kandidaten senden, falls Zeitfenster (comboTimeoutMs) ohne zweiten Tastendruck abgelaufen ist
   if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -2076,6 +2198,10 @@ void processDeferredKeys(unsigned long now) {
               keySentToHost[r][c] = true;
             } else if (isDynamicMacroAction(act)) {
               dynamicMacroPress(act, now);
+              keySentToHost[r][c] = true;
+            } else if (act == ACT_LEADER) {
+              if (leaderBuffered[r][c]) leaderState.start(now);
+              leaderBuffered[r][c] = false;
               keySentToHost[r][c] = true;
             } else if (isRepeatKeyAction(act)) {
               repeatStartAt(r, c, act == ACT_ALT_REPEAT);
@@ -2228,6 +2354,9 @@ void loadKeymapFromNVS() {
       preferences.remove("num_ovr");
       preferences.remove("ovr_data");
 #endif
+      // Leader-Folgen verweisen auf Tastenpaare und Makros: die einkompilierte Liste ersetzt die gespeicherte
+      preferences.remove("num_leader");
+      preferences.remove("leader_data");
       // Makros ebenso: MACRO_n verweist auf die einkompilierten Makros
       preferences.remove("num_macros");
       preferences.remove("macro_lens");
@@ -2305,6 +2434,10 @@ void loadKeymapFromNVS() {
   if (preferences.isKey("quick_tap")) {
     uint16_t qt = preferences.getUShort("quick_tap", 0);
     if (qt <= QUICK_TAP_MAX_MS) quickTapMs = qt;
+  }
+  if (preferences.isKey("leader_to")) {
+    uint16_t lt = preferences.getUShort("leader_to", LEADER_TIMEOUT_DEFAULT_MS);
+    if (lt >= LEADER_TIMEOUT_MIN_MS && lt <= LEADER_TIMEOUT_MAX_MS) leaderTimeoutMs = lt;
   }
   if (preferences.isKey("prior_idle")) {
     uint16_t pi = preferences.getUShort("prior_idle", 0);
@@ -2385,6 +2518,28 @@ void loadKeymapFromNVS() {
     Serial.printf("NVS: %d Tasten-Überschreibungen geladen.\n", numKeyOverrides);
   }
 #endif
+  // Leader-Folgen: gespeicherte Liste (auch leer nach CLEAR_LEADER + SAVE_LEADER) überschreibt die einkompilierte
+  if (preferences.isKey("num_leader")) {
+    uint8_t n = preferences.getUChar("num_leader", 0);
+    if (n == 0) {
+      numLeaderSeqs = 0;
+    } else if (n <= MAX_LEADER_SEQS && preferences.isKey("leader_data") &&
+               preferences.getBytesLength("leader_data") == n * sizeof(LeaderSeq)) {
+      LeaderSeq loaded[MAX_LEADER_SEQS];
+      preferences.getBytes("leader_data", loaded, n * sizeof(LeaderSeq));
+      bool valid = true;
+      for (uint8_t i = 0; i < n; i++) valid = valid && leaderSeqValid(loaded[i]);
+      if (valid) {
+        memcpy(userLeaderSeqs, loaded, n * sizeof(LeaderSeq));
+        numLeaderSeqs = n;
+        Serial.printf("NVS: %d Leader-Folgen geladen.\n", numLeaderSeqs);
+      } else {
+        Serial.println("NVS: Leader-Folgen ungültig, die einkompilierte Liste bleibt.");
+      }
+    } else {
+      Serial.println("NVS: Leader-Folgen unvollständig (Anzahl und Daten passen nicht), die einkompilierte Liste bleibt.");
+    }
+  }
   // Makros: gespeicherte Liste (auch leer nach CLEAR_MACROS + SAVE_MACROS) überschreibt die einkompilierte.
   // macros_data enthält nur die belegten Schritte hintereinander, macro_lens die Länge jedes Makros.
   if (preferences.isKey("num_macros")) {
@@ -2593,6 +2748,15 @@ bool saveRequirePriorIdleToNVS(uint16_t ms) {
   return ok;
 }
 
+bool saveLeaderTimeoutToNVS(uint16_t ms) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUShort("leader_to", ms) > 0;
+  preferences.end();
+  if (ok) leaderTimeoutMs = ms;
+  Serial.printf("NVS: Leader-Zeitlimit %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
+  return ok;
+}
+
 bool saveQuickTapToNVS(uint16_t ms) {
   if (!preferences.begin("dactyl", false)) return false;
   bool ok = preferences.putUShort("quick_tap", ms) > 0;
@@ -2683,6 +2847,22 @@ bool saveCombosToNVS() {
   }
   preferences.end();
   Serial.printf("NVS: %d Combos %s.\n", numCombos, ok ? "gespeichert" : "FEHLER beim Speichern");
+  return ok;
+}
+
+bool saveLeaderSeqsToNVS() {
+  if (!preferences.begin("dactyl", false)) return false;
+  // Daten zuerst, Anzahl zuletzt: ein Fehler beim Schreiben der Daten lässt die alte Anzahl nicht mit neuen Daten stehen
+  bool ok = true;
+  size_t len = numLeaderSeqs * sizeof(LeaderSeq);
+  if (len > 0) {
+    ok = preferences.putBytes("leader_data", userLeaderSeqs, len) == len;
+  } else {
+    preferences.remove("leader_data");
+  }
+  if (ok) ok = preferences.putUChar("num_leader", numLeaderSeqs) > 0;
+  preferences.end();
+  Serial.printf("NVS: %d Leader-Folgen %s.\n", numLeaderSeqs, ok ? "gespeichert" : "FEHLER beim Speichern");
   return ok;
 }
 
@@ -2809,6 +2989,7 @@ void sendMatrixData(const char* prefix, uint16_t (*matrix)[NUM_ROWS][NUM_COLS], 
 #define GET_CONFIG_COMBOS_PER_LINE 3
 #define GET_CONFIG_PAIRS_PER_LINE  8
 #define GET_CONFIG_OVERRIDES_PER_LINE 6
+#define GET_CONFIG_LEADER_PER_LINE 4
 #define GET_CONFIG_STEPS_PER_LINE  8
 void sendCombosPairsMacros() {
   sendConfigNotification("COMBO_COUNT:" + String(numCombos), true);
@@ -2841,6 +3022,17 @@ void sendCombosPairsMacros() {
     sendConfigNotification(out + "]}", true);
   }
 #endif
+  sendConfigNotification("LEADER_COUNT:" + String(numLeaderSeqs), true);
+  for (int o = 0; o < numLeaderSeqs; o += GET_CONFIG_LEADER_PER_LINE) {
+    String out = "LEADER_DATA:{\"o\":" + String(o) + ",\"e\":[";
+    for (int i = o; i < numLeaderSeqs && i < o + GET_CONFIG_LEADER_PER_LINE; i++) {
+      const LeaderSeq &ls = userLeaderSeqs[i];
+      out += String(i > o ? "," : "") + "[" + ls.action;
+      for (int k = 0; k < LEADER_MAX_KEYS; k++) out += String(",") + ls.keys[k];
+      out += "]";
+    }
+    sendConfigNotification(out + "]}", true);
+  }
   sendConfigNotification("MACRO_COUNT:" + String(numMacros), true);
   for (int i = 0; i < numMacros; i++) {
     int n = macroLengths[i];
@@ -3262,7 +3454,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;
@@ -3323,6 +3515,54 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd == "SAVE_OVERRIDES") {
     sendConfigNotification(saveKeyOverridesToNVS() ? "OK SAVE_OVERRIDES" : "ERR NVS SAVE_OVERRIDES");
 #endif
+  } else if (cmd == "CLEAR_LEADER") {
+    leaderReset();
+    numLeaderSeqs = 0;
+    sendConfigNotification("OK CLEAR_LEADER");
+  } else if (cmd.startsWith("ADD_LEADER ")) {
+    // ADD_LEADER <Aktion> <Taste1> [<Taste2> [<Taste3> [<Taste4>]]>]: Tasten 1..255 ohne Modifier; Aktion Taste, PAIR_n oder MACRO_n.
+    // Zwei Folgen mit denselben Tasten sind ungültig; wird als nächster Index angehängt.
+    // Strenger Parser: jedes Token ist eine Dezimalzahl bis 5 Stellen, sonst ungültig (sscanf übersieht nachgestellten Text)
+    int v[1 + LEADER_MAX_KEYS];
+    int n = 0;
+    bool ok = true;
+    {
+      const char *p = cmd.c_str() + 11;
+      while (ok && *p) {
+        if (*p == ' ') { p++; continue; }
+        int digits = 0, val = 0;
+        while (*p >= '0' && *p <= '9' && digits < 6) { val = val * 10 + (*p - '0'); p++; digits++; }
+        if (digits == 0 || digits > 5 || (*p != 0 && *p != ' ') || n >= 1 + LEADER_MAX_KEYS) ok = false;
+        else v[n++] = val;
+      }
+    }
+    LeaderSeq seq = { { 0, 0, 0, 0 }, 0 };
+    ok = ok && n >= 2 && numLeaderSeqs < MAX_LEADER_SEQS && leaderActionValid(v[0]);
+    for (int i = 1; ok && i < n; i++) {
+      if (!leaderKeyCodeValid(v[i])) ok = false;
+      else seq.keys[i - 1] = (uint8_t)v[i];
+    }
+    if (ok && leaderFindExact(userLeaderSeqs, numLeaderSeqs, seq.keys, (uint8_t)(n - 1)) >= 0) ok = false;
+    if (ok) {
+      seq.action = (uint16_t)v[0];
+      userLeaderSeqs[numLeaderSeqs++] = seq;
+      sendConfigNotification("OK ADD_LEADER " + String(numLeaderSeqs - 1));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd == "SAVE_LEADER") {
+    sendConfigNotification(saveLeaderSeqsToNVS() ? "OK SAVE_LEADER" : "ERR NVS SAVE_LEADER");
+  } else if (cmd.startsWith("SET_LEADER_TIMEOUT ")) {
+    int lt = cmd.substring(19).toInt();
+    String arg = cmd.substring(19);
+    arg.trim();
+    bool digits = arg.length() > 0 && arg.length() <= 4;
+    for (unsigned i = 0; digits && i < arg.length(); i++) digits = arg.charAt(i) >= '0' && arg.charAt(i) <= '9';
+    if (digits && lt >= LEADER_TIMEOUT_MIN_MS && lt <= LEADER_TIMEOUT_MAX_MS) {
+      sendConfigNotification(saveLeaderTimeoutToNVS((uint16_t)lt) ? "OK SET_LEADER_TIMEOUT " + String(lt) : String("ERR NVS SET_LEADER_TIMEOUT"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd == "CLEAR_MACROS") {
     stopMacro(true);
     numMacros = 0;
@@ -3399,12 +3639,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
 #endif
     char buf[768];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"require_prior_idle_ms\":%u,\"chordal_hold\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"require_prior_idle_ms\":%u,\"chordal_hold\":%u,\"leader_timeout_ms\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, triJson, hostJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)leaderTimeoutMs, triJson, hostJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW
@@ -3482,7 +3722,8 @@ void checkUserCombos() {
     uint8_t c2 = userCombos[i].c2;
 
     bool bothPressed = comboAllPressed(i);
-    if (bothPressed && !comboRuntime[i].active) {
+    if (bothPressed && !comboRuntime[i].active && !leaderConsumed[r1][c1] && !leaderConsumed[r2][c2] &&
+        !(comboHasThirdKey(i) && leaderConsumed[userCombos[i].r3][userCombos[i].c3])) {
       // Alle Tasten müssen innerhalb des Fensters der Combo (windowMs oder comboTimeoutMs) gedrückt worden sein!
       // Wenn eine Taste schon lange gehalten wurde und man dann schnell tippt, ist es KEINE Combo!
       bool inWindow = comboKeysInWindow(i);

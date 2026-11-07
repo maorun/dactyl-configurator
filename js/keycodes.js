@@ -76,7 +76,8 @@ const KEYCODES = [
     { code: "REPEAT", label: "Repeat (letzte Aktion wiederholen)", char: "" },
     { code: "ALT_REPEAT", label: "Alt Repeat (Gegenteil der letzten Aktion)", char: "" },
     { code: "DM_REC", label: "Makro aufnehmen (Start/Stopp, nur Master)", char: "" },
-    { code: "DM_PLAY", label: "Aufgenommenes Makro abspielen (nur Master)", char: "" }
+    { code: "DM_PLAY", label: "Aufgenommenes Makro abspielen (nur Master)", char: "" },
+    { code: "LEADER", label: "Leader-Taste (Sequenz mit bis zu 4 Tasten)", char: "" }
   ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
@@ -270,6 +271,7 @@ const ACTION_TO_NUMERIC = {
   "ALT_REPEAT": 0x16B,
   "DM_REC": 0x16C,
   "DM_PLAY": 0x16D,
+  "LEADER": 0x16E,
 
   // Mouse Actions (0x130..0x138)
   "MOUSE_LEFT": 0x130,
@@ -302,8 +304,13 @@ const ONE_SHOT_LABELS = {
   OSM_LCTRL: "OS Ctrl", OSM_LSHIFT: "OS Shift", OSM_LALT: "OS Alt", OSM_LGUI: "OS Cmd",
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
   CAPS_WORD: "CapsWd", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
-  DM_REC: "DM Rec", DM_PLAY: "DM Play"
+  DM_REC: "DM Rec", DM_PLAY: "DM Play", LEADER: "Leader"
 };
+
+// true für die Leader-Taste (keine Combo-Aktion)
+function isLeaderCode(code) {
+  return /^(ACT_)?LEADER$/.test(String(code || ""));
+}
 
 // true für dynamische Makros DM_REC und DM_PLAY (nur Master, keine Combo-Aktion)
 function isDynamicMacroCode(code) {
@@ -336,6 +343,10 @@ const MAX_KEY_OVERRIDES = 16;
 // Modifier-Klassen wie KEY_OVERRIDE_MOD_* in DactylKeyOverride.h (Bit pro Klasse, links und rechts zählen gleich)
 const KEY_OVERRIDE_MODS = { ctrl: 1, shift: 2, alt: 4, gui: 8 };
 const KEY_OVERRIDE_MOD_LABELS = { ctrl: "Ctrl", shift: "Shift", alt: "Alt", gui: "Cmd" };
+
+// Leader-Sequenzen (Index in currentConfig.leaderSequences): bis zu 4 Tasten nach LEADER lösen eine Aktion aus
+const MAX_LEADER_SEQS = 16;
+const LEADER_MAX_KEYS = 4;
 
 // Makro MACRO_<n>: Folge aus Tippen, Drücken, Loslassen und Pausen (Index in currentConfig.macros)
 const ACT_MACRO_BASE = 0x170;

@@ -112,7 +112,7 @@ function setupEventListeners() {
         if (currentConfig.layers[targetLayer] && currentConfig.layers[targetLayer][r]) {
           currentConfig.layers[targetLayer][r][c] = oldKey;
           // Mitangelegte Paare entfernen, solange sie am Ende stehen und keine andere Taste sie nutzt
-          if (revertResolvedPairs(currentConfig.keyPairs, currentConfig.layers, firstAddedIdx, resolved.added.length)) renderKeyPairs();
+          if (revertResolvedPairs(currentConfig.keyPairs, currentConfig.layers, firstAddedIdx, resolved.added.length, currentConfig.leaderSequences)) renderKeyPairs();
           renderMatrix();
           if (selectedKey && selectedKey.r === r && selectedKey.c === c && activeLayerIndex === targetLayer) {
             updateInspector(r, c);
@@ -201,6 +201,10 @@ function setupEventListeners() {
     }
     if (isOslCode(action)) {
       alert("Combos unterstützen keine One-Shot-Ebene. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
+    if (isLeaderCode(action)) {
+      alert("Combos unterstützen kein Leader. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
     if (isDynamicMacroCode(action)) {
@@ -347,6 +351,7 @@ function setupEventListeners() {
       const tappingTerm = clampSetting("tappingTermMs", parseInt(document.getElementById("tappingTermInput")?.value, 10));
       const holdTapMode = clampSetting("holdTapMode", parseInt(document.getElementById("holdTapModeSelect")?.value, 10));
       const quickTap = clampSetting("quickTapMs", parseInt(document.getElementById("quickTapInput")?.value, 10));
+      const leaderTimeout = clampSetting("leaderTimeoutMs", parseInt(document.getElementById("leaderTimeoutInput")?.value, 10));
       const priorIdle = clampSetting("requirePriorIdleMs", parseInt(document.getElementById("priorIdleInput")?.value, 10));
       const chordalHold = clampSetting("chordalHold", parseInt(document.getElementById("chordalHoldSelect")?.value, 10));
       const standbyMinutes = clampSetting("standbyTimeoutMinutes", parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10));
@@ -358,6 +363,7 @@ function setupEventListeners() {
       setVal("tappingTermInput", tappingTerm);
       setVal("holdTapModeSelect", holdTapMode);
       setVal("quickTapInput", quickTap);
+      setVal("leaderTimeoutInput", leaderTimeout);
       setVal("priorIdleInput", priorIdle);
       setVal("chordalHoldSelect", chordalHold);
 
@@ -374,6 +380,7 @@ function setupEventListeners() {
         tappingTermMs: tappingTerm,
         holdTapMode: holdTapMode,
         quickTapMs: quickTap,
+        leaderTimeoutMs: leaderTimeout,
         requirePriorIdleMs: priorIdle,
         chordalHold: chordalHold,
         triLayers: triLayers,

@@ -234,6 +234,10 @@ function closeMacroEditor() {
 // Snapshot-Änderung: Makros und Ebenen (beim Löschen) werden als Ganzes ersetzt und zurückgesetzt
 function applyMacroState(state) {
   currentConfig.macros = state.macros;
+  if (state.leaderSequences) {
+    currentConfig.leaderSequences = state.leaderSequences;
+    renderLeaderSequences();
+  }
   if (state.layers) currentConfig.layers = state.layers;
   renderMacros();
   if (state.layers) renderMatrix();
@@ -279,8 +283,8 @@ function saveMacroFromUI() {
 function deleteMacro(idx) {
   const next = removeMacroAt(currentConfig, idx);
   if (!next) return;
-  if (isMacroUsed(currentConfig.layers, idx) &&
-      !confirm(`Makro ${idx} ist noch Tasten zugewiesen. Diese Belegungen werden geleert. Trotzdem löschen?`)) return;
+  if (isMacroUsed(currentConfig.layers, idx, currentConfig.leaderSequences) &&
+      !confirm(`Makro ${idx} ist noch Tasten oder Leader-Sequenzen zugewiesen. Diese Belegungen werden geleert. Trotzdem löschen?`)) return;
   const removed = JSON.parse(JSON.stringify(currentConfig.macros[idx]));
   const hadFollowers = idx < currentConfig.macros.length - 1;
   if (macroEditIndex >= 0) closeMacroEditor();
@@ -293,7 +297,7 @@ function deleteMacro(idx) {
     description: `${removed.name}${hadFollowers ? "; folgende Makros rücken auf" : ""}`,
     // Nur die geleerten Verweise zurücksetzen: Tastenänderungen nach dem Löschen bleiben erhalten
     revert: () => {
-      const restored = restoreMacroAt(currentConfig, idx, removed, next.cleared);
+      const restored = restoreMacroAt(currentConfig, idx, removed, next.cleared, next.leaderRemoved);
       if (restored) applyMacroState(restored);
       else if (currentConfig.macros.length >= MAX_MACROS) showToast(`Makro ${idx} kann nicht zurückkommen: die Liste hat schon ${MAX_MACROS} Makros.`);
       else showToast(`Makro ${idx} kann nicht zurückkommen: die Makro-Liste hat sich geändert.`);

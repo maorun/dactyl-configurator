@@ -451,6 +451,7 @@ const ON_SCREEN_KEYBOARD_TABS = {
         { code: "ALT_REPEAT", label: "Alt Repeat", width: 2 },
         { code: "DM_REC", label: "Makro REC", width: 2 },
         { code: "DM_PLAY", label: "Makro PLAY", width: 2 },
+        { code: "LEADER", label: "Leader", width: 2 },
         { code: "MAC_GLOBE", label: "🌐 Globus / Fn", width: 2 }
       ]
     ]
@@ -591,6 +592,7 @@ function describeActionUsage(hit, layerName) {
     case "combo": return `Combo in Zeile ${hit.index + 1}${hit.name ? ` (${hit.name})` : ""}`;
     case "pair": return `Tastenpaar ${hit.index}: ${hit.member === "first" ? "erste" : "zweite"} Taste`;
     case "override": return `Überschreibung in Zeile ${hit.index + 1}: ${hit.role === "key" ? "Taste" : "Ersatz"}`;
+    case "leader": return `Leader-Sequenz in Zeile ${hit.index + 1}: ${hit.role === "key" ? "Taste" : "Aktion"}`;
     case "macro": return `Makro ${hit.macro}, Schritt ${hit.step + 1} (${MACRO_STEP_LABELS[hit.type] || hit.type})`;
     default: return String(hit.kind);
   }
@@ -639,7 +641,7 @@ function renderActionSearch() {
   });
 }
 
-// Wählt Hälfte, Ebene und Taste eines Treffers. Treffer ohne Taste (Combo, Paar, Überschreibung, Makro)
+// Wählt Hälfte, Ebene und Taste eines Treffers. Treffer ohne Taste (Combo, Paar, Überschreibung, Leader, Makro)
 // wechseln nur die Hälfte.
 function gotoActionUsage(hit) {
   if (!sideStore.has(hit.side)) return;
@@ -1297,6 +1299,7 @@ function renderCombosTable() {
   // Tastenpaare, Überschreibungen und Makros liegen im selben Tab und ändern sich bei Laden, Import und Undo zusammen mit den Combos
   renderKeyPairs();
   renderKeyOverrides();
+  renderLeaderSequences();
   renderMacros();
   renderActionSearch();
   const tbody = document.getElementById("combosTableBody");

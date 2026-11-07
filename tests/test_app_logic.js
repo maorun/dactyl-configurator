@@ -48,6 +48,8 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
              MAX_KEY_OVERRIDES, KEY_OVERRIDE_MODS, isValidKeyOverride, isKeyOverrideMember, keyOverrideModsValue,
              normalizeKeyOverride, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
+             MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
+             leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              isValidMacroStep, isValidMacro, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
              macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
@@ -855,6 +857,11 @@ function listLines(cfg) {
     const overrides = cfg.keyOverrides.map(o => [api.keyOverrideModsValue(o.mods), api.actionCodeToNumeric(o.key), api.actionCodeToNumeric(o.replacement)]);
     lines.push("OVERRIDE_COUNT:" + overrides.length);
     for (let o = 0; o < overrides.length; o += 6) lines.push("OVERRIDE_DATA:" + JSON.stringify({ o, e: overrides.slice(o, o + 6) }));
+  }
+  if (cfg.leaderSequences) {
+    const leader = cfg.leaderSequences.map(q => [api.actionCodeToNumeric(q.action), ...api.leaderKeyNumbers(q.keys)]);
+    lines.push("LEADER_COUNT:" + leader.length);
+    for (let o = 0; o < leader.length; o += 4) lines.push("LEADER_DATA:" + JSON.stringify({ o, e: leader.slice(o, o + 4) }));
   }
   const macros = cfg.macros || [];
   lines.push("MACRO_COUNT:" + macros.length);
@@ -2309,6 +2316,9 @@ function fullSyncHarness(reply, holdMs = null) {
     { mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" },
     { mods: ["ctrl", "alt"], key: "KEY_A", replacement: "KEY_B" }
   ];
+  cfg.leaderSequences = [
+    { keys: ["KEY_A", "KEY_B"], action: "MACRO_0" }, { keys: ["KEY_C"], action: "PAIR_0" }, { keys: ["KEY_D"], action: "KEY_Z" }
+  ];
   cfg.macros = [
     { name: "Copy", steps: [{ type: "down", code: "KEY_LEFT_GUI" }, { type: "tap", code: "KEY_C" }, { type: "up", code: "KEY_LEFT_GUI" }] },
     { name: "Warten", steps: [{ type: "pause", ms: 250 }, { type: "tap", code: "a" }] }
@@ -2467,7 +2477,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED) |CLEAR_TAP_TERMS$)/.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT) |CLEAR_TAP_TERMS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -2475,9 +2485,13 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   const overrides = sent.filter(c => c.startsWith("ADD_OVERRIDE ")).length;
   assert.strictEqual(macros, 2);
   assert.strictEqual(overrides, 2);
+  const leader = sent.filter(c => c.startsWith("ADD_LEADER ")).length;
+  assert.strictEqual(leader, 3);
+  assert.ok(sent.includes("CLEAR_LEADER") && sent.includes("SAVE_LEADER") && sent.includes("ADD_LEADER 368 97 98") && sent.includes("ADD_LEADER 320 99"));
+  assert.ok(sent.some(c => c === "SET_LEADER_TIMEOUT 1000"));
   // SAVE_NVS, SAVE_COMBOS, die Tastenpaar-Phase, je Überschreibung ein Schritt und SAVE_OVERRIDES,
   // je Makro ein Schritt und SAVE_MACROS
-  assert.strictEqual(steps.length, settings + names + keys + 1 + combos + 1 + 1 + overrides + 1 + macros + 1);
+  assert.strictEqual(steps.length, settings + names + keys + 1 + combos + 1 + 1 + overrides + 1 + macros + 1 + leader + 1);
   assert.strictEqual(steps.at(-1), 100);
   assert.ok(steps.every(p => p <= 100), `Fortschritt über 100 %: ${Math.max(...steps)}`);
 }]);
@@ -2540,14 +2554,14 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   // Eine weitere Einstellung erhöht die Schrittzahl (früher fest "+ 9")
   assert.strictEqual(ctx.count(7, 8, 2) - ctx.count(6, 8, 2), 1);
   assert.strictEqual(ctx.count(6, 8, 3) - ctx.count(6, 8, 2), 1);
-  assert.strictEqual(ctx.count(6, 8, 0), 6 + 8 + 8 * 6 * 7 + 4);
+  assert.strictEqual(ctx.count(6, 8, 0), 6 + 8 + 8 * 6 * 7 + 5);
   assert.strictEqual(ctx.count(6, 8, 0, 3) - ctx.count(6, 8, 0), 3);
   // Überschreibungen des Masters: je Eintrag ein Schritt plus die Phase (CLEAR/SAVE); die andere Hälfte hat keine
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 13);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "CLEAR_TAP_TERMS"]);
+  assert.strictEqual(cmds.length, 14);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "CLEAR_TAP_TERMS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
@@ -2565,7 +2579,18 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(cmds[11].cmd, "SET_CAPS_LED 0");
   assert.strictEqual(ctx.build({ capsLed: 1 }, R)[11].cmd, "SET_CAPS_LED 1");
   // Die linke Hälfte hat keinen Host: kein Befehl
-  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 12);
+  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 13);
+  // Leader-Wartezeit: Standard 1000, Bereich 100..5000
+  const leaderCmd = c => c.find(x => x.ack === "SET_LEADER_TIMEOUT");
+  assert.strictEqual(leaderCmd(cmds).cmd, "SET_LEADER_TIMEOUT 1000");
+  assert.strictEqual(leaderCmd(cmds).optional, true);
+  assert.strictEqual(leaderCmd(ctx.build({ leaderTimeoutMs: 700 }, R)).cmd, "SET_LEADER_TIMEOUT 700");
+  assert.strictEqual(leaderCmd(ctx.build({ leaderTimeoutMs: 9 }, R)).cmd, "SET_LEADER_TIMEOUT 100");
+  assert.strictEqual(leaderCmd(ctx.build({ leaderTimeoutMs: 99999 }, L)).cmd, "SET_LEADER_TIMEOUT 5000");
+  // Leader-Phase: je Sequenz ein Schritt plus die Phase (CLEAR/SAVE), auf beiden Hälften
+  assert.strictEqual(ctx.count(6, 8, 0, 0, -1, 3) - ctx.count(6, 8, 0, 0, -1, 0), 3);
+  // Auch ohne Sequenzen läuft die Phase (CLEAR_LEADER und SAVE_LEADER): 2 Schritte minus 1 für die Zählung je Sequenz
+  assert.strictEqual(ctx.count(6, 8, 0, 0, -1, 0), ctx.count(6, 8, 0));
 });
 
 asyncTests.push(["Sync: Text über dem Balken zählt die übertragenen Schritte", async () => {
@@ -2656,12 +2681,36 @@ asyncTests.push(["Sync: Makros gehen als CLEAR_MACROS, ADD_MACRO, ADD_MACRO_STEP
   await w.write();
   const start = sent.indexOf("CLEAR_MACROS");
   assert.ok(start > sent.indexOf("SAVE_PAIRS"));
-  assert.deepStrictEqual(sent.slice(start), [
+  assert.deepStrictEqual(sent.slice(start, sent.indexOf("SAVE_MACROS") + 1), [
     "CLEAR_MACROS",
     "ADD_MACRO", "ADD_MACRO_STEP 2 131 0", "ADD_MACRO_STEP 1 99 0", "ADD_MACRO_STEP 3 131 0",
     "ADD_MACRO", "ADD_MACRO_STEP 4 0 250", "ADD_MACRO_STEP 1 97 0",
     "SAVE_MACROS"
   ]);
+  // Danach folgt die Leader-Phase
+  assert.deepStrictEqual(sent.slice(sent.indexOf("SAVE_MACROS") + 1), [
+    "CLEAR_LEADER", "ADD_LEADER 368 97 98", "ADD_LEADER 320 99", "ADD_LEADER 122 100", "SAVE_LEADER"
+  ]);
+}]);
+
+asyncTests.push(["Sync: Firmware ohne Leader überspringt die Leader-Phase mit Hinweis und endet bei 100 %", async () => {
+  const { w, toasts, sent, progress } = fullSyncHarness(cmd => cmd === "CLEAR_LEADER" ? `ERR UNKNOWN ${cmd}` : okReply(cmd));
+  await w.write();
+  assert.strictEqual(progress.at(-2), 100);
+  assert.ok(sent.includes("CLEAR_LEADER"));
+  assert.ok(!sent.some(c => c.startsWith("ADD_LEADER") || c === "SAVE_LEADER"));
+  assert.ok(toasts.some(t => t.includes("CLEAR_LEADER") && t.includes("flashen")));
+  assert.ok(toasts.some(t => t.includes("Vollständige Konfiguration")));
+}]);
+
+asyncTests.push(["Sync: Fehler bei ADD_LEADER nach CLEAR_LEADER zeigt einen Hinweis und bricht ab", async () => {
+  const { w, toasts, sent } = fullSyncHarness(cmd => cmd.startsWith("ADD_LEADER 320") ? `ERR ARGS ${cmd}` : okReply(cmd));
+  let failed = false;
+  try { await w.write(); } catch (e) { failed = true; }
+  assert.ok(sent.includes("CLEAR_LEADER"));
+  assert.ok(!sent.includes("SAVE_LEADER"));
+  assert.ok(toasts.some(t => t.includes("Leader-Folgen") && t.includes("teilweise")));
+  assert.ok(failed || toasts.some(t => /abgebrochen|nicht bestätigt/.test(t)));
 }]);
 
 asyncTests.push(["Sync: Firmware ohne Makros überspringt die Makro-Phase mit Hinweis", async () => {
@@ -3059,7 +3108,7 @@ test("Tastenpaar löschen: Nachfrage, Snapshot-Zustand und Revert", () => {
   assert.strictEqual(plan0.next.layers[0][0][0].tap, "PAIR_0");
   assert.strictEqual(plan0.next.combos[0].action, "NONE");
   // Revert-Zustand: Paare, Ebenen und Combos wie vorher, unabhängig vom Original
-  assert.strictEqual(JSON.stringify(plan0.old), JSON.stringify({ keyPairs: config.keyPairs, layers: config.layers, combos: config.combos }));
+  assert.strictEqual(JSON.stringify(plan0.old), JSON.stringify({ keyPairs: config.keyPairs, layers: config.layers, combos: config.combos, leaderSequences: [] }));
   plan0.old.layers[0][0][0].tap = "MUTATED";
   assert.strictEqual(JSON.stringify(config), before);
   // Ungenutztes letztes Paar: keine Nachfrage, nichts rückt auf
@@ -3509,7 +3558,7 @@ function markPendingSync(change, side = editSide) { change.id = pendingBySide[si
 function pendingFor(side) { return pendingBySide[side]; }
 function showToast(t) { log.toasts.push(t); }
 function saveConfigToServer() { log.saved++; }
-function renderMatrix() {} function renderLayerButtons() {} function renderCombosTable() {} function renderKeyPairs() {}
+function renderMatrix() {} function renderLayerButtons() {} function renderCombosTable() {} function renderKeyPairs() {} function renderLeaderSequences() {}
 function updateInspector() {} function applySettingsToInputs() {} function applySelectFilter() {} function clearSelectFilter() {}
 function clearKeySelection() {} function isEditableTarget() { return false; }
 async function sendDeviceCommand(cmd, side) { log.sent.push(cmd); return true; }
@@ -3569,6 +3618,72 @@ test("Makro-UI: Löschen und Rückgängig behalten spätere Tastenänderungen", 
   vm.runInContext(`currentConfig.macros = [];`, w);
   second();
   assert.ok(log.toasts.at(-1).includes("Makro-Liste hat sich geändert"));
+});
+
+test("Leader-UI: die gewählte Aktion bleibt nach dem Neuzeichnen erhalten, auch ein Paar oder Makro", () => {
+  const { w, dom } = uiHarness(read("js/leader-ui.js"));
+  vm.runInContext(`currentConfig.macros = [{ name: "a", steps: [] }, { name: "b", steps: [] }];
+    currentConfig.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+    currentConfig.leaderSequences = [];`, w);
+  const select = dom.document.getElementById("leaderActionSelect");
+  // Wie ein echtes select: options listet die Einträge aller Gruppen; ein Wert ohne Eintrag wird beim Setzen verworfen
+  Object.defineProperty(select, "options", { get() { return this.children.flatMap(c => (c.tagName === "OPTGROUP" ? c.children : [c])); } });
+  let value = "";
+  Object.defineProperty(select, "value", {
+    get() { return value; },
+    set(v) { value = this.options.some(o => o.value === v) ? v : ""; }
+  });
+  Object.defineProperty(select, "innerHTML", { get() { return ""; }, set(_) { this.children = []; value = ""; } });
+  w.renderLeaderSequences();
+  select.value = "MACRO_1";
+  assert.strictEqual(select.value, "MACRO_1");
+  w.renderLeaderSequences();
+  assert.strictEqual(select.value, "MACRO_1");
+  select.value = "PAIR_0";
+  w.renderLeaderSequences();
+  assert.strictEqual(select.value, "PAIR_0");
+});
+
+test("Leader-UI: Makro und Paar löschen entfernt Sequenzen, Rückgängig stellt sie wieder her", () => {
+  const { w, log } = uiHarness(section("js/key-pairs-ui.js", "// Löscht ein beliebiges Paar.", "function initKeyPairsUI"));
+  vm.runInContext(`currentConfig.macros = [{ name: "a", steps: [] }, { name: "b", steps: [] }];
+    currentConfig.keyPairs = [{ first: "KEY_A", second: "KEY_B" }, { first: "KEY_C", second: "KEY_D" }];
+    currentConfig.leaderSequences = [{ keys: ["KEY_A"], action: "MACRO_0" }, { keys: ["KEY_B"], action: "MACRO_1" }, { keys: ["KEY_C"], action: "PAIR_1" }];`, w);
+  const actions = () => JSON.parse(vm.runInContext("JSON.stringify(currentConfig.leaderSequences.map(q => q.action))", w));
+  w.deleteMacro(0);
+  assert.deepStrictEqual(actions(), ["MACRO_0", "PAIR_1"]);
+  log.pending.at(-1).revert();
+  assert.deepStrictEqual(actions(), ["MACRO_0", "MACRO_1", "PAIR_1"]);
+  w.deleteKeyPair(0);
+  assert.deepStrictEqual(actions(), ["MACRO_0", "MACRO_1", "PAIR_0"]);
+  log.pending.at(-1).revert();
+  assert.deepStrictEqual(actions(), ["MACRO_0", "MACRO_1", "PAIR_1"]);
+});
+
+test("Leader-UI: Rückgängig nach Löschen stellt keine Sequenz mit doppelten Tasten wieder her", () => {
+  const { w, log } = uiHarness(read("js/leader-ui.js"));
+  vm.runInContext(`currentConfig.leaderSequences = [{ keys: ["KEY_A"], action: "KEY_Z" }];`, w);
+  const count = () => vm.runInContext("currentConfig.leaderSequences.length", w);
+  w.deleteLeaderSequence(0);
+  assert.strictEqual(count(), 0);
+  vm.runInContext(`currentConfig.leaderSequences.push({ keys: ["KEY_A"], action: "KEY_Y" });`, w);
+  log.pending.at(-1).revert();
+  assert.strictEqual(count(), 1);
+  assert.ok(log.toasts.at(-1).includes("denselben Tasten"));
+});
+
+test("Layout-Prüfung: Leader-Sequenz mit nicht definiertem Paar oder Makro", () => {
+  const cfg = lintCfg();
+  cfg.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  cfg.macros = [{ name: "m", steps: [] }];
+  cfg.leaderSequences = [
+    { keys: ["KEY_A"], action: "PAIR_0" }, { keys: ["KEY_B"], action: "PAIR_1" },
+    { keys: ["KEY_C"], action: "MACRO_0" }, { keys: ["KEY_D"], action: "MACRO_2" }, { keys: ["KEY_E"], action: "KEY_Z" }
+  ];
+  const found = lintCodes(lintBoth(cfg), "leader-undefined-target");
+  assert.strictEqual(found.length, 2);
+  assert.ok(found[0].message.includes("Leader-Sequenz 1") && found[0].message.includes("PAIR_1"));
+  assert.ok(found[1].message.includes("Leader-Sequenz 3") && found[1].message.includes("MACRO_2"));
 });
 
 test("Pfeiltasten: Auswahl bewegt sich in der Finger-Matrix und überspringt fehlende Tasten", () => {
@@ -6246,6 +6361,187 @@ function configFor(side) { return side === "R" ? currentConfig : null; }`);
 function configFor() { return null; }
 document.getElementById = () => null;`);
   vm.runInContext("renderActionSearch()", bare.w);
+});
+
+
+test("Leader: Sequenz-Prüfung, Normalisierung und Anzeige", () => {
+  const ok = { keys: ["KEY_A", "KEY_B"], action: "MACRO_0" };
+  assert.ok(api.isValidLeaderSequence(ok));
+  assert.ok(api.isValidLeaderSequence({ keys: ["KEY_A"], action: "PAIR_3" }));
+  assert.ok(api.isValidLeaderSequence({ keys: ["KEY_A", "KEY_B", "KEY_C", "KEY_D"], action: "KEY_Z" }));
+  const bad = [
+    { ...ok, keys: [] }, { ...ok, keys: ["KEY_A", "KEY_B", "KEY_C", "KEY_D", "KEY_E"] }, { ...ok, keys: "KEY_A" },
+    { ...ok, keys: ["KEY_LEFT_SHIFT"] }, { ...ok, keys: ["PAIR_0"] }, { ...ok, keys: ["MO_1"] }, { ...ok, keys: ["NONE"] },
+    { ...ok, action: "KEY_LEFT_CTRL" }, { ...ok, action: "MO_1" }, { ...ok, action: "NONE" }, { ...ok, action: "LEADER" },
+    { ...ok, action: undefined }, { keys: ["KEY_A"] }, null, "x"
+  ];
+  for (const b of bad) assert.ok(!api.isValidLeaderSequence(b), JSON.stringify(b));
+  assert.ok(api.hasDuplicateLeaderSequence([ok, { keys: ["KEY_A", "KEY_B"], action: "KEY_Z" }]));
+  assert.ok(!api.hasDuplicateLeaderSequence([ok, { keys: ["KEY_A"], action: "KEY_Z" }, { keys: ["KEY_B", "KEY_A"], action: "KEY_Z" }]));
+  assert.strictEqual(api.MAX_LEADER_SEQS, 16);
+  assert.strictEqual(api.LEADER_MAX_KEYS, 4);
+  assert.strictEqual(api.leaderSequenceLabel(ok, c => c), "KEY_A, KEY_B → MACRO_0");
+  assert.ok(api.isLeaderCode("LEADER") && api.isLeaderCode("ACT_LEADER") && !api.isLeaderCode("DM_REC"));
+  assert.strictEqual(api.actionCodeToNumeric("LEADER"), 0x16E);
+  assert.ok(api.KEYCODES.some(g => g.keys.some(k => k.code === "LEADER")));
+});
+
+test("Leader: Tupel für die Firmware und Anzeige", () => {
+  const cfg = { leaderSequences: [{ keys: ["KEY_A", "KEY_B"], action: "MACRO_1" }, { keys: ["KEY_C"], action: "PAIR_2" }] };
+  const tuples = JSON.parse(JSON.stringify(api.localLeaderTuples(cfg)));
+  assert.deepStrictEqual(tuples, [[0x171, 97, 98, 0, 0], [0x142, 99, 0, 0, 0]]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.leaderKeyNumbers(["KEY_A"]))), [97, 0, 0, 0]);
+  assert.ok(api.describeLeaderTuple(tuples[0]).includes("→"));
+});
+
+test("Leader: normalizeConfig und Validierung gelten für beide Hälften", () => {
+  const copy = o => JSON.parse(JSON.stringify(o));
+  const seqs = [{ keys: ["KEY_A", "KEY_B"], action: "KEY_Z" }];
+  for (const profile of [R, L]) {
+    const norm = api.normalizeConfig({ ...copy(profile.defaultConfig), leaderSequences: seqs }, profile);
+    assert.strictEqual(norm.leaderSequences.length, 1);
+    api.validateConfigShape({ ...copy(profile.defaultConfig), leaderSequences: seqs }, profile);
+    assert.throws(() => api.validateConfigShape({ ...copy(profile.defaultConfig), leaderSequences: [{ keys: [], action: "KEY_Z" }] }, profile), /Leader-Sequenz 0/);
+    assert.throws(() => api.validateConfigShape({ ...copy(profile.defaultConfig), leaderSequences: "x" }, profile), /leaderSequences/);
+    assert.throws(() => api.validateConfigShape({ ...copy(profile.defaultConfig), leaderSequences: [seqs[0], { keys: ["KEY_A", "KEY_B"], action: "KEY_Y" }] }, profile), /dieselben Tasten/);
+    assert.throws(() => api.validateConfigShape({ ...copy(profile.defaultConfig), leaderSequences: Array.from({ length: 17 }, (_, i) => ({ keys: [`KEY_${i + 4}`], action: "KEY_Z" })) }, profile), /leaderSequences/);
+  }
+  // Ungültige und doppelte Einträge fallen beim Normalisieren weg, die Obergrenze gilt, fehlendes Feld ergibt eine leere Liste
+  const mixed = [seqs[0], { keys: [], action: "KEY_Z" }, { keys: ["KEY_A", "KEY_B"], action: "KEY_Y" }, { keys: ["KEY_C"], action: "NONE" }];
+  assert.strictEqual(api.normalizeConfig({ ...copy(R.defaultConfig), leaderSequences: mixed }, R).leaderSequences.length, 1);
+  const many = Array.from({ length: 20 }, (_, i) => ({ keys: [`KEY_${i + 4}`], action: "KEY_Z" }));
+  assert.strictEqual(api.normalizeConfig({ ...copy(R.defaultConfig), leaderSequences: many }, R).leaderSequences.length, 16);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.normalizeConfig(copy(R.defaultConfig), R).leaderSequences)), []);
+});
+
+test("Leader: Combos lehnen die Leader-Taste ab, die Wartezeit wird begrenzt", () => {
+  const cfg = JSON.parse(JSON.stringify(R.defaultConfig));
+  cfg.combos = [{ id: "c1", name: "x", key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "LEADER" }];
+  assert.throws(() => api.validateConfigShape(cfg, R), /kein Leader/);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.SETTINGS_RANGES.leaderTimeoutMs)), [100, 5000, 1000]);
+  assert.strictEqual(api.clampSetting("leaderTimeoutMs", 10), 100);
+  assert.strictEqual(api.clampSetting("leaderTimeoutMs", 9999), 5000);
+  assert.strictEqual(api.clampSetting("leaderTimeoutMs", "x"), 1000);
+  assert.strictEqual(api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R).settings.leaderTimeoutMs, 1000);
+  assert.strictEqual(api.settingsFromDeviceInfo({ leader_timeout_ms: 750 }, {}).leaderTimeoutMs, 750);
+});
+
+test("Leader: Gerätedaten (GET_CONFIG) ergeben dieselbe Config, kaputte Zeilen machen den Snapshot unvollständig", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.keyPairs = [{ first: "KEY_LEFT_SHIFT", second: "KEY_PERIOD" }];
+  cfg.macros = [{ name: "M", steps: [{ type: "tap", code: "KEY_A" }] }];
+  cfg.leaderSequences = [
+    { keys: ["KEY_A", "KEY_B"], action: "MACRO_0" }, { keys: ["KEY_C"], action: "PAIR_0" },
+    { keys: ["KEY_D", "KEY_E", "KEY_F", "KEY_G"], action: "KEY_Z" }, { keys: ["KEY_H"], action: "KEY_Y" }, { keys: ["KEY_I"], action: "KEY_X" }
+  ];
+  const snap = snapshotWithLists(cfg);
+  assert.strictEqual(api.snapshotListsState(snap), "complete");
+  assert.strictEqual(snap.counts.leader, 5);
+  snap.info = { name: "Dactyl", side: "R" };
+  const built = api.buildConfigFromSnapshot(snap, cfg, R);
+  assert.ok(built.config, built.error);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(built.config.leaderSequences)), JSON.parse(JSON.stringify(cfg.leaderSequences)));
+  // Ohne LEADER_COUNT (alte Firmware) bleiben die lokalen Sequenzen
+  const old = snapshotOf(cfg);
+  for (const line of listLines(cfg).filter(l => !l.startsWith("LEADER_"))) api.captureListLine(old, line);
+  old.info = snap.info;
+  assert.strictEqual(api.snapshotListsState(old), "complete");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.buildConfigFromSnapshot(old, cfg, R).config.leaderSequences)), JSON.parse(JSON.stringify(cfg.leaderSequences)));
+  // Kaputte Zeilen
+  const broken = [
+    "LEADER_COUNT:17", "LEADER_COUNT:x",
+    "LEADER_COUNT:1\nLEADER_DATA:{\"o\":0,\"e\":[[97,97,0,0]]}",
+  ];
+  for (const text of broken) {
+    const s2 = api.createDeviceSnapshot();
+    for (const line of text.split("\n")) api.captureListLine(s2, line);
+    assert.ok(s2.listsBroken || api.snapshotListsState(s2) === "incomplete", text);
+  }
+  const badData = [
+    [[97, 0, 98, 0, 0]],        // Lücke in den Tasten
+    [[97, 131, 0, 0, 0]],       // Modifier als Taste
+    [[131, 97, 0, 0, 0]],       // Modifier als Aktion
+    [[0, 97, 0, 0, 0]],         // keine Aktion
+    [[97, 0, 0, 0, 0]],         // keine erste Taste
+    [[0x144 + 12, 97, 0, 0, 0]] // Paar-Index außerhalb
+  ];
+  for (const e of badData) {
+    const s3 = api.createDeviceSnapshot();
+    api.captureListLine(s3, "LEADER_COUNT:1");
+    api.captureListLine(s3, "LEADER_DATA:" + JSON.stringify({ o: 0, e }));
+    assert.ok(s3.listsBroken, JSON.stringify(e));
+  }
+  // Zähler ohne alle Einträge: unvollständig
+  const partial = api.createDeviceSnapshot();
+  for (const line of listLines({ ...cfg, leaderSequences: [] })) api.captureListLine(partial, line);
+  api.captureListLine(partial, "LEADER_COUNT:2");
+  assert.strictEqual(api.snapshotListsState(partial), "incomplete");
+});
+
+test("Layout-Diff: Leader-Sequenzen werden verglichen, ohne Zähler nicht", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.leaderSequences = [{ keys: ["KEY_A", "KEY_B"], action: "KEY_Z" }];
+  const snap = snapshotWithLists(cfg);
+  assert.strictEqual(api.diffKeymap(cfg, snap, R).lists.leader.length, 0);
+  cfg.leaderSequences[0].action = "KEY_Y";
+  cfg.leaderSequences.push({ keys: ["KEY_C"], action: "KEY_X" });
+  const d = api.diffKeymap(cfg, snap, R).lists;
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(d.leader.map(r => r.where))), ["Leader 0", "Leader 1"]);
+  assert.strictEqual(d.leader[1].device, "—");
+  // Gerät ohne Leader-Zähler: nichts zu vergleichen, die Zeilen fehlen
+  const old = snapshotOf(cfg);
+  for (const line of listLines(cfg).filter(l => !l.startsWith("LEADER_"))) api.captureListLine(old, line);
+  assert.strictEqual(api.diffKeymap(cfg, old, R).lists.leader.length, 0);
+});
+
+test("Leader: Tastenpaar oder Makro löschen entfernt Sequenzen und rückt Verweise auf, Revert stellt sie her", () => {
+  const seqs = [
+    { keys: ["KEY_A"], action: "MACRO_0" }, { keys: ["KEY_B"], action: "MACRO_1" }, { keys: ["KEY_C"], action: "MACRO_2" },
+    { keys: ["KEY_D"], action: "PAIR_1" }, { keys: ["KEY_E"], action: "PAIR_2" }, { keys: ["KEY_F"], action: "KEY_Z" }
+  ];
+  const macros = [{ name: "a", steps: [] }, { name: "b", steps: [] }, { name: "c", steps: [] }];
+  const config = { macros, keyPairs: [p("KEY_A", "KEY_B"), p("KEY_C", "KEY_D"), p("KEY_E", "KEY_F")], layers: [[["KEY_A"]]], combos: [], leaderSequences: seqs };
+  const before = JSON.stringify(config);
+  assert.ok(api.isMacroUsed([], 1, seqs) && !api.isMacroUsed([], 1, []));
+  const next = api.removeMacroAt(config, 1);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(next.leaderSequences.map(q => q.action))), ["MACRO_0", "MACRO_1", "PAIR_1", "PAIR_2", "KEY_Z"]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(next.leaderRemoved.map(r => r.index))), [1]);
+  assert.strictEqual(JSON.stringify(config), before);
+  const back = api.restoreMacroAt({ ...config, macros: next.macros, layers: next.layers, leaderSequences: next.leaderSequences }, 1, macros[1], next.cleared, next.leaderRemoved);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(back.leaderSequences)), JSON.parse(JSON.stringify(seqs)));
+  // Tastenpaar
+  const plan = api.planKeyPairDeletion(config, 1);
+  assert.strictEqual(plan.used, true);   // nur die Sequenz nutzt PAIR_1
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(plan.next.leaderSequences.map(q => q.action))), ["MACRO_0", "MACRO_1", "MACRO_2", "PAIR_1", "KEY_Z"]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(plan.old.leaderSequences)), JSON.parse(JSON.stringify(seqs)));
+  // Ein Paar, das nur eine Sequenz nutzt, bleibt beim Revert einer Tastenänderung stehen
+  assert.strictEqual(api.revertResolvedPairs([p("KEY_A", "KEY_B")], [[["KEY_A"]]], 0, 1, [{ keys: ["KEY_A"], action: "PAIR_0" }]), 0);
+  assert.strictEqual(api.revertResolvedPairs([p("KEY_A", "KEY_B")], [[["KEY_A"]]], 0, 1, []), 1);
+});
+
+test("Leader: findActionUsages meldet Sequenz-Tasten und Aktionen, die Layout-Prüfung zählt sie als Nutzung", () => {
+  const cfg = lintCfg();
+  cfg.keyPairs = [{ first: "KEY_A", second: "KEY_B" }];
+  cfg.macros = [{ name: "M", steps: [] }];
+  cfg.leaderSequences = [{ keys: ["KEY_Q", "KEY_W"], action: "PAIR_0" }, { keys: ["KEY_E"], action: "MACRO_0" }];
+  const findings = lintBoth(cfg);
+  assert.strictEqual(lintCodes(findings, "pair-unused").length, 0);
+  assert.strictEqual(lintCodes(findings, "macro-unused").length, 0);
+  cfg.leaderSequences = [];
+  assert.strictEqual(lintCodes(lintBoth(cfg), "pair-unused").length, 1);
+  assert.strictEqual(lintCodes(lintBoth(cfg), "macro-unused").length, 1);
+  const hits = JSON.parse(JSON.stringify(api.findActionUsages({ layers: [], leaderSequences: [{ keys: ["KEY_Q", "KEY_W"], action: "KEY_Q" }] }, "KEY_Q", "R")));
+  assert.deepStrictEqual(hits, [{ kind: "leader", side: "R", index: 0, role: "key" }, { kind: "leader", side: "R", index: 0, role: "action" }]);
+});
+
+test("Sync: Leader-Phase sendet CLEAR_LEADER, ADD_LEADER und SAVE_LEADER und zählt ihre Schritte", () => {
+  const src = read("js/config-sync.js");
+  assert.ok(src.includes('"CLEAR_LEADER", "CLEAR_LEADER", 3000, true'));
+  assert.ok(src.includes("`ADD_LEADER ${actionCodeToNumeric(q.action)} ${keys}`"));
+  assert.ok(src.includes('"SAVE_LEADER", "SAVE_LEADER", 5000'));
+  // Zahl der updateProgress()-Aufrufe der Leader-Phase: je Sequenz einer (gesendet oder übersprungen) plus einer für die Phase
+  const phase = src.slice(src.indexOf("CLEAR_LEADER"), src.indexOf("Nur die tatsächlich übertragenen"));
+  assert.strictEqual((phase.match(/updateProgress\(\)/g) || []).length, 3);
 });
 
 (async () => {

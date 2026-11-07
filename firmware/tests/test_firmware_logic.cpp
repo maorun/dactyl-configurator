@@ -47,6 +47,7 @@ static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
 static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
+static uint16_t leaderTimeoutMs = 1000;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t capsLedEnabled = 0;
@@ -66,6 +67,9 @@ static KeyCombo userCombos[MAX_COMBOS];
 
 static uint8_t numKeyPairs = 0;
 static KeyPair userKeyPairs[MAX_KEY_PAIRS];
+
+static uint8_t numLeaderSeqs = 0;
+static LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS];
 
 // Tasten-Überschreibungen (nur der Master, wie dactyl_right.ino)
 #define DACTYL_KEY_OVERRIDES
@@ -165,6 +169,11 @@ void resetState() {
   for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) comboPressLayer1[r][c] = 0;
   numKeyPairs = 0;
   for (int i = 0; i < MAX_KEY_PAIRS; i++) userKeyPairs[i] = { 0, 0 };
+  numLeaderSeqs = 0;
+  for (int i = 0; i < MAX_LEADER_SEQS; i++) userLeaderSeqs[i] = { { 0, 0, 0, 0 }, 0 };
+  leaderTimeoutMs = 1000;
+  leaderReset();
+  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) leaderConsumed[r][c] = leaderBuffered[r][c] = false;
   numKeyOverrides = 0;
   for (int i = 0; i < MAX_KEY_OVERRIDES; i++) userKeyOverrides[i] = { 0, 0, 0 };
   numMacros = 0;
@@ -7349,6 +7358,761 @@ TEST(test_dynamic_macro_get_info_reports_the_state_again) {
   handleConfigCommand("GET_INFO", false);          // neue Verbindung der App
   dynamicMacroService();
   assert(dmSerialCount("DM_REC:1") == 2);
+}
+
+
+// -----------------------------------------------------------------------------
+// Leader-Folgen (ACT_LEADER)
+// -----------------------------------------------------------------------------
+static void leaderMapKeys() {
+  KEYMAP[0][0][0] = ACT_LEADER;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[0][2][3] = 'c';
+}
+static void leaderAddSeq(uint16_t action, std::initializer_list<uint8_t> keys) {
+  LeaderSeq s = { { 0, 0, 0, 0 }, action };
+  int i = 0;
+  for (uint8_t k : keys) s.keys[i++] = k;
+  userLeaderSeqs[numLeaderSeqs++] = s;
+}
+static int leaderWrites(uint8_t code) {
+  return (int)std::count(bleKeyboard.writtenKeys.begin(), bleKeyboard.writtenKeys.end(), code);
+}
+static bool leaderNoOtherKeys() {
+  return bleKeyboard.pressedKeys.empty() && bleKeyboard.pressHistory.empty();
+}
+
+TEST(test_leader_matching_sequence_runs_its_action_and_sends_no_sequence_key) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  setMillis(1000);
+  dmTap(0, 0);                                    // Leader
+  assert(leaderNoOtherKeys() && bleKeyboard.writtenKeys.empty());   // die Leader-Taste sendet nichts
+  setMillis(1100);
+  dmTap(2, 1);                                    // a
+  assert(leaderNoOtherKeys() && bleKeyboard.writtenKeys.empty());   // noch unvollständig
+  setMillis(1200);
+  dmTap(2, 2);                                    // b: die Folge ist vollständig
+  assert(leaderWrites('z') == 1);
+  assert(leaderNoOtherKeys());                    // weder a noch b erreichten den Host
+  assert(bleKeyboard.pressedKeys.empty());        // nach der Folge ist alles losgelassen
+  assert(!leaderState.active);
+  // Danach tippen die Tasten wieder normal
+  setMillis(1500);
+  dmTap(2, 1);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'a') == 1);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_leader_sequence_key_held_across_the_match_sends_nothing_on_release) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a' });
+  setMillis(1000);
+  dmTap(0, 0);
+  pressKey(2, 1);                                 // a gedrückt: Folge vollständig, Aktion läuft
+  assert(leaderWrites('z') == 1);
+  setMillis(1300);
+  releaseKey(2, 1);                               // Loslassen sendet nichts und lässt nichts hängen
+  assert(leaderNoOtherKeys() && bleKeyboard.pressedKeys.empty());
+  assert(!leaderConsumed[2][1]);
+}
+
+TEST(test_leader_timeout_sends_nothing) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  setMillis(1000);
+  dmTap(0, 0);
+  setMillis(1100);
+  dmTap(2, 1);                                    // a: Teilfolge
+  assert(leaderState.active);
+  runTicks(1100 + 999);
+  assert(leaderState.active);                     // das Zeitlimit zählt ab der letzten Taste
+  runTicks(1100 + 1001);
+  assert(!leaderState.active);
+  assert(bleKeyboard.writtenKeys.empty() && leaderNoOtherKeys());   // nichts gesendet, auch a nicht
+  // Eine spätere Taste tippt normal
+  dmTap(2, 2);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'b') == 1);
+}
+
+TEST(test_leader_timeout_without_any_key_ends_silently) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a' });
+  setMillis(1000);
+  dmTap(0, 0);
+  runTicks(2100);
+  assert(!leaderState.active);
+  assert(bleKeyboard.writtenKeys.empty() && leaderNoOtherKeys());
+  dmTap(2, 1);                                    // jetzt eine normale Taste
+  assert(leaderWrites('z') == 0);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'a') == 1);
+}
+
+TEST(test_leader_timeout_follows_the_setting) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  leaderTimeoutMs = 300;
+  setMillis(1000);
+  dmTap(0, 0);
+  runTicks(1299);
+  assert(leaderState.active);
+  runTicks(1301);
+  assert(!leaderState.active);
+}
+
+TEST(test_leader_sequence_without_match_sends_nothing) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  setMillis(1000);
+  dmTap(0, 0);
+  setMillis(1100);
+  dmTap(2, 3);                                    // c: keine Folge beginnt damit
+  assert(!leaderState.active);
+  assert(bleKeyboard.writtenKeys.empty() && leaderNoOtherKeys());
+  // Auch ein falscher zweiter Schritt sendet nichts
+  setMillis(1500);
+  dmTap(0, 0);
+  dmTap(2, 1);                                    // a
+  dmTap(2, 3);                                    // c statt b
+  assert(!leaderState.active);
+  assert(bleKeyboard.writtenKeys.empty() && leaderNoOtherKeys());
+  // Die Erfassung ist beendet: die nächste Taste tippt normal
+  setMillis(2000);
+  dmTap(2, 2);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'b') == 1);
+}
+
+TEST(test_leader_releases_all_keys_after_the_sequence) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  setMillis(1000);
+  dmTap(0, 0);
+  pressKey(2, 1);                                 // a und b werden gleichzeitig gehalten
+  pressKey(2, 2);
+  assert(leaderWrites('z') == 1);
+  releaseKey(2, 2);
+  releaseKey(2, 1);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(leaderNoOtherKeys());
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++) assert(!keySentToHost[r][c] && !leaderConsumed[r][c]);
+}
+
+TEST(test_leader_runs_key_pair_and_macro_actions) {
+  resetState();
+  leaderMapKeys();
+  userKeyPairs[0] = { KEY_LEFT_SHIFT, '1' };
+  numKeyPairs = 1;
+  numMacros = 1;
+  macroLengths[0] = 2;
+  userMacros[0][0] = { MACRO_STEP_TAP, 'q', 0 };
+  userMacros[0][1] = { MACRO_STEP_TAP, 'r', 0 };
+  leaderAddSeq(ACT_KEY_PAIR_BASE + 0, { 'a' });
+  leaderAddSeq(ACT_MACRO_BASE + 0, { 'b' });
+  setMillis(1000);
+  dmTap(0, 0);
+  dmTap(2, 1);                                    // Paar: Shift + 1 als Tipp
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), '1') == 1);
+  assert(bleKeyboard.pressedKeys.empty());
+  bleKeyboard.pressHistory.clear();
+  setMillis(1500);
+  dmTap(0, 0);
+  dmTap(2, 2);                                    // Makro q, r
+  runTicks(1800);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'q') == 1);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'r') == 1);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'a') == 0);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'b') == 0);
+  assert(bleKeyboard.pressedKeys.empty() && !macroRun.active);
+}
+
+TEST(test_leader_prefix_sequence_waits_and_runs_when_the_time_expires) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('x', { 'a' });
+  leaderAddSeq('y', { 'a', 'b' });
+  setMillis(1000);
+  dmTap(0, 0);
+  setMillis(1100);
+  dmTap(2, 1);                                    // a: "x" passt, "y" ist noch möglich
+  assert(leaderState.active && bleKeyboard.writtenKeys.empty());
+  runTicks(1100 + 1001);
+  assert(leaderWrites('x') == 1 && leaderWrites('y') == 0);
+  assert(!leaderState.active && leaderNoOtherKeys());
+
+  // Die längere Folge gewinnt, wenn die zweite Taste rechtzeitig kommt
+  bleKeyboard.writtenKeys.clear();
+  setMillis(4000);
+  dmTap(0, 0);
+  dmTap(2, 1);
+  setMillis(4200);
+  dmTap(2, 2);
+  assert(leaderWrites('y') == 1 && leaderWrites('x') == 0);
+}
+
+TEST(test_leader_runs_a_four_key_sequence_and_stops_at_the_limit) {
+  resetState();
+  leaderMapKeys();
+  KEYMAP[0][2][4] = 'd';
+  KEYMAP[0][2][5] = 'e';
+  leaderAddSeq('z', { 'a', 'b', 'c', 'd' });
+  setMillis(1000);
+  dmTap(0, 0);
+  dmTap(2, 1); dmTap(2, 2); dmTap(2, 3);
+  assert(leaderState.active && leaderState.count == 3);
+  dmTap(2, 4);
+  assert(leaderWrites('z') == 1 && !leaderState.active && leaderNoOtherKeys());
+  // Die fünfte Taste gehört nicht mehr zur Folge
+  dmTap(2, 5);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'e') == 1);
+}
+
+TEST(test_leader_does_nothing_without_host_or_in_config_mode) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a' });
+  bleKeyboard.connected = false;
+  dmTap(0, 0);
+  assert(!leaderState.active);
+  bleKeyboard.connected = true;
+  isConfigMode = true;
+  dmTap(0, 0);
+  assert(!leaderState.active);
+  isConfigMode = false;
+  // Host fällt während der Erfassung weg: nichts wird ausgeführt
+  dmTap(0, 0);
+  assert(leaderState.active);
+  bleKeyboard.connected = false;
+  dmTap(2, 1);
+  bleKeyboard.connected = true;
+  assert(leaderWrites('z') == 0 && leaderNoOtherKeys());
+}
+
+TEST(test_leader_capture_ends_with_release_all_state) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  dmTap(0, 0);
+  dmTap(2, 1);
+  assert(leaderState.active);
+  oslClearAll();                                  // Host-Verlust, Link-Ausfall, Config Mode
+  assert(!leaderState.active);
+  dmTap(2, 2);
+  assert(leaderWrites('z') == 0);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'b') == 1);
+}
+
+TEST(test_leader_ignores_layer_keys_and_modifiers_during_capture) {
+  resetState();
+  leaderMapKeys();
+  KEYMAP[0][3][0] = ACT_MO_1;
+  KEYMAP[1][2][1] = 'a';
+  KEYMAP[0][3][1] = KEY_LEFT_SHIFT;
+  leaderAddSeq('z', { 'a' });
+  setMillis(1000);
+  dmTap(0, 0);
+  pressKey(3, 0);                                 // MO_1 halten: die Erfassung läuft weiter
+  assert(leaderState.active && getActiveLayer() == 1);
+  dmTap(2, 1);                                    // a auf Ebene 1
+  releaseKey(3, 0);
+  assert(leaderWrites('z') == 1 && leaderNoOtherKeys());
+  // Ein Modifier ist nie Teil einer Folge
+  dmTap(0, 0);
+  pressKey(3, 1);
+  assert(leaderState.active);
+  releaseKey(3, 1);
+  dmTap(2, 1);
+  assert(leaderWrites('z') == 2);
+}
+
+TEST(test_leader_does_not_trigger_a_combo_from_consumed_keys) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  numCombos = 1;
+  userCombos[0] = { 2, 1, 2, 2, 0, (uint16_t)KEY_ESC };
+  setMillis(1000);
+  dmTap(0, 0);
+  pressKey(2, 1);
+  setMillis(1010);
+  pressKey(2, 2);                                 // innerhalb des Combo-Fensters
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+  releaseKey(2, 2);
+  releaseKey(2, 1);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_leader_commands_validate_and_report) {
+  resetState();
+  handleConfigCommand("CLEAR_LEADER", false);
+  assert(mockChar.value == "OK CLEAR_LEADER");
+  handleConfigCommand("ADD_LEADER 122 97 98", false);
+  assert(mockChar.value == "OK ADD_LEADER 0");
+  handleConfigCommand("ADD_LEADER 320 99", false);          // Paar 0
+  assert(mockChar.value == "OK ADD_LEADER 1");
+  handleConfigCommand("ADD_LEADER 368 100 101 102 103", false);   // Makro 0, vier Tasten
+  assert(mockChar.value == "OK ADD_LEADER 2");
+  assert(numLeaderSeqs == 3);
+  assert(userLeaderSeqs[0].keys[0] == 97 && userLeaderSeqs[0].keys[1] == 98 && userLeaderSeqs[0].keys[2] == 0);
+  assert(userLeaderSeqs[2].keys[3] == 103 && userLeaderSeqs[2].action == 368);
+  // Ungültig: Duplikat, Modifier, fünf Tasten, Aktion ohne Tasten, ungültige Aktion, Layer-Aktion, Zusatzwert
+  const char *bad[] = {
+    "ADD_LEADER 65 97 98", "ADD_LEADER 122 128 98", "ADD_LEADER 122 97 98 99 100 101", "ADD_LEADER 122",
+    "ADD_LEADER 256 97", "ADD_LEADER 0 97", "ADD_LEADER 256 99", "ADD_LEADER 122 0", "ADD_LEADER 122 97 0 98",
+    "ADD_LEADER 122 300", "ADD_LEADER 336 101", "ADD_LEADER 122 101 x",
+  };
+  for (const char *c : bad) {
+    handleConfigCommand(c, false);
+    assert(mockChar.value == std::string("ERR ARGS ") + c);
+  }
+  assert(numLeaderSeqs == 3);
+  // Obergrenze
+  handleConfigCommand("CLEAR_LEADER", false);
+  for (int i = 0; i < MAX_LEADER_SEQS; i++) handleConfigCommand((std::string("ADD_LEADER 122 ") + std::to_string(33 + i)).c_str(), false);
+  assert(numLeaderSeqs == MAX_LEADER_SEQS);
+  handleConfigCommand("ADD_LEADER 122 120", false);
+  assert(mockChar.value == "ERR ARGS ADD_LEADER 122 120");
+}
+
+TEST(test_leader_sequences_persist_in_nvs) {
+  resetState();
+  loadKeymapFromNVS();
+  handleConfigCommand("CLEAR_LEADER", false);
+  handleConfigCommand("ADD_LEADER 122 97 98", false);
+  handleConfigCommand("ADD_LEADER 368 99", false);
+  handleConfigCommand("SAVE_LEADER", false);
+  assert(mockChar.value == "OK SAVE_LEADER");
+  assert(Preferences::bytesStore.count("leader_data") && preferences.isKey("num_leader"));
+  numLeaderSeqs = 0;
+  for (int i = 0; i < MAX_LEADER_SEQS; i++) userLeaderSeqs[i] = { { 0, 0, 0, 0 }, 0 };
+  loadKeymapFromNVS();
+  assert(numLeaderSeqs == 2);
+  assert(userLeaderSeqs[0].action == 122 && userLeaderSeqs[0].keys[0] == 97 && userLeaderSeqs[0].keys[1] == 98);
+  assert(userLeaderSeqs[1].action == 368 && userLeaderSeqs[1].keys[0] == 99);
+
+  // Eine leere gespeicherte Liste überschreibt die einkompilierte
+  handleConfigCommand("CLEAR_LEADER", false);
+  handleConfigCommand("SAVE_LEADER", false);
+  assert(mockChar.value == "OK SAVE_LEADER");
+  numLeaderSeqs = 1;
+  userLeaderSeqs[0] = { { 97, 0, 0, 0 }, 122 };
+  loadKeymapFromNVS();
+  assert(numLeaderSeqs == 0);
+
+  // Beschädigte Daten (ungültige Folge) ersetzen die einkompilierte Liste nicht
+  preferences.begin("dactyl", false);
+  LeaderSeq broken[1] = { { { 128, 0, 0, 0 }, 122 } };
+  preferences.putBytes("leader_data", broken, sizeof(broken));
+  preferences.putUChar("num_leader", 1);
+  preferences.end();
+  numLeaderSeqs = 0;
+  loadKeymapFromNVS();
+  assert(numLeaderSeqs == 0);
+}
+
+TEST(test_leader_nvs_write_failure_is_reported) {
+  resetState();
+  handleConfigCommand("ADD_LEADER 122 97", false);
+  Preferences::failBytesKey = "leader_data";
+  handleConfigCommand("SAVE_LEADER", false);
+  assert(mockChar.value == "ERR NVS SAVE_LEADER");
+  assert(!preferences.isKey("num_leader"));       // die Anzahl bleibt ohne Daten unverändert
+  Preferences::failBytesKey.clear();
+}
+
+TEST(test_app_flash_discards_stored_leader_sequences) {
+  resetState();
+  handleConfigCommand("ADD_LEADER 122 97", false);
+  handleConfigCommand("SAVE_LEADER", false);
+  loadKeymapFromNVS();
+  testDefaultsId = 0xBEEF;
+  numLeaderSeqs = 1;
+  userLeaderSeqs[0] = { { 98, 0, 0, 0 }, 121 };
+  loadKeymapFromNVS();
+  assert(numLeaderSeqs == 1 && userLeaderSeqs[0].keys[0] == 98 && userLeaderSeqs[0].action == 121);
+  assert(!preferences.isKey("num_leader"));
+}
+
+TEST(test_leader_get_config_sends_the_list) {
+  resetState();
+  loadKeymapFromNVS();
+  handleConfigCommand("CLEAR_LEADER", false);
+  handleConfigCommand("ADD_LEADER 122 97 98", false);
+  handleConfigCommand("ADD_LEADER 368 99", false);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool count = false, data = false;
+  for (const auto &n : mockChar.notifications) {
+    if (n == "LEADER_COUNT:2") count = true;
+    if (n == "LEADER_DATA:{\"o\":0,\"e\":[[122,97,98,0,0],[368,99,0,0,0]]}") data = true;
+  }
+  assert(count && data);
+  // Liste mit mehr als einer Zeile: alle Einträge kommen genau einmal an
+  handleConfigCommand("CLEAR_LEADER", false);
+  for (int i = 0; i < MAX_LEADER_SEQS; i++) handleConfigCommand((std::string("ADD_LEADER 122 ") + std::to_string(33 + i)).c_str(), false);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  int lines = 0, entries = 0;
+  for (const auto &n : mockChar.notifications) {
+    if (n.rfind("LEADER_DATA", 0) == 0) { lines++; entries += (int)std::count(n.begin(), n.end(), '[') - 1; }
+  }
+  assert(lines == MAX_LEADER_SEQS / GET_CONFIG_LEADER_PER_LINE && entries == MAX_LEADER_SEQS);
+  for (const auto &n : mockChar.notifications) if (n.rfind("LEADER_DATA", 0) == 0) assert(n.size() <= 150);
+}
+
+TEST(test_leader_timeout_command_and_device_info) {
+  resetState();
+  handleConfigCommand("SET_LEADER_TIMEOUT 1500", false);
+  assert(mockChar.value == "OK SET_LEADER_TIMEOUT 1500" && leaderTimeoutMs == 1500);
+  assert(Preferences::uintStore.count("leader_to") || preferences.isKey("leader_to"));
+  const char *bad[] = { "SET_LEADER_TIMEOUT 99", "SET_LEADER_TIMEOUT 5001", "SET_LEADER_TIMEOUT x", "SET_LEADER_TIMEOUT -5", "SET_LEADER_TIMEOUT 12345", "SET_LEADER_TIMEOUT 1e3" };
+  for (const char *c : bad) {
+    handleConfigCommand(c, false);
+    assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  }
+  assert(leaderTimeoutMs == 1500);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"leader_timeout_ms\":1500") != std::string::npos);
+  leaderTimeoutMs = 1000;
+  loadKeymapFromNVS();
+  assert(leaderTimeoutMs == 1500);                // aus dem NVS geladen
+  // Längster Gerätename: DEVICE_INFO bleibt gültiges JSON
+  deviceName = String("0123456789012345678901234567890");
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.back() == '}' && mockChar.value.find("\"config_mode\":") != std::string::npos);
+  deviceName = DEFAULT_DEVICE_NAME;
+}
+
+TEST(test_leader_is_no_combo_action) {
+  resetState();
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("ADD_COMBO 2 0 2 1 0 366", false);   // ACT_LEADER
+  assert(mockChar.value == "ERR ARGS ADD_COMBO 2 0 2 1 0 366" && numCombos == 0);
+  handleConfigCommand("ADD_COMBO 2 0 2 1 1 366", false);
+  assert(numCombos == 0);
+}
+
+TEST(test_leader_clear_command_ends_a_running_capture) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  dmTap(0, 0);
+  dmTap(2, 1);
+  handleConfigCommand("CLEAR_LEADER", false);
+  assert(!leaderState.active && numLeaderSeqs == 0);
+}
+
+TEST(test_leader_validation_helpers) {
+  assert(leaderKeyCodeValid('a') && leaderKeyCodeValid(255) && leaderKeyCodeValid(1));
+  assert(!leaderKeyCodeValid(0) && !leaderKeyCodeValid(256) && !leaderKeyCodeValid(0x80) && !leaderKeyCodeValid(0x87));
+  assert(leaderKeyCodeValid(0x88));
+  assert(leaderActionValid(ACT_KEY_PAIR_BASE) && leaderActionValid(ACT_KEY_PAIR_BASE + 15) && !leaderActionValid(ACT_KEY_PAIR_BASE + 16));
+  assert(leaderActionValid(ACT_MACRO_BASE) && leaderActionValid(ACT_MACRO_BASE + 15) && !leaderActionValid(ACT_MACRO_BASE + 16));
+  assert(!leaderActionValid(ACT_MO_1) && !leaderActionValid(ACT_LEADER));
+  uint8_t gap[4] = { 97, 0, 98, 0 };
+  assert(leaderKeyCount(gap) == 0);
+  uint8_t ok[4] = { 97, 98, 0, 0 };
+  assert(leaderKeyCount(ok) == 2);
+  uint8_t full[4] = { 1, 2, 3, 4 };
+  assert(leaderKeyCount(full) == 4);
+}
+
+
+TEST(test_leader_as_combo_candidate_starts_only_without_a_combo) {
+  resetState();
+  leaderMapKeys();
+  KEYMAP[0][0][0] = 0;
+  KEYMAP[0][1][0] = ACT_LEADER;   // R0C0 ist die Config-Combo-Taste
+  leaderAddSeq('z', { 'a' });
+  numCombos = 1;
+  userCombos[0] = { 1, 0, 2, 1, 0, (uint16_t)KEY_ESC };   // Leader-Taste + a als Combo
+  setMillis(1000);
+  pressKey(1, 0);
+  setMillis(1010);
+  pressKey(2, 1);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(!leaderState.active);                    // die Combo hat die Leader-Taste verbraucht
+  releaseKey(2, 1);
+  releaseKey(1, 0);
+  setMillis(2000);
+  dmTap(2, 2);                                    // die nächste Taste tippt normal und wird nicht verschluckt
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'b') == 1);
+
+  // Ohne Combo: schneller Tipp beginnt die Erfassung beim Loslassen
+  resetState();
+  leaderMapKeys();
+  KEYMAP[0][0][0] = 0;
+  KEYMAP[0][1][0] = ACT_LEADER;   // R0C0 ist die Config-Combo-Taste
+  leaderAddSeq('z', { 'a' });
+  numCombos = 1;
+  userCombos[0] = { 1, 0, 2, 3, 0, (uint16_t)KEY_ESC };
+  setMillis(1000);
+  pressKey(1, 0);
+  assert(!leaderState.active);                    // gepuffert
+  setMillis(1020);
+  releaseKey(1, 0);
+  assert(leaderState.active);
+  dmTap(2, 1);
+  assert(leaderWrites('z') == 1);
+
+  // Nach dem Combo-Fenster beginnt die Erfassung ohne Loslassen
+  resetState();
+  leaderMapKeys();
+  KEYMAP[0][0][0] = 0;
+  KEYMAP[0][1][0] = ACT_LEADER;   // R0C0 ist die Config-Combo-Taste
+  leaderAddSeq('z', { 'a' });
+  numCombos = 1;
+  userCombos[0] = { 1, 0, 2, 3, 0, (uint16_t)KEY_ESC };
+  setMillis(1000);
+  pressKey(1, 0);
+  runTicks(1000 + comboTimeoutMs + 5);
+  assert(leaderState.active);
+  releaseKey(1, 0);
+  assert(leaderState.active);                     // das Loslassen beendet die Erfassung nicht
+  dmTap(2, 1);
+  assert(leaderWrites('z') == 1);
+}
+
+TEST(test_leader_consumed_third_combo_key_blocks_a_three_key_combo) {
+  resetState();
+  leaderMapKeys();
+  KEYMAP[0][2][4] = 'd';
+  leaderAddSeq('z', { 'd' });
+  numCombos = 1;
+  userCombos[0] = { 2, 1, 2, 2, 0, (uint16_t)KEY_ESC };
+  userCombos[0].r3 = 2; userCombos[0].c3 = 4;
+  setMillis(1000);
+  dmTap(0, 0);
+  pressKey(2, 4);                                 // d wird als dritte Combo-Taste verbraucht
+  pressKey(2, 1);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+}
+
+TEST(test_leader_capture_aborts_on_actions_with_host_output) {
+  resetState();
+  leaderMapKeys();
+  userKeyPairs[0] = { KEY_LEFT_SHIFT, '1' };
+  numKeyPairs = 1;
+  KEYMAP[0][3][0] = ACT_KEY_PAIR_BASE;
+  KEYMAP[0][3][1] = ACT_REPEAT;
+  KEYMAP[0][3][2] = ACT_CAPS_WORD;
+  KEYMAP[0][3][3] = ACT_LEADER;
+  leaderAddSeq('z', { 'a' });
+  const uint8_t keys[][2] = { {3, 0}, {3, 1}, {3, 2} };
+  for (const auto &k : keys) {
+    setMillis(1000);
+    leaderReset();
+    dmTap(0, 0);
+    assert(leaderState.active);
+    pressKey(k[0], k[1]);
+    releaseKey(k[0], k[1]);
+    assert(!leaderState.active);                  // Aktion mit Ausgabe: die Erfassung endet
+    bleKeyboard.writtenKeys.clear();
+    dmTap(2, 1);
+    assert(leaderWrites('z') == 0);               // 'a' ist wieder eine normale Taste
+  }
+  // Eine zweite Leader-Taste beginnt die Erfassung neu
+  leaderReset();
+  dmTap(0, 0);
+  dmTap(2, 2);                                    // b: keine Folge, Erfassung endet
+  dmTap(0, 0);
+  pressKey(3, 3);
+  releaseKey(3, 3);
+  assert(leaderState.active && leaderState.count == 0);
+}
+
+TEST(test_leader_hold_resolved_leader_key_starts_the_capture) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a' });
+  KEYMAP[0][3][0] = 'q';
+  HOLDMAP[0][3][0] = ACT_LEADER;
+  setMillis(1000);
+  pressKey(3, 0);
+  runTicks(1000 + tappingTermMs + 5);
+  assert(leaderState.active);
+  releaseKey(3, 0);
+  assert(leaderState.active);
+  assert(std::count(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), 'q') == 0);
+  dmTap(2, 1);
+  assert(leaderWrites('z') == 1);
+}
+
+TEST(test_leader_hold_on_a_combo_candidate_key_starts_the_capture_when_the_hold_resolves) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a' });
+  KEYMAP[0][3][0] = 'q';
+  HOLDMAP[0][3][0] = ACT_LEADER;
+  numCombos = 1;
+  userCombos[0] = { 3, 0, 3, 5, 0, (uint16_t)KEY_ESC };   // R3C0 ist ein Combo-Kandidat
+  setMillis(1000);
+  pressKey(3, 0);
+  runTicks(1000 + tappingTermMs + 5);
+  assert(leaderState.active);
+  releaseKey(3, 0);
+  dmTap(2, 1);
+  assert(leaderWrites('z') == 1);
+}
+
+TEST(test_leader_consumed_shifted_key_is_no_held_modifier_for_umlauts) {
+  resetState();
+  leaderMapKeys();
+  KEYMAP[0][2][1] = '!';                          // eine Taste, die Shift braucht
+  KEYMAP[0][2][4] = ACT_UMLAUT_AE;
+  leaderAddSeq('z', { '!', 'b' });
+  setMillis(1000);
+  dmTap(0, 0);
+  pressKey(2, 1);                                 // verbraucht und noch gehalten
+  assert(heldModifierMask() == 0);
+  bleKeyboard.keyEvents.clear();
+  pressKey(2, 4);                                 // Umlaut bricht die Erfassung ab und läuft ohne Shift
+  for (int e : bleKeyboard.keyEvents) assert(e != KEY_LEFT_SHIFT && e != -KEY_LEFT_SHIFT);
+  releaseKey(2, 4);
+  releaseKey(2, 1);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_leader_deferred_key_uses_its_press_time_for_the_timeout) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a' });
+  setMillis(1000);
+  dmTap(0, 0);
+  // Der Druck liegt im Zeitlimit, wird aber erst spät ausgeführt (Deferred Queue): er zählt trotzdem
+  keyPressTime[2][1] = 1900;
+  keyState[2][1] = true;
+  setMillis(2500);
+  dispatchPress(2, 1, 'a', 0);
+  assert(leaderWrites('z') == 1);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_leader_consumed_key_still_reports_a_press_to_the_app) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  dmTap(0, 0);
+  Serial.clear();
+  pressKey(2, 1);
+  bool seen = false;   // USB-Serial; über BLE geht KEY_PRESS im Tastaturmodus nie (Keylogger-Schutz)
+  for (const auto &l : Serial.outputLines) if (l.rfind("KEY_PRESS:", 0) == 0 && l.find("\"r\":2,\"c\":1") != std::string::npos) seen = true;
+  assert(seen);
+  releaseKey(2, 1);
+}
+
+TEST(test_leader_timeout_uses_a_signed_32_bit_difference) {
+  LeaderState st;
+  st.start(5000);
+  assert(!st.timedOut(4990, 1000));                // Start nach dem Zeitpunkt now: nicht abgelaufen
+  assert(!st.timedOut(5999, 1000) && st.timedOut(6000, 1000));
+  st.start(0xFFFFFF00UL);                          // Überlauf von millis()
+  assert(!st.timedOut(0xFFFFFF00UL + 500UL, 1000));
+  assert(st.timedOut((0xFFFFFF00UL + 1000UL) & 0xFFFFFFFFUL, 1000));
+  st.reset();
+  assert(!st.timedOut(99999, 1));                  // ohne Erfassung nie
+}
+
+TEST(test_leader_hold_resolve_after_the_tick_does_not_end_the_capture) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a' });
+  KEYMAP[0][3][0] = 'q';
+  HOLDMAP[0][3][0] = ACT_LEADER;
+  setMillis(1000);
+  pressKey(3, 0);
+  // Der Tick läuft mit einer Zeit vor dem Start der Erfassung (Hold-Entscheidung innerhalb desselben Durchlaufs)
+  setMillis(1000 + tappingTermMs + 5);
+  processDeferredKeys(1000);
+  processDeferredKeys(millis());
+  assert(leaderState.active);
+}
+
+TEST(test_leader_capture_survives_while_a_mod_tap_key_waits) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a' });
+  KEYMAP[0][3][1] = 'm';
+  HOLDMAP[0][3][1] = KEY_LEFT_SHIFT;
+  tappingTermMs = 3000;                            // länger als das Leader-Zeitlimit
+  setMillis(1000);
+  dmTap(0, 0);
+  pressKey(3, 1);                                  // Mod-Tap wartet auf seine Entscheidung
+  assert(anyTapHoldPending());
+  setMillis(2500);                                 // Leader-Zeitlimit (1000 ms) überschritten
+  processDeferredKeys(millis());
+  assert(leaderState.active);                      // die wartende Taste hält die Erfassung offen
+  releaseKey(3, 1);
+  tappingTermMs = 200;
+}
+
+TEST(test_leader_stale_zero_press_time_does_not_expire_the_capture) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a' });
+  setMillis(5000);
+  dmTap(0, 0);
+  keyPressTime[2][1] = 0;                          // keine Anschlagzeit (z. B. Nachholen eines Tipps)
+  keyState[2][1] = true;
+  dispatchPress(2, 1, 'a', 0);
+  assert(leaderWrites('z') == 1);
+}
+
+TEST(test_leader_consumed_key_press_never_goes_over_ble_in_keyboard_mode) {
+  resetState();
+  leaderMapKeys();
+  leaderAddSeq('z', { 'a', 'b' });
+  dmTap(0, 0);
+  mockChar.notifications.clear();
+  pressKey(2, 1);
+  releaseKey(2, 1);
+  for (const auto &n : mockChar.notifications) {
+    assert(n.rfind("KEY_PRESS", 0) != 0 && n.rfind("KEY_RELEASE", 0) != 0);
+  }
+}
+
+TEST(test_leader_consumes_an_armed_one_shot_layer_like_any_key) {
+  resetState();
+  leaderMapKeys();
+  KEYMAP[0][5][0] = ACT_OSL_BASE + 2;
+  leaderAddSeq('z', { 'a' });
+  tapOsl(5, 0);
+  assert(oslArmed == (1 << 2));
+  dmTap(0, 0);                                    // die Leader-Taste ist der nächste Druck: sie verbraucht die Vormerkung
+  assert(oslArmed == 0 && getActiveLayer() == 0);
+  dmTap(2, 1);
+  assert(leaderWrites('z') == 1);
+}
+
+TEST(test_leader_partial_nvs_data_keeps_the_compiled_in_list) {
+  resetState();
+  loadKeymapFromNVS();
+  handleConfigCommand("ADD_LEADER 122 97", false);
+  handleConfigCommand("SAVE_LEADER", false);
+  // Anzahl 2, aber Daten für eine Folge: die gespeicherte Liste wird verworfen und das Protokoll meldet es
+  preferences.begin("dactyl", false);
+  preferences.putUChar("num_leader", 2);
+  preferences.end();
+  numLeaderSeqs = 1;
+  userLeaderSeqs[0] = { { 98, 0, 0, 0 }, 121 };
+  Serial.clear();
+  loadKeymapFromNVS();
+  assert(numLeaderSeqs == 1 && userLeaderSeqs[0].keys[0] == 98);
+  bool logged = false;
+  for (const auto &l : Serial.outputLines) if (l.find("Leader-Folgen unvollständig") != std::string::npos) logged = true;
+  assert(logged);
 }
 
 int main() {

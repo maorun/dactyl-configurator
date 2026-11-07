@@ -23,15 +23,6 @@ Rules for this file:
 
 ## Priority 4
 
-### Leader key (`LEADER`)
-
-- **Rank:** Feature model. Total 20/40 (typing 6, configuration 3, harmony 6, safety 5). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `server.py`, `js/keycodes.js`, new module `js/leader-ui.js`.
-- **Problem:** Rare actions, for example a macro or a media key, use a key position or a combo. The positions and combos are limited.
-- **Goal:** Add the action `LEADER`. After it, the firmware collects up to four keys within a timeout (default 1000 ms). A matching sequence runs its action (keyboard code, key pair or macro); no match sends nothing. The list holds up to 16 sequences per half. Keys in a sequence send no HID event. Add commands, NVS keys and a `GET_CONFIG` block like the key pairs. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test checks a match, a timeout, a sequence without a match and the release of all keys after the sequence.
-
 ### Eager debounce per key
 
 - **Rank:** Feature model. Total 20/40 (typing 7, configuration 2, harmony 5, safety 6). Effort M. Estimate.

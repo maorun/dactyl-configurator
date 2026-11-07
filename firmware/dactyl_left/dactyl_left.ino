@@ -79,6 +79,7 @@ uint16_t tappingTermMs = 200;
 uint16_t quickTapMs = 0;
 uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
+uint16_t leaderTimeoutMs = 1000;
 uint8_t holdTapMode = 0;
 uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
 uint8_t numTriLayers = 0;
@@ -102,6 +103,14 @@ KeyPair userKeyPairs[MAX_KEY_PAIRS] = {
   { 0, 0 }
 };
 // [[[END_KEY_PAIRS]]]
+
+// Leader-Folgen (ACT_LEADER): bis zu vier Tasten dieser Hälfte führen eine Aktion aus (DactylLeader.h)
+// [[[START_LEADER]]]
+uint8_t numLeaderSeqs = 0;
+LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS] = {
+  { {0, 0, 0, 0}, 0 }
+};
+// [[[END_LEADER]]]
 
 // [[[START_MACROS]]]
 uint8_t numMacros = 0;

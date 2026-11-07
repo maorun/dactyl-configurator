@@ -16,6 +16,7 @@ const SETTINGS_RANGES = {
   tappingTermMs: [100, 500, 200],
   holdTapMode: [0, 2, 0],
   quickTapMs: [0, 500, 0],
+  leaderTimeoutMs: [100, 5000, 1000],
   requirePriorIdleMs: [0, 500, 0],
   chordalHold: [0, 1, 0],
   capsLed: [0, 1, 0],
@@ -328,6 +329,69 @@ function keyOverrideLabel(o, labelFor) {
   return `${o.mods.map(m => KEY_OVERRIDE_MOD_LABELS[m]).join(" + ")} + ${labelFor(o.key)} → ${labelFor(o.replacement)}`;
 }
 
+// Leader-Sequenz { keys: [1..4 Tasten], action }: Tasten 1..255 ohne Modifier; Aktion eine solche Taste, ein Tastenpaar
+// (PAIR_n) oder ein Makro (MACRO_n). Wie server.py und die Firmware.
+function isLeaderKey(code) {
+  return isStandardKeyOrModifier(code) && !isModifierKeyCode(code);
+}
+
+function isLeaderAction(code) {
+  return isLeaderKey(code) || pairIndexFromCode(code) >= 0 || macroIndexFromCode(code) >= 0;
+}
+
+function isValidLeaderSequence(q) {
+  return !!q && typeof q === "object" && Array.isArray(q.keys) && q.keys.length >= 1 && q.keys.length <= LEADER_MAX_KEYS &&
+    q.keys.every(isLeaderKey) && isLeaderAction(q.action);
+}
+
+// Tasten einer Sequenz als vier Zahlen, ungenutzte Plätze 0 (wie die Firmware)
+function leaderKeyNumbers(keys) {
+  const out = (keys || []).slice(0, LEADER_MAX_KEYS).map(actionCodeToNumeric);
+  while (out.length < LEADER_MAX_KEYS) out.push(0);
+  return out;
+}
+
+// true, wenn zwei Sequenzen der Liste dieselben Tasten haben
+function hasDuplicateLeaderSequence(list) {
+  const seen = new Set();
+  for (const q of list) {
+    const id = leaderKeyNumbers(q.keys).join(",");
+    if (seen.has(id)) return true;
+    seen.add(id);
+  }
+  return false;
+}
+
+function normalizeLeaderSequence(q) {
+  return { keys: q.keys.slice(0, LEADER_MAX_KEYS), action: q.action };
+}
+
+// Anzeigename, z. B. "A, B → Makro 0"
+function leaderSequenceLabel(q, labelFor) {
+  if (!q) return "?";
+  return `${q.keys.map(labelFor).join(", ")} → ${labelFor(q.action)}`;
+}
+
+// true, wenn eine Leader-Sequenz die Aktion code (z. B. PAIR_2, MACRO_1) ausführt
+function isLeaderActionUsed(sequences, code) {
+  return (sequences || []).some(q => q && q.action === code);
+}
+
+// Leader-Aktionen nach dem Löschen von Paar oder Makro idx (prefix "PAIR_" oder "MACRO_"): Sequenzen auf idx entfallen,
+// höhere Verweise rücken auf. Liefert { sequences, removed: [{ index, seq }] } (Kopie, ändert nichts in-place).
+function remapLeaderSequences(sequences, prefix, idx) {
+  const re = new RegExp(`^${prefix}(\\d{1,2})$`);
+  const out = [];
+  const removed = [];
+  (sequences || []).forEach((q, index) => {
+    const m = q && typeof q.action === "string" ? re.exec(q.action) : null;
+    const n = m ? Number(m[1]) : -1;
+    if (n === idx) { removed.push({ index, seq: JSON.parse(JSON.stringify(q)) }); return; }
+    out.push(n > idx ? { ...q, keys: q.keys.slice(), action: `${prefix}${n - 1}` } : JSON.parse(JSON.stringify(q)));
+  });
+  return { sequences: out, removed };
+}
+
 // true, wenn eine Taste einer Ebene PAIR_<idx> als Tap, Halten oder Doppel-Tipp nutzt.
 // Alte Zellen im String-Format ("PAIR_2") zählen als Tap-Aktion.
 function isKeyPairUsed(layers, idx) {
@@ -342,14 +406,17 @@ function planKeyPairDeletion(config, idx) {
   const next = removeKeyPairAt(config, idx);
   if (!next) return null;
   const code = `PAIR_${idx}`;
-  const used = isKeyPairUsed(config.layers, idx) || (config.combos || []).some(cb => cb && cb.action === code);
-  const old = JSON.parse(JSON.stringify({ keyPairs: config.keyPairs, layers: config.layers || [], combos: config.combos || [] }));
+  const used = isKeyPairUsed(config.layers, idx) || (config.combos || []).some(cb => cb && cb.action === code) ||
+    isLeaderActionUsed(config.leaderSequences, code);
+  const old = JSON.parse(JSON.stringify({ keyPairs: config.keyPairs, layers: config.layers || [], combos: config.combos || [],
+    leaderSequences: config.leaderSequences || [] }));
   return { used, next, old, removed: { ...config.keyPairs[idx] }, shiftsFollowing: idx < config.keyPairs.length - 1 };
 }
 
 // Entfernt das Tastenpaar idx und nummeriert die Verweise neu: PAIR_idx wird "NONE", PAIR_n mit n > idx
 // wird PAIR_(n-1). Gilt für Tap, Halten und Doppel-Tipp aller Ebenen sowie für Combo-Aktionen.
-// Ändert nichts in-place; liefert { keyPairs, layers, combos } oder null bei ungültigem Index.
+// Leader-Sequenzen mit dem gelöschten Paar entfallen, höhere Verweise rücken auf.
+// Ändert nichts in-place; liefert { keyPairs, layers, combos, leaderSequences } oder null bei ungültigem Index.
 function removeKeyPairAt(config, idx) {
   const pairs = (config && config.keyPairs) || [];
   if (!isValidIndex(idx, pairs.length)) return null;
@@ -364,7 +431,8 @@ function removeKeyPairAt(config, idx) {
     else if (k && typeof k === "object") ["tap", "hold", "dtap"].forEach(f => { if (f in k) k[f] = remap(k[f]); });
   })));
   const combos = JSON.parse(JSON.stringify(config.combos || [])).map(cb => (cb && "action" in cb ? { ...cb, action: remap(cb.action) } : cb));
-  return { keyPairs: pairs.filter((_, i) => i !== idx).map(p => ({ ...p })), layers, combos };
+  const leaderSequences = remapLeaderSequences(config.leaderSequences, "PAIR_", idx).sequences;
+  return { keyPairs: pairs.filter((_, i) => i !== idx).map(p => ({ ...p })), layers, combos, leaderSequences };
 }
 
 // Hängt die beim Übernehmen neu angelegten Paare an pairs an; liefert den Index des ersten neuen Paars
@@ -376,10 +444,11 @@ function appendResolvedPairs(pairs, added) {
 
 // Revert einer Tastenänderung: entfernt die mitangelegten Paare, solange sie am Ende stehen und keine
 // Taste sie nutzt (layers enthält die Taste bereits im alten Zustand). Liefert die Anzahl entfernter Paare.
-function revertResolvedPairs(pairs, layers, firstIdx, count) {
+// sequences: Leader-Sequenzen; ein Paar, das eine Sequenz ausführt, bleibt ebenfalls stehen.
+function revertResolvedPairs(pairs, layers, firstIdx, count, sequences) {
   let removed = 0;
   for (let i = firstIdx + count - 1; i >= firstIdx; i--) {
-    if (pairs.length !== i + 1 || isKeyPairUsed(layers, i)) break;
+    if (pairs.length !== i + 1 || isKeyPairUsed(layers, i) || isLeaderActionUsed(sequences, `PAIR_${i}`)) break;
     pairs.pop();
     removed++;
   }
@@ -484,8 +553,9 @@ function macroSaveIndex(macros, editIndex) {
 }
 
 // true, wenn eine Taste einer Ebene MACRO_<idx> als Tap, Halten oder Doppel-Tipp nutzt
-function isMacroUsed(layers, idx) {
+function isMacroUsed(layers, idx, sequences) {
   const code = `MACRO_${idx}`;
+  if (isLeaderActionUsed(sequences, code)) return true;
   const uses = k => (typeof k === "string" ? k === code : !!k && (k.tap === code || k.hold === code || k.dtap === code));
   return (layers || []).some(layer => (layer || []).some(row => (row || []).some(uses)));
 }
@@ -502,7 +572,8 @@ function remapLayerCodes(layers, remap) {
 }
 
 // Entfernt das Makro idx und nummeriert die Verweise neu (wie removeKeyPairAt). Combos nutzen keine Makros.
-// Ändert nichts in-place; liefert { macros, layers, cleared } oder null bei ungültigem Index.
+// Leader-Sequenzen mit dem Makro entfallen (leaderRemoved, für restoreMacroAt), höhere Verweise rücken auf.
+// Ändert nichts in-place; liefert { macros, layers, cleared, leaderSequences, leaderRemoved } oder null bei ungültigem Index.
 // cleared: Positionen, deren Verweis auf das Makro geleert wurde (für restoreMacroAt).
 function removeMacroAt(config, idx) {
   const macros = (config && config.macros) || [];
@@ -515,12 +586,15 @@ function removeMacroAt(config, idx) {
     cleared.push(pos);
     return "NONE";
   });
-  return { macros: JSON.parse(JSON.stringify(macros.filter((_, i) => i !== idx))), layers, cleared };
+  const leader = remapLeaderSequences(config.leaderSequences, "MACRO_", idx);
+  return { macros: JSON.parse(JSON.stringify(macros.filter((_, i) => i !== idx))), layers, cleared,
+    leaderSequences: leader.sequences, leaderRemoved: leader.removed };
 }
 
 // Rückgängig zu removeMacroAt auf dem aktuellen Stand: fügt das Makro wieder bei idx ein, rückt höhere Verweise
 // zurück und setzt nur die geleerten Positionen wieder, die noch leer sind. Spätere Tastenänderungen bleiben.
-function restoreMacroAt(config, idx, macro, cleared) {
+// leaderRemoved: die mit dem Makro entfallenen Leader-Sequenzen ({ index, seq }); sie kommen an ihre Stelle zurück.
+function restoreMacroAt(config, idx, macro, cleared, leaderRemoved) {
   const macros = JSON.parse(JSON.stringify((config && config.macros) || []));
   if (!Number.isInteger(idx) || idx < 0 || idx > macros.length || macros.length >= MAX_MACROS) return null;
   macros.splice(idx, 0, JSON.parse(JSON.stringify(macro)));
@@ -531,7 +605,14 @@ function restoreMacroAt(config, idx, macro, cleared) {
     if (n < 0 && (code === "NONE" || code === "") && wasCleared.has(`${pos.l},${pos.r},${pos.c},${pos.field}`)) return `MACRO_${idx}`;
     return code;
   });
-  return { macros, layers };
+  const sequences = JSON.parse(JSON.stringify((config && config.leaderSequences) || [])).map(q => {
+    const n = macroIndexFromCode(q.action);
+    return n >= idx ? { ...q, action: `MACRO_${n + 1}` } : q;
+  });
+  for (const { index, seq } of (leaderRemoved || [])) {
+    if (sequences.length < MAX_LEADER_SEQS) sequences.splice(Math.min(index, sequences.length), 0, JSON.parse(JSON.stringify(seq)));
+  }
+  return { macros, layers, leaderSequences: sequences };
 }
 
 // Anzeigename eines Tastenpaars, z. B. "Umschalt (Links) + ."
@@ -605,6 +686,17 @@ function validateConfigShape(cfg, profile) {
       }
     });
   }
+  if (cfg.leaderSequences !== undefined) {
+    if (!Array.isArray(cfg.leaderSequences) || cfg.leaderSequences.length > MAX_LEADER_SEQS) {
+      throw new Error(`'leaderSequences' muss eine Liste mit maximal ${MAX_LEADER_SEQS} Einträgen sein.`);
+    }
+    cfg.leaderSequences.forEach((q, i) => {
+      if (!isValidLeaderSequence(q)) {
+        throw new Error(`Leader-Sequenz ${i} braucht 1..${LEADER_MAX_KEYS} normale Tasten (keys) und eine Aktion (Taste, Tastenpaar oder Makro).`);
+      }
+    });
+    if (hasDuplicateLeaderSequence(cfg.leaderSequences)) throw new Error("Zwei Leader-Sequenzen haben dieselben Tasten.");
+  }
   if (cfg.macros !== undefined) {
     if (!Array.isArray(cfg.macros) || cfg.macros.length > MAX_MACROS) {
       throw new Error(`'macros' muss eine Liste mit maximal ${MAX_MACROS} Einträgen sein.`);
@@ -619,6 +711,7 @@ function validateConfigShape(cfg, profile) {
   if ((cfg.combos || []).some(cb => cb && isMouseMoveCode(cb.action))) throw new Error("Combos unterstützen keine Mausbewegung.");
   if ((cfg.combos || []).some(cb => cb && isOslCode(cb.action))) throw new Error("Combos unterstützen keine One-Shot-Ebene.");
   if ((cfg.combos || []).some(cb => cb && isDynamicMacroCode(cb.action))) throw new Error("Combos unterstützen keine dynamischen Makros.");
+  if ((cfg.combos || []).some(cb => cb && isLeaderCode(cb.action))) throw new Error("Combos unterstützen kein Leader.");
   // Den Slot hat nur der Master: auf der anderen Hälfte tun DM_REC und DM_PLAY nichts (wie validate_config in server.py)
   if (profile && !profile.master && Array.isArray(cfg.layers) &&
       cfg.layers.some(layer => Array.isArray(layer) && layer.some(row => Array.isArray(row) && row.some(cell => {
@@ -698,6 +791,13 @@ function normalizeConfig(cfg, profile) {
   cfg.keyOverrides = Array.isArray(cfg.keyOverrides) && profile && profile.master
     ? cfg.keyOverrides.filter(isValidKeyOverride).slice(0, MAX_KEY_OVERRIDES).map(normalizeKeyOverride)
     : [];
+  // Ungültige oder doppelte Sequenzen entfallen (der erste Eintrag mit denselben Tasten gewinnt)
+  const leaderList = [];
+  for (const q of Array.isArray(cfg.leaderSequences) ? cfg.leaderSequences : []) {
+    if (!isValidLeaderSequence(q) || leaderList.length >= MAX_LEADER_SEQS) continue;
+    if (!hasDuplicateLeaderSequence([...leaderList, q])) leaderList.push(normalizeLeaderSequence(q));
+  }
+  cfg.leaderSequences = leaderList;
   // Ein ungültiges Makro wird leer, nicht entfernt: MACRO_<n> verweist per Index, die Indizes bleiben gleich
   cfg.macros = Array.isArray(cfg.macros)
     ? cfg.macros.slice(0, MAX_MACROS).map((m, i) => ({
@@ -715,6 +815,7 @@ function normalizeConfig(cfg, profile) {
     tappingTermMs: clampSetting("tappingTermMs", s.tappingTermMs ?? 200),
     holdTapMode: clampSetting("holdTapMode", s.holdTapMode ?? 0),
     quickTapMs: clampSetting("quickTapMs", s.quickTapMs ?? 0),
+    leaderTimeoutMs: clampSetting("leaderTimeoutMs", s.leaderTimeoutMs ?? 1000),
     requirePriorIdleMs: clampSetting("requirePriorIdleMs", s.requirePriorIdleMs ?? 0),
     chordalHold: clampSetting("chordalHold", s.chordalHold ?? 0),
     triLayers: normalizeTriLayers(s.triLayers),
@@ -921,7 +1022,7 @@ function maxKeyCount(stats, layer = null) {
 function createDeviceSnapshot() {
   return {
     names: null, tap: [], hold: [], dtap: [], term: [],
-    counts: { combos: null, pairs: null, macros: null, overrides: null }, combos: [], pairs: [], macros: [], overrides: [], macroLens: [], listsBroken: false,
+    counts: { combos: null, pairs: null, macros: null, overrides: null, leader: null }, combos: [], pairs: [], macros: [], overrides: [], leader: [], macroLens: [], listsBroken: false,
     // DEVICE_INFO der Hälfte (nur beim Laden der kompletten Config gelesen), sonst null
     info: null
   };
@@ -929,8 +1030,8 @@ function createDeviceSnapshot() {
 
 const COMBO_BEHAVIOR_CODES = { KEY_PRESS: 0, MODIFIER_HOLD: 1, LAYER_TOGGLE: 2 };
 
-const LIST_COUNT_MAX = { "COMBO_COUNT:": MAX_COMBOS, "PAIR_COUNT:": MAX_KEY_PAIRS, "MACRO_COUNT:": MAX_MACROS, "OVERRIDE_COUNT:": MAX_KEY_OVERRIDES };
-const LIST_DATA_PREFIXES = ["COMBO_DATA:", "PAIR_DATA:", "MACRO_DATA:", "OVERRIDE_DATA:"];
+const LIST_COUNT_MAX = { "COMBO_COUNT:": MAX_COMBOS, "PAIR_COUNT:": MAX_KEY_PAIRS, "MACRO_COUNT:": MAX_MACROS, "OVERRIDE_COUNT:": MAX_KEY_OVERRIDES, "LEADER_COUNT:": MAX_LEADER_SEQS };
+const LIST_DATA_PREFIXES = ["COMBO_DATA:", "PAIR_DATA:", "MACRO_DATA:", "OVERRIDE_DATA:", "LEADER_DATA:"];
 
 // Übernimmt eine Zeile ..._COUNT: oder ..._DATA: in den Snapshot. Gibt true zurück, wenn die Zeile eine dieser
 // Arten ist (auch bei ungültigem Inhalt: verbraucht, der Snapshot gilt dann als unvollständig).
@@ -944,7 +1045,7 @@ function captureListLine(snapshot, line) {
     if (LIST_COUNT_MAX[prefix] !== undefined) {
       const n = /^\d{1,3}$/.test(body) ? Number(body) : -1;
       if (n < 0 || n > LIST_COUNT_MAX[prefix]) return fail();
-      const kind = { "COMBO_COUNT:": "combos", "PAIR_COUNT:": "pairs", "MACRO_COUNT:": "macros", "OVERRIDE_COUNT:": "overrides" }[prefix];
+      const kind = { "COMBO_COUNT:": "combos", "PAIR_COUNT:": "pairs", "MACRO_COUNT:": "macros", "OVERRIDE_COUNT:": "overrides", "LEADER_COUNT:": "leader" }[prefix];
       snapshot.counts[kind] = n;
       snapshot[kind] = [];
       if (kind === "macros") snapshot.macroLens = [];
@@ -964,17 +1065,33 @@ function captureListLine(snapshot, line) {
     }
     const isCombo = prefix === "COMBO_DATA:";
     const isOverride = prefix === "OVERRIDE_DATA:";
-    const kind = isCombo ? "combos" : isOverride ? "overrides" : "pairs";
+    const isLeader = prefix === "LEADER_DATA:";
+    const kind = isCombo ? "combos" : isOverride ? "overrides" : isLeader ? "leader" : "pairs";
     const count = snapshot.counts[kind];
     const list = snapshot[kind];
     if (count === null || data.o !== list.length || !Array.isArray(data.e) || list.length + data.e.length > count ||
         !data.e.every(e => isCombo ? (nums(e, 6, t => t[4] <= 2) || nums(e, 7, t => t[4] <= 2 && isValidComboLayerMask(t[6])) ||
             nums(e, 10, t => t[4] <= 2 && isValidComboLayerMask(t[6]) && isDeviceComboThirdAndWindow(t)))
-          : isOverride ? nums(e, 3, t => t[0] >= 1 && t[0] <= 15) : nums(e, 2))) return fail();
+          : isOverride ? nums(e, 3, t => t[0] >= 1 && t[0] <= 15)
+          : isLeader ? nums(e, 5, isDeviceLeaderTuple) : nums(e, 2))) return fail();
     // Firmware vor der Ebenenmaske sendet 6 Werte je Combo (alle Ebenen), vor Stand 24 sieben (zwei Tasten, globales
     // Fenster). Alle Einträge werden auf zehn Werte ergänzt: ..., Maske, r3, c3, Fenster.
     list.push(...(isCombo ? data.e.map(e => [...e, ...[COMBO_ALL_LAYERS, COMBO_NO_KEY, COMBO_NO_KEY, 0].slice(e.length - 6)]) : data.e));
   } catch (_) { return fail(); }
+  return true;
+}
+
+// Leader-Eintrag vom Gerät: [Aktion, k1..k4]; Tasten 1..255 ohne Modifier, nach der ersten leeren Stelle nur Nullen
+function isDeviceLeaderTuple(t) {
+  const code = n => (n >= 0x80 && n <= 0x87) ? false : (n >= 1 && n <= 0xFF);
+  const actionOk = code(t[0]) || (t[0] >= ACT_KEY_PAIR_BASE && t[0] < ACT_KEY_PAIR_BASE + MAX_KEY_PAIRS) ||
+    (t[0] >= ACT_MACRO_BASE && t[0] < ACT_MACRO_BASE + MAX_MACROS);
+  if (!actionOk || !code(t[1])) return false;
+  let ended = false;
+  for (let i = 2; i <= LEADER_MAX_KEYS; i++) {
+    if (t[i] === 0) { ended = true; continue; }
+    if (ended || !code(t[i])) return false;
+  }
   return true;
 }
 
@@ -989,13 +1106,15 @@ function isDeviceComboThirdAndWindow(t) {
 function snapshotListsState(snapshot) {
   if (!snapshot) return "absent";
   const c = snapshot.counts;
-  const none = c.combos === null && c.pairs === null && c.macros === null && c.overrides === null;
+  const none = c.combos === null && c.pairs === null && c.macros === null && c.overrides === null && c.leader === null;
   if (none && !snapshot.listsBroken) return "absent";
   if (snapshot.listsBroken || c.combos === null || c.pairs === null || c.macros === null) return "incomplete";
   if (snapshot.combos.length !== c.combos || snapshot.pairs.length !== c.pairs) return "incomplete";
   // Die Überschreibungen sendet nur der Master ab Stand 7: ohne Zähler gibt es nichts zu vergleichen,
   // ein begonnener Block muss vollständig sein
   if (c.overrides !== null && snapshot.overrides.length !== c.overrides) return "incomplete";
+  // Die Leader-Sequenzen senden beide Hälften ab Stand 26; Firmware davor sendet keinen Zähler
+  if (c.leader !== null && snapshot.leader.length !== c.leader) return "incomplete";
   for (let i = 0; i < c.macros; i++) {
     if (snapshot.macroLens[i] === undefined || snapshot.macros[i].length !== snapshot.macroLens[i]) return "incomplete";
   }
@@ -1023,6 +1142,10 @@ function localOverrideTuples(cfg) {
   return (cfg.keyOverrides || []).slice(0, MAX_KEY_OVERRIDES).map(o => [keyOverrideModsValue(o.mods), actionCodeToNumeric(o.key), actionCodeToNumeric(o.replacement)]);
 }
 
+function localLeaderTuples(cfg) {
+  return (cfg.leaderSequences || []).slice(0, MAX_LEADER_SEQS).map(q => [actionCodeToNumeric(q.action), ...leaderKeyNumbers(q.keys)]);
+}
+
 function localMacroSteps(cfg) {
   return (cfg.macros || []).slice(0, MAX_MACROS).map(m => m.steps.map(st => st.type === "pause"
     ? [MACRO_STEP_TYPES.pause, 0, st.ms]
@@ -1047,6 +1170,11 @@ function describePairTuple(t) {
 function describeOverrideTuple(t) {
   const mods = Object.keys(KEY_OVERRIDE_MODS).filter(m => t[0] & KEY_OVERRIDE_MODS[m]).map(m => KEY_OVERRIDE_MOD_LABELS[m]).join(" + ");
   return `${mods} + ${findDefinitionByCode(t[1]).label} → ${findDefinitionByCode(t[2]).label}`;
+}
+
+function describeLeaderTuple(t) {
+  const keys = t.slice(1).filter(n => n > 0).map(n => findDefinitionByCode(n).label).join(", ");
+  return `${keys} → ${findDefinitionByCode(t[0]).label}`;
 }
 
 function describeMacroSteps(steps) {
@@ -1120,7 +1248,7 @@ function diffKeymap(cfg, snapshot, profile) {
 // nichts wird verglichen.
 function diffLists(cfg, snapshot) {
   const state = snapshotListsState(snapshot);
-  const out = { known: state === "complete", state, combos: [], pairs: [], overrides: [], macros: [] };
+  const out = { known: state === "complete", state, combos: [], pairs: [], overrides: [], leader: [], macros: [] };
   if (!out.known) return out;
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const compare = (target, label, device, local, describe) => {
@@ -1134,6 +1262,8 @@ function diffLists(cfg, snapshot) {
   compare(out.pairs, "Paar", snapshot.pairs, localPairTuples(cfg), describePairTuple);
   // Nur wenn das Gerät Überschreibungen meldet (Master ab Stand 7); sonst gibt es nichts zu vergleichen
   if (snapshot.counts.overrides !== null) compare(out.overrides, "Überschreibung", snapshot.overrides, localOverrideTuples(cfg), describeOverrideTuple);
+  // Nur wenn das Gerät Leader-Sequenzen meldet (ab Stand 26)
+  if (snapshot.counts.leader !== null) compare(out.leader, "Leader", snapshot.leader, localLeaderTuples(cfg), describeLeaderTuple);
   const deviceMacros = Array.from({ length: snapshot.counts.macros }, (_, i) => snapshot.macros[i]);
   compare(out.macros, "Makro", deviceMacros, localMacroSteps(cfg), describeMacroSteps);
   return out;
@@ -1146,7 +1276,7 @@ function settingsFromDeviceInfo(info, base) {
   const map = {
     standby_timeout: "standbyTimeoutMinutes", sleep_timeout: "sleepTimeoutMinutes", debounce_ms: "debounceMs",
     combo_timeout_ms: "comboTimeoutMs", tapping_term_ms: "tappingTermMs", hold_tap_mode: "holdTapMode",
-    quick_tap_ms: "quickTapMs", require_prior_idle_ms: "requirePriorIdleMs", chordal_hold: "chordalHold"
+    quick_tap_ms: "quickTapMs", leader_timeout_ms: "leaderTimeoutMs", require_prior_idle_ms: "requirePriorIdleMs", chordal_hold: "chordalHold"
   };
   for (const [key, field] of Object.entries(map)) if (info[key] !== undefined) out[field] = info[key];
   if (Array.isArray(info.tri_layer)) {
@@ -1224,6 +1354,10 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
       : snapshot.overrides.map(t => ({
           mods: Object.keys(KEY_OVERRIDE_MODS).filter(m => t[0] & KEY_OVERRIDE_MODS[m]), key: tapOf(t[1]), replacement: tapOf(t[2])
         })),
+    // Ohne LEADER_COUNT (Firmware vor Stand 26) bleiben die lokalen Sequenzen
+    leaderSequences: snapshot.counts.leader === null
+      ? JSON.parse(JSON.stringify((baseCfg && baseCfg.leaderSequences) || []))
+      : snapshot.leader.map(t => ({ keys: t.slice(1).filter(n => n > 0).map(tapOf), action: tapOf(t[0]) })),
     macros: Array.from({ length: snapshot.counts.macros }, (_, i) => ({
       name: `Makro ${i}`,
       steps: snapshot.macros[i].map(st => st[0] === MACRO_STEP_TYPES.pause
@@ -1437,6 +1571,11 @@ function findActionUsages(config, code, side = null) {
       if (o[role] === code) hits.push({ kind: "override", side, index, role });
     }
   });
+  (Array.isArray(config.leaderSequences) ? config.leaderSequences : []).forEach((q, index) => {
+    if (!q) return;
+    if (Array.isArray(q.keys) && q.keys.includes(code)) hits.push({ kind: "leader", side, index, role: "key" });
+    if (q.action === code) hits.push({ kind: "leader", side, index, role: "action" });
+  });
   (Array.isArray(config.macros) ? config.macros : []).forEach((m, macro) => {
     (m && Array.isArray(m.steps) ? m.steps : []).forEach((st, step) => {
       if (st && st.type !== "pause" && st.code === code) hits.push({ kind: "macro", side, macro, step, type: st.type });
@@ -1599,13 +1738,21 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
     const cfg = configs[side];
     const combos = Array.isArray(cfg.combos) ? cfg.combos : [];
     (Array.isArray(cfg.keyPairs) ? cfg.keyPairs : []).forEach((pair, i) => {
-      if (isKeyPairUsed(cfg.layers, i) || combos.some(cb => cb && cb.action === `PAIR_${i}`)) return;
+      if (isKeyPairUsed(cfg.layers, i) || combos.some(cb => cb && cb.action === `PAIR_${i}`) || isLeaderActionUsed(cfg.leaderSequences, `PAIR_${i}`)) return;
       add("info", side, "pair-unused", `Tastenpaar ${i} (${keyPairLabel(pair, labelFor)}) wird nirgends verwendet.`);
     });
     (Array.isArray(cfg.macros) ? cfg.macros : []).forEach((macro, i) => {
-      if (isMacroUsed(cfg.layers, i)) return;
+      if (isMacroUsed(cfg.layers, i, cfg.leaderSequences)) return;
       const name = macro && typeof macro.name === "string" && macro.name ? macro.name : "ohne Name";
       add("info", side, "macro-unused", `Makro ${i} (${name}) wird nirgends verwendet.`);
+    });
+    // Eine Leader-Sequenz mit einem nicht definierten Paar oder Makro sendet nichts
+    (Array.isArray(cfg.leaderSequences) ? cfg.leaderSequences : []).forEach((q, i) => {
+      if (!q || typeof q.action !== "string") return;
+      const pairIdx = pairIndexFromCode(q.action);
+      const macroIdx = macroIndexFromCode(q.action);
+      const missing = pairIdx >= 0 ? pairIdx >= (cfg.keyPairs || []).length : macroIdx >= 0 && macroIdx >= (cfg.macros || []).length;
+      if (missing) add("warn", side, "leader-undefined-target", `Leader-Sequenz ${i} führt ${q.action} aus, aber dieses ${pairIdx >= 0 ? "Tastenpaar" : "Makro"} gibt es nicht. Die Sequenz sendet nichts.`);
     });
     // Zwei Combos über dieselben Tasten sind nur ein Fehler, wenn ihre Ebenenmasken sich überlappen
     const seen = new Map();

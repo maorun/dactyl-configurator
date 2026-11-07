@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Auto Shift character class filter (`autoShift` modes)
-
-- **Rank:** Feature model. Total 24/40 (typing 6, configuration 4, harmony 7, safety 7). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `js/config-model.js`, `js/editor-events.js`, `server.py`.
-- **Problem:** `autoShift` applies to letters, digits and symbols alike. Many users want Auto Shift on symbols and digits without shifting home-row letters during brief pauses.
-- **Goal:** Extend `autoShift` from `0..1` to `0..4` (`0` = off, `1` = all printable keys, `2` = digits and symbols only, `3` = letters only, `4` = symbols only) in `SET_AUTO_SHIFT`, NVS, `DEVICE_INFO`, `server.py` and the settings UI. Keep mode `1` identical to the existing behavior.
-- **Acceptance test:** A firmware test sets `autoShift = 2`, holds `'a'` past `autoShiftMs` and expects `'a'`, then holds `'1'` past `autoShiftMs` and expects `'!'`.
-
 ### Drag-and-drop key swap and cross-half layer mirror in the editor
 
 - **Rank:** Feature model. Total 23/40 (typing 2, configuration 8, harmony 6, safety 7). Effort S. Estimate.

@@ -172,8 +172,9 @@ void processOtaTimeout() {
 #define PRIOR_IDLE_MAX_MS 500
 // Opposite-Hand-Regel (chordalHold): 0 = aus, 1 = an. Die Daumenreihe (letzte Matrixzeile) ist ausgenommen.
 #define CHORDAL_THUMB_ROW (NUM_ROWS - 1)
-// Auto Shift (autoShift): 0 = aus, 1 = an. Eine Zeichentaste ohne Halte-Aktion sendet das umgeschaltete Zeichen, wenn sie
+// Auto Shift (autoShift): 0 = aus, 1 = alle Zeichentasten, 2 = Ziffern und Symbole, 3 = nur Buchstaben, 4 = nur Symbole. Eine Zeichentaste ohne Halte-Aktion sendet das umgeschaltete Zeichen, wenn sie
 // länger als autoShiftMs gehalten wird. Standardwert des Zeitlimits ohne NVS-Eintrag: AUTO_SHIFT_DEFAULT_MS.
+#define AUTO_SHIFT_MAX_MODE 4
 #define AUTO_SHIFT_MIN_MS 50
 #define AUTO_SHIFT_MAX_MS 500
 #define AUTO_SHIFT_DEFAULT_MS 175
@@ -1962,6 +1963,19 @@ static inline uint16_t autoShiftedAscii(uint16_t c) {
   }
 }
 
+// Auto Shift: Zeichenklasse des Modus (1 = alle, 2 = Ziffern und Symbole, 3 = Buchstaben, 4 = Symbole); 0 = aus
+static inline bool autoShiftModeAllows(uint8_t mode, uint16_t c) {
+  bool letter = c >= 'a' && c <= 'z';
+  bool digit = c >= '0' && c <= '9';
+  switch (mode) {
+    case 1: return true;
+    case 2: return !letter;
+    case 3: return letter;
+    case 4: return !letter && !digit;
+    default: return false;
+  }
+}
+
 // Auto Shift: Taste wartet auf das Zeitlimit; ein Loslassen oder eine andere Taste davor macht sie zum normalen Tipp
 struct AutoShiftKey {
   bool pending;
@@ -2516,7 +2530,7 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
     if (holdAct != 0 || dtapAct != 0) {
       tapHoldOnPress(r, c, tapAct, holdAct, layer, now, resolveKeyTapTerm(layer, r, c));
       tapHoldDtap[r][c] = dtapAct;
-    } else if (autoShift && autoShiftedAscii(tapAct) != 0 && !leaderState.active && heldModifierMask() == 0) {
+    } else if (autoShift && autoShiftedAscii(tapAct) != 0 && autoShiftModeAllows(autoShift, tapAct) && !leaderState.active && heldModifierMask() == 0) {
       // Auto Shift (nicht bei gehaltenem Modifikator dieser Hälfte, z. B. Cmd+Z, und nicht in einer Leader-Erfassung): erst nach dem Zeitlimit oder beim Loslassen entscheiden; Tasten mit Halte- oder Doppel-Tipp-Aktion,
       // Modifikatoren und Layer-Tasten (kein ASCII-Zeichen) laufen nie hierher
       autoShiftKeys[r][c] = { true, tapAct, autoShiftedAscii(tapAct), layer, now };
@@ -2887,7 +2901,7 @@ void loadKeymapFromNVS() {
   }
   if (preferences.isKey("auto_shift")) {
     uint8_t as = preferences.getUChar("auto_shift", 0);
-    if (as <= 1) autoShift = as;
+    if (as <= AUTO_SHIFT_MAX_MODE) autoShift = as;
   }
   if (preferences.isKey("auto_shift_ms")) {
     uint16_t am = preferences.getUShort("auto_shift_ms", AUTO_SHIFT_DEFAULT_MS);
@@ -3897,8 +3911,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd.startsWith("SET_AUTO_SHIFT ")) {
     String arg = cmd.substring(15);
     arg.trim();
-    if (arg == "0" || arg == "1") {
-      sendConfigNotification(saveAutoShiftToNVS(arg == "1" ? 1 : 0) ? "OK SET_AUTO_SHIFT " + arg : String("ERR NVS SET_AUTO_SHIFT"));
+    if (arg.length() == 1 && arg.charAt(0) >= '0' && arg.charAt(0) <= '0' + AUTO_SHIFT_MAX_MODE) {
+      sendConfigNotification(saveAutoShiftToNVS((uint8_t)(arg.charAt(0) - '0')) ? "OK SET_AUTO_SHIFT " + arg : String("ERR NVS SET_AUTO_SHIFT"));
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }

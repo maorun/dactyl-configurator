@@ -2,6 +2,9 @@
 // Editor: Event-Listener, Combo löschen, Flashen
 // =============================================================================
 
+// Öffnet den Combo-Dialog; setupEventListeners setzt die Funktion
+let openComboModal = () => {};
+
 window.deleteCombo = function(id) {
   const deletedCombo = currentConfig.combos ? currentConfig.combos.find(c => c.id === id) : null;
   currentConfig.combos = currentConfig.combos.filter(c => c.id !== id);
@@ -323,13 +326,19 @@ function setupEventListeners() {
 
   // Combo Modal Events
   const comboModal = document.getElementById("comboModal");
-  document.getElementById("btnOpenAddComboModal").addEventListener("click", () => {
+  // pair ({ a, b } mit r, c) füllt Taste 1 und 2 vor, z. B. aus einem Combo-Vorschlag der Heatmap
+  openComboModal = pair => {
     populateComboKeyDropdowns();
+    if (pair) {
+      document.getElementById("comboKey1Select").value = `${pair.a.r},${pair.a.c}`;
+      document.getElementById("comboKey2Select").value = `${pair.b.r},${pair.b.c}`;
+    }
     document.querySelectorAll(".combo-layer-check").forEach(cb => { cb.checked = true; });
     document.getElementById("comboWindowInput").value = "";
     clearSelectFilter("comboActionSelect");
     comboModal.style.display = "flex";
-  });
+  };
+  document.getElementById("btnOpenAddComboModal").addEventListener("click", () => openComboModal());
   // Tastenaufnahme: Druck auf Taste 1, 2, 3 der bearbeiteten Hälfte füllt die Auswahlfelder
   const btnCaptureCombo = document.getElementById("btnCaptureComboKeys");
   const comboKeySelectIds = ["comboKey1Select", "comboKey2Select", "comboKey3Select"];

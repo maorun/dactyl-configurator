@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Combo suggestions from frequent bigrams (`suggestCombos`)
-
-- **Rank:** Feature model. Total 28/40 (typing 6, configuration 6, harmony 8, safety 8). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js`, `js/heatmap.js`, `js/editor.js` (combo table).
-- **Problem:** The user must find good combo pairs without data. The heatmap already counts same-finger pairs, but it does not count key pairs of different hands or fingers.
-- **Goal:** Count the most frequent bigrams of two keys on the same half in `recordKeyPress`. Add `suggestCombos(stats, config, profile)`. It lists up to five pairs that no combo uses yet and whose two keys are adjacent. Add a button "Combo anlegen" that opens the combo dialog with the pair filled in.
-- **Acceptance test:** A unit test gives statistics with the pair `t`/`h` as most frequent adjacent pair and expects it first; a pair that a combo already uses does not appear.
-
 ### Detect a stale layout on connect (`js/config-sync.js`)
 
 - **Rank:** Feature model. Total 27/40 (typing 3, configuration 7, harmony 8, safety 9). Effort M. Estimate.

@@ -124,6 +124,7 @@ function updateFingerLoadUI() {
       .map(k => `${keyPositionLabel(k.id)}: ${formatShare(k.share)} (${k.corrections}/${k.presses})`).join(" · ");
   }
   updateErgonomicSwapsUI(stats);
+  updateComboSuggestionsUI(stats);
 }
 
 // Liste der Tausch-Vorschläge für Ebene 0; baut nur neu, wenn sich die Vorschläge ändern (der Timer ruft oft auf)
@@ -174,6 +175,41 @@ function updateErgonomicSwapsUI(stats) {
       for (const id of ids) ergonomicSwappedFor(side).add(id);
       updateFingerLoadUI();
     });
+    row.append(text, btn);
+    listEl.appendChild(row);
+  }
+}
+
+// Liste der Combo-Vorschläge aus den häufigsten Bigrammen; baut nur neu, wenn sich die Vorschläge ändern
+function updateComboSuggestionsUI(stats) {
+  const listEl = document.getElementById("comboSuggestions");
+  if (!listEl) return;
+  const cellLabel = pos => {
+    const cell = currentConfig.layers[0][pos.r][pos.c];
+    return `${keyPositionLabel(`${pos.r}_${pos.c}`)} ${(cell && cell.label) || ""}`.trim();
+  };
+  const suggestions = suggestCombos(stats, currentConfig, activeProfile()).map(s => ({
+    ...s, text: `${cellLabel(s.a)} + ${cellLabel(s.b)} (${s.count}×)`
+  }));
+  const signature = JSON.stringify(suggestions);
+  if (listEl.dataset.signature === signature) return;
+  listEl.dataset.signature = signature;
+  listEl.textContent = "";
+  if (!suggestions.length) {
+    listEl.textContent = "Keine Vorschläge (zu wenige Folgen oder alle Paare haben schon eine Combo).";
+    return;
+  }
+  for (const s of suggestions) {
+    const row = document.createElement("div");
+    row.className = "ergonomic-swap-row";
+    const text = document.createElement("span");
+    text.textContent = s.text;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "hand-btn";
+    btn.textContent = "Combo anlegen";
+    btn.title = "Öffnet den Combo-Dialog mit diesem Tastenpaar";
+    btn.addEventListener("click", () => openComboModal({ a: s.a, b: s.b }));
     row.append(text, btn);
     listEl.appendChild(row);
   }

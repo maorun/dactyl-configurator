@@ -32,7 +32,7 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTriLayers, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
-             createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
+             createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, suggestCombos, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
              COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
@@ -7988,3 +7988,92 @@ test("Tausch-Vorschläge: Zähler der Ebene 0 zählen, Gesamtzähler nur als Rü
   console.error(err);
   process.exit(1);
 });
+
+function bigramStats(seq) {
+  const s = api.createTypingStats(null, R);
+  let t = 0;
+  for (const id of seq) { const [r, c] = id.split("_").map(Number); api.recordKeyPress(s, r, c, t); t += 100; }
+  return s;
+}
+
+test("Combo-Vorschläge: häufigstes benachbartes Paar steht vorn", () => {
+  // t/h = 2_1 / 2_2 (Nachbarn) 4x, 1_1 / 2_1 2x, 0_0 / 2_4 (nicht benachbart) 9x
+  const seq = [];
+  for (let i = 0; i < 4; i++) seq.push("2_1", "2_2", "3_5");
+  for (let i = 0; i < 2; i++) seq.push("1_1", "2_1", "4_4");
+  for (let i = 0; i < 9; i++) seq.push("0_0", "2_4", "5_3");
+  const out = JSON.parse(JSON.stringify(api.suggestCombos(bigramStats(seq), ergoConfig(), R)));
+  assert.deepStrictEqual(out[0], { a: { r: 2, c: 1 }, b: { r: 2, c: 2 }, count: 4 });
+  assert.ok(out.length <= 5);
+  assert.ok(!out.some(p => p.a.r === 0 && p.a.c === 0)); // 0_0 / 2_4 nicht benachbart
+  assert.ok(!out.some(p => p.a.r === 5 || p.b.r === 5)); // Daumen zählt nicht
+});
+
+test("Combo-Vorschläge: Paar mit vorhandener Combo fehlt, Reihenfolge der Tasten egal", () => {
+  const seq = [];
+  for (let i = 0; i < 4; i++) seq.push("2_1", "2_2", "3_5");
+  for (let i = 0; i < 2; i++) seq.push("1_1", "2_1", "4_4");
+  const cfg = ergoConfig();
+  cfg.combos = [{ key1: { r: 2, c: 2 }, key2: { r: 2, c: 1 }, behavior: "KEY_PRESS", action: "KEY_ESC" }];
+  const out = JSON.parse(JSON.stringify(api.suggestCombos(bigramStats(seq), cfg, R)));
+  assert.ok(!out.some(p => p.a.r === 2 && p.a.c === 1 && p.b.r === 2 && p.b.c === 2));
+  assert.deepStrictEqual(out[0].count, 2);
+  assert.strictEqual(api.suggestCombos(api.createTypingStats(null, R), ergoConfig(), R).length, 0);
+});
+
+test("Combo-Vorschläge: Bigramme werden gespeichert, ungültige Einträge entfallen, Pause trennt", () => {
+  const s = bigramStats(["2_1", "2_2", "2_1"]);
+  assert.deepStrictEqual({ ...s.bigrams }, { "2_1|2_2": 2 });
+  const back = api.createTypingStats(JSON.parse(JSON.stringify(api.serializeTypingStats(s))), R);
+  assert.deepStrictEqual({ ...back.bigrams }, { "2_1|2_2": 2 });
+  const bad = api.createTypingStats(JSON.parse('{"bigrams": {"2_1|2_2": 1, "2_2|2_1": 1, "4_0|4_1": 1, "2_1|2_1": 1, "2_1|2_2x": 1, "1_1|1_2": -1}}'), R);
+  assert.deepStrictEqual({ ...bad.bigrams }, { "2_1|2_2": 1 });
+  const gap = api.createTypingStats(null, R);
+  api.recordKeyPress(gap, 2, 1, 0);
+  api.recordKeyPress(gap, 2, 2, 5000);
+  assert.deepStrictEqual({ ...gap.bigrams }, {});
+});
+
+test("Combo-Vorschläge: Rollen, Ebenen, Filter, Drei-Tasten-Combo, Limit und alte Speicherform", () => {
+  const typed = (seq, extra) => {
+    const st = api.createTypingStats(null, R);
+    seq.forEach(([id, role, layer], i) => { const [r, c] = id.split("_").map(Number); api.recordKeyPress(st, r, c, i * 100, layer, role); });
+    return st;
+  };
+  // Modifier (silent), Backspace und Ebene 1 bilden kein Bigramm; Backspace trennt die Folge
+  const st = typed([["2_1", "typed", 0], ["2_2", "silent", 0], ["2_1", "typed", 0], ["2_2", "backspace", 0], ["2_1", "typed", 0],
+    ["2_2", "typed", 1], ["2_1", "typed", 0]]);
+  assert.deepStrictEqual({ ...st.bigrams }, {});
+  // Diagonale Nachbarn zählen, Tasten ohne Aktion auf Ebene 0 nicht
+  const diag = typed([["1_1", "typed", 0], ["2_2", "typed", 0], ["1_3", "typed", 0], ["2_4", "typed", 0]]);
+  const none = ergoConfig({ "1_3": { tap: "NONE" } });
+  const out = JSON.parse(JSON.stringify(api.suggestCombos(diag, none, R)));
+  assert.deepStrictEqual(out.map(p => [p.a.r, p.a.c, p.b.r, p.b.c]), [[1, 1, 2, 2]]);
+  // Drei-Tasten-Combo belegt alle drei Paare
+  const cfg3 = ergoConfig();
+  cfg3.combos = [{ key1: { r: 1, c: 1 }, key2: { r: 2, c: 2 }, key3: { r: 1, c: 2 }, behavior: "KEY_PRESS", action: "KEY_ESC" }];
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.suggestCombos(diag, cfg3, R))).map(p => [p.a.r, p.a.c]), [[1, 3], [1, 3]]); // 1_3/2_2 und 1_3/2_4 bleiben
+  assert.strictEqual(api.suggestCombos(typed([["1_1", "typed", 0], ["1_2", "typed", 0], ["2_2", "typed", 0]]), cfg3, R).length, 0);
+  // Limit fünf
+  const many = [];
+  for (let c = 0; c < 5; c++) many.push(["1_" + c, "typed", 0], ["2_" + c, "typed", 0], ["3_" + c, "typed", 0]);
+  assert.strictEqual(api.suggestCombos(typed(many), ergoConfig(), R, 99).length, 5);
+  // Alte Speicherform mit Zählern, aber ohne bigrams
+  assert.deepStrictEqual({ ...api.createTypingStats({ "2_1": 3, layers: {} }, R).bigrams }, {});
+});
+
+test("Combo-Vorschläge: Anzeige zeigt Paare und ruft den Combo-Dialog mit dem Paar", async () => {
+  const { w, dom } = uiHarness(`${section("js/heatmap.js", "function keyPositionLabel", "function updateFingerLoadUI")}
+${section("js/heatmap.js", "function updateComboSuggestionsUI", "function onTypingStatsChanged")}
+var typingStatsBySide = { R: createTypingStats(null, SIDE_PROFILES.R) };
+var openedPair = null;
+function openComboModal(pair) { openedPair = pair; }`);
+  vm.runInContext(`recordKeyPress(typingStatsBySide.R, 1, 1, 0); recordKeyPress(typingStatsBySide.R, 1, 2, 10);
+    updateComboSuggestionsUI(typingStatsBySide.R);`, w);
+  const list = dom.document.getElementById("comboSuggestions");
+  assert.strictEqual(list.children.length, 1);
+  assert.ok(/R1C1.*\+.*R1C2.*\(1×\)/.test(list.children[0].children[0].textContent));
+  await list.children[0].children[1].click();
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(openedPair)", w)), { a: { r: 1, c: 1 }, b: { r: 1, c: 2 } });
+});
+

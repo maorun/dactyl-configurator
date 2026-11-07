@@ -42,6 +42,7 @@
 #define CONFIG_COMBO_C1 LEFT_CONFIG_COMBO_C1
 #define CONFIG_COMBO_R2 LEFT_CONFIG_COMBO_R2
 #define CONFIG_COMBO_C2 LEFT_CONFIG_COMBO_C2
+#define SWAP_THUMB_MIRROR SWAP_THUMB_MIRROR_LEFT
 #define DEFAULT_DEVICE_NAME "Dactyl Links"
 #define CONFIG_BLE_NAME "Dactyl Config L"
 #define DEVICE_SIDE "L"
@@ -134,6 +135,7 @@ void flushSendQueue(unsigned long maxMs);
 void stopMacro(bool releaseKeys);
 void resetMouseMove();
 void oslClearAll();
+void swapClearAll();
 static void queueSplitLayerRelease();
 
 // Im Gegensatz zur rechten Hälfte gibt es keinen macOS-HID-Bond: Config Mode startet per Soft-Reboot
@@ -209,6 +211,7 @@ void exitStandby() {
 void enterStandby() {
   if (!isStandby) {
     isStandby = true;
+    swapClearAll();
     applyLeftWakeWindow(true);
     Serial.println("[POWER] Inaktivität erreicht -> Standby aktiv (gedrosselter Matrix-Scan, CPU bleibt 240 MHz)");
   }

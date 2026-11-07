@@ -211,6 +211,10 @@ function setupEventListeners() {
       alert("Combos unterstützen kein Key Lock. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
+    if (isSwapHandsCode(action)) {
+      alert("Combos unterstützen kein Swap Hands. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
     if (isBleHostCode(action)) {
       alert("Combos unterstützen keine BLE-Host-Slots. Bitte eine normale Taste mit der Aktion belegen.");
       return;

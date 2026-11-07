@@ -565,6 +565,22 @@ class TestServerAndCodegen(unittest.TestCase):
             with self.assertRaises(ValueError):
                 server.generate_combos_cpp([combo])
 
+    def test_swap_hands_code_matches_firmware_and_is_no_combo_action(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_SWAP_HANDS\s+0x18B")
+        self.assertEqual(server.code_to_cpp("SWAP_HANDS"), "ACT_SWAP_HANDS")
+        self.assertEqual(server.code_to_cpp("ACT_SWAP_HANDS"), "ACT_SWAP_HANDS")
+        with open(server.DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["layers"][0][2][1] = {"tap": "SWAP_HANDS"}
+        server.validate_config(cfg, "R")
+        self.assertIn("ACT_SWAP_HANDS", server.generate_keymap_cpp(cfg["layers"]))
+        for behavior in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
+            combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": behavior, "action": "SWAP_HANDS"}
+            with self.assertRaises(ValueError):
+                server.generate_combos_cpp([combo])
+
     def test_ble_host_codes_match_firmware_and_roundtrip(self):
         with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
             common = f.read()

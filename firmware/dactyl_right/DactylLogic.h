@@ -470,8 +470,47 @@ void leaderReset() { leaderState.reset(); }
 // und Config Mode erledigen das in SplitArbitratedKeyboard selbst
 void keyLockReleaseAll() { bleKeyboard.keyLockReleaseAll(); }
 
+// Swap hands (ACT_SWAP_HANDS): gehaltene Taste, Vormerkung für den nächsten Druck und Einrastung.
+// swapMirrorCol() ist eine Involution: Fingerzeilen c -> FINGER_COLS - 1 - c, Daumenreihe nach Tabelle.
+uint8_t swapHeldKeys = 0;
+bool swapKeyDown[NUM_ROWS][NUM_COLS] = {};
+bool swapArmed = false;
+bool swapLocked = false;
+bool swapUsedInHold = false;
+unsigned long swapLastTapMs = 0;
+bool swapLastTapValid = false;
+// Zeit des Matrix-Ereignisses (Scan-Zeit, auch beim Nachspielen); 0 = keine, dann gilt millis()
+unsigned long swapEventMs = 0;
+
+// Ein Druck einer anderen Taste verbraucht die Vormerkung, unterbricht das Doppel-Tippen und macht das Halten zum Nicht-Tipp
+inline void swapNoteKeyPress();
+
+inline bool swapActive() { return swapHeldKeys > 0 || swapArmed || swapLocked; }
+
+inline uint8_t swapMirrorCol(uint8_t r, uint8_t c) {
+  static const uint8_t thumbMirror[7] = SWAP_THUMB_MIRROR;
+  if (r >= FINGER_ROWS) return c < 7 ? thumbMirror[c] : c;
+  return c < FINGER_COLS ? (uint8_t)(FINGER_COLS - 1 - c) : c;
+}
+
+inline void swapNoteKeyPress() {
+  swapArmed = false;
+  swapLastTapValid = false;
+  if (swapHeldKeys > 0) swapUsedInHold = true;
+}
+
+void swapClearAll() {
+  swapHeldKeys = 0;
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++) swapKeyDown[r][c] = false;
+  swapArmed = swapLocked = swapUsedInHold = swapLastTapValid = false;
+  swapLastTapMs = 0;
+  swapEventMs = 0;
+}
+
 // Alle Vormerkungen löschen (RELEASE_ALL, Link-Ausfall, Verlust des Hosts, Config Mode)
 void oslClearAll() {
+  swapClearAll();
   // Die Leader-Erfassung endet an denselben Stellen
   leaderReset();
   uint8_t before = getActiveLayer();
@@ -1295,7 +1334,7 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
     // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
     if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
         isDynamicMacroAction(action) || isOneShotAction(action) || action == ACT_CAPS_WORD || action == ACT_LEADER ||
-        action == ACT_KEY_LOCK || isBleHostAction(action)) {
+        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || isBleHostAction(action)) {
       leaderState.reset();
     }
     return false;
@@ -1315,6 +1354,37 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
 }
 
 static inline uint16_t effectiveTapTerm(uint16_t keyTerm);
+// Drücken: die Taste hält den Wechsel, solange sie gedrückt ist (Config Mode: wirkungslos)
+void swapHandsPress(uint8_t r, uint8_t c) {
+  if (isConfigMode || swapKeyDown[r][c]) return;
+  swapKeyDown[r][c] = true;
+  swapHeldKeys++;
+  swapUsedInHold = false;
+}
+
+// Loslassen: ohne anderen Tastendruck dazwischen und innerhalb des Tapping-Terms ist es ein Tipp. Ein Tipp löst eine
+// Einrastung, sonst merkt er den Wechsel für den nächsten Druck vor; ein zweiter Tipp im Tapping-Term rastet ihn ein.
+void swapHandsRelease(uint8_t r, uint8_t c, unsigned long now) {
+  if (!swapKeyDown[r][c]) return;
+  // Eine Combo hat die Taste verbraucht oder sie gehört zur Config-Combo: kein Tipp
+  bool consumed = wasComboRecentlyActive(r, c) || isConfigComboKey(r, c);
+  swapKeyDown[r][c] = false;
+  if (swapHeldKeys > 0) swapHeldKeys--;
+  bool isTap = !consumed && !swapUsedInHold && swapHeldKeys == 0 && keyPressTime[r][c] != 0 &&
+               (unsigned long)(now - keyPressTime[r][c]) < effectiveTapTerm(0);
+  if (!isTap) return;
+  if (swapLocked) {
+    swapLocked = swapArmed = swapLastTapValid = false;
+  } else if (swapLastTapValid && (unsigned long)(now - swapLastTapMs) < effectiveTapTerm(0)) {
+    swapLocked = true;
+    swapArmed = swapLastTapValid = false;
+  } else {
+    swapArmed = true;
+    swapLastTapValid = true;
+    swapLastTapMs = now;
+  }
+}
+
 void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) {
   pressedAction[r][c] = action;
   // Ein Merker ohne Loslassen (Combo, RELEASE_ALL) darf das Loslassen dieses Drucks nicht verschlucken
@@ -1455,6 +1525,13 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         keySentToHost[r][c] = true;
       }
     }
+  } else if (action == ACT_SWAP_HANDS) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Swap Hands\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
+    sendConfigNotification(String(buf));
+    Serial.printf("Swap Hands gedrückt: [R%d, C%d] (L%d)\n", r, c, currentLayer);
+    swapHandsPress(r, c);
+    keySentToHost[r][c] = true;
   } else if (action == ACT_KEY_LOCK) {
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Key Lock\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
@@ -1667,6 +1744,9 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         sendUmlaut(action);
       }
     }
+  } else if (action == ACT_SWAP_HANDS) {
+    keySentToHost[r][c] = false;
+    swapHandsRelease(r, c, swapEventMs != 0 ? swapEventMs : millis());
   } else if (action == ACT_KEY_LOCK) {
     // Die Vormerkung begann beim Drücken; nur ein gepufferter Combo-Kandidat (schneller Einzeltipp) merkt sie jetzt vor
     if (keySentToHost[r][c]) {
@@ -2306,7 +2386,7 @@ void autoShiftTick(unsigned long now) {
 
 // now: Zeitpunkt des Anschlags. Der Master führt eine zurückgehaltene Änderung später aus (SplitLocalDefer) und
 // gibt ihre Scan-Zeit mit, damit Tapping-Term und Combo-Fenster die echten Abstände sehen.
-void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long now) {
+void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned long now) {
   if (isPressed) {
     // chordalHold: offene Mod-Tap-Tasten derselben Hälfte sofort als Tipp entscheiden, vor der Entscheidung von holdTapMode
     if (chordalHold && !isReplayingDeferredQueue && anyTapHoldPending()) {
@@ -2343,12 +2423,20 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     if (isSecondTap) {
       d.waiting = false;
       d.active = true;
+      swapNoteKeyPress();                        // auch dieser Druck verbraucht die Vormerkung
       oslNoteKeyPress(d.dtapAction, 0, 0);
       dispatchPress(r, c, d.dtapAction, layer);
       return;
     }
     uint16_t tapAct, holdAct, dtapAct;
     resolveKeyActions(layer, r, c, tapAct, holdAct, dtapAct);
+    // Swap hands: bei aktivem Wechsel gilt die gespiegelte Taste. Eine SWAP_HANDS-Taste bleibt an ihrem Platz,
+    // sonst ließe sich eine Einrastung nicht lösen. Das Loslassen liest pressedAction[r][c] und bleibt sauber.
+    bool isSwapKey = tapAct == ACT_SWAP_HANDS || holdAct == ACT_SWAP_HANDS;
+    if (swapActive() && !isSwapKey) {
+      resolveKeyActions(layer, r, swapMirrorCol(r, c), tapAct, holdAct, dtapAct);
+    }
+    if (!isSwapKey) swapNoteKeyPress();
     // Dieser Druck verbraucht eine vorgemerkte One-Shot-Ebene (die Ebene der Taste ist schon aufgelöst)
     oslNoteKeyPress(tapAct, holdAct, dtapAct);
     // Quick-Tap: derselbe Mod-Tap-Druck kurz nach seinem Tipp gilt sofort als gehaltener Tipp.
@@ -2430,6 +2518,14 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     keyPressTime[r][c] = 0;
     comboPressLayer1[r][c] = 0;
   }
+}
+
+// Setzt die Scan-Zeit des Ereignisses für Swap hands (Tipp-Erkennung beim nachgespielten Loslassen)
+void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long now) {
+  unsigned long outer = swapEventMs;           // das Nachspielen ruft diese Funktion verschachtelt auf
+  swapEventMs = now;
+  applyMatrixKeyChangeImpl(r, c, isPressed, now);
+  swapEventMs = outer;
 }
 
 void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long atMs) {
@@ -3805,7 +3901,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && !isBleHostAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && !isBleHostAction((uint16_t)act) &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;

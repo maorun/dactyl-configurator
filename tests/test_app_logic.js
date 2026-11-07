@@ -40,7 +40,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              applyLayerOperation, transparentLayer, isUndoBlocked, swapLayerKeys, mirrorLayerAcrossSides, swappedSelectionPosition, parseKeyDragPayload,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell, keyTapTerm,
-             createDeviceSnapshot, captureListLine, buildConfigFromSnapshot, settingsFromDeviceInfo, deviceNameFromInfo, diffSettings, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
+             createDeviceSnapshot, captureListLine, buildConfigFromSnapshot, settingsFromDeviceInfo, deviceNameFromInfo, diffSettings, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, staleLayoutState, describeKeyActions,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
              removeKeyPairAt, KEYCODES, UMLAUT_LABELS, ONE_SHOT_LABELS, holdSublabel,
@@ -1059,6 +1059,107 @@ test("Layout-Diff: gleiche Belegung ergibt keinen Unterschied", () => {
   assert.strictEqual(diff.names.length, 0);
 });
 
+test("Veraltete Belegung: eine geänderte Taste zeigt das Banner mit einem Unterschied", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap = snapshotOf(cfg);
+  cfg.layers[2][1][3] = { label: "J", tap: "KEY_J" };
+  const state = api.staleLayoutState(cfg, snap, R, 0);
+  assert.strictEqual(state.show, true);
+  assert.strictEqual(state.count, 1);
+});
+
+test("Veraltete Belegung: Ebenen-Name und Taste zählen zusammen", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap = snapshotOf(cfg);
+  cfg.layerNames[4] = "Neu";
+  cfg.layers[2][1][3] = { label: "J", tap: "KEY_J" };
+  const state = api.staleLayoutState(cfg, snap, R, 0);
+  assert.strictEqual(state.count, 2);
+});
+
+// Banner-Ablauf aus js/config-sync.js mit Fake-Banner und Fake-Lesen
+function staleBannerHarness() {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const banner = { hidden: true, dataset: {} };
+  const text = { textContent: "" };
+  const els = { staleLayoutBanner: banner, staleLayoutText: text };
+  const h = {
+    SIDE_PROFILES: api.SIDE_PROFILES, staleLayoutState: api.staleLayoutState, configFor: () => cfg,
+    isAutoSyncing: false, isConnectingBle: false, diffFlowActive: false, deviceSnapshotRead: null,
+    DEVICE_SNAPSHOT_TIMEOUT_MS: 50, side: "R", pending: { R: [], L: [] }, reads: [], snap: snapshotOf(cfg),
+    document: { getElementById: id => els[id] || null }, Date,
+    setTimeout
+  };
+  h.connectedSide = () => h.side;
+  h.pendingFor = side => h.pending[side];
+  h.readDeviceSnapshot = (side, withInfo, silent) => new Promise(resolve => {
+    h.deviceSnapshotRead = { silent, stale: false };
+    h.reads.push({ side, silent, finish: snap => { h.deviceSnapshotRead = null; resolve(snap); } });
+  });
+  vm.createContext(h);
+  vm.runInContext(`${section("js/config-sync.js", "// Nach dem Verbinden: liest die Belegung", "function setupStaleLayoutBanner")}
+    this.check = checkStaleLayout; this.hide = hideStaleLayoutBanner; this.wait = waitForStaleLayoutRead;
+    this.ignored = staleLayoutIgnored;`, h);
+  return { h, cfg, banner, flush: () => new Promise(r => setImmediate(r)) };
+}
+
+asyncTests.push(["Banner: Abweichung zeigt das Banner nur nach dem stillen Lesen", async () => {
+  const { h, cfg, banner, flush } = staleBannerHarness();
+  cfg.layers[2][1][3] = { label: "J", tap: "KEY_J" };
+  const p = h.check("R");
+  assert.strictEqual(h.reads[0].silent, true);
+  assert.strictEqual(banner.hidden, true);
+  h.reads[0].finish(h.snap);
+  await p;
+  assert.strictEqual(banner.hidden, false);
+  assert.strictEqual(banner.dataset.side, "R");
+  await flush();
+}]);
+
+asyncTests.push(["Banner: Trennen oder Vorgemerktes während des Lesens verwirft das Ergebnis", async () => {
+  const { h, cfg, banner } = staleBannerHarness();
+  cfg.layers[2][1][3] = { label: "J", tap: "KEY_J" };
+  const p = h.check("R");
+  h.hide("R", true);
+  h.reads[0].finish(h.snap);
+  await p;
+  assert.strictEqual(banner.hidden, true);
+}]);
+
+asyncTests.push(["Banner: Ignorieren gilt je Hälfte und endet mit dem Trennen", async () => {
+  const { h, cfg } = staleBannerHarness();
+  cfg.layers[2][1][3] = { label: "J", tap: "KEY_J" };
+  h.ignored.add("R");
+  await h.check("R");
+  assert.strictEqual(h.reads.length, 0);
+  h.hide("L", true);
+  assert.ok(h.ignored.has("R"));
+  h.hide("R", true);
+  assert.ok(!h.ignored.has("R"));
+}]);
+
+asyncTests.push(["Banner: Speichern wartet auf die stille Abfrage", async () => {
+  const { h, flush } = staleBannerHarness();
+  const p = h.check("R");
+  let waited = false;
+  h.wait().then(() => { waited = true; });
+  await flush();
+  assert.strictEqual(waited, false);
+  h.reads[0].finish(null);
+  await p;
+  await new Promise(r => setTimeout(r, 120));
+  assert.strictEqual(waited, true);
+}]);
+
+test("Veraltete Belegung: gleiche Belegung und vorgemerkte Änderungen zeigen kein Banner", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  const snap = snapshotOf(cfg);
+  assert.strictEqual(api.staleLayoutState(cfg, snap, R, 0).show, false);
+  cfg.layers[2][1][3] = { label: "J", tap: "KEY_J" };
+  assert.strictEqual(api.staleLayoutState(cfg, snap, R, 1).show, false);
+  assert.strictEqual(api.staleLayoutState(cfg, null, R, 0).show, false);
+});
+
 test("Layout-Diff: geänderte Taste und Ebenen-Name erscheinen mit Geräte- und Neuwert", () => {
   const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
   const snap = snapshotOf(cfg);
@@ -2017,7 +2118,9 @@ function diffFlowHarness() {
     showToast: (t) => calls.toasts.push(t), configFor: () => cfg
   };
   vm.createContext(h);
-  vm.runInContext(`${section("js/config-sync.js", "const DEVICE_SNAPSHOT_TIMEOUT_MS", "// Zeigt den Diff im Dialog")}
+  vm.runInContext(`function waitForStaleLayoutRead() { return Promise.resolve(); }
+    function hideStaleLayoutBanner() {}
+    ${section("js/config-sync.js", "const DEVICE_SNAPSHOT_TIMEOUT_MS", "// Zeigt den Diff im Dialog")}
     ${section("js/config-sync.js", '// "Auf ESP32 speichern": zuerst', "// Ersetzt die Config der bearbeiteten Hälfte durch die vom Gerät gelesene")}
     ${section("js/config-sync.js", "// One-Shot-Auto-Sync (BLE-Verbindung", "// =============================================================================\n// Layout-Diff")}
     ${section("js/config-sync.js", "// Nach einer BLE- oder USB-Trennung", "// Zeigt den Diff im Dialog")}
@@ -2490,6 +2593,7 @@ function liveSyncHarness() {
   h.writeConfigToESP32 = async opts => { h.writes.push(opts); };
   vm.createContext(h);
   vm.runInContext(`var isAutoSyncing = false, isConnectingBle = false, deviceSnapshotRead = null, diffFlowActive = false;
+    function waitForStaleLayoutRead() { return Promise.resolve(); }
     ${section("js/config-sync.js", "// Änderungen innerhalb von LIVE_SYNC_DEBOUNCE_MS", "// One-Shot-Auto-Sync (BLE-Verbindung")}
     this.request = requestLiveSync;`, h);
   const run = async () => { while (timers.length) { const t = timers.shift(); await t.fn(); } };
@@ -2622,7 +2726,9 @@ asyncTests.push(["Layout-Diff: writeConfigToESP32 überträgt nach einem Hälfte
     document: { getElementById: () => { progressShown = true; return null; } }
   };
   vm.createContext(w);
-  vm.runInContext(`${section("js/config-sync.js", "async function writeConfigToESP32", "  const cfg = configFor(side);")}
+  vm.runInContext(`function waitForStaleLayoutRead() { return Promise.resolve(); }
+    function hideStaleLayoutBanner() {}
+    ${section("js/config-sync.js", "async function writeConfigToESP32", "  const cfg = configFor(side);")}
     }
     this.write = writeConfigToESP32;`, w);
   await w.write({ autoDisconnectAfter: false, expectedSide: "R" });

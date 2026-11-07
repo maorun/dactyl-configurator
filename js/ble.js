@@ -267,6 +267,7 @@ async function connectToBleDevice(device, isAutoTriggered = false, advName = "")
           await runAutoSync({ autoDisconnectAfter: false });
         } else {
           await sendBleCommand("GET_NAMES");
+          checkStaleLayout(bleSide);
         }
       }, 180);
     }
@@ -383,6 +384,7 @@ async function disconnectBle() {
 function onBleDisconnected() {
   lastBleDisconnectTime = Date.now();
   stopKeyCapture();
+  if (bleSide) hideStaleLayoutBanner(bleSide, true);
   // Idempotent: manuelles Trennen und das gattserverdisconnected-Event rufen diese Funktion beide auf
   if (!bleDevice && !bleConfigChar && !bleServer) return;
   if (bleDevice) bleDevice.removeEventListener("gattserverdisconnected", onBleDisconnected);

@@ -627,6 +627,12 @@ Rules for this file:
 
 ## App and Server
 
+### Stale layout banner (`checkStaleLayout`)
+
+- After a BLE connect in config mode without One-Shot Auto-Sync and without pending change and after the first `DEVICE_INFO` of a USB connect, `checkStaleLayout` (`js/config-sync.js`) reads `GET_CONFIG` of the connected half with `readDeviceSnapshot`. `staleLayoutState` (`js/config-model.js`) uses `diffKeymap` and returns `{ show, count }`: `show` is true only when the half has no pending change and keys, layer names or lists differ.
+- The banner `#staleLayoutBanner` shows "Gerät weicht ab" with the count and two buttons. "Vom Gerät laden" opens the normal load dialog (`readConfigFromESP32`). "Ignorieren" hides the banner for this connection. The app never starts a sync on its own.
+- `staleLayoutState` counts keys, layer names and lists; settings from `DEVICE_INFO` are not counted (the load dialog lists them). The banner hides at each pending change (`markPendingSync`) and at each sync start. The read is silent: save, load and sync wait for it (`waitForStaleLayoutRead`). Token and ignore state are per half. The check does not run during a sync, a connect, a diff flow or another snapshot read. It drops its result when the connection, the half or the connection state changed meanwhile. A disconnect hides the banner and clears the ignore state.
+
 ### Physical key capture (`createKeyCapture`, `js/editor-events.js`, `js/leader-ui.js`)
 
    - The combo dialog (button `btnCaptureComboKeys`) and the leader editor (button `btnCaptureLeader`) have the toggle "Auf Tastatur drücken". While it is on, a press on the keyboard fills the next key slot: key 1, 2, 3 of the combo, or key 1..4 of the leader sequence. The capture stops when all slots are full, with the toggle, when the dialog closes or saves, when the leader sequence is added, or when the edited half changes. Only one capture runs at a time.

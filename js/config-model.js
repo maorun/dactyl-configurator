@@ -1778,6 +1778,18 @@ function diffKeymap(cfg, snapshot, profile) {
   return { keys, names, lists: diffLists(cfg, snapshot) };
 }
 
+// Banner "Gerät weicht ab" nach dem Verbinden: zeigt sich nur ohne vorgemerkte Änderung der Hälfte und bei
+// mindestens einem Unterschied (Taste, Ebenen-Name oder Liste). Rückgabe { show, count }; startet keinen Sync.
+function staleLayoutState(cfg, snapshot, profile, pendingCount) {
+  if (pendingCount > 0 || !snapshot || !isDeviceSnapshotComplete(snapshot)) return { show: false, count: 0 };
+  const diff = diffKeymap(cfg, snapshot, profile);
+  const lists = diff.lists || {};
+  const listCount = ["combos", "pairs", "overrides", "leader", "altrep", "macros"]
+    .reduce((n, key) => n + (lists[key] || []).length, 0);
+  const count = diff.keys.length + diff.names.length + listCount;
+  return { show: count > 0, count };
+}
+
 // Unterschiede bei Combos, Tastenpaaren und Makros, jeweils je Index in der Reihenfolge der Liste (die Firmware
 // prüft Combos in dieser Reihenfolge). Zeilen { where, device, local }. state = "absent" oder "incomplete":
 // nichts wird verglichen.

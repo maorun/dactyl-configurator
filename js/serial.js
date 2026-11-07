@@ -122,6 +122,7 @@ async function disconnectSerialNow() {
   // Ein laufender BLE-Sync derselben Hälfte bleibt bestehen (js/side-routing.js)
   const scope = Dactyl.usbDisconnectAckScope({ ...connectionState(), serialUp: false });
   if (scope.reject) rejectAllPendingAcks("USB-Verbindung getrennt", scope.side);
+  if (serialSide) hideStaleLayoutBanner(serialSide, true);
   serialSide = null;
   serialReader = null;
   forgetSplitLink();
@@ -375,7 +376,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
     try {
       const detected = Dactyl.sideFromDeviceInfo(JSON.parse(line.substring(12)));
       if (detected) {
-        if (transport === "usb") serialSide = detected;
+        if (transport === "usb") {
+          const firstDetection = serialSide === null;
+          serialSide = detected;
+          if (firstDetection) setTimeout(() => checkStaleLayout(detected), 500);
+        }
         else resolveBleInfoWaiters(detected);
         side = detected;
       }

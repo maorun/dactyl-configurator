@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Caps Word idle timeout and automatic umlaut capitalization
-
-- **Rank:** Feature model. Total 22/40 (typing 5, configuration 3, harmony 7, safety 7). Effort S. Estimate.
-- **Area:** Firmware.
-- **Code:** `firmware/dactyl_right/DactylOneShot.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylSplitHid.h`.
-- **Problem:** Caps Word stays on forever after a typing pause, and pressing `UMLAUT_AE`, `UMLAUT_OE` or `UMLAUT_UE` during Caps Word sends a lowercase umlaut instead of the uppercase umlaut.
-- **Goal:** Expire Caps Word automatically after `CAPS_WORD_IDLE_MS` (5000 ms) without a key press, and map `ACT_UMLAUT_AE`, `ACT_UMLAUT_OE` and `ACT_UMLAUT_UE` to their uppercase counterparts while Caps Word is active without ending Caps Word.
-- **Acceptance test:** A firmware test enables Caps Word, presses `UMLAUT_AE` and expects the uppercase sequence `Alt+u`, `A`; advancing past 5000 ms of idle time turns Caps Word off.
-
 ### Macro repeat while held (`macroRepeat`)
 
 - **Rank:** Feature model. Total 22/40 (typing 5, configuration 4, harmony 6, safety 7). Effort M. Estimate.

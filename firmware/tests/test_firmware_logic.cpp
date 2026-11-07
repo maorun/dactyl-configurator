@@ -3112,6 +3112,20 @@ TEST(test_one_shot_key_reports_press_and_release) {
   assert(sawName);
 }
 
+TEST(test_umlaut_ae_during_caps_word_sends_plain_sequence_and_keeps_caps_word) {
+  // Schutztest: der Master gibt dem Vokal Shift und beendet Caps Word nicht (test_split_hid.cpp, dort auch der Ablauf
+  // nach CAPS_WORD_IDLE_MS); die Logik sendet weder Shift noch ein Umschalten
+  resetState();
+  KEYMAP[0][5][1] = ACT_CAPS_WORD;
+  KEYMAP[0][2][4] = ACT_UMLAUT_AE;
+  tapKeyAt(5, 1, 1000, 1050);
+  bleKeyboard.pressHistory.clear();
+  tapKeyAt(2, 4, 1100, 1150);
+  std::vector<uint8_t> expected = { KEY_LEFT_ALT, 'u', 'a' };
+  assert(bleKeyboard.pressHistory == expected);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));   // nur das erste Umschalten
+}
+
 TEST(test_caps_word_key_toggles_once_per_press) {
   resetState();
   KEYMAP[0][5][1] = ACT_CAPS_WORD;

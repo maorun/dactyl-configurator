@@ -23,15 +23,6 @@ Rules for this file:
 
 ## Priority 4
 
-### Layer mask for key overrides (`KeyOverride.layerMask`)
-
-- **Rank:** Feature model. Total 18/40 (typing 5, configuration 3, harmony 5, safety 5). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylKeyOverride.h`, `firmware/dactyl_right/DactylSplitHid.h`, `firmware/dactyl_right/DactylLogic.h`, `js/key-overrides-ui.js`, `js/config-model.js`, `server.py`.
-- **Problem:** Key overrides apply on every layer. An override intended only for the base layer or a code layer cannot be restricted.
-- **Goal:** Add an 8-bit `layerMask` (default `0xFF`, all layers) to `KeyOverride`. Accept the optional fourth value in `ADD_OVERRIDE <mods> <key> <replacement> [<mask>]` and include it in `OVERRIDE_DATA` and NVS (`ovr_v2`, keeping `ovr_data` readable). Check the active layer before applying an override. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test restricts an override to Layer 0 (`mask = 0x01`), verifies that it fires on Layer 0 and does not fire when Layer 1 is active.
-
 ### Heatmap-guided ergonomic swap suggestions (`suggestErgonomicSwaps`)
 
 - **Rank:** Feature model. Total 17/40 (typing 3, configuration 6, harmony 4, safety 4). Effort S. Estimate.

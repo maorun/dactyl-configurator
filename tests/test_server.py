@@ -506,10 +506,10 @@ class TestServerAndCodegen(unittest.TestCase):
             {"mods": ["shift", "ctrl"], "key": "KEY_A", "replacement": "KEY_B"},
         ])
         self.assertIn("uint8_t numKeyOverrides = 2;", cpp)
-        self.assertIn("{ 2, KEY_BACKSPACE, KEY_DELETE }", cpp)
-        self.assertIn("{ 3, 'a', 'b' }", cpp)
-        self.assertIn("{ 0, 0, 0 }", server.generate_key_overrides_cpp([]))
-        self.assertIn("{ 0, 0, 0 }", server.generate_key_overrides_cpp(None))
+        self.assertIn("{ 2, KEY_BACKSPACE, KEY_DELETE, 255 }", cpp)
+        self.assertIn("{ 3, 'a', 'b', 255 }", cpp)
+        self.assertIn("{ 0, 0, 0, 0xFF }", server.generate_key_overrides_cpp([]))
+        self.assertIn("{ 0, 0, 0, 0xFF }", server.generate_key_overrides_cpp(None))
         bad_entries = (
             {"mods": [], "key": "KEY_A", "replacement": "KEY_B"},                    # kein Modifier
             {"mods": ["foo"], "key": "KEY_A", "replacement": "KEY_B"},               # unbekannter Modifier
@@ -542,7 +542,13 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertEqual(content.count("// [[[START_KEY_OVERRIDES]]]"), 1)
         out = server.render_ino_content(content, dict(cfg, keyOverrides=override))
         self.assertIn("uint8_t numKeyOverrides = 1;", out)
-        self.assertIn("{ 2, KEY_BACKSPACE, KEY_DELETE }", out)
+        self.assertIn("{ 2, KEY_BACKSPACE, KEY_DELETE, 255 }", out)
+        # Ebenenmaske: Bit i = Ebene i; ungültige Werte werden abgelehnt
+        masked = [dict(override[0], layerMask=1)]
+        self.assertIn("{ 2, KEY_BACKSPACE, KEY_DELETE, 1 }", server.render_ino_content(content, dict(cfg, keyOverrides=masked)))
+        for bad in (0, 256, "x"):
+            with self.assertRaises(ValueError):
+                server.render_ino_content(content, dict(cfg, keyOverrides=[dict(override[0], layerMask=bad)]))
         # Ohne Schlüssel bleibt die Liste der Vorlage unverändert
         self.assertEqual(server.render_ino_content(content, cfg).count("// [[[START_KEY_OVERRIDES]]]"), 1)
         # Die linke Hälfte hat keine Überschreibungen: die Config wird abgelehnt

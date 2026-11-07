@@ -196,7 +196,7 @@ async function writeConfigToESP32(options = {}) {
       const overrideKnown = await sendConfirmed("CLEAR_OVERRIDES", "CLEAR_OVERRIDES", 3000, true);
       if (overrideKnown !== "unknown") {
         for (const o of overrides) {
-          await sendConfirmed(`ADD_OVERRIDE ${keyOverrideModsValue(o.mods)} ${actionCodeToNumeric(o.key)} ${actionCodeToNumeric(o.replacement)}`, "ADD_OVERRIDE");
+          await sendConfirmed(`ADD_OVERRIDE ${keyOverrideModsValue(o.mods)} ${actionCodeToNumeric(o.key)} ${actionCodeToNumeric(o.replacement)}${keyOverrideLayerMask(o) === COMBO_ALL_LAYERS ? "" : " " + keyOverrideLayerMask(o)}`, "ADD_OVERRIDE");
           updateProgress();
         }
         await sendConfirmed("SAVE_OVERRIDES", "SAVE_OVERRIDES", 5000);

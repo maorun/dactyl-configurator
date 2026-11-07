@@ -2836,6 +2836,7 @@ void loadKeymapFromNVS() {
       // Überschreibungen kommen mit der App-Belegung mit: die einkompilierte Liste ersetzt die gespeicherte
       preferences.remove("num_ovr");
       preferences.remove("ovr_data");
+      preferences.remove("ovr_v2");
 #endif
       // Leader-Folgen verweisen auf Tastenpaare und Makros: die einkompilierte Liste ersetzt die gespeicherte
       preferences.remove("num_leader");
@@ -3006,12 +3007,34 @@ void loadKeymapFromNVS() {
     uint8_t n = preferences.getUChar("num_ovr", 0);
     if (n == 0) {
       numKeyOverrides = 0;
-    } else if (n <= MAX_KEY_OVERRIDES && preferences.isKey("ovr_data") &&
-               preferences.getBytesLength("ovr_data") == n * sizeof(KeyOverride)) {
+    } else if (n <= MAX_KEY_OVERRIDES && preferences.isKey("ovr_v2") &&
+               preferences.getBytesLength("ovr_v2") == n * KEY_OVERRIDE_NVS_RECORD_BYTES) {
+      // ovr_v2: je Eintrag mods, key, replacement, layerMask
+      uint8_t raw[MAX_KEY_OVERRIDES * KEY_OVERRIDE_NVS_RECORD_BYTES];
+      preferences.getBytes("ovr_v2", raw, n * KEY_OVERRIDE_NVS_RECORD_BYTES);
       KeyOverride loaded[MAX_KEY_OVERRIDES];
-      preferences.getBytes("ovr_data", loaded, n * sizeof(KeyOverride));
       uint8_t valid = 1;
-      for (uint8_t i = 0; i < n; i++) valid &= keyOverrideValid(loaded[i].mods, loaded[i].key, loaded[i].replacement);
+      for (uint8_t i = 0; i < n; i++) {
+        const uint8_t *r = raw + i * KEY_OVERRIDE_NVS_RECORD_BYTES;
+        loaded[i].mods = r[0]; loaded[i].key = r[1]; loaded[i].replacement = r[2]; loaded[i].layerMask = r[3];
+        valid &= keyOverrideValid(r[0], r[1], r[2], r[3]);
+      }
+      if (valid) {
+        memcpy(userKeyOverrides, loaded, n * sizeof(KeyOverride));
+        numKeyOverrides = n;
+      }
+    } else if (n <= MAX_KEY_OVERRIDES && preferences.isKey("ovr_data") &&
+               preferences.getBytesLength("ovr_data") == n * KEY_OVERRIDE_NVS_LEGACY_BYTES) {
+      // Altes Format ohne Ebenenmaske: gilt auf allen Ebenen
+      uint8_t raw[MAX_KEY_OVERRIDES * KEY_OVERRIDE_NVS_LEGACY_BYTES];
+      preferences.getBytes("ovr_data", raw, n * KEY_OVERRIDE_NVS_LEGACY_BYTES);
+      KeyOverride loaded[MAX_KEY_OVERRIDES];
+      uint8_t valid = 1;
+      for (uint8_t i = 0; i < n; i++) {
+        const uint8_t *r = raw + i * KEY_OVERRIDE_NVS_LEGACY_BYTES;
+        loaded[i].mods = r[0]; loaded[i].key = r[1]; loaded[i].replacement = r[2]; loaded[i].layerMask = KEY_OVERRIDE_ALL_LAYERS;
+        valid &= keyOverrideValid(r[0], r[1], r[2]);
+      }
       if (valid) {
         memcpy(userKeyOverrides, loaded, n * sizeof(KeyOverride));
         numKeyOverrides = n;
@@ -3467,13 +3490,21 @@ bool saveKeyOverridesToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
   // Daten zuerst, Anzahl zuletzt: ein Fehler beim Schreiben der Daten lässt die alte Anzahl nicht mit neuen Daten stehen
   bool ok = true;
-  size_t len = numKeyOverrides * sizeof(KeyOverride);
+  size_t len = numKeyOverrides * KEY_OVERRIDE_NVS_RECORD_BYTES;
   // Leere Liste: putBytes mit Länge 0 meldet 0 Bytes, das ist kein Fehler
   if (len > 0) {
-    ok = preferences.putBytes("ovr_data", userKeyOverrides, len) == len;
+    uint8_t raw[MAX_KEY_OVERRIDES * KEY_OVERRIDE_NVS_RECORD_BYTES];
+    for (uint8_t i = 0; i < numKeyOverrides; i++) {
+      uint8_t *r = raw + i * KEY_OVERRIDE_NVS_RECORD_BYTES;
+      r[0] = userKeyOverrides[i].mods; r[1] = userKeyOverrides[i].key;
+      r[2] = userKeyOverrides[i].replacement; r[3] = userKeyOverrides[i].layerMask;
+    }
+    ok = preferences.putBytes("ovr_v2", raw, len) == len;
   } else {
-    preferences.remove("ovr_data");
+    preferences.remove("ovr_v2");
   }
+  // Das alte Format entfällt: ovr_v2 ersetzt es
+  if (ok) preferences.remove("ovr_data");
   if (ok) ok = preferences.putUChar("num_ovr", numKeyOverrides) > 0;
   preferences.end();
   Serial.printf("NVS: %d Tasten-Überschreibungen %s.\n", numKeyOverrides, ok ? "gespeichert" : "FEHLER beim Speichern");
@@ -3606,7 +3637,7 @@ void sendCombosPairsMacros() {
   for (int o = 0; o < numKeyOverrides; o += GET_CONFIG_OVERRIDES_PER_LINE) {
     String out = "OVERRIDE_DATA:{\"o\":" + String(o) + ",\"e\":[";
     for (int i = o; i < numKeyOverrides && i < o + GET_CONFIG_OVERRIDES_PER_LINE; i++) {
-      out += String(i > o ? "," : "") + "[" + userKeyOverrides[i].mods + "," + userKeyOverrides[i].key + "," + userKeyOverrides[i].replacement + "]";
+      out += String(i > o ? "," : "") + "[" + userKeyOverrides[i].mods + "," + userKeyOverrides[i].key + "," + userKeyOverrides[i].replacement + "," + userKeyOverrides[i].layerMask + "]";
     }
     sendConfigNotification(out + "]}", true);
   }
@@ -4123,14 +4154,16 @@ void handleConfigCommand(String cmd, bool fromBle) {
     numKeyOverrides = 0;
     sendConfigNotification("OK CLEAR_OVERRIDES");
   } else if (cmd.startsWith("ADD_OVERRIDE ")) {
-    // ADD_OVERRIDE <Modifier-Klassen 1..15> <Taste> <Ersatz>: Tasten 1..255, keine Modifier; wird als nächster Index angehängt
+    // ADD_OVERRIDE <Modifier-Klassen 1..15> <Taste> <Ersatz> [<Ebenenmaske 1..255>]: Tasten 1..255, keine Modifier; wird als nächster Index angehängt
     int mods, key, repl;
     char extra;
-    if (sscanf(cmd.c_str(), "ADD_OVERRIDE %d %d %d %c", &mods, &key, &repl, &extra) == 3 &&
-        numKeyOverrides < MAX_KEY_OVERRIDES && keyOverrideValid(mods, key, repl)) {
+    int mask = KEY_OVERRIDE_ALL_LAYERS;
+    int parsed = sscanf(cmd.c_str(), "ADD_OVERRIDE %d %d %d %d %c", &mods, &key, &repl, &mask, &extra);
+    if ((parsed == 3 || parsed == 4) && numKeyOverrides < MAX_KEY_OVERRIDES && keyOverrideValid(mods, key, repl, mask)) {
       userKeyOverrides[numKeyOverrides].mods = (uint8_t)mods;
       userKeyOverrides[numKeyOverrides].key = (uint8_t)key;
       userKeyOverrides[numKeyOverrides].replacement = (uint8_t)repl;
+      userKeyOverrides[numKeyOverrides].layerMask = (uint8_t)mask;
       numKeyOverrides++;
       sendConfigNotification("OK ADD_OVERRIDE " + String(numKeyOverrides - 1));
     } else {

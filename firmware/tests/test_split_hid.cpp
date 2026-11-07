@@ -3365,10 +3365,13 @@ TEST(test_mouse_move_reaches_sink_without_state_and_is_not_retried) {
 static KeyOverride ovrTable[MAX_KEY_OVERRIDES];
 static uint8_t ovrCount = 0;
 
+static uint8_t ovrActiveLayer = 0;
+
 static void ovrSetup(Kbd &k, std::initializer_list<KeyOverride> entries) {
   ovrCount = 0;
+  ovrActiveLayer = 0;
   for (const KeyOverride &o : entries) ovrTable[ovrCount++] = o;
-  k.setKeyOverrides(ovrTable, &ovrCount);
+  k.setKeyOverrides(ovrTable, &ovrCount, [] { return ovrActiveLayer; });
 }
 
 TEST(test_override_shift_backspace_sends_delete_without_shift) {
@@ -3645,6 +3648,36 @@ TEST(test_override_two_overrides_restore_shared_modifier_after_the_last_release)
     k.release((uint8_t)KEY_LEFT_SHIFT);
     k.log.clear();
   }
+}
+
+TEST(test_override_layer_mask_fires_only_on_matching_layer) {
+  Kbd k;
+  ovrSetup(k, {{KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE, 0x01}});  // nur Ebene 0
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  // Ebene 0: die Überschreibung greift
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"BEGIN", "R129", "P" + std::to_string(KEY_DELETE), "END"}));
+  k.release((uint8_t)KEY_BACKSPACE);
+  // Ebene 1: keine Überschreibung, Backspace bleibt Backspace mit Shift
+  ovrActiveLayer = 1;
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"P" + std::to_string(KEY_BACKSPACE)}));
+  k.release((uint8_t)KEY_BACKSPACE);
+}
+
+TEST(test_override_layer_mask_selects_between_entries_and_default_is_all_layers) {
+  KeyOverride o[2] = {
+    { KEY_OVERRIDE_MOD_SHIFT, 'a', 'x', 0x02 },                    // nur Ebene 1
+    { KEY_OVERRIDE_MOD_SHIFT, 'a', 'y' }                           // Standard: alle Ebenen
+  };
+  assert(o[1].layerMask == KEY_OVERRIDE_ALL_LAYERS);
+  assert(keyOverrideFind(o, 2, KEY_OVERRIDE_MOD_SHIFT, 'a', 0)->replacement == 'y');
+  assert(keyOverrideFind(o, 2, KEY_OVERRIDE_MOD_SHIFT, 'a', 1)->replacement == 'x');
+  assert(keyOverrideFind(o, 2, KEY_OVERRIDE_MOD_SHIFT, 'a', 7)->replacement == 'y');
+  assert(keyOverrideFind(o, 1, KEY_OVERRIDE_MOD_SHIFT, 'a', 0) == nullptr);
+  assert(!keyOverrideValid(2, 'a', 'b', 0) && !keyOverrideValid(2, 'a', 'b', 256) && keyOverrideValid(2, 'a', 'b', 1));
 }
 
 TEST(test_override_validation) {

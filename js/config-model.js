@@ -459,7 +459,8 @@ function isKeyOverrideMember(code) {
 function isValidKeyOverride(o) {
   return !!o && typeof o === "object" && Array.isArray(o.mods) && o.mods.length > 0 &&
     o.mods.every(m => typeof m === "string" && Object.prototype.hasOwnProperty.call(KEY_OVERRIDE_MODS, m)) &&
-    new Set(o.mods).size === o.mods.length && isKeyOverrideMember(o.key) && isKeyOverrideMember(o.replacement);
+    new Set(o.mods).size === o.mods.length && isKeyOverrideMember(o.key) && isKeyOverrideMember(o.replacement) &&
+    (o.layerMask === undefined || o.layerMask === null || isValidComboLayerMask(o.layerMask));
 }
 
 // Modifier einer Überschreibung als Bitmaske (1..15) und in fester Reihenfolge
@@ -469,17 +470,33 @@ function keyOverrideModsValue(mods) {
 
 function normalizeKeyOverride(o) {
   const value = keyOverrideModsValue(o.mods);
-  return {
+  const out = {
     mods: Object.keys(KEY_OVERRIDE_MODS).filter(m => value & KEY_OVERRIDE_MODS[m]),
     key: o.key,
     replacement: o.replacement
   };
+  // Die Maske für alle Ebenen steht nicht in der Datei (Standard)
+  if (isValidComboLayerMask(o.layerMask) && o.layerMask !== COMBO_ALL_LAYERS) out.layerMask = o.layerMask;
+  return out;
+}
+
+// Maske einer Überschreibung (fehlend oder ungültig = alle Ebenen)
+function keyOverrideLayerMask(o) {
+  return o && isValidComboLayerMask(o.layerMask) ? o.layerMask : COMBO_ALL_LAYERS;
+}
+
+// "Ebene 0, 2" oder "" bei allen Ebenen
+function keyOverrideLayerSuffix(mask) {
+  if (mask === COMBO_ALL_LAYERS) return "";
+  const layers = [];
+  for (let i = 0; i < 8; i++) if (mask & (1 << i)) layers.push(i);
+  return ` (Ebene ${layers.join(", ")})`;
 }
 
 // Anzeigename, z. B. "Shift + Bksp → Entf"
 function keyOverrideLabel(o, labelFor) {
   if (!o) return "?";
-  return `${o.mods.map(m => KEY_OVERRIDE_MOD_LABELS[m]).join(" + ")} + ${labelFor(o.key)} → ${labelFor(o.replacement)}`;
+  return `${o.mods.map(m => KEY_OVERRIDE_MOD_LABELS[m]).join(" + ")} + ${labelFor(o.key)} → ${labelFor(o.replacement)}${keyOverrideLayerSuffix(keyOverrideLayerMask(o))}`;
 }
 
 // Leader-Sequenz { keys: [1..4 Tasten], action }: Tasten 1..255 ohne Modifier; Aktion eine solche Taste, ein Tastenpaar
@@ -1414,11 +1431,12 @@ function captureListLine(snapshot, line) {
     if (count === null || data.o !== list.length || !Array.isArray(data.e) || list.length + data.e.length > count ||
         !data.e.every(e => isCombo ? (nums(e, 6, t => t[4] <= 2) || nums(e, 7, t => t[4] <= 2 && isValidComboLayerMask(t[6])) ||
             nums(e, 10, t => t[4] <= 2 && isValidComboLayerMask(t[6]) && isDeviceComboThirdAndWindow(t)))
-          : isOverride ? nums(e, 3, t => t[0] >= 1 && t[0] <= 15)
+          : isOverride ? (nums(e, 3, t => t[0] >= 1 && t[0] <= 15) || nums(e, 4, t => t[0] >= 1 && t[0] <= 15 && isValidComboLayerMask(t[3])))
           : isLeader ? nums(e, 5, isDeviceLeaderTuple) : isAltRepeat ? nums(e, 2, t => t[0] >= 1 && t[0] <= 0xFF && t[1] >= 1 && t[1] <= 0xFF) : nums(e, 2))) return fail();
     // Firmware vor der Ebenenmaske sendet 6 Werte je Combo (alle Ebenen), vor Stand 24 sieben (zwei Tasten, globales
     // Fenster). Alle Einträge werden auf zehn Werte ergänzt: ..., Maske, r3, c3, Fenster.
-    list.push(...(isCombo ? data.e.map(e => [...e, ...[COMBO_ALL_LAYERS, COMBO_NO_KEY, COMBO_NO_KEY, 0].slice(e.length - 6)]) : data.e));
+    list.push(...(isCombo ? data.e.map(e => [...e, ...[COMBO_ALL_LAYERS, COMBO_NO_KEY, COMBO_NO_KEY, 0].slice(e.length - 6)])
+      : isOverride ? data.e.map(e => e.length === 3 ? [...e, COMBO_ALL_LAYERS] : e) : data.e));
   } catch (_) { return fail(); }
   return true;
 }
@@ -1483,7 +1501,7 @@ function localPairTuples(cfg) {
 }
 
 function localOverrideTuples(cfg) {
-  return (cfg.keyOverrides || []).slice(0, MAX_KEY_OVERRIDES).map(o => [keyOverrideModsValue(o.mods), actionCodeToNumeric(o.key), actionCodeToNumeric(o.replacement)]);
+  return (cfg.keyOverrides || []).slice(0, MAX_KEY_OVERRIDES).map(o => [keyOverrideModsValue(o.mods), actionCodeToNumeric(o.key), actionCodeToNumeric(o.replacement), keyOverrideLayerMask(o)]);
 }
 
 function localAltRepeatTuples(cfg) {
@@ -1519,7 +1537,7 @@ function describePairTuple(t) {
 
 function describeOverrideTuple(t) {
   const mods = Object.keys(KEY_OVERRIDE_MODS).filter(m => t[0] & KEY_OVERRIDE_MODS[m]).map(m => KEY_OVERRIDE_MOD_LABELS[m]).join(" + ");
-  return `${mods} + ${findDefinitionByCode(t[1]).label} → ${findDefinitionByCode(t[2]).label}`;
+  return `${mods} + ${findDefinitionByCode(t[1]).label} → ${findDefinitionByCode(t[2]).label}${keyOverrideLayerSuffix(t[3])}`;
 }
 
 function describeLeaderTuple(t) {
@@ -1707,7 +1725,8 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
     keyOverrides: snapshot.counts.overrides === null
       ? JSON.parse(JSON.stringify((baseCfg && baseCfg.keyOverrides) || []))
       : snapshot.overrides.map(t => ({
-          mods: Object.keys(KEY_OVERRIDE_MODS).filter(m => t[0] & KEY_OVERRIDE_MODS[m]), key: tapOf(t[1]), replacement: tapOf(t[2])
+          mods: Object.keys(KEY_OVERRIDE_MODS).filter(m => t[0] & KEY_OVERRIDE_MODS[m]), key: tapOf(t[1]), replacement: tapOf(t[2]),
+          ...(t[3] !== COMBO_ALL_LAYERS ? { layerMask: t[3] } : {})
         })),
     // Ohne LEADER_COUNT (Firmware vor Stand 26) bleiben die lokalen Sequenzen
     leaderSequences: snapshot.counts.leader === null

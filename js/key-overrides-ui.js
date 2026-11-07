@@ -14,6 +14,12 @@ function selectedOverrideMods() {
   });
 }
 
+function selectedOverrideLayerMask() {
+  let mask = 0;
+  document.querySelectorAll(".override-layer-check").forEach(cb => { if (cb.checked) mask |= 1 << parseInt(cb.value, 10); });
+  return mask;
+}
+
 function renderKeyOverrides() {
   const card = document.getElementById("keyOverridesSection");
   const tbody = document.getElementById("keyOverridesTableBody");
@@ -47,6 +53,12 @@ function addKeyOverrideFromUI() {
     key: document.getElementById("keyOverrideKeySelect").value,
     replacement: document.getElementById("keyOverrideReplacementSelect").value
   };
+  const layerMask = selectedOverrideLayerMask();
+  if (layerMask === 0) {
+    showToast("Bitte mindestens eine Ebene wählen.");
+    return;
+  }
+  override.layerMask = layerMask;
   if (!isValidKeyOverride(override)) {
     showToast("Bitte mindestens einen Modifier und zwei normale Tasten (keine Modifier) wählen.");
     return;

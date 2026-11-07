@@ -128,6 +128,7 @@ LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS] = {
 // [[[START_MACROS]]]
 uint8_t numMacros = 0;
 uint8_t macroLengths[MAX_MACROS] = { 0 };
+bool userMacroRepeat[MAX_MACROS] = { false };
 MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS] = {
   { { 0, 0, 0 } }
 };

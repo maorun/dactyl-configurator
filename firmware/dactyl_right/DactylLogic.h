@@ -18,7 +18,7 @@
  *   nur Master (DACTYL_KEY_OVERRIDES): KeyOverride, userKeyOverrides[], numKeyOverrides (DactylKeyOverride.h),
  *   MAX_ALT_REPEATS, AltRepeatPair, userAltRepeats[], numAltRepeats (eigene Alternate-Repeat-Paare),
  *   MAX_LEADER_SEQS, LeaderSeq, userLeaderSeqs[], numLeaderSeqs, leaderTimeoutMs (Leader-Folgen, DactylLeader.h),
- *   MAX_MACROS, MAX_MACRO_STEPS, ACT_MACRO_BASE, MacroStep, userMacros[][], macroLengths[], numMacros,
+ *   MAX_MACROS, MAX_MACRO_STEPS, ACT_MACRO_BASE, MacroStep, userMacros[][], macroLengths[], userMacroRepeat[], numMacros,
  *   momentaryLayers[], toggleLayers[], keyState[][], pressedAction[][],
  *   (remoteMomentaryLayers definiert diese Datei: MO-Ebenen der anderen Hälfte)
  *   keyPressTime[][], keySentToHost[][],
@@ -827,8 +827,12 @@ struct MacroRun {
   uint16_t held[MAX_MACRO_STEPS]; // mit DOWN gedrückte Codes, das Makro-Ende lässt sie los
   unsigned long stepTime;  // Zeitpunkt des letzten Schritts
   unsigned long waitMs;    // Wartezeit ab stepTime bis zum nächsten Schritt
+  bool repeat;             // Wiederholen, solange die auslösende Taste (repeatR, repeatC) gehalten wird
+  uint8_t repeatR;
+  uint8_t repeatC;
 };
 MacroRun macroRun = {};
+#define MACRO_NO_KEY 0xFF
 
 bool isMacroAction(uint16_t action) {
   return action >= ACT_MACRO_BASE && action < ACT_MACRO_BASE + MAX_MACROS;
@@ -896,13 +900,20 @@ const MacroStep &macroStepOf(uint8_t idx, uint8_t step) {
 }
 
 // Startet das Makro. Ein laufendes Makro läuft zu Ende: ein weiterer Start während des Laufs entfällt.
-bool startMacro(uint16_t action, unsigned long now) {
+// Mit gesetzter Wiederholung (userMacroRepeat) und einer Taste (r, c) läuft es von vorn, solange die Taste gehalten wird.
+bool startMacro(uint16_t action, unsigned long now, uint8_t r = MACRO_NO_KEY, uint8_t c = MACRO_NO_KEY) {
   if (macroRun.active || isConfigMode || !bleKeyboard.isConnected()) return false;
   int idx = macroIndexForAction(action);
   if (idx < 0) return false;
   macroRun = {};
   macroRun.active = true;
   macroRun.index = (uint8_t)idx;
+  // Nur bei noch gehaltener Taste: ein Tipp (Mod-Tap, Doppel-Tipp, Auto Shift) startet erst nach dem Loslassen
+  if (userMacroRepeat[idx] && r < NUM_ROWS && c < NUM_COLS && keyState[r][c]) {
+    macroRun.repeat = true;
+    macroRun.repeatR = r;
+    macroRun.repeatC = c;
+  }
   macroRun.stepTime = now;
   // Erster Schritt sofort, die weiteren aus processDeferredKeys()
   macroTick(now);
@@ -1015,6 +1026,11 @@ void macroTick(unsigned long now) {
     macroRun = {};
     return;
   }
+  // Taste losgelassen: das Makro endet sofort, mit DOWN gedrückte Codes und ein offener TAP werden losgelassen
+  if (macroRun.repeat && !keyState[macroRun.repeatR][macroRun.repeatC]) {
+    stopMacro(true);
+    return;
+  }
   if ((unsigned long)(now - macroRun.stepTime) < macroRun.waitMs) return;
   if (!MACRO_OUTPUT_READY()) return;
   // Ein laufendes Makro gilt als Aktivität: Standby (langsamer Scan) darf seine Schritte nicht verzögern
@@ -1034,7 +1050,12 @@ void macroTick(unsigned long now) {
   // Nichts mehr offen: sofort beenden, damit ein neuer Druck das Makro ohne Verzögerung startet.
   // Eine Pause als letzter Schritt läuft erst ab; das Ende folgt im ersten Aufruf danach.
   if (!pausing && macroRun.step >= macroLengthOf(macroRun.index) && !macroRun.tapCode && macroRun.numHeld == 0) {
-    macroRun = {};
+    if (macroRun.repeat && keyState[macroRun.repeatR][macroRun.repeatC]) {
+      macroRun.step = 0;                  // Taste noch gehalten: nächster Durchlauf nach der Schrittpause
+      macroRun.waitMs = MACRO_STEP_GAP_MS;
+    } else {
+      macroRun = {};
+    }
   }
 }
 
@@ -1589,7 +1610,7 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     if (!isConfigMode && bleKeyboard.isConnected()) {
       if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
         // Auch ein ignorierter Start (Makro läuft schon) verbraucht die Taste: das Loslassen startet nichts
-        startMacro(action, millis());
+        startMacro(action, millis(), r, c);
         keySentToHost[r][c] = true;
       }
     }
@@ -2220,7 +2241,7 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       sendUmlaut(act);
       keySentToHost[r][c] = true;
     } else if (isMacroAction(act)) {
-      startMacro(act, millis());
+      startMacro(act, millis(), r, c);
       keySentToHost[r][c] = true;
     } else if (isBleHostAction(act)) {
       bleHostSwitchPress(act);
@@ -2649,7 +2670,7 @@ void processDeferredKeys(unsigned long now) {
               sendUmlaut(act);
               keySentToHost[r][c] = true;
             } else if (isMacroAction(act)) {
-              startMacro(act, now);
+              startMacro(act, now, r, c);
               keySentToHost[r][c] = true;
             } else if (isBleHostAction(act)) {
               bleHostSwitchPress(act);
@@ -2824,6 +2845,7 @@ void loadKeymapFromNVS() {
       // Makros ebenso: MACRO_n verweist auf die einkompilierten Makros
       preferences.remove("num_macros");
       preferences.remove("macro_lens");
+      preferences.remove("macro_rep");
       preferences.remove("macros_data");
     }
     // Fingerprint zuletzt und nur nach vollständigem Schreiben: sonst beim nächsten Start erneut versuchen
@@ -3072,6 +3094,11 @@ void loadKeymapFromNVS() {
         for (int j = 0; j < macroLengths[i]; j++) userMacros[i][j] = packed[pos++];
       }
       numMacros = n;
+      // Wiederholen-Flags (ab Stand 39); fehlt der Schlüssel (älterer Stand), läuft kein Makro wiederholt
+      uint8_t rep[MAX_MACROS] = {0};
+      bool repOk = n > 0 && preferences.isKey("macro_rep") && preferences.getBytesLength("macro_rep") == n &&
+                   preferences.getBytes("macro_rep", rep, n) == n;
+      for (int i = 0; i < MAX_MACROS; i++) userMacroRepeat[i] = repOk && i < n && rep[i] == 1;
     }
     Serial.printf("NVS: %d Makros geladen.\n", numMacros);
   }
@@ -3478,6 +3505,13 @@ bool saveMacrosToNVS() {
   } else {
     preferences.remove("macros_data");
   }
+  if (numMacros > 0) {
+    uint8_t rep[MAX_MACROS] = {0};
+    for (int i = 0; i < numMacros; i++) rep[i] = userMacroRepeat[i] ? 1 : 0;
+    ok = (preferences.putBytes("macro_rep", rep, numMacros) == numMacros) && ok;
+  } else {
+    preferences.remove("macro_rep");
+  }
   if (ok) ok = preferences.putUChar("num_macros", numMacros) > 0;
   preferences.end();
   Serial.printf("NVS: %d Makros %s.\n", numMacros, ok ? "gespeichert" : "FEHLER beim Speichern");
@@ -3600,7 +3634,7 @@ void sendCombosPairsMacros() {
   for (int i = 0; i < numMacros; i++) {
     int n = macroLengths[i];
     for (int o = 0; o == 0 || o < n; o += GET_CONFIG_STEPS_PER_LINE) {
-      String out = "MACRO_DATA:{\"i\":" + String(i) + ",\"n\":" + String(n) + ",\"o\":" + String(o) + ",\"s\":[";
+      String out = "MACRO_DATA:{\"i\":" + String(i) + ",\"n\":" + String(n) + ",\"o\":" + String(o) + (userMacroRepeat[i] ? ",\"r\":1" : "") + ",\"s\":[";
       for (int j = o; j < n && j < o + GET_CONFIG_STEPS_PER_LINE; j++) {
         const MacroStep &st = userMacros[i][j];
         out += String(j > o ? "," : "") + "[" + st.type + "," + st.code + "," + st.ms + "]";
@@ -4185,13 +4219,18 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd == "CLEAR_MACROS") {
     stopMacro(true);
     numMacros = 0;
-    for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
+    for (int i = 0; i < MAX_MACROS; i++) { macroLengths[i] = 0; userMacroRepeat[i] = false; }
     sendConfigNotification("OK CLEAR_MACROS");
-  } else if (cmd == "ADD_MACRO") {
-    // Hängt ein leeres Makro an; ADD_MACRO_STEP füllt es. Ein laufendes Makro endet: die Liste ändert sich.
-    if (numMacros < MAX_MACROS) {
+  } else if (cmd == "ADD_MACRO" || cmd.startsWith("ADD_MACRO ")) {
+    // ADD_MACRO [0|1] hängt ein leeres Makro an (1 = wiederholen, solange die Taste gehalten wird);
+    // ADD_MACRO_STEP füllt es. Ein laufendes Makro endet: die Liste ändert sich.
+    // Genau ein Zeichen als Argument: kein Parser mit Überlauf bei langen Zahlen
+    bool argsOk = cmd == "ADD_MACRO" || cmd == "ADD_MACRO 0" || cmd == "ADD_MACRO 1";
+    int rep = cmd == "ADD_MACRO 1" ? 1 : 0;
+    if (argsOk && numMacros < MAX_MACROS) {
       stopMacro(true);
       macroLengths[numMacros] = 0;
+      userMacroRepeat[numMacros] = rep == 1;
       numMacros++;
       sendConfigNotification("OK ADD_MACRO " + String(numMacros - 1));
     } else {

@@ -587,9 +587,10 @@ function normalizeMacroStep(step) {
   return step.type === "pause" ? { type: "pause", ms: step.ms } : { type: step.type, code: step.code };
 }
 
-// Firmware-Befehle eines Makros: ADD_MACRO, dann je Schritt ADD_MACRO_STEP <typ> <code> <ms>
+// Firmware-Befehle eines Makros: ADD_MACRO [1], dann je Schritt ADD_MACRO_STEP <typ> <code> <ms>.
+// Das Argument 1 (Wiederholen, solange die Taste gehalten wird) steht nur bei gesetztem Flag: ältere Firmware kennt es nicht.
 function macroCommands(macro) {
-  return ["ADD_MACRO", ...macro.steps.map(st => `ADD_MACRO_STEP ${macroStepTuple(st).join(" ")}`)];
+  return [macro.repeat === true ? "ADD_MACRO 1" : "ADD_MACRO", ...macro.steps.map(st => `ADD_MACRO_STEP ${macroStepTuple(st).join(" ")}`)];
 }
 
 // Zielindex beim Speichern aus dem Makro-Editor: -1 = neues Makro (wird angehängt), sonst ein vorhandener Index.
@@ -967,7 +968,9 @@ function normalizeConfig(cfg, profile) {
   cfg.macros = Array.isArray(cfg.macros)
     ? cfg.macros.slice(0, MAX_MACROS).map((m, i) => ({
         name: sanitizeCommandText(m && m.name, `Makro ${i}`),
-        steps: isValidMacro(m) ? m.steps.map(normalizeMacroStep) : []
+        steps: isValidMacro(m) ? m.steps.map(normalizeMacroStep) : [],
+        // Das Feld steht nur bei gesetztem Flag: Makros ohne Wiederholung behalten ihre Form
+        ...(isValidMacro(m) && m.repeat === true ? { repeat: true } : {})
       }))
     : [];
   const names = Array.isArray(cfg.layerNames) ? cfg.layerNames : [];
@@ -1217,7 +1220,7 @@ function maxKeyCount(stats, layer = null) {
 function createDeviceSnapshot() {
   return {
     names: null, tap: [], hold: [], dtap: [], term: [],
-    counts: { combos: null, pairs: null, macros: null, overrides: null, leader: null, altrep: null }, combos: [], pairs: [], macros: [], overrides: [], leader: [], altrep: [], macroLens: [], listsBroken: false,
+    counts: { combos: null, pairs: null, macros: null, overrides: null, leader: null, altrep: null }, combos: [], pairs: [], macros: [], overrides: [], leader: [], altrep: [], macroLens: [], macroRep: [], listsBroken: false,
     // DEVICE_INFO der Hälfte (nur beim Laden der kompletten Config gelesen), sonst null
     info: null
   };
@@ -1243,7 +1246,7 @@ function captureListLine(snapshot, line) {
       const kind = { "COMBO_COUNT:": "combos", "PAIR_COUNT:": "pairs", "MACRO_COUNT:": "macros", "OVERRIDE_COUNT:": "overrides", "LEADER_COUNT:": "leader", "ALTREP_COUNT:": "altrep" }[prefix];
       snapshot.counts[kind] = n;
       snapshot[kind] = [];
-      if (kind === "macros") snapshot.macroLens = [];
+      if (kind === "macros") { snapshot.macroLens = []; snapshot.macroRep = []; }
       return true;
     }
     const data = JSON.parse(body);
@@ -1251,8 +1254,9 @@ function captureListLine(snapshot, line) {
     if (prefix === "MACRO_DATA:") {
       const count = snapshot.counts.macros;
       if (count === null || !isValidIndex(data.i, count) || !Number.isInteger(data.n) || data.n < 0 || data.n > MAX_MACRO_STEPS ||
-          !Array.isArray(data.s) || !data.s.every(e => nums(e, 3, t => t[0] >= 1 && t[0] <= 4))) return fail();
-      if (snapshot.macroLens[data.i] === undefined) { snapshot.macroLens[data.i] = data.n; snapshot.macros[data.i] = []; }
+          !Array.isArray(data.s) || !data.s.every(e => nums(e, 3, t => t[0] >= 1 && t[0] <= 4)) ||
+          (data.r !== undefined && data.r !== 1)) return fail();
+      if (snapshot.macroLens[data.i] === undefined) { snapshot.macroLens[data.i] = data.n; snapshot.macros[data.i] = []; snapshot.macroRep[data.i] = data.r === 1; }
       const steps = snapshot.macros[data.i];
       if (snapshot.macroLens[data.i] !== data.n || data.o !== steps.length || steps.length + data.s.length > data.n) return fail();
       steps.push(...data.s);
@@ -1470,8 +1474,10 @@ function diffLists(cfg, snapshot) {
   if (snapshot.counts.leader !== null) compare(out.leader, "Leader", snapshot.leader, localLeaderTuples(cfg), describeLeaderTuple);
   // Nur wenn das Gerät Alt-Repeat-Paare meldet (ab Stand 34)
   if (snapshot.counts.altrep !== null) compare(out.altrep, "Alt-Repeat", snapshot.altrep, localAltRepeatTuples(cfg), describeAltRepeatTuple);
-  const deviceMacros = Array.from({ length: snapshot.counts.macros }, (_, i) => snapshot.macros[i]);
-  compare(out.macros, "Makro", deviceMacros, localMacroSteps(cfg), describeMacroSteps);
+  // Schritte und Wiederholen-Flag zusammen vergleichen (Stand 39)
+  const deviceMacros = Array.from({ length: snapshot.counts.macros }, (_, i) => snapshot.macros[i] && { steps: snapshot.macros[i], repeat: snapshot.macroRep[i] === true });
+  const localMacros = localMacroSteps(cfg).map((steps, i) => ({ steps, repeat: cfg.macros[i].repeat === true }));
+  compare(out.macros, "Makro", deviceMacros, localMacros, m => (m.repeat ? "↻ " : "") + describeMacroSteps(m.steps));
   return out;
 }
 
@@ -1571,6 +1577,7 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
       : snapshot.altrep.map(t => ({ key: tapOf(t[0]), alt: tapOf(t[1]) })),
     macros: Array.from({ length: snapshot.counts.macros }, (_, i) => ({
       name: `Makro ${i}`,
+      ...(snapshot.macroRep[i] === true ? { repeat: true } : {}),
       steps: snapshot.macros[i].map(st => st[0] === MACRO_STEP_TYPES.pause
         ? { type: "pause", ms: st[2] } : { type: stepNames[st[0]], code: tapOf(macroTupleActionNumber(st)) })
     })),

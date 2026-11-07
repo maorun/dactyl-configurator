@@ -212,7 +212,7 @@ async function writeConfigToESP32(options = {}) {
     if (macrosKnown !== "unknown") {
       for (const macro of macros) {
         for (const cmd of macroCommands(macro)) {
-          await sendConfirmed(cmd, cmd === "ADD_MACRO" ? "ADD_MACRO" : "ADD_MACRO_STEP");
+          await sendConfirmed(cmd, cmd.startsWith("ADD_MACRO_STEP") ? "ADD_MACRO_STEP" : "ADD_MACRO");
         }
         updateProgress();
       }

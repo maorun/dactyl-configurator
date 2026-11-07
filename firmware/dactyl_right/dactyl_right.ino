@@ -287,6 +287,8 @@ void exitConfigMode() {
   ESP.restart();
 }
 
+bool saveBleHostToNVS(uint8_t slot);  // definiert in DactylLogic.h (wird später eingebunden)
+
 // Host-Slot wechseln: Slot im NVS speichern, Bluedroid sauber beenden (die Bonds aller Slots bleiben im NVS) und neu
 // starten. Der Start setzt die statische Random-Adresse des neuen Slots. Die Tasten sind schon freigegeben.
 void switchBleHostSlot(uint8_t slot) {

@@ -307,6 +307,16 @@ function forgetSplitLink() {
   updateSplitLinkUI();
 }
 
+// Aktiver BLE-Host-Slot (Zeile BLE_HOST:<n>): nur der Master meldet ihn; Firmware ohne Host-Slots meldet nichts
+function updateBleHostUI(slot) {
+  const pill = document.getElementById("bleHostPill");
+  const text = document.getElementById("bleHostText");
+  if (!pill || !text) return;
+  const valid = Number.isInteger(slot) && slot >= 1 && slot <= 3;
+  pill.hidden = !valid;
+  if (valid) text.textContent = `Host ${slot}`;
+}
+
 // LED-Zustand des Hosts: Pill "Caps Lock" im Kopf, sichtbar nur bei aktivem Caps Lock.
 // Der Stand stammt vom Master (HOST_LEDS, DEVICE_INFO.host_leds) und nur über USB; endet die Verbindung, gilt er nicht mehr.
 let hostLedsState = null;
@@ -345,6 +355,7 @@ function forgetHostLeds() {
   if (Dactyl.splitLinkStaysValid(connectionState())) return;
   hostLedsState = null;
   updateHostLedsUI();
+  updateBleHostUI(null);
 }
 
 // Gedrückte SPLIT_KEY-Tasten; ein verlorenes Release löst die Taste nach Dactyl.SPLIT_KEY_STALE_MS
@@ -405,6 +416,12 @@ function handleSerialLine(line, side = null, transport = "ble") {
     } else if (line.includes("ConfigMode=0") && !bleConfigChar) {
       updateConfigModeUI(false, false);
     }
+    return;
+  }
+
+  // 0. Aktiver BLE-Host-Slot ("BLE_HOST:<n>", nur vom Master, kommt vor DEVICE_INFO)
+  if (line.startsWith("BLE_HOST:")) {
+    updateBleHostUI(Number(line.substring(9)));
     return;
   }
 

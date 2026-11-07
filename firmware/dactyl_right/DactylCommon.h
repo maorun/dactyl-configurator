@@ -111,6 +111,10 @@
 // ist sie wieder gelöst; ein zweites Tippen nimmt die Vormerkung zurück; Halten wirkt wie MO_n und merkt nichts vor
 #define ACT_OSL_BASE             0x180
 #define NUM_OSL_ACTIONS          8
+// BLE-Host-Slot wechseln (HOST_1 .. HOST_3, nur Master): gibt alle Tasten frei, speichert den Slot im NVS und startet
+// BLE mit der statischen Random-Adresse des Slots neu (DactylBleHost.h). 0x170..0x17F gehören den Makros.
+#define ACT_HOST_BASE            0x188
+#define NUM_HOST_ACTIONS         3
 
 #define NUM_LAYERS 8
 
@@ -210,4 +214,5 @@ inline uint16_t altRepeatAction(uint16_t a) {
 }
 
 inline bool isRepeatKeyAction(uint16_t a) { return a == ACT_REPEAT || a == ACT_ALT_REPEAT; }
+inline bool isBleHostAction(uint16_t a) { return a >= ACT_HOST_BASE && a < ACT_HOST_BASE + NUM_HOST_ACTIONS; }
 inline bool isDynamicMacroAction(uint16_t a) { return a == ACT_DM_REC || a == ACT_DM_PLAY; }

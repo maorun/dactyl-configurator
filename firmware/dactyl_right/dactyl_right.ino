@@ -155,6 +155,8 @@ LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS] = {
 #define DACTYL_KEY_OVERRIDES
 // Dynamisches Makro (DM_REC, DM_PLAY): nur der Master hat den Slot (DactylDynamicMacro.h)
 #define DACTYL_DYNAMIC_MACRO
+// BLE-Host-Slots (HOST_1 .. HOST_3): nur der Master hat eine BLE-HID-Verbindung (DactylBleHost.h)
+#define DACTYL_BLE_HOST
 // [[[START_KEY_OVERRIDES]]]
 uint8_t numKeyOverrides = 0;
 KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES] = {
@@ -271,6 +273,31 @@ void exitConfigMode() {
   // WICHTIG: Im Config-Modus KEIN esp_bluedroid_disable() aufrufen, damit Bluedroid
   // niemals leere/unverschlüsselte Security-Tabellen über den gespeicherten Mac-Bond ins NVS schreibt!
   Serial.println("[BLE] Starte sauberen Neustart für Mac-HID-Verbindung...");
+  Serial.flush();
+  ESP.restart();
+}
+
+// Host-Slot wechseln: Slot im NVS speichern, Bluedroid sauber beenden (die Bonds aller Slots bleiben im NVS) und neu
+// starten. Der Start setzt die statische Random-Adresse des neuen Slots. Die Tasten sind schon freigegeben.
+void switchBleHostSlot(uint8_t slot) {
+  if (isConfigMode || !isValidBleHostSlot(slot)) return;
+  isBleTransitioning = true;
+  if (!saveBleHostToNVS(slot)) {
+    isBleTransitioning = false;
+    return;
+  }
+  Serial.printf("[BLE] Wechsle zu Host-Slot %u...\n", slot);
+  sendSplitLayerRelease();   // die linke Hälfte gibt ihre MO-Ebenen frei, wie beim Config Mode
+  BLEServer *pServer = BLEDevice::getServer();
+  if (pServer) {
+    pServer->getAdvertising()->stop();
+    std::vector<uint16_t> peers;
+    for (auto const& peer : pServer->getPeerDevices(false)) peers.push_back(peer.first);
+    for (uint16_t id : peers) pServer->disconnect(id);
+    for (int i = 0; i < 25 && pServer->getConnectedCount() > 0; i++) delay(10);
+  }
+  esp_bluedroid_disable();
+  delay(60);
   Serial.flush();
   ESP.restart();
 }
@@ -931,6 +958,8 @@ void setup() {
 
   // 2b. Gespeicherte Belegung und Namen aus NVS laden
   loadKeymapFromNVS();
+  loadBleHostFromNVS();
+  bleKeyboard.hostSlot = bleHostSlot;
   // Gespeicherten Gerätenamen (SET_DEV_NAME) für das BLE-HID-Advertising übernehmen
   bleKeyboard.setName(deviceName.c_str());
 
@@ -1130,6 +1159,11 @@ void loop() {
   if (exitConfigRequested) {
     exitConfigRequested = false;
     exitConfigMode();
+  }
+  if (bleHostSwitchRequested != 0) {
+    uint8_t slot = bleHostSwitchRequested;
+    bleHostSwitchRequested = 0;
+    switchBleHostSlot(slot);
   }
 
   // Inaktivitäts-Timeouts für Standby (Stufe 1) und Deep Sleep (Stufe 2)

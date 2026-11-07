@@ -77,6 +77,8 @@ static LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS];
 #define DACTYL_KEY_OVERRIDES
 // Dynamisches Makro (nur der Master, wie dactyl_right.ino)
 #define DACTYL_DYNAMIC_MACRO
+// BLE-Host-Slots (nur der Master, wie dactyl_right.ino)
+#define DACTYL_BLE_HOST
 #include "../dactyl_right/DactylKeyOverride.h"
 static uint8_t numKeyOverrides = 0;
 static KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES];
@@ -8999,6 +9001,166 @@ TEST(test_key_lock_as_combo_candidate_arms_only_on_quick_tap) {
   pressKey(3, 0, true);
   pressKey(3, 0, false);
   assert(bleKeyboard.mouseButtons == 0);                  // keine Vormerkung zurückgeblieben
+}
+
+// -----------------------------------------------------------------------------
+// BLE-Host-Slots (ACT_HOST_1 .. ACT_HOST_3)
+// -----------------------------------------------------------------------------
+TEST(test_ble_host_address_per_slot_is_static_random_and_distinct) {
+  const uint8_t base[6] = {0x2E, 0xBC, 0xBB, 0x81, 0x61, 0xA8};
+  uint8_t a[BLE_HOST_SLOTS + 1][6];
+  for (int s = 1; s <= BLE_HOST_SLOTS; s++) {
+    assert(bleHostAddress(base, s, a[s]));
+    assert((a[s][0] & 0xC0) == 0xC0);                       // statische Random-Adresse: oberste Bits 11b
+    uint8_t again[6];
+    assert(bleHostAddress(base, s, again) && memcmp(again, a[s], 6) == 0);   // deterministisch
+  }
+  for (int i = 1; i <= BLE_HOST_SLOTS; i++)
+    for (int j = i + 1; j <= BLE_HOST_SLOTS; j++) assert(memcmp(a[i], a[j], 6) != 0);
+  // Die Adresse des Config Mode (DactylConfigBle.h) fällt mit keinem Slot zusammen
+  uint8_t cfgAddr[6];
+  memcpy(cfgAddr, base, 6);
+  cfgAddr[0] |= 0xC0; cfgAddr[5] |= 0xC0; cfgAddr[4] ^= 0x55;
+  for (int s = 1; s <= BLE_HOST_SLOTS; s++) assert(memcmp(cfgAddr, a[s], 6) != 0);
+  uint8_t bad[6];
+  assert(!bleHostAddress(base, 0, bad) && !bleHostAddress(base, BLE_HOST_SLOTS + 1, bad));
+}
+
+TEST(test_ble_host_slot_persists_in_nvs_and_defaults_to_one) {
+  resetState();
+  loadBleHostFromNVS();
+  assert(bleHostSlot == 1);                                   // ohne Schlüssel Slot 1
+  assert(saveBleHostToNVS(3));
+  assert(Preferences::uintStore["ble_host"] == 3);
+  bleHostSlot = 1;
+  loadBleHostFromNVS();
+  assert(bleHostSlot == 3);
+  Preferences::uintStore["ble_host"] = 9;                     // ungültiger Wert fällt auf Slot 1 zurück
+  loadBleHostFromNVS();
+  assert(bleHostSlot == 1);
+  assert(!saveBleHostToNVS(0) && !saveBleHostToNVS(4));
+  Preferences::failWrites = true;
+  bleHostSlot = 2;
+  assert(!saveBleHostToNVS(3) && bleHostSlot == 2);           // Schreibfehler ändert den Stand nicht
+  Preferences::failWrites = false;
+}
+
+TEST(test_ble_host_action_releases_all_keys_and_requests_switch) {
+  resetState();
+  bleHostSlot = 1;
+  bleHostSwitchRequested = 0;
+  KEYMAP[0][0][0] = 'a';
+  KEYMAP[0][0][1] = ACT_HOST_BASE + 1;                        // HOST_2
+  pressKey(0, 0);
+  assert(!bleKeyboard.pressedKeys.empty());
+  pressKey(0, 1);
+  assert(bleKeyboard.pressedKeys.empty());                    // alles freigegeben
+  assert(bleHostSwitchRequested == 2);
+  releaseKey(0, 1);
+  releaseKey(0, 0);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(bleHostSwitchRequested == 2);
+}
+
+TEST(test_ble_host_action_for_active_slot_only_releases) {
+  resetState();
+  bleHostSlot = 2;
+  bleHostSwitchRequested = 0;
+  KEYMAP[0][0][1] = ACT_HOST_BASE + 1;
+  pressKey(0, 1);
+  releaseKey(0, 1);
+  assert(bleHostSwitchRequested == 0);                        // kein Neustart für den aktiven Slot
+}
+
+TEST(test_ble_host_action_does_nothing_in_config_mode_or_without_host) {
+  resetState();
+  bleHostSlot = 1;
+  bleHostSwitchRequested = 0;
+  KEYMAP[0][0][1] = ACT_HOST_BASE + 2;
+  isConfigMode = true;
+  pressKey(0, 1); releaseKey(0, 1);
+  assert(bleHostSwitchRequested == 0);
+  isConfigMode = false;
+  bleKeyboard.connected = true;
+}
+
+TEST(test_ble_host_action_switches_without_mac_connection) {
+  resetState();
+  bleHostSlot = 1;
+  bleHostSwitchRequested = 0;
+  KEYMAP[0][0][1] = ACT_HOST_BASE + 2;
+  bleKeyboard.connected = false;                              // verlorener Host darf den Wechsel nicht sperren
+  pressKey(0, 1); releaseKey(0, 1);
+  assert(bleHostSwitchRequested == 3);
+  bleKeyboard.connected = true;
+  bleHostSwitchRequested = 0;
+}
+
+TEST(test_ble_host_action_as_hold_and_double_tap_action) {
+  resetState();
+  bleHostSlot = 1;
+  bleHostSwitchRequested = 0;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = ACT_HOST_BASE + 1;
+  setMillis(1000);
+  pressKey(2, 1, true);
+  setMillis(1000 + tappingTermMs + 10);
+  processDeferredKeys(millis());                              // Halten löst HOST_2 aus
+  assert(bleHostSwitchRequested == 2);
+  pressKey(2, 1, false);
+  bleHostSwitchRequested = 0;
+}
+
+TEST(test_ble_host_action_as_double_tap_action) {
+  resetState();
+  bleHostSlot = 1;
+  bleHostSwitchRequested = 0;
+  KEYMAP[0][2][2] = 'x';
+  DTAPMAP[0][2][2] = ACT_HOST_BASE + 2;
+  setMillis(1000);
+  pressKey(2, 2, true);
+  setMillis(1020);
+  pressKey(2, 2, false);
+  setMillis(1050);
+  pressKey(2, 2, true);                                       // zweiter Tipp: Doppel-Tipp-Aktion
+  pressKey(2, 2, false);
+  assert(bleHostSwitchRequested == 3);
+  DTAPMAP[0][2][2] = 0;
+  bleHostSwitchRequested = 0;
+}
+
+TEST(test_ble_host_nvs_failure_reports_error) {
+  resetState();
+  mockChar.notifications.clear();
+  Preferences::failWrites = true;
+  bleHostSlot = 1;
+  assert(!saveBleHostToNVS(2));
+  bool err = false;
+  for (const auto &n : mockChar.notifications) if (n == "ERR NVS BLE_HOST") err = true;
+  assert(err);
+  Preferences::failWrites = false;
+}
+
+TEST(test_ble_host_action_codes_and_combo_rejection) {
+  assert(ACT_HOST_BASE > ACT_MACRO_BASE + MAX_MACROS - 1 && ACT_HOST_BASE != ACT_OSL_BASE);
+  assert(isBleHostAction(ACT_HOST_BASE) && isBleHostAction(ACT_HOST_BASE + 2) && !isBleHostAction(ACT_HOST_BASE + 3));
+  resetState();
+  handleConfigCommand("CLEAR_COMBOS", false);
+  mockChar.notifications.clear();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 392", false);      // ACT_HOST_BASE
+  assert(numCombos == 0);
+}
+
+TEST(test_ble_host_slot_in_device_info) {
+  resetState();
+  bleHostSlot = 3;
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_INFO", true);
+  bool sawSlot = false;
+  for (const auto &n : mockChar.notifications) if (n == "BLE_HOST:3") sawSlot = true;
+  assert(sawSlot);
+  assert(mockChar.value.find("DEVICE_INFO:") == 0);          // DEVICE_INFO bleibt die letzte Zeile
+  assert(DACTYL_FW_VERSION >= 30);
 }
 
 int main() {

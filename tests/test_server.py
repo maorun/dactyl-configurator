@@ -561,6 +561,30 @@ class TestServerAndCodegen(unittest.TestCase):
             with self.assertRaises(ValueError):
                 server.generate_combos_cpp([combo])
 
+    def test_ble_host_codes_match_firmware_and_roundtrip(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_HOST_BASE\s+0x188")
+        self.assertRegex(common, r"#define NUM_HOST_ACTIONS\s+3")
+        for n in (1, 2, 3):
+            self.assertEqual(server.code_to_cpp(f"HOST_{n}"), f"(ACT_HOST_BASE + {n - 1})")
+        with open(server.DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["layers"][0][2][1] = {"tap": "HOST_2"}
+        server.validate_config(cfg, "R")
+        self.assertIn("(ACT_HOST_BASE + 1)", server.generate_keymap_cpp(cfg["layers"]))
+
+    def test_ble_host_is_no_combo_action_and_master_only(self):
+        for behavior in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
+            combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": behavior, "action": "HOST_1"}
+            with self.assertRaises(ValueError):
+                server.generate_combos_cpp([combo])
+        with open(server.LEFT_DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["layers"][0][2][1] = {"tap": "HOST_3"}
+        with self.assertRaises(ValueError):
+            server.validate_config(cfg, "L")
+
     def test_leader_codegen(self):
         cpp = server.generate_leader_cpp([
             {"keys": ["KEY_A", "KEY_B"], "action": "MACRO_0"},

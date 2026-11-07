@@ -984,13 +984,14 @@ void loop() {
       splitDeferReplay(splitLocalDefer, applyLocalKeyChange);
     }
 
+    const unsigned long scanNowMs = millis();
     for (int r = 0; r < NUM_ROWS; r++) {
       pinMode(ROW_PINS[r], OUTPUT);
       digitalWrite(ROW_PINS[r], LOW);
       delayMicroseconds(MATRIX_SETTLE_US);
 
       for (int c = 0; c < NUM_COLS; c++) {
-        bool isPressed = (digitalRead(COL_PINS[c]) == LOW);
+        bool isPressed = debouncedMatrixKey(r, c, digitalRead(COL_PINS[c]) == LOW, scanNowMs);
 
         if (isPressed != rawKeyState[r][c]) {
           rawKeyState[r][c] = isPressed;
@@ -1047,6 +1048,8 @@ void loop() {
         comboPressLayer1[4][5] = 0;
         rawKeyState[0][0] = false;
         rawKeyState[4][5] = false;
+        resetMatrixDebounceKey(0, 0);
+        resetMatrixDebounceKey(4, 5);
         // Zurückgehaltene Änderungen gehören zur Zeit vor dem Moduswechsel
         splitDeferReset(splitLocalDefer);
         sendConfigNotification("KEY_RELEASE:{\"r\":0,\"c\":0}");
@@ -1161,5 +1164,5 @@ void loop() {
   }
 
   diagNoteLoopUs(micros() - diagLoopStartUs);
-  delay(isStandby ? 40 : debounceMs);
+  delay(isStandby ? 40 : 1); // debounce per key (DactylDebounce.h), no global wait
 }

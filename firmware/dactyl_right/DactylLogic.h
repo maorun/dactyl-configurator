@@ -55,6 +55,7 @@
 // "left_fw".
 #include "DactylVersion.h"
 #include "DactylHostLeds.h"
+#include "DactylDebounce.h"
 #ifdef ARDUINO
 #include <Update.h>
 #include <esp_ota_ops.h>
@@ -1620,6 +1621,22 @@ inline bool deferredQueuePop(DeferredKeyEvent &out) {
 }
 
 void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long now);
+
+// Eager debounce per key (DactylDebounce.h): the press passes in the first pass, the release after debounceMs.
+// Returns the reported state of the key. The matrix scan compares it with rawKeyState.
+EagerDebounceKey matrixDebounce[NUM_ROWS][NUM_COLS] = {};
+bool debouncedMatrixKey(uint8_t r, uint8_t c, bool rawPressed, unsigned long nowMs) {
+  return eagerDebounceUpdate(matrixDebounce[r][c], rawPressed, nowMs, debounceMs);
+}
+// Clears the debounce state of one key (config combo reset).
+void resetMatrixDebounceKey(uint8_t r, uint8_t c) {
+  eagerDebounceReset(matrixDebounce[r][c]);
+}
+// Clears the debounce state of every key (config mode change, tests).
+void resetMatrixDebounce() {
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++) eagerDebounceReset(matrixDebounce[r][c]);
+}
 void replayDeferredQueue();
 bool anyTapHoldPending();
 bool deferredKeysWaiting() { return deferredQueue.count > 0; }

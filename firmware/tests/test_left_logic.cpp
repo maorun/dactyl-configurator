@@ -30,57 +30,73 @@ TEST(test_split_event_layout) {
   assert(b[3] == 0);
 }
 
-TEST(test_press_reported_after_debounce) {
-  assert(!updateLeftKey(1, 2, true, 100));
-  assert(!updateLeftKey(1, 2, true, 104));
-  assert(updateLeftKey(1, 2, true, 105));
+TEST(test_press_reported_in_first_pass) {
+  assert(updateLeftKey(1, 2, true, 100));
   assert(leftKeys[1][2].stable);
   // Gehaltene Taste meldet kein weiteres Ereignis
   assert(!updateLeftKey(1, 2, true, 200));
 }
 
 TEST(test_release_reported_after_debounce) {
-  updateLeftKey(0, 0, true, 0);
-  assert(updateLeftKey(0, 0, true, 5));
-  assert(!updateLeftKey(0, 0, false, 10));
+  assert(updateLeftKey(0, 0, true, 0));
+  assert(!updateLeftKey(0, 0, false, 10));   // Kontakt offen, Fenster läuft
+  assert(!updateLeftKey(0, 0, false, 14));
   assert(updateLeftKey(0, 0, false, 15));
   assert(!leftKeys[0][0].stable);
 }
 
-TEST(test_bounce_restarts_window) {
-  assert(!updateLeftKey(3, 4, true, 0));
-  assert(!updateLeftKey(3, 4, false, 2));
-  assert(!updateLeftKey(3, 4, true, 3));
-  assert(!updateLeftKey(3, 4, true, 7));
-  assert(updateLeftKey(3, 4, true, 8));
+TEST(test_bouncing_press_gives_one_press_and_one_release) {
+  int presses = 0, releases = 0;
+  // Prellen beim Drücken und beim Loslassen, 1-ms-Takt
+  const bool samples[] = {1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,   // Drücken mit Prellen
+                          0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};   // Loslassen mit Prellen
+  bool before = false;
+  for (unsigned long t = 0; t < sizeof(samples); t++) {
+    updateLeftKey(2, 3, samples[t], t + 100, 5);
+    bool now = leftKeys[2][3].stable;
+    if (now && !before) presses++;
+    if (!now && before) releases++;
+    before = now;
+  }
+  assert(presses == 1);
+  assert(releases == 1);
 }
 
-TEST(test_short_glitch_is_ignored) {
-  assert(!updateLeftKey(2, 2, true, 0));
-  assert(!updateLeftKey(2, 2, false, 3));
-  assert(!updateLeftKey(2, 2, false, 50));
-  assert(!leftKeys[2][2].stable);
+TEST(test_bounce_after_press_is_ignored) {
+  assert(updateLeftKey(3, 4, true, 0));
+  assert(!updateLeftKey(3, 4, false, 2));    // Prellen im Fenster
+  assert(!updateLeftKey(3, 4, true, 3));
+  assert(leftKeys[3][4].stable);
+}
+
+TEST(test_short_open_glitch_keeps_key_pressed) {
+  assert(updateLeftKey(2, 2, true, 0));
+  assert(!updateLeftKey(2, 2, false, 10));
+  assert(!updateLeftKey(2, 2, true, 12));    // Kontakt wieder zu: Release-Kandidat verfällt
+  assert(!updateLeftKey(2, 2, false, 14));
+  assert(!updateLeftKey(2, 2, false, 18));   // erst 4 ms offen seit 14
+  assert(leftKeys[2][2].stable);
 }
 
 TEST(test_keys_are_independent) {
-  updateLeftKey(0, 1, true, 0);
-  updateLeftKey(0, 2, false, 0);
-  assert(updateLeftKey(0, 1, true, 5));
-  assert(!updateLeftKey(0, 2, false, 5));
+  assert(updateLeftKey(0, 1, true, 0));
+  assert(!updateLeftKey(0, 2, false, 0));
   assert(!leftKeys[0][2].stable);
 }
 
 TEST(test_debounce_across_millis_wrap) {
   const unsigned long nearWrap = ~0UL - 2;
-  assert(!updateLeftKey(4, 1, true, nearWrap));
-  assert(!updateLeftKey(4, 1, true, nearWrap + 4)); // 4 ms vergangen, nach dem Überlauf
-  assert(updateLeftKey(4, 1, true, nearWrap + 5));
+  assert(updateLeftKey(4, 1, true, nearWrap));
+  assert(!updateLeftKey(4, 1, false, nearWrap + 6));      // Release-Kandidat startet nach dem Überlauf
+  assert(!updateLeftKey(4, 1, false, nearWrap + 10));
+  assert(updateLeftKey(4, 1, false, nearWrap + 11));
 }
 
 TEST(test_debounce_uses_configured_time) {
-  assert(!updateLeftKey(1, 1, true, 0, 20));
-  assert(!updateLeftKey(1, 1, true, 19, 20));
-  assert(updateLeftKey(1, 1, true, 20, 20));
+  assert(updateLeftKey(1, 1, true, 0, 20));
+  assert(!updateLeftKey(1, 1, false, 20, 20));
+  assert(!updateLeftKey(1, 1, false, 39, 20));
+  assert(updateLeftKey(1, 1, false, 40, 20));
 }
 
 TEST(test_out_of_range_is_rejected) {

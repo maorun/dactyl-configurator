@@ -23,15 +23,6 @@ Rules for this file:
 
 ## Priority 4
 
-### Eager debounce per key
-
-- **Rank:** Feature model. Total 20/40 (typing 7, configuration 2, harmony 5, safety 6). Effort M. Estimate.
-- **Area:** Firmware.
-- **Code:** `firmware/dactyl_right/dactyl_right.ino` (`loop()`, `delay(debounceMs)`), `firmware/dactyl_left/dactyl_left.ino`, `firmware/dactyl_right/DactylLogic.h` (`debounceMs`).
-- **Problem:** The loop waits `debounceMs` (5 ms) after each scan for all keys. This adds latency to each key press, and a switch that bounces longer than one pass can still send a double press.
-- **Goal:** Replace the global delay with a debounce state per key: a press is sent at once (eager), and changes of that key are ignored for `debounceMs`. A release is sent after the key stays open for `debounceMs`. The scan rate in standby stays unchanged.
-- **Acceptance test:** A firmware test feeds bouncing matrix samples and expects one press and one release. A test checks that the press is sent in the first pass.
-
 ### Key lock (`KEY_LOCK`)
 
 - **Rank:** Feature model. Total 19/40 (typing 4, configuration 2, harmony 7, safety 6). Effort S. Estimate.

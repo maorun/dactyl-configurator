@@ -119,8 +119,7 @@ static void testRemoteRelease(uint8_t r, uint8_t c) {
 #define REPEAT_RELEASE_HELD_PAIRS() (testPairReleases++)
 #include "../dactyl_right/DactylLogic.h"
 
-// =============================================================================
-// TEST SUITE ASSERTIONS
+// ======================================================================// TEST SUITE ASSERTIONS
 // =============================================================================
 static int testsRun = 0;
 static int testsPassed = 0;
@@ -200,6 +199,7 @@ void resetState() {
   capsLedEnabled = 0;
   testHostLeds = HostLedsState();
   debounceMs = 5;
+  resetMatrixDebounce();
   standbyTimeoutMinutes = 5;
   deepSleepTimeoutMinutes = 60;
   deviceName = "Dactyl Keyboard";
@@ -8113,6 +8113,74 @@ TEST(test_leader_partial_nvs_data_keeps_the_compiled_in_list) {
   bool logged = false;
   for (const auto &l : Serial.outputLines) if (l.find("Leader-Folgen unvollständig") != std::string::npos) logged = true;
   assert(logged);
+}
+
+TEST(test_eager_debounce_reports_press_in_first_pass) {
+  resetState();
+  assert(debouncedMatrixKey(2, 3, true, 1000));        // first pass, no wait
+  assert(debouncedMatrixKey(2, 3, true, 1001));
+}
+
+TEST(test_eager_debounce_bouncing_gives_one_press_and_one_release) {
+  resetState();
+  debounceMs = 5;
+  const bool samples[] = {1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                          0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  int presses = 0, releases = 0;
+  bool before = false;
+  for (unsigned long t = 0; t < sizeof(samples); t++) {
+    bool now = debouncedMatrixKey(1, 1, samples[t], 2000 + t);
+    if (now && !before) presses++;
+    if (!now && before) releases++;
+    before = now;
+  }
+  assert(presses == 1);
+  assert(releases == 1);
+}
+
+TEST(test_eager_debounce_release_waits_for_debounce_ms) {
+  resetState();
+  debounceMs = 8;
+  assert(debouncedMatrixKey(0, 1, true, 3000));
+  assert(debouncedMatrixKey(0, 1, false, 3010));       // open window starts
+  assert(debouncedMatrixKey(0, 1, false, 3017));
+  assert(!debouncedMatrixKey(0, 1, false, 3018));
+}
+
+TEST(test_eager_debounce_keys_are_independent) {
+  resetState();
+  assert(debouncedMatrixKey(0, 0, true, 4000));
+  assert(debouncedMatrixKey(0, 1, true, 4001));
+  assert(!debouncedMatrixKey(0, 2, false, 4001));
+}
+
+TEST(test_eager_debounce_survives_millis_wrap) {
+  resetState();
+  debounceMs = 5;
+  const unsigned long nearWrap = ~0UL - 2;
+  assert(debouncedMatrixKey(3, 2, true, nearWrap));
+  assert(debouncedMatrixKey(3, 2, false, nearWrap + 6));   // open window starts after the wrap
+  assert(debouncedMatrixKey(3, 2, false, nearWrap + 10));
+  assert(!debouncedMatrixKey(3, 2, false, nearWrap + 11));
+}
+
+TEST(test_eager_debounce_short_open_glitch_keeps_key_pressed) {
+  resetState();
+  debounceMs = 5;
+  assert(debouncedMatrixKey(4, 4, true, 5000));
+  assert(debouncedMatrixKey(4, 4, false, 5010));
+  assert(debouncedMatrixKey(4, 4, true, 5012));            // contact closes again: candidate lapses
+  assert(debouncedMatrixKey(4, 4, false, 5014));
+  assert(debouncedMatrixKey(4, 4, false, 5018));           // only 4 ms open since 5014
+}
+
+TEST(test_eager_debounce_key_reset_clears_one_key) {
+  resetState();
+  assert(debouncedMatrixKey(0, 0, true, 6000));
+  assert(debouncedMatrixKey(4, 5, true, 6000));
+  resetMatrixDebounceKey(0, 0);
+  assert(!debouncedMatrixKey(0, 0, false, 6001));          // reset key reports open at once
+  assert(debouncedMatrixKey(4, 5, true, 6001));            // other key keeps its state
 }
 
 int main() {

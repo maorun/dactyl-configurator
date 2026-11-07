@@ -1905,9 +1905,11 @@ public:
 
   // Tabelle der Tasten-Überschreibungen (Master, gilt für beide Hälften). Der Zähler liegt beim Aufrufer,
   // damit CLEAR_OVERRIDES und ADD_OVERRIDE ihn ohne Umweg ändern.
-  void setKeyOverrides(const KeyOverride *table, const uint8_t *count) {
+  // layerFn liefert die aktive Ebene (getActiveLayer); ohne sie gilt Ebene 0.
+  void setKeyOverrides(const KeyOverride *table, const uint8_t *count, uint8_t (*layerFn)() = nullptr) {
     overrideTable = table;
     overrideCount = count;
+    overrideLayerFn = layerFn;
   }
 
   const SplitHeldSet &rightHeld() const { return right; }
@@ -2023,6 +2025,7 @@ private:
   OverrideActive ovrLeft[256] = {};
   const KeyOverride *overrideTable = nullptr;
   const uint8_t *overrideCount = nullptr;
+  uint8_t (*overrideLayerFn)() = nullptr;
 
   static void overrideClear(OverrideActive *a) { memset(a, 0, 256 * sizeof(OverrideActive)); }
 
@@ -2040,7 +2043,8 @@ private:
   // Passende Überschreibung für k bei den gehaltenen Modifiern oder nullptr. Ohne Nebenwirkung.
   const KeyOverride *overrideFor(uint8_t k) const {
     if (!overrideTable || !overrideCount || *overrideCount == 0) return nullptr;
-    return keyOverrideFind(overrideTable, *overrideCount, keyOverrideClassesOfCodes(heldModifierCodes()), k);
+    return keyOverrideFind(overrideTable, *overrideCount, keyOverrideClassesOfCodes(heldModifierCodes()), k,
+                           overrideLayerFn ? overrideLayerFn() : 0);
   }
 
   // true, wenn eine aktive Überschreibung (beider Hälften) die Ersatztaste code gerade hält

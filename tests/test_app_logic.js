@@ -47,7 +47,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              planKeyPairDeletion,
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
              MAX_KEY_OVERRIDES, KEY_OVERRIDE_MODS, isValidKeyOverride, isKeyOverrideMember, keyOverrideModsValue,
-             normalizeKeyOverride, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
+             normalizeKeyOverride, keyOverrideLayerMask, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
              MAX_ALT_REPEATS, isValidAltRepeat, hasDuplicateAltRepeat, normalizeAltRepeat, altRepeatsFromSameFingerPairs, localAltRepeatTuples, describeAltRepeatTuple,
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
@@ -1248,6 +1248,20 @@ test("Tasten-Überschreibungen: Prüfung, Normalisierung und Anzeige", () => {
   assert.strictEqual(api.keyOverrideModsValue(["shift"]), 2);
   assert.strictEqual(api.keyOverrideLabel(n, c => c), "Ctrl + Shift + Cmd + KEY_A → KEY_B");
   assert.strictEqual(api.MAX_KEY_OVERRIDES, 16);
+});
+
+test("Tasten-Überschreibungen: Ebenenmaske (Prüfung, Normalisierung, Anzeige)", () => {
+  const base = { mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" };
+  assert.ok(api.isValidKeyOverride({ ...base, layerMask: 1 }));
+  for (const m of [0, 256, 1.5, "1"]) assert.ok(!api.isValidKeyOverride({ ...base, layerMask: m }), String(m));
+  // null gilt wie bei server.py als alle Ebenen und fällt bei der Normalisierung weg
+  assert.ok(api.isValidKeyOverride({ ...base, layerMask: null }));
+  assert.ok(!("layerMask" in api.normalizeKeyOverride({ ...base, layerMask: null })));
+  // Alle Ebenen ist der Standard und steht nicht in der Datei
+  assert.ok(!("layerMask" in api.normalizeKeyOverride({ ...base, layerMask: 255 })));
+  assert.strictEqual(api.normalizeKeyOverride({ ...base, layerMask: 5 }).layerMask, 5);
+  assert.strictEqual(api.keyOverrideLayerMask(base), 255);
+  assert.strictEqual(api.keyOverrideLabel({ ...base, layerMask: 5 }, c => c), "Shift + KEY_BACKSPACE → KEY_DELETE (Ebene 0, 2)");
 });
 
 test("Tasten-Überschreibungen: nur der Master trägt sie (normalizeConfig und Validierung)", () => {
@@ -2755,7 +2769,7 @@ function fullSyncHarness(reply, holdMs = null) {
   cfg.keyPairs = [{ first: "KEY_LEFT_ALT", second: "*" }];
   cfg.keyOverrides = [
     { mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" },
-    { mods: ["ctrl", "alt"], key: "KEY_A", replacement: "KEY_B" }
+    { mods: ["ctrl", "alt"], key: "KEY_A", replacement: "KEY_B", layerMask: 1 }
   ];
   cfg.leaderSequences = [
     { keys: ["KEY_A", "KEY_B"], action: "MACRO_0" }, { keys: ["KEY_C"], action: "PAIR_0" }, { keys: ["KEY_D"], action: "KEY_Z" }
@@ -3228,7 +3242,7 @@ asyncTests.push(["Sync: Überschreibungen gehen als CLEAR_OVERRIDES, ADD_OVERRID
   assert.ok(save < sent.indexOf("CLEAR_MACROS"));
   assert.deepStrictEqual(sent.filter(c => c.startsWith("ADD_OVERRIDE ")), [
     "ADD_OVERRIDE 2 178 212",  // Shift + Backspace -> Delete
-    "ADD_OVERRIDE 5 97 98"     // Ctrl + Alt + a -> b
+    "ADD_OVERRIDE 5 97 98 1"   // Ctrl + Alt + a -> b, nur Ebene 0 (vierter Wert; ohne Maske entfällt er)
   ]);
 }]);
 

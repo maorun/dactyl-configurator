@@ -170,7 +170,7 @@ LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS] = {
 // [[[START_KEY_OVERRIDES]]]
 uint8_t numKeyOverrides = 0;
 KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES] = {
-  { 0, 0, 0 }
+  { 0, 0, 0, 0xFF }
 };
 // [[[END_KEY_OVERRIDES]]]
 
@@ -928,7 +928,7 @@ void sendSplitLayerStateIfDue(unsigned long refreshIntervalMs) {
 }
 
 void setup() {
-  bleKeyboard.setKeyOverrides(userKeyOverrides, &numKeyOverrides);
+  bleKeyboard.setKeyOverrides(userKeyOverrides, &numKeyOverrides, getActiveLayer);
   // RX-Puffer auf 4KB vergrößern für zuverlässige USB-Batch-Synchronisierung (SET_K x 336)
   Serial.setRxBufferSize(4096);
   Serial.begin(115200);

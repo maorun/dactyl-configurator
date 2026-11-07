@@ -405,7 +405,7 @@
           <div class="combos-header key-pairs-header">
             <div>
               <h3>Tasten-Überschreibungen (Modifier + Taste = andere Taste)</h3>
-              <p class="subtitle">Eine Überschreibung ersetzt eine Taste, solange ein Modifier gehalten wird, z. B. <code>Umschalt + Rücktaste</code> sendet <code>Entf</code> ohne Umschalt. Die Taste allein bleibt unverändert. Links und rechts gehaltene Modifier zählen gleich, auch über beide Hälften. Sie gelten nur auf der rechten Hälfte (Master) und brauchen die Firmware ab Stand 7.</p>
+              <p class="subtitle">Eine Überschreibung ersetzt eine Taste, solange ein Modifier gehalten wird, z. B. <code>Umschalt + Rücktaste</code> sendet <code>Entf</code> ohne Umschalt. Die Taste allein bleibt unverändert. Links und rechts gehaltene Modifier zählen gleich, auch über beide Hälften. Sie gelten nur auf der rechten Hälfte (Master) und brauchen die Firmware ab Stand 7; die Ebenenwahl braucht Stand 40.</p>
             </div>
           </div>
           <div class="combos-list-card" id="keyOverridesCard">
@@ -418,6 +418,7 @@
               <select id="keyOverrideKeySelect" class="form-control" title="Taste, die ersetzt wird"></select>
               <strong>→</strong>
               <select id="keyOverrideReplacementSelect" class="form-control" title="Gesendete Taste (ohne die gehaltenen Modifier)"></select>
+              <span title="Ebenen, auf denen die Überschreibung gilt">Ebenen: <label><input type="checkbox" class="override-layer-check" value="0" checked> 0</label> <label><input type="checkbox" class="override-layer-check" value="1" checked> 1</label> <label><input type="checkbox" class="override-layer-check" value="2" checked> 2</label> <label><input type="checkbox" class="override-layer-check" value="3" checked> 3</label> <label><input type="checkbox" class="override-layer-check" value="4" checked> 4</label> <label><input type="checkbox" class="override-layer-check" value="5" checked> 5</label> <label><input type="checkbox" class="override-layer-check" value="6" checked> 6</label> <label><input type="checkbox" class="override-layer-check" value="7" checked> 7</label></span>
               <button id="btnAddKeyOverride" class="btn btn-primary btn-sm" type="button">+ Überschreibung hinzufügen</button>
             </div>
             <table class="combos-table">
@@ -1122,7 +1123,7 @@
   <script src="js/config-model.js?v=10"></script>
   <script src="js/editor.js?v=7"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
-  <script src="js/key-overrides-ui.js?v=1"></script>
+  <script src="js/key-overrides-ui.js?v=2"></script>
   <script src="js/leader-ui.js?v=2"></script>
   <script src="js/alt-repeats-ui.js?v=1"></script>
   <script src="js/macros-ui.js?v=2"></script>

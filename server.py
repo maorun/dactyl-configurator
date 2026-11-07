@@ -758,13 +758,15 @@ def generate_key_overrides_cpp(overrides):
     for o in overrides:
         if not isinstance(o, dict):
             raise ValueError("Ungültiger Eintrag einer Tasten-Überschreibung.")
+        # layerMask: Bit i = die Überschreibung gilt auf Ebene i; fehlend = alle Ebenen
+        mask = validate_combo_layer_mask(o.get("layerMask"))
         entries.append(f"  {{ {key_override_mods_value(o.get('mods'))}, {key_override_member_cpp(o.get('key'), 'key')}, "
-                       f"{key_override_member_cpp(o.get('replacement'), 'replacement')} }}")
+                       f"{key_override_member_cpp(o.get('replacement'), 'replacement')}, {mask} }}")
     lines = [
         "// [[[START_KEY_OVERRIDES]]]",
         f"uint8_t numKeyOverrides = {len(entries)};",
         "KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES] = {",
-        ",\n".join(entries) if entries else "  { 0, 0, 0 }",
+        ",\n".join(entries) if entries else "  { 0, 0, 0, 0xFF }",
         "};",
         "// [[[END_KEY_OVERRIDES]]]"
     ]

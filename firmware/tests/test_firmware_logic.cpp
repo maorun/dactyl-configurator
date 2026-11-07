@@ -189,7 +189,7 @@ void resetState() {
   leaderReset();
   for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) leaderConsumed[r][c] = leaderBuffered[r][c] = false;
   numKeyOverrides = 0;
-  for (int i = 0; i < MAX_KEY_OVERRIDES; i++) userKeyOverrides[i] = { 0, 0, 0 };
+  for (int i = 0; i < MAX_KEY_OVERRIDES; i++) userKeyOverrides[i] = { 0, 0, 0, KEY_OVERRIDE_ALL_LAYERS };
   numMacros = 0;
   for (int i = 0; i < MAX_MACROS; i++) { macroLengths[i] = 0; userMacroRepeat[i] = false; }
   macroRun = {};
@@ -2092,7 +2092,7 @@ TEST(test_key_override_commands_validate_arguments) {
     "ADD_OVERRIDE 2 129 212",     // Modifier als Taste
     "ADD_OVERRIDE 2 178 129",     // Modifier als Ersatz
     "ADD_OVERRIDE 2 178",         // zu wenig Argumente
-    "ADD_OVERRIDE 2 178 212 1",   // zu viele Argumente
+    "ADD_OVERRIDE 2 178 212 1 1", // zu viele Argumente
   };
   for (const char* cmd : bad) {
     handleConfigCommand(cmd, false);
@@ -2115,8 +2115,8 @@ TEST(test_key_overrides_persist_in_nvs) {
 
   // Neustart: RAM leer, NVS lädt die Liste
   numKeyOverrides = 0;
-  userKeyOverrides[0] = { 0, 0, 0 };
-  userKeyOverrides[1] = { 0, 0, 0 };
+  userKeyOverrides[0] = { 0, 0, 0, KEY_OVERRIDE_ALL_LAYERS };
+  userKeyOverrides[1] = { 0, 0, 0, KEY_OVERRIDE_ALL_LAYERS };
   loadKeymapFromNVS();
   assert(numKeyOverrides == 2);
   assert(userKeyOverrides[1].mods == 9 && userKeyOverrides[1].key == 97 && userKeyOverrides[1].replacement == 98);
@@ -2126,7 +2126,7 @@ TEST(test_key_overrides_persist_in_nvs) {
   handleConfigCommand("SAVE_OVERRIDES", false);
   assert(mockChar.value == "OK SAVE_OVERRIDES");
   numKeyOverrides = 1;
-  userKeyOverrides[0] = { 2, 178, 212 };
+  userKeyOverrides[0] = { 2, 178, 212, KEY_OVERRIDE_ALL_LAYERS };
   loadKeymapFromNVS();
   assert(numKeyOverrides == 0);
 }
@@ -2134,10 +2134,10 @@ TEST(test_key_overrides_persist_in_nvs) {
 TEST(test_key_overrides_in_nvs_with_invalid_entry_are_ignored) {
   resetState();
   // Beschädigte NVS-Daten: eine Überschreibung mit Modifier als Taste
-  KeyOverride broken[1] = {{ 2, 129, 212 }};
+  const uint8_t broken[4] = { 2, 129, 212, 0xFF };
   preferences.begin("dactyl", false);
   preferences.putUChar("num_ovr", 1);
-  preferences.putBytes("ovr_data", broken, sizeof(broken));
+  preferences.putBytes("ovr_v2", broken, sizeof(broken));
   preferences.end();
   numKeyOverrides = 0;
   loadKeymapFromNVS();
@@ -2151,7 +2151,7 @@ TEST(test_key_overrides_failed_data_write_keeps_old_count_and_reports_error) {
   assert(mockChar.value == "OK SAVE_OVERRIDES");
   // Die Daten schlagen fehl: die Anzahl darf nicht zu neuen Daten passen, der Fehler wird gemeldet
   handleConfigCommand("ADD_OVERRIDE 9 97 98", false);
-  Preferences::failBytesKey = "ovr_data";
+  Preferences::failBytesKey = "ovr_v2";
   handleConfigCommand("SAVE_OVERRIDES", false);
   Preferences::failBytesKey = "";
   assert(mockChar.value == "ERR NVS SAVE_OVERRIDES");
@@ -2170,7 +2170,7 @@ TEST(test_get_config_sends_key_overrides) {
   bool count = false, data = false;
   for (const auto& n : mockChar.notifications) {
     if (n == "OVERRIDE_COUNT:1") count = true;
-    if (n == "OVERRIDE_DATA:{\"o\":0,\"e\":[[2,178,212]]}") data = true;
+    if (n == "OVERRIDE_DATA:{\"o\":0,\"e\":[[2,178,212,255]]}") data = true;
   }
   assert(count && data);
 
@@ -2191,6 +2191,61 @@ TEST(test_get_config_sends_key_overrides) {
   assert(entries == MAX_KEY_OVERRIDES);
 }
 
+TEST(test_key_override_layer_mask_command_and_nvs) {
+  resetState();
+  handleConfigCommand("CLEAR_OVERRIDES", false);
+  handleConfigCommand("ADD_OVERRIDE 2 178 212 1", false);  // nur Ebene 0
+  assert(mockChar.value == "OK ADD_OVERRIDE 0");
+  assert(userKeyOverrides[0].layerMask == 1);
+  handleConfigCommand("ADD_OVERRIDE 2 178 212", false);    // ohne Maske: alle Ebenen
+  assert(userKeyOverrides[1].layerMask == KEY_OVERRIDE_ALL_LAYERS);
+  const char* bad[] = { "ADD_OVERRIDE 2 178 212 0", "ADD_OVERRIDE 2 178 212 256", "ADD_OVERRIDE 2 178 212 -1",
+                        "ADD_OVERRIDE 2 178 212 1 9" };
+  for (const char* b : bad) {
+    handleConfigCommand(b, false);
+    assert(mockChar.value == std::string("ERR ARGS ") + b);
+  }
+  assert(numKeyOverrides == 2);
+  handleConfigCommand("SAVE_OVERRIDES", false);
+  assert(mockChar.value == "OK SAVE_OVERRIDES");
+  assert(preferences.isKey("ovr_v2") && !preferences.isKey("ovr_data"));
+  numKeyOverrides = 0;
+  loadKeymapFromNVS();
+  assert(numKeyOverrides == 2 && userKeyOverrides[0].layerMask == 1 && userKeyOverrides[1].layerMask == KEY_OVERRIDE_ALL_LAYERS);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool data = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n == "OVERRIDE_DATA:{\"o\":0,\"e\":[[2,178,212,1],[2,178,212,255]]}") data = true;
+  }
+  assert(data);
+}
+
+TEST(test_key_overrides_legacy_nvs_format_loads_for_all_layers) {
+  resetState();
+  // Altes Format ovr_data: 3 Bytes je Eintrag, ohne Ebenenmaske
+  const uint8_t legacy[6] = { 2, 178, 212, 9, 97, 98 };
+  preferences.begin("dactyl", false);
+  preferences.putUChar("num_ovr", 2);
+  preferences.putBytes("ovr_data", legacy, sizeof(legacy));
+  preferences.end();
+  numKeyOverrides = 0;
+  loadKeymapFromNVS();
+  assert(numKeyOverrides == 2);
+  assert(userKeyOverrides[0].mods == 2 && userKeyOverrides[0].key == 178 && userKeyOverrides[0].replacement == 212);
+  assert(userKeyOverrides[0].layerMask == KEY_OVERRIDE_ALL_LAYERS && userKeyOverrides[1].layerMask == KEY_OVERRIDE_ALL_LAYERS);
+  assert(userKeyOverrides[1].mods == 9 && userKeyOverrides[1].key == 97 && userKeyOverrides[1].replacement == 98);
+  // Ein ungültiger Maskenwert im neuen Format verwirft die Liste
+  const uint8_t badMask[4] = { 2, 178, 212, 0 };
+  preferences.begin("dactyl", false);
+  preferences.putUChar("num_ovr", 1);
+  preferences.putBytes("ovr_v2", badMask, sizeof(badMask));
+  preferences.end();
+  numKeyOverrides = 0;
+  loadKeymapFromNVS();
+  assert(numKeyOverrides == 0);
+}
+
 TEST(test_new_app_defaults_remove_stored_key_overrides) {
   resetState();
   handleConfigCommand("ADD_OVERRIDE 2 178 212", false);
@@ -2200,7 +2255,7 @@ TEST(test_new_app_defaults_remove_stored_key_overrides) {
   testDefaultsId = 12345;
   numKeyOverrides = 0;
   loadKeymapFromNVS();
-  assert(!preferences.isKey("num_ovr") && !preferences.isKey("ovr_data"));
+  assert(!preferences.isKey("num_ovr") && !preferences.isKey("ovr_v2") && !preferences.isKey("ovr_data"));
   testDefaultsId = 0;
 }
 

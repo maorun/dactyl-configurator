@@ -91,6 +91,7 @@ const activePressedKeys = new Set();
 // Matrix-Test: pro Hälfte, nur für die laufende Sitzung, nicht gespeichert.
 let heatmapEnabled = false;
 let heatmapPerLayer = false;
+let heatmapErrors = false; // Heatmap nach Korrekturanteil statt nach Anschlägen
 let heatmapSaveTimer = null;
 
 // Initialisierung

@@ -44,11 +44,27 @@ function applyHeatClass(keyEl, counts, maxCount) {
   else delete keyEl.dataset.heatCount;
 }
 
-// Jede Hälfte färbt nach ihrer eigenen Statistik (alle Ebenen oder nur die angezeigte)
+// Stufe nach dem Anteil im Verhältnis zur Taste mit dem höchsten Anteil; die Zahl ist der Anteil in Prozent
+function applyErrorClass(keyEl, shares, maxShare) {
+  for (let i = 1; i <= HEAT_LEVELS; i++) keyEl.classList.remove(`heat-${i}`);
+  const share = shares[`${keyEl.dataset.row}_${keyEl.dataset.col}`] || 0;
+  const level = share > 0 ? heatLevel(share, maxShare) : 0;
+  if (heatmapEnabled && level) keyEl.classList.add(`heat-${level}`);
+  if (heatmapEnabled && share > 0) keyEl.dataset.heatCount = `${Math.round(share * 100)} %`;
+  else delete keyEl.dataset.heatCount;
+}
+
+// Jede Hälfte färbt nach ihrer eigenen Statistik (alle Ebenen oder nur die angezeigte); im Modus
+// Korrekturen nach dem Korrekturanteil (immer über alle Ebenen)
 function applyHeatmap() {
   const layer = heatmapLayer();
   for (const side of Dactyl.SIDE_IDS) {
     const stats = typingStatsFor(side);
+    if (heatmapErrors) {
+      const { shares, max } = correctionShares(stats);
+      document.querySelectorAll(`.key-cap[data-side="${side}"]:not(.key-cap-spacer)`).forEach(el => applyErrorClass(el, shares, max));
+      continue;
+    }
     const counts = heatmapCounts(stats, layer);
     const maxCount = maxKeyCount(stats, layer);
     document.querySelectorAll(`.key-cap[data-side="${side}"]:not(.key-cap-spacer)`).forEach(el => applyHeatClass(el, counts, maxCount));
@@ -102,6 +118,11 @@ function updateFingerLoadUI() {
   totalEl.textContent = String(stats.sameFingerTotal);
   pairsEl.textContent = topSameFingerPairs(stats)
     .map(p => `${keyPositionLabel(p.a)} ↔ ${keyPositionLabel(p.b)}: ${p.count}`).join(" · ");
+  const topEl = document.getElementById("topCorrectedKeys");
+  if (topEl) {
+    topEl.textContent = topCorrectedKeys(stats)
+      .map(k => `${keyPositionLabel(k.id)}: ${formatShare(k.share)} (${k.corrections}/${k.presses})`).join(" · ");
+  }
   updateErgonomicSwapsUI(stats);
 }
 
@@ -173,6 +194,15 @@ function initHeatmapUI() {
     layerBtn.addEventListener("click", () => {
       heatmapPerLayer = !heatmapPerLayer;
       updateHeatmapLayerButton(layerBtn);
+      applyHeatmap();
+    });
+  }
+  const errorsBtn = document.getElementById("btnHeatmapErrors");
+  if (errorsBtn) {
+    errorsBtn.addEventListener("click", () => {
+      heatmapErrors = !heatmapErrors;
+      errorsBtn.classList.toggle("active", heatmapErrors);
+      if (layerBtn) layerBtn.disabled = heatmapErrors; // der Modus zählt immer über alle Ebenen
       applyHeatmap();
     });
   }

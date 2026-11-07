@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Backspace correction heatmap (`recordKeyPress`, `js/heatmap.js`)
-
-- **Rank:** Feature model. Total 29/40 (typing 5, configuration 7, harmony 7, safety 10). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js` (`recordKeyPress`), `js/heatmap.js`, `js/live-monitor.js`.
-- **Problem:** The heatmap shows which keys the user presses, but not which keys the user corrects. The user cannot find the keys that cause most typing errors.
-- **Goal:** Count each `Backspace` press as a correction of the key that came before it, inside a 1500 ms window. Show a correction share per key as a second heatmap mode (`#btnHeatmapErrors`). List the five keys with the highest share. Keep the data in the browser only.
-- **Acceptance test:** A unit test feeds the key sequence `a`, `s`, `Backspace` and expects one correction for `s` and none for `a`; a press after the window creates no correction.
-
 ### Weak-key drills in practice mode (`js/practice-ui.js`)
 
 - **Rank:** Feature model. Total 29/40 (typing 6, configuration 6, harmony 8, safety 9). Effort M. Estimate.

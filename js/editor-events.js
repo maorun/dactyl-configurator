@@ -364,6 +364,7 @@ function setupEventListeners() {
       const holdTapMode = clampSetting("holdTapMode", parseInt(document.getElementById("holdTapModeSelect")?.value, 10));
       const quickTap = clampSetting("quickTapMs", parseInt(document.getElementById("quickTapInput")?.value, 10));
       const leaderTimeout = clampSetting("leaderTimeoutMs", parseInt(document.getElementById("leaderTimeoutInput")?.value, 10));
+      const oneShotTimeout = clampSetting("oneShotTimeoutMs", parseInt(document.getElementById("oneShotTimeoutInput")?.value, 10));
       const priorIdle = clampSetting("requirePriorIdleMs", parseInt(document.getElementById("priorIdleInput")?.value, 10));
       const chordalHold = clampSetting("chordalHold", parseInt(document.getElementById("chordalHoldSelect")?.value, 10));
       const retroTap = clampSetting("retroTap", parseInt(document.getElementById("retroTapSelect")?.value, 10));
@@ -379,6 +380,7 @@ function setupEventListeners() {
       setVal("holdTapModeSelect", holdTapMode);
       setVal("quickTapInput", quickTap);
       setVal("leaderTimeoutInput", leaderTimeout);
+      setVal("oneShotTimeoutInput", oneShotTimeout);
       setVal("priorIdleInput", priorIdle);
       setVal("chordalHoldSelect", chordalHold);
       setVal("retroTapSelect", retroTap);
@@ -399,6 +401,7 @@ function setupEventListeners() {
         holdTapMode: holdTapMode,
         quickTapMs: quickTap,
         leaderTimeoutMs: leaderTimeout,
+        oneShotTimeoutMs: oneShotTimeout,
         requirePriorIdleMs: priorIdle,
         chordalHold: chordalHold,
         retroTap: retroTap,

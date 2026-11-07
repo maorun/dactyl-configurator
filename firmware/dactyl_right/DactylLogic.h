@@ -26,7 +26,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, autoShift, autoShiftMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, autoShift, autoShiftMs, oneShotTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -202,6 +202,8 @@ unsigned long remoteOslIgnoreMs = 0;
 unsigned long oslPressTime[NUM_LAYERS] = {};
 uint16_t oslTerm[NUM_LAYERS] = {};
 unsigned long remoteOslRxMs = 0;
+uint8_t oslSeenArmed = 0;     // oslArmed beim letzten oslExpireLocal(): ein anderer Wert startet die Frist neu
+unsigned long oslArmedMs = 0;
 
 bool isOslAction(uint16_t a) {
   return a >= ACT_OSL_BASE && a < ACT_OSL_BASE + NUM_OSL_ACTIONS;
@@ -446,6 +448,20 @@ void oslExpireRemote(unsigned long now) {
     remoteOslArmed = 0;
     oslAnnounce(before);
   }
+}
+
+// oneShotTimeoutMs (0 = aus): eine eigene Vormerkung ohne verbrauchenden Druck verfällt nach dieser Zeit. Jede Änderung von
+// oslArmed startet die Frist neu. Das Spiegelbild der anderen Hälfte verfällt dort selbst und meldet das per SPLIT_OP_OSL.
+void oslExpireLocal(unsigned long now) {
+  if (oslArmed != oslSeenArmed) {
+    oslSeenArmed = oslArmed;
+    oslArmedMs = now;
+    return;
+  }
+  if (oneShotTimeoutMs == 0 || oslArmed == 0 || (unsigned long)(now - oslArmedMs) < oneShotTimeoutMs) return;
+  uint8_t before = getActiveLayer();
+  oslArmed = oslSeenArmed = 0;
+  oslAnnounce(before);
 }
 
 // Spiegelbild der anderen Hälfte löschen (Link-Ausfall, RELEASE_ALL der anderen Hälfte)
@@ -2887,6 +2903,10 @@ void loadKeymapFromNVS() {
     uint16_t lt = preferences.getUShort("leader_to", LEADER_TIMEOUT_DEFAULT_MS);
     if (lt >= LEADER_TIMEOUT_MIN_MS && lt <= LEADER_TIMEOUT_MAX_MS) leaderTimeoutMs = lt;
   }
+  if (preferences.isKey("osm_to")) {
+    uint16_t ot = preferences.getUShort("osm_to", 0);
+    if (ot == 0 || (ot >= ONE_SHOT_TIMEOUT_MIN_MS && ot <= ONE_SHOT_TIMEOUT_MAX_MS)) oneShotTimeoutMs = ot;
+  }
   if (preferences.isKey("prior_idle")) {
     uint16_t pi = preferences.getUShort("prior_idle", 0);
     if (pi <= PRIOR_IDLE_MAX_MS) requirePriorIdleMs = pi;
@@ -3263,6 +3283,15 @@ bool saveLeaderTimeoutToNVS(uint16_t ms) {
   preferences.end();
   if (ok) leaderTimeoutMs = ms;
   Serial.printf("NVS: Leader-Zeitlimit %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
+  return ok;
+}
+
+bool saveOneShotTimeoutToNVS(uint16_t ms) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUShort("osm_to", ms) > 0;
+  preferences.end();
+  if (ok) oneShotTimeoutMs = ms;
+  Serial.printf("NVS: One-Shot-Zeitlimit %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
   return ok;
 }
 
@@ -4142,6 +4171,17 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_ONESHOT_TIMEOUT ")) {
+    int ot = cmd.substring(20).toInt();
+    String arg = cmd.substring(20);
+    arg.trim();
+    bool digits = arg.length() > 0 && arg.length() <= 5;
+    for (unsigned i = 0; digits && i < arg.length(); i++) digits = arg.charAt(i) >= '0' && arg.charAt(i) <= '9';
+    if (digits && (ot == 0 || (ot >= ONE_SHOT_TIMEOUT_MIN_MS && ot <= ONE_SHOT_TIMEOUT_MAX_MS))) {
+      sendConfigNotification(saveOneShotTimeoutToNVS((uint16_t)ot) ? "OK SET_ONESHOT_TIMEOUT " + String(ot) : String("ERR NVS SET_ONESHOT_TIMEOUT"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd == "CLEAR_MACROS") {
     stopMacro(true);
     numMacros = 0;
@@ -4222,12 +4262,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     sendConfigNotification("BLE_HOST:" + String((int)bleHostSlot));
 #endif
     char buf[768];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"pi\":%u,\"chordal_hold\":%u,\"rt\":%u,\"as\":%u,\"at\":%u,\"leader_timeout_ms\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"pi\":%u,\"chordal_hold\":%u,\"rt\":%u,\"as\":%u,\"at\":%u,\"leader_timeout_ms\":%u,\"ot\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)retroTap, (unsigned)autoShift, (unsigned)autoShiftMs, (unsigned)leaderTimeoutMs, triJson, hostJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)retroTap, (unsigned)autoShift, (unsigned)autoShiftMs, (unsigned)leaderTimeoutMs, (unsigned)oneShotTimeoutMs, triJson, hostJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

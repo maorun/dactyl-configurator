@@ -74,6 +74,7 @@ static KeyPair userKeyPairs[MAX_KEY_PAIRS];
 static uint8_t numLeaderSeqs = 0;
 static LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS];
 static uint16_t leaderTimeoutMs = 1000;
+static uint16_t oneShotTimeoutMs = 0;
 static uint8_t numMacros = 0;
 static uint8_t macroLengths[MAX_MACROS] = {0};
 static MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS];

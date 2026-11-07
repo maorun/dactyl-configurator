@@ -83,6 +83,16 @@ test("Einstellung autoShift: beide Sketche deklarieren sie, DactylLogic.h kennt 
   assert.ok(server.includes('uint8_t autoShift = {values["autoShift"]};') && server.includes('uint16_t autoShiftMs = {values["autoShiftMs"]};'), "server.py rendert Auto Shift nicht");
 });
 
+test("Einstellung oneShotTimeoutMs: beide Sketche deklarieren sie und rufen den Ablauf in loop() auf", () => {
+  for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
+    assert.ok(/^uint16_t oneShotTimeoutMs = 0;$/m.test(src), `${name}: oneShotTimeoutMs fehlt im Sketch`);
+    assert.ok(src.includes("oslExpireLocal(millis());"), `${name}: oslExpireLocal fehlt in loop()`);
+  }
+  assert.ok(read("firmware/dactyl_right/dactyl_right.ino").includes("oneShotExpire(bleKeyboard.oneShot, millis(), oneShotTimeoutMs);"), "oneShotExpire fehlt in loop()");
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  assert.ok(logic.includes('\\"ot\\":%u') && logic.includes('cmd.startsWith("SET_ONESHOT_TIMEOUT ")') && logic.includes('"osm_to"'), "GET_INFO, Befehl oder NVS-Schlüssel fehlt");
+});
+
 test("Einstellung retroTap: beide Sketche deklarieren sie, DactylLogic.h meldet und setzt sie, der Server rendert sie", () => {
   for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
     assert.ok(/^uint8_t retroTap = 0;$/m.test(src), `${name}: retroTap fehlt im Sketch`);

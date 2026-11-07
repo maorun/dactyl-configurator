@@ -170,6 +170,10 @@ struct KeyPair {
 #define LEADER_TIMEOUT_MAX_MS 5000
 #define LEADER_TIMEOUT_DEFAULT_MS 1000
 
+// Zeitlimit für vorgemerkte One-Shot-Modifier und -Ebenen (oneShotTimeoutMs): 0 = aus, sonst 500..10000 ms
+#define ONE_SHOT_TIMEOUT_MIN_MS 500
+#define ONE_SHOT_TIMEOUT_MAX_MS 10000
+
 // Leader-Folge (exakt 6 Bytes, NVS-Format): keys = Tastencodes 1..255 ohne Modifier, ungenutzte Plätze 0 (die belegten
 // stehen vorn); action = Tastencode 1..255 ohne Modifier, Tastenpaar (ACT_KEY_PAIR_BASE + n) oder Makro (ACT_MACRO_BASE + n)
 struct LeaderSeq {

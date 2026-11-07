@@ -122,6 +122,17 @@ Rules for this file:
 - `RELEASE_ALL`, a right `releaseAll()` (combos) and the link timeout release a held one-shot key without arming it. A host loss clears the state. `CAPS_WORD_TOGGLE` is never retried (a duplicate would undo it); one-shot press and release are idempotent.
 - Combos support both actions with `KEY_PRESS` (one-shot = tap). `MODIFIER_HOLD` holds only codes 1..255, so `server.py` (`generate_combos_cpp`) and the combo dialog reject `OSM_*` and `CAPS_WORD` with `MODIFIER_HOLD`. Older saved configs, profiles and imports with this pair are migrated to `KEY_PRESS` (`migrate_config` in `server.py`, `migrateConfig` in `validateConfigShape`); before, such a combo sent nothing. Key pairs do not accept them as members.
 
+### One-shot timeout (`oneShotTimeoutMs`)
+
+- Setting per half: `0` = off (default), otherwise `500..10000` ms. An armed one-shot modifier (`OSM_*`) or an armed one-shot layer (`OSL_n`) expires when the time passes without a consuming key press.
+- Command `SET_ONESHOT_TIMEOUT <0|500..10000>` (`OK SET_ONESHOT_TIMEOUT <ms>`, otherwise `ERR ARGS`; a value of 1..499, a non-digit or more than 5 characters is rejected). NVS key `osm_to`, `DEVICE_INFO` field `ot`. The compiled-in default is `oneShotTimeoutMs` in the settings block (`server.py`, `SETTINGS_RANGES`); the app clamps 1..499 to 500 (`clampSetting`).
+- Modifiers: the master holds the state (`OneShotState`). `oneShotExpire()` (`DactylOneShot.h`) runs in `loop()` of `dactyl_right.ino`. Layers: `oslExpireLocal()` (`DactylLogic.h`) runs in `loop()` of both halves. Each half expires only its own armed layers; the mirror of the other half keeps its own limit (`OSL_REMOTE_TIMEOUT_MS`).
+- The time starts at the first `loop()` pass that sees a changed armed state. Every change (a new arm, a disarm, a consumed key) starts it again for all armed items. Held one-shot keys and Caps Word stay untouched.
+- The app sends the command in the full sync as optional (`optional: "args"`): firmware without it answers `ERR UNKNOWN` or `ERR ARGS`, and the sync continues. The input is `#oneShotTimeoutInput`.
+- Limit: a clear and a re-arm that leave the same armed bits within one `loop()` pass keep the old timer, because the timer compares the state, not a counter.
+- `DACTYL_FW_VERSION` 37. Flash both halves.
+- Tests: `test_firmware_logic.cpp` (`test_osl_expires_after_timeout_without_key`, `test_osl_never_expires_when_timeout_is_zero`, `test_osl_consumed_before_timeout_stays_consumed`, `test_osl_timeout_survives_millis_wrap`, `test_one_shot_timeout_nvs_rejects_invalid_values`, `test_one_shot_timeout_command_and_device_info`), `test_split_hid.cpp` (`test_one_shot_modifier_*`), `tests/test_app_logic.js`, `tests/test_server.py` (`test_one_shot_timeout_setting`).
+
 ### Dynamic macro (`ACT_DM_REC`, `ACT_DM_PLAY`)
 
 - `ACT_DM_REC` (`0x16C`, app name `DM_REC`, keycap label `DM Rec`) starts and stops the recording of one macro; `ACT_DM_PLAY` (`0x16D`, `DM_PLAY`, `DM Play`) plays it. A user who repeats an edit many times records it on the keyboard and needs neither the app nor a sync.

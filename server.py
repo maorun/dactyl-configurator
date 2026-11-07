@@ -411,6 +411,7 @@ SETTINGS_RANGES = {
     "holdTapMode": (0, 2, 0),
     "quickTapMs": (0, 500, 0),
     "leaderTimeoutMs": (100, 5000, 1000),
+    "oneShotTimeoutMs": (0, 10000, 0),  # 0 = aus, sonst 500..10000
     "requirePriorIdleMs": (0, 500, 0),
     "chordalHold": (0, 1, 0),
     "retroTap": (0, 1, 0),
@@ -980,6 +981,8 @@ def generate_settings_cpp(settings, side="R"):
     values = {}
     for field, (lo, hi, default) in SETTINGS_RANGES.items():
         values[field] = validate_int(settings.get(field, default), lo, hi, field)
+    if 0 < values["oneShotTimeoutMs"] < 500:
+        raise ValueError("Ungültiger Wert für oneShotTimeoutMs: 0 oder 500 bis 10000 erwartet.")
     tri_rules = validate_tri_layers(settings.get("triLayers"))
     tri_flat = [str(v) for rule in tri_rules for v in rule]
     tri_flat += ["0"] * (TRI_LAYER_MAX_RULES * 3 - len(tri_flat))
@@ -996,6 +999,7 @@ def generate_settings_cpp(settings, side="R"):
         f'uint8_t autoShift = {values["autoShift"]};',
         f'uint16_t autoShiftMs = {values["autoShiftMs"]};',
         f'uint16_t leaderTimeoutMs = {values["leaderTimeoutMs"]};',
+        f'uint16_t oneShotTimeoutMs = {values["oneShotTimeoutMs"]};',
         f'uint8_t holdTapMode = {values["holdTapMode"]};',
         f'uint8_t triLayerRules[{TRI_LAYER_MAX_RULES * 3}] = {{ {", ".join(tri_flat)} }};',
         f"uint8_t numTriLayers = {len(tri_rules)};",

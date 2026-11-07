@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### One-shot modifier and one-shot layer timeout (`oneShotTimeoutMs`)
-
-- **Rank:** Feature model. Total 23/40 (typing 5, configuration 3, harmony 7, safety 8). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylOneShot.h`, `firmware/dactyl_right/DactylLogic.h`, `js/config-model.js`, `server.py`.
-- **Problem:** An armed `OSM_*` or `OSL_n` remains active indefinitely when the user pauses, so the first key press after a break uses an unintended modifier or layer.
-- **Goal:** Add the setting `oneShotTimeoutMs` (`0` = off, or `500..10000` ms, default `0`) per half (`SET_ONESHOT_TIMEOUT`, NVS key `osm_to`, `DEVICE_INFO` field `ot`). Expire armed one-shot modifiers and armed one-shot layers when `oneShotTimeoutMs` elapses without a consuming key press. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test arms `OSM_LSHIFT` and `OSL_2` with `oneShotTimeoutMs = 1500`, advances 1600 ms and verifies that the next key press sends an unshifted Layer 0 key.
-
 ### Caps Word idle timeout and automatic umlaut capitalization
 
 - **Rank:** Feature model. Total 22/40 (typing 5, configuration 3, harmony 7, safety 7). Effort S. Estimate.

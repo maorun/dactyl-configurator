@@ -336,6 +336,7 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_LEADER_TIMEOUT ${clampSetting("leaderTimeoutMs", s.leaderTimeoutMs ?? 1000)}`, ack: "SET_LEADER_TIMEOUT", optional: true },
     { cmd: `SET_AUTO_SHIFT ${clampSetting("autoShift", s.autoShift ?? 0)}`, ack: "SET_AUTO_SHIFT", optional: true },
     { cmd: `SET_AUTO_SHIFT_TERM ${clampSetting("autoShiftMs", s.autoShiftMs ?? 175)}`, ack: "SET_AUTO_SHIFT_TERM", optional: true },
+    { cmd: `SET_RETRO_TAP ${clampSetting("retroTap", s.retroTap ?? 0)}`, ack: "SET_RETRO_TAP", optional: true },
     { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true }
   ];
 }

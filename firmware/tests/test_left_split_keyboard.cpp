@@ -55,6 +55,7 @@ static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
 static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
+static uint8_t retroTap = 0;
 static uint8_t autoShift = 0;
 static uint16_t autoShiftMs = 175;
 static uint8_t holdTapMode = 0;
@@ -1111,6 +1112,17 @@ TEST(test_master_prior_press_handoff) {
   masterPriorPressNote(m, 2000);
   masterPriorPressNote(m, 2100);               // zwei Pakete vor dem Lesen: die neuere Zeit gilt
   assert(masterPriorPressTake(m, ms) && ms == 2100);
+}
+
+// MASTER_PRESS (Master -> links) setzt die Druckzeit wie HOLD_PENDING 1: Hold nur nach einer Tipp-Pause
+TEST(test_master_press_note_counts_as_prior_press) {
+  MasterPriorPress m = {};
+  unsigned long ms = 0;
+  masterPriorPressNote(m, 500);
+  assert(masterPriorPressTake(m, ms) && ms == 500);
+  uint32_t seq = retroPressSeq;
+  notePriorKeyPress(ms);
+  assert(retroPressSeq == seq + 1);            // bricht einen offenen Retro-Tipp ab
 }
 
 // Hold nur nach einer Tipp-Pause auf der linken Hälfte: ein Druck der anderen Hälfte (Meldung des Masters) zählt

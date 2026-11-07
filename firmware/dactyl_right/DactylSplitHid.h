@@ -98,7 +98,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_SLEEP = 26,        // nur Master -> links: Master geht in Deep Sleep, linke Hälfte legt sich ebenfalls schlafen, ohne Werte
   SPLIT_OP_OSL = 27,          // beide Richtungen: One-Shot-Ebenen des Absenders (code Bits 0..7 = vorgemerkte Ebenen, Bits 8..15 = verbrauchte Vormerkungen des Empfängers), arg 0
   SPLIT_OP_KEY_LOCK = 28,     // links -> Master: KEY_LOCK vormerken (ohne Werte); KEY_PRESS und MOUSE_PRESS mit arg 1 sind sperrbar
-  SPLIT_OP_COUNT = 29
+  SPLIT_OP_MASTER_PRESS = 29, // nur Master -> links: eine Taste des Masters wurde gedrückt (retroTap, Tipp-Pause), ohne Werte
+  SPLIT_OP_COUNT = 30
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -236,7 +237,7 @@ inline bool parseSplitHidPacket(const uint8_t *srcMac, const uint8_t *data, int 
 // Paket verschiebt das Einschlafen nur um ein Intervall.
 #define SPLIT_ACTIVITY_INTERVAL_MS 10000
 
-// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY, TAP_FLUSH, HOLD_RESOLVE oder SLEEP ohne Werte, ein
+// Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY, TAP_FLUSH, HOLD_RESOLVE, SLEEP oder MASTER_PRESS ohne Werte, ein
 // HOLD_PENDING (code 0/1), ein Master-LAYER_STATE (arg < 0, der Master führt die Toggles), ein OSL (arg 0) oder ein
 // REPEAT_RUN (code 0/1/2, Nummer 1..127)
 inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, int len, SplitHidEvent &out) {
@@ -246,7 +247,7 @@ inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, i
   SplitHidEvent ev;
   memcpy(&ev, data, sizeof(ev));
   bool ok = ((ev.op == SPLIT_OP_ACTIVITY || ev.op == SPLIT_OP_TAP_FLUSH || ev.op == SPLIT_OP_HOLD_RESOLVE ||
-              ev.op == SPLIT_OP_SLEEP) &&
+              ev.op == SPLIT_OP_SLEEP || ev.op == SPLIT_OP_MASTER_PRESS) &&
              ev.code == 0 && ev.arg == 0) ||
             (ev.op == SPLIT_OP_HOLD_PENDING && ev.code <= 1 && ev.arg == 0) ||
             isValidSplitMasterLayerEvent(ev) ||
@@ -335,6 +336,7 @@ inline bool splitDisconnectedDeepSleepDue(SplitDisconnectedSleep &s, bool config
 // KEY_EVENT zählte in Heatmap und Statistik doppelt; ein verlorenes kostet nur eine Anzeige.
 // MOUSE_MOVE bewegt den Zeiger bei jedem Paket: ein Duplikat sprang doppelt, ein verlorener Schritt fällt nicht auf.
 // CAPS_WORD_TOGGLE schaltet um: ein Duplikat nähme das Umschalten zurück, ein verlorenes Paket tippt man neu.
+// MASTER_PRESS geht nur Master -> links und nie durch diese Warteschlange.
 inline bool splitEventRetryable(const SplitHidEvent &ev) {
   return ev.op != SPLIT_OP_MOUSE_SCROLL && ev.op != SPLIT_OP_MOUSE_MOVE && ev.op != SPLIT_OP_KEY_EVENT &&
          ev.op != SPLIT_OP_CAPS_WORD_TOGGLE;

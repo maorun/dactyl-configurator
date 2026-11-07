@@ -83,6 +83,16 @@ test("Einstellung autoShift: beide Sketche deklarieren sie, DactylLogic.h kennt 
   assert.ok(server.includes('uint8_t autoShift = {values["autoShift"]};') && server.includes('uint16_t autoShiftMs = {values["autoShiftMs"]};'), "server.py rendert Auto Shift nicht");
 });
 
+test("Einstellung retroTap: beide Sketche deklarieren sie, DactylLogic.h meldet und setzt sie, der Server rendert sie", () => {
+  for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
+    assert.ok(/^uint8_t retroTap = 0;$/m.test(src), `${name}: retroTap fehlt im Sketch`);
+  }
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  assert.ok(logic.includes('\\"rt\\":%u'), "GET_INFO meldet rt nicht");
+  assert.ok(logic.includes('cmd.startsWith("SET_RETRO_TAP ")'), "SET_RETRO_TAP fehlt");
+  assert.ok(read("server.py").includes('uint8_t retroTap = {values["retroTap"]};'), "server.py rendert retroTap nicht");
+});
+
 test("Einstellung chordalHold: beide Sketche deklarieren sie, DactylLogic.h meldet sie und der Server rendert sie", () => {
   for (const [name, src] of [["rechts", rightIno], ["links", leftIno]]) {
     assert.ok(/^uint8_t chordalHold = 0;$/m.test(src), `${name}: chordalHold fehlt im Sketch`);
@@ -1034,6 +1044,12 @@ test("Gemeinsame Matrix-Definition: js/matrix-constants.js, DactylMatrixConstant
   const sideLeftJs = read("js/side-left.js");
   assert.match(sideRightJs, /DACTYL_MATRIX_CONSTANTS/, "js/side-right.js muss DACTYL_MATRIX_CONSTANTS nutzen");
   assert.match(sideLeftJs, /DACTYL_MATRIX_CONSTANTS/, "js/side-left.js muss DACTYL_MATRIX_CONSTANTS nutzen");
+});
+
+test("dactyl_right.ino meldet nur einen Tastendruck an die linke Hälfte (MASTER_PRESS)", () => {
+  const ino = read("firmware/dactyl_right/dactyl_right.ino");
+  assert.match(ino, /if \(isPressed\) sendSplitMasterPress\(\);/, "MASTER_PRESS nur beim Druck, nicht beim Loslassen");
+  assert.equal((ino.match(/sendSplitMasterPress\(\)/g) || []).length, 2, "Definition und genau ein Aufruf");
 });
 
 runAll().catch((err) => {

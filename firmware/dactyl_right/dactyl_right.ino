@@ -114,6 +114,7 @@ uint16_t tappingTermMs = 200;
 uint16_t quickTapMs = 0;
 uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
+uint8_t retroTap = 0;
 uint8_t autoShift = 0;
 uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
@@ -853,6 +854,14 @@ void sendSplitActivityIfDue() {
   splitActivitySendResult(splitActivity, esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK);
 }
 
+// Druck einer Master-Taste an die linke Hälfte melden (SPLIT_OP_MASTER_PRESS): sie zählt ihn als letzten Tastendruck
+// (retroTap, Tipp-Pause). Kein Retry: ein verlorenes Paket hebt nur den Schutz für diese eine Taste auf.
+static void sendSplitMasterPress() {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_MASTER_PRESS);
+  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+}
+
 // Vor Config Mode und Deep Sleep: eigene MO-Ebenen links lösen (sonst erst nach dem Verfall).
 // Die Toggles bleiben, die linke Hälfte führt sie weiter.
 void sendSplitLayerRelease() {
@@ -1030,6 +1039,7 @@ void loop() {
           rawKeyState[r][c] = isPressed;
           splitNoteLocalKeyChange(splitActivity, millis(), lastActivityTime);
           exitStandby();
+          if (isPressed) sendSplitMasterPress();
           // Hinter einem wartenden linken Einzel-Tipp zurückhalten (Zeichenreihenfolge)
           splitDeferApplyOrHold(splitLocalDefer, r, c, isPressed, leftTapPendingNow(), millis(), applyLocalKeyChange);
         }

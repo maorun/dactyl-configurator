@@ -25,7 +25,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, autoShift, autoShiftMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, autoShift, autoShiftMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -1849,6 +1849,7 @@ struct TapHoldKey {
   uint8_t layer;
   unsigned long pressTime;
   uint16_t term;     // Eigener Tapping-Term dieser Taste (0 = tappingTermMs der Hälfte)
+  uint32_t retroSeq; // retroPressSeq beim Druck: gleicher Wert beim Loslassen = kein Tastendruck dazwischen (retroTap)
 };
 TapHoldKey tapHold[NUM_ROWS][NUM_COLS];
 // Quick-Tap: Zeitpunkt des letzten Tipps (Loslassen) je Mod-Tap-Taste; nur der Tipp der zuletzt gedrückten Taste zählt
@@ -1859,8 +1860,12 @@ bool quickTapHeld[NUM_ROWS][NUM_COLS];   // Der laufende Druck gilt als gehalten
 bool priorKeyValid = false;
 unsigned long priorKeyAt = 0;
 
+// Zähler aller Tastendrücke beider Hälften (retroTap): ein Druck zwischen Halten und Loslassen bricht den Retro-Tipp ab
+uint32_t retroPressSeq = 0;
+
 // Einen Tastendruck vormerken (eigene Matrix oder Meldung der anderen Hälfte). Ein späterer Zeitpunkt gewinnt.
 void notePriorKeyPress(unsigned long at) {
+  retroPressSeq++;
   if (!priorKeyValid || (int32_t)(uint32_t)(at - priorKeyAt) > 0) priorKeyAt = at;
   priorKeyValid = true;
 }
@@ -1883,7 +1888,7 @@ static inline uint16_t effectiveTapTerm(uint16_t keyTerm) {
 void resetTapHold() {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      tapHold[r][c] = { false, false, 0, 0, 0, 0, 0 };
+      tapHold[r][c] = { false, false, 0, 0, 0, 0, 0, 0 };
       quickTapValid[r][c] = false;
       quickTapAt[r][c] = 0;
       quickTapHeld[r][c] = false;
@@ -1896,7 +1901,7 @@ void resetTapHold() {
 }
 
 void tapHoldOnPress(uint8_t r, uint8_t c, uint16_t tapAct, uint16_t holdAct, uint8_t layer, unsigned long now, uint16_t term = 0) {
-  tapHold[r][c] = { true, false, tapAct, holdAct, layer, now, term };
+  tapHold[r][c] = { true, false, tapAct, holdAct, layer, now, term, retroPressSeq };
 }
 
 // -----------------------------------------------------------------------------
@@ -2248,6 +2253,13 @@ bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct 
   if (k.holdActive) {
     k.holdActive = false;
     dispatchRelease(r, c, k.holdAction);
+    // retroTap: Halten ohne Tastendruck beider Hälften dazwischen sendet beim Loslassen den Tipp nach.
+    // Ausgenommen: Tasten mit Doppel-Tipp-Aktion und Tasten ohne eigene Halte-Aktion (Halten war schon der Tipp).
+    if (retroTap && k.retroSeq == retroPressSeq && tapHoldDtap[r][c] == 0 && k.tapAction != 0 && k.holdAction != k.tapAction) {
+      oslNoteKeyPress(k.tapAction, 0, 0);
+      dispatchPress(r, c, k.tapAction, k.layer);
+      dispatchRelease(r, c, k.tapAction);
+    }
     if (!anyTapHoldPending() && deferredQueue.count > 0) replayDeferredQueue();
     return true;
   }
@@ -2720,6 +2732,10 @@ void loadKeymapFromNVS() {
     uint8_t ch = preferences.getUChar("chordal", 0);
     if (ch <= 1) chordalHold = ch;
   }
+  if (preferences.isKey("retro_tap")) {
+    uint8_t rt = preferences.getUChar("retro_tap", 0);
+    if (rt <= 1) retroTap = rt;
+  }
   if (preferences.isKey("auto_shift")) {
     uint8_t as = preferences.getUChar("auto_shift", 0);
     if (as <= 1) autoShift = as;
@@ -3008,6 +3024,15 @@ bool saveTriLayerToNVS(const uint8_t* rules, uint8_t n) {
     numTriLayers = n;
   }
   Serial.printf("NVS: Tri-Layer %s: %u Regeln\n", ok ? "gespeichert" : "FEHLER", n);
+  return ok;
+}
+
+bool saveRetroTapToNVS(uint8_t on) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("retro_tap", on) > 0;
+  preferences.end();
+  if (ok) retroTap = on;
+  Serial.printf("NVS: Retro-Tap %s: %u\n", ok ? "gespeichert" : "FEHLER", on);
   return ok;
 }
 
@@ -3665,6 +3690,14 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_RETRO_TAP ")) {
+    String arg = cmd.substring(14);
+    arg.trim();
+    if (arg == "0" || arg == "1") {
+      sendConfigNotification(saveRetroTapToNVS(arg == "1" ? 1 : 0) ? "OK SET_RETRO_TAP " + arg : String("ERR NVS SET_RETRO_TAP"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd.startsWith("SET_AUTO_SHIFT ")) {
     String arg = cmd.substring(15);
     arg.trim();
@@ -3961,12 +3994,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     sendConfigNotification("BLE_HOST:" + String((int)bleHostSlot));
 #endif
     char buf[768];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"require_prior_idle_ms\":%u,\"chordal_hold\":%u,\"as\":%u,\"at\":%u,\"leader_timeout_ms\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"pi\":%u,\"chordal_hold\":%u,\"rt\":%u,\"as\":%u,\"at\":%u,\"leader_timeout_ms\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)autoShift, (unsigned)autoShiftMs, (unsigned)leaderTimeoutMs, triJson, hostJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)retroTap, (unsigned)autoShift, (unsigned)autoShiftMs, (unsigned)leaderTimeoutMs, triJson, hostJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

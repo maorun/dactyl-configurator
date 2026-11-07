@@ -236,6 +236,13 @@ Rules for this file:
   - Quick tap: the tap of the rule does not start a quick-tap window (`quickTapValid` stays unchanged); only the tap on release does.
   - Order with "Hold only after a typing pause": the chordal check runs first. The pause check applies only to a key that the chordal rule did not resolve.
   - Mixed firmware: needs `DACTYL_FW_VERSION` 20 or newer on the half that holds the key.
+- Retro Tap is a setting per half: `retroTap` (0 = off, default; 1 = on), command `SET_RETRO_TAP <0|1>` (answers `OK SET_RETRO_TAP <n>`, `ERR ARGS` for any other value, `ERR NVS` when the write fails), NVS key `retro_tap`, `DEVICE_INFO` field `rt`, config field `settings.retroTap`, select `#retroTapSelect`. The app sends the command as an optional step of the full sync (older firmware answers `ERR UNKNOWN`).
+  - Rule: when a Mod-Tap or Layer-Tap key resolved as hold and the user releases it with no key press on either half in between, `tapHoldOnRelease()` sends the tap action (press and release) after the release of the hold action. Any key press of the own matrix cancels it for all open holds; a press of the left half cancels it on the master.
+  - Counter: `retroPressSeq` in `DactylLogic.h` rises in `notePriorKeyPress()`, which runs for each press of the own matrix and, on the master, for each press of the left half. `tapHoldOnPress()` stores the value in `TapHoldKey.retroSeq`; an equal value at the release means no press in between.
+  - Exempt: keys with a double-tap action (`tapHoldDtap`), keys without a tap action and keys whose hold action equals the tap action (the hold already sent it).
+  - `DEVICE_INFO` shortens `require_prior_idle_ms` to `pi` (line limit 512 bytes). The app reads both names.
+  - Both halves: the master sends `SPLIT_OP_MASTER_PRESS` (master -> left only, no values, no retry) to the left half for each press of its own matrix. The left half notes it with `masterPriorPressNote` and `notePriorKeyPress`, so a press on the master cancels an open Retro Tap on the left half. The master sees every left press (`onSplitBeforeLeftPress`). The retro tap itself calls `oslNoteKeyPress`, like every key press.
+  - Mixed firmware: needs `DACTYL_FW_VERSION` 31 or newer on both halves; a left half without `MASTER_PRESS` ignores the packet and misses master presses.
 
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 

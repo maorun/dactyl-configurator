@@ -494,13 +494,19 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("leaderTimeoutInput", info.leader_timeout_ms);
         if (settingsTarget) settingsTarget.leaderTimeoutMs = info.leader_timeout_ms;
       }
-      if (info.require_prior_idle_ms !== undefined) {
-        setInput("priorIdleInput", info.require_prior_idle_ms);
-        if (settingsTarget) settingsTarget.requirePriorIdleMs = info.require_prior_idle_ms;
+      // Firmware ab Version 31 meldet "pi", ältere "require_prior_idle_ms"
+      const priorIdle = info.pi !== undefined ? info.pi : info.require_prior_idle_ms;
+      if (priorIdle !== undefined) {
+        setInput("priorIdleInput", priorIdle);
+        if (settingsTarget) settingsTarget.requirePriorIdleMs = priorIdle;
       }
       if (info.chordal_hold !== undefined) {
         setInput("chordalHoldSelect", info.chordal_hold);
         if (settingsTarget) settingsTarget.chordalHold = info.chordal_hold;
+      }
+      if (info.rt !== undefined) {
+        setInput("retroTapSelect", info.rt);
+        if (settingsTarget) settingsTarget.retroTap = info.rt;
       }
       if (info.as !== undefined) {
         setInput("autoShiftSelect", info.as);

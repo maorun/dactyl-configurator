@@ -126,6 +126,10 @@ class TestServerAndCodegen(unittest.TestCase):
             server.generate_settings_cpp({"requirePriorIdleMs": 501})
         with self.assertRaises(ValueError):
             server.generate_settings_cpp({"requirePriorIdleMs": -1})
+        self.assertIn("uint8_t retroTap = 0;", server.generate_settings_cpp({}))
+        self.assertIn("uint8_t retroTap = 1;", server.generate_settings_cpp({"retroTap": 1}))
+        with self.assertRaises(Exception):
+            server.generate_settings_cpp({"retroTap": 2})
         self.assertIn("uint8_t chordalHold = 0;", server.generate_settings_cpp({}))
         self.assertIn("uint8_t chordalHold = 1;", server.generate_settings_cpp({"chordalHold": 1}))
         with self.assertRaises(ValueError):

@@ -581,6 +581,23 @@ class TestServerAndCodegen(unittest.TestCase):
             with self.assertRaises(ValueError):
                 server.generate_combos_cpp([combo])
 
+    def test_sentence_case_code_matches_firmware_and_needs_key_press_combo(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_SENTENCE_CASE\s+0x18C")
+        self.assertEqual(server.code_to_cpp("SENTENCE_CASE"), "ACT_SENTENCE_CASE")
+        self.assertEqual(server.code_to_cpp("ACT_SENTENCE_CASE"), "ACT_SENTENCE_CASE")
+        with open(server.DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg["layers"][0][2][1] = {"tap": "SENTENCE_CASE"}
+        server.validate_config(cfg, "R")
+        self.assertIn("ACT_SENTENCE_CASE", server.generate_keymap_cpp(cfg["layers"]))
+        combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": "KEY_PRESS", "action": "SENTENCE_CASE"}
+        self.assertIn("ACT_SENTENCE_CASE", server.generate_combos_cpp([combo]))
+        combo["behavior"] = "MODIFIER_HOLD"
+        with self.assertRaises(ValueError):
+            server.generate_combos_cpp([combo])
+
     def test_ble_host_codes_match_firmware_and_roundtrip(self):
         with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
             common = f.read()

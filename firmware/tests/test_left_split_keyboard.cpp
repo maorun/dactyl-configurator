@@ -495,6 +495,13 @@ TEST(test_one_shot_and_caps_word_are_forwarded) {
   assert(is(ev[2], SPLIT_OP_CAPS_WORD_TOGGLE, 0));
 }
 
+TEST(test_sentence_case_toggle_is_forwarded) {
+  KEYMAP[0][5][1] = ACT_SENTENCE_CASE;
+  tap(5, 1);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && isValidSplitHidEvent(ev[0]) && is(ev[0], SPLIT_OP_SENTENCE_CASE_TOGGLE, 0));
+}
+
 // RELEASE_ALL löst eine gehaltene One-Shot-Taste auf dem Master (splitReleaseHeld, ohne Vormerken)
 TEST(test_one_shot_held_is_released_by_release_all) {
   KEYMAP[0][5][1] = ACT_OSM_LCTRL;

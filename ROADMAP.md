@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Sentence case (`SENTENCE_CASE`)
-
-- **Rank:** Feature model. Total 25/40 (typing 7, configuration 2, harmony 8, safety 8). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylSentenceCase.h`, `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylSplitHid.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** Writing prose requires pressing `Shift` at the start of each sentence after `.`, `!` or `?`.
-- **Goal:** Add the toggle action `SENTENCE_CASE` (`ACT_SENTENCE_CASE`). While active on the master across both halves, typing `.`, `!` or `?` followed by one or more `Space` keys arms a single shifted press for the next lowercase letter (`a`..`z`). Digits, navigation keys or `Backspace` before the letter cancel the armed shift. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test enables `SENTENCE_CASE`, types `a`, `.`, ` `, `b` across both halves and expects `B` as the fourth character.
-
 ### Custom alternate repeat pairs (`userAltRepeats`)
 
 - **Rank:** Feature model. Total 25/40 (typing 7, configuration 4, harmony 7, safety 7). Effort M. Estimate.

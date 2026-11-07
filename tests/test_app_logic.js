@@ -5265,6 +5265,24 @@ test("Swap Hands: Code passt zur Firmware, Tastenpalette, Label und Rundlauf; Co
   assert.throws(() => api.validateConfigShape(cfg, R), /Swap Hands/);
 });
 
+test("Sentence Case: Code passt zur Firmware, Tastenpalette, Label und Rundlauf; MODIFIER_HOLD-Combo wird abgelehnt", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(common, /#define ACT_SENTENCE_CASE\s+0x18C/);
+  assert.strictEqual(api.actionCodeToNumeric("SENTENCE_CASE"), 0x18C);
+  assert.strictEqual(api.keyToNumericActions({ tap: "SENTENCE_CASE" }).tapCode, 0x18C);
+  assert.ok(api.KEYCODES.some(g => g.keys.some(k => k.code === "SENTENCE_CASE")));
+  assert.strictEqual(api.ONE_SHOT_LABELS.SENTENCE_CASE, "Sentence");
+  assert.ok(api.isOneShotOrCapsWordCode("SENTENCE_CASE") && api.isOneShotOrCapsWordCode("ACT_SENTENCE_CASE"));
+  const copy = o => JSON.parse(JSON.stringify(o));
+  for (const profile of [R, L]) {
+    const cfg = copy(profile.defaultConfig);
+    cfg.layers[0][2][1] = { tap: "SENTENCE_CASE" };
+    const norm = api.normalizeConfig(cfg, profile);
+    assert.strictEqual(norm.layers[0][2][1].tap, "SENTENCE_CASE");
+    api.validateConfigShape(norm, profile);
+  }
+});
+
 test("BLE-Host-Slots: Codes passen zu Firmware, Tastenpalette, Label und Rundlauf; Combos und linke Hälfte lehnen sie ab", () => {
   const common = read("firmware/dactyl_right/DactylCommon.h");
   assert.match(common, /#define ACT_HOST_BASE\s+0x188/);

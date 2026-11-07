@@ -1181,11 +1181,18 @@ uint16_t lastRepeatAction = 0;
 uint16_t repeatResolved[NUM_ROWS][NUM_COLS] = {};
 bool repeatRemote[NUM_ROWS][NUM_COLS] = {};
 
+// Umschalter für Texthilfen im Master-Zustand: Caps Word und Satzanfang groß
+bool isTextToggleAction(uint16_t a) { return a == ACT_CAPS_WORD || a == ACT_SENTENCE_CASE; }
+void sendTextToggle(uint16_t a) {
+  if (a == ACT_SENTENCE_CASE) bleKeyboard.sentenceCaseToggle();
+  else bleKeyboard.capsWordToggle();
+}
+
 bool isRepeatableAction(uint16_t a) {
   if (a == 0 || isRepeatKeyAction(a)) return false;
   if (a <= 0xFF) return a < KEY_LEFT_CTRL || a > KEY_RIGHT_GUI;
   if (isMediaAction(a) || isMouseKeyAction(a)) return true;
-  return isKeyPairAction(a) || isMacroAction(a) || isUmlautAction(a) || isOneShotAction(a) || a == ACT_CAPS_WORD;
+  return isKeyPairAction(a) || isMacroAction(a) || isUmlautAction(a) || isOneShotAction(a) || isTextToggleAction(a);
 }
 
 void recordRepeatAction(uint16_t a) {
@@ -1215,8 +1222,8 @@ void repeatPress(uint16_t a) {
     sendUmlaut(a);
   } else if (isOneShotAction(a)) {
     bleKeyboard.oneShotPress(oneShotMaskForAction(a));
-  } else if (a == ACT_CAPS_WORD) {
-    bleKeyboard.capsWordToggle();
+  } else if (isTextToggleAction(a)) {
+    sendTextToggle(a);
   } else if (a > 0 && a <= 0xFF) {
     bleKeyboard.press((uint8_t)a);
   }
@@ -1333,7 +1340,7 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
     // Aktionen mit eigener Ausgabe an den Host (Tastenpaar, Makro, Umlaut, Repeat, dynamisches Makro, One-Shot, Caps Word,
     // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
     if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
-        isDynamicMacroAction(action) || isOneShotAction(action) || action == ACT_CAPS_WORD || action == ACT_LEADER ||
+        isDynamicMacroAction(action) || isOneShotAction(action) || isTextToggleAction(action) || action == ACT_LEADER ||
         action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || isBleHostAction(action)) {
       leaderState.reset();
     }
@@ -1599,11 +1606,11 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
       repeatStartAt(r, c, action == ACT_ALT_REPEAT);
       keySentToHost[r][c] = true;
     }
-  } else if (isOneShotAction(action) || action == ACT_CAPS_WORD) {
+  } else if (isOneShotAction(action) || isTextToggleAction(action)) {
     static const char* const osmNames[NUM_ONE_SHOT_ACTIONS] = {
       "OSM Ctrl", "OSM Shift", "OSM Alt", "OSM Cmd", "OSM RCtrl", "OSM RShift", "OSM RAlt", "OSM RCmd"
     };
-    const char* name = action == ACT_CAPS_WORD ? "Caps Word" : osmNames[action - ACT_ONE_SHOT_BASE];
+    const char* name = action == ACT_SENTENCE_CASE ? "Sentence Case" : action == ACT_CAPS_WORD ? "Caps Word" : osmNames[action - ACT_ONE_SHOT_BASE];
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, name, action, currentLayer);
     sendConfigNotification(String(buf));
@@ -1612,11 +1619,11 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     // One-Shot-Tasten senden sofort; releaseAll() einer Combo lässt sie ohne Vormerken los.
     capsWordBuffered[r][c] = false;
     if (!isConfigMode && bleKeyboard.isConnected() && !isConfigComboSuppressed(r, c)) {
-      if (action == ACT_CAPS_WORD && isComboCandidateKey(r, c)) {
+      if (isTextToggleAction(action) && isComboCandidateKey(r, c)) {
         // Gepuffert: nur ein Druck mit Host darf beim Loslassen oder nach dem Combo-Fenster umschalten
         capsWordBuffered[r][c] = true;
       } else {
-        if (action == ACT_CAPS_WORD) bleKeyboard.capsWordToggle();
+        if (isTextToggleAction(action)) sendTextToggle(action);
         else bleKeyboard.oneShotPress(oneShotMaskForAction(action));
         keySentToHost[r][c] = true;
       }
@@ -1725,14 +1732,14 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
       // Eine One-Shot-Taste sendet sofort, auch als Combo-Kandidat: sie zählt, wenn keine Combo sie verbraucht hat
       if (isComboCandidateKey(r, c) && !wasComboRecentlyActive(r, c)) recordRepeatAction(action);
     }
-  } else if (action == ACT_CAPS_WORD) {
+  } else if (isTextToggleAction(action)) {
     // Nur ein gepufferter Combo-Kandidat schaltet jetzt um (schneller Einzeltipp)
     // Ein Druck ohne Host (keySentToHost false, kein Combo-Kandidat) schaltet beim Loslassen nichts um
     if (keySentToHost[r][c]) {
       keySentToHost[r][c] = false;
     } else if (!isConfigMode && bleKeyboard.isConnected() && capsWordBuffered[r][c] &&
                !wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
-      bleKeyboard.capsWordToggle();
+      sendTextToggle(action);
     }
     capsWordBuffered[r][c] = false;
   } else if (isUmlautAction(action)) {
@@ -2158,9 +2165,9 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
     } else if (isRepeatKeyAction(act)) {
       repeatStartAt(r, c, act == ACT_ALT_REPEAT);
       keySentToHost[r][c] = true;
-    } else if (act == ACT_CAPS_WORD) {
+    } else if (isTextToggleAction(act)) {
       // dispatchPress hat den Druck nur mit Host gepuffert; ohne ihn schaltet die Hold-Entscheidung nichts um
-      if (capsWordBuffered[r][c]) bleKeyboard.capsWordToggle();
+      if (capsWordBuffered[r][c]) sendTextToggle(act);
       capsWordBuffered[r][c] = false;
       keySentToHost[r][c] = true;
     } else if (act >= 0x130 && act <= 0x132) {
@@ -2587,8 +2594,8 @@ void processDeferredKeys(unsigned long now) {
             } else if (isRepeatKeyAction(act)) {
               repeatStartAt(r, c, act == ACT_ALT_REPEAT);
               keySentToHost[r][c] = true;
-            } else if (act == ACT_CAPS_WORD) {
-              if (capsWordBuffered[r][c]) bleKeyboard.capsWordToggle();
+            } else if (isTextToggleAction(act)) {
+              if (capsWordBuffered[r][c]) sendTextToggle(act);
               capsWordBuffered[r][c] = false;
               keySentToHost[r][c] = true;
             } else if (isMouseKeyAction(act)) {
@@ -4227,8 +4234,8 @@ void checkUserCombos() {
             } else if (isOneShotAction(act)) {
               bleKeyboard.oneShotPress(oneShotMaskForAction(act));
               bleKeyboard.oneShotRelease(oneShotMaskForAction(act));
-            } else if (act == ACT_CAPS_WORD) {
-              bleKeyboard.capsWordToggle();
+            } else if (isTextToggleAction(act)) {
+              sendTextToggle(act);
             } else if (isRepeatKeyAction(act)) {
               // Wie ein Tipp der ersten Combo-Taste
               if (repeatStartAt(r1, c1, act == ACT_ALT_REPEAT)) {

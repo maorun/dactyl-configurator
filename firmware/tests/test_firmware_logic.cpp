@@ -3109,6 +3109,13 @@ TEST(test_caps_word_key_toggles_once_per_press) {
   assert((bleKeyboard.oneShotEvents == std::vector<int>{0}));
 }
 
+TEST(test_sentence_case_key_toggles_once_per_press) {
+  resetState();
+  KEYMAP[0][5][1] = ACT_SENTENCE_CASE;
+  tapKeyAt(5, 1, 1000, 1050);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{BleKeyboard::SENTENCE_CASE_EVENT}));
+}
+
 TEST(test_one_shot_as_hold_action_and_combo_action) {
   resetState();
   // Mod-Tap: Tap = 'f', Halten = One-Shot-Shift (wirkt beim Halten wie Shift auf dem Master)

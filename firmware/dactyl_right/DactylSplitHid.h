@@ -99,7 +99,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_OSL = 27,          // beide Richtungen: One-Shot-Ebenen des Absenders (code Bits 0..7 = vorgemerkte Ebenen, Bits 8..15 = verbrauchte Vormerkungen des Empfängers), arg 0
   SPLIT_OP_KEY_LOCK = 28,     // links -> Master: KEY_LOCK vormerken (ohne Werte); KEY_PRESS und MOUSE_PRESS mit arg 1 sind sperrbar
   SPLIT_OP_MASTER_PRESS = 29, // nur Master -> links: eine Taste des Masters wurde gedrückt (retroTap, Tipp-Pause), ohne Werte
-  SPLIT_OP_COUNT = 30
+  SPLIT_OP_SENTENCE_CASE_TOGGLE = 30, // links -> Master: Satzanfang groß umschalten, ohne Werte
+  SPLIT_OP_COUNT = 31
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -192,6 +193,7 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
     case SPLIT_OP_ONE_SHOT_RELEASE:
       return ev.code >= 1 && ev.code <= 0xFF && ev.arg == 0;
     case SPLIT_OP_CAPS_WORD_TOGGLE:
+    case SPLIT_OP_SENTENCE_CASE_TOGGLE:
     case SPLIT_OP_KEY_LOCK:
       return ev.code == 0 && ev.arg == 0;
     case SPLIT_OP_LAYER_STATE:
@@ -335,11 +337,11 @@ inline bool splitDisconnectedDeepSleepDue(SplitDisconnectedSleep &s, bool config
 // Scrollschritt ist harmloser, deshalb wiederholt die linke Hälfte MOUSE_SCROLL nicht. Ein doppeltes
 // KEY_EVENT zählte in Heatmap und Statistik doppelt; ein verlorenes kostet nur eine Anzeige.
 // MOUSE_MOVE bewegt den Zeiger bei jedem Paket: ein Duplikat sprang doppelt, ein verlorener Schritt fällt nicht auf.
-// CAPS_WORD_TOGGLE schaltet um: ein Duplikat nähme das Umschalten zurück, ein verlorenes Paket tippt man neu.
+// CAPS_WORD_TOGGLE und SENTENCE_CASE_TOGGLE schalten um: ein Duplikat nähme das Umschalten zurück, ein verlorenes Paket tippt man neu.
 // MASTER_PRESS geht nur Master -> links und nie durch diese Warteschlange.
 inline bool splitEventRetryable(const SplitHidEvent &ev) {
   return ev.op != SPLIT_OP_MOUSE_SCROLL && ev.op != SPLIT_OP_MOUSE_MOVE && ev.op != SPLIT_OP_KEY_EVENT &&
-         ev.op != SPLIT_OP_CAPS_WORD_TOGGLE;
+         ev.op != SPLIT_OP_CAPS_WORD_TOGGLE && ev.op != SPLIT_OP_SENTENCE_CASE_TOGGLE;
 }
 
 // -----------------------------------------------------------------------------
@@ -1155,6 +1157,7 @@ struct SplitHidSink {
   virtual void leftOneShotPress(uint8_t mask) = 0;
   virtual void leftOneShotRelease(uint8_t mask, bool arm) = 0;
   virtual void leftCapsWordToggle() = 0;
+  virtual void leftSentenceCaseToggle() = 0;
   // Key lock (DactylKeyLock.h). Ohne Überschreibung wirkt ein sperrbarer Druck wie ein gewöhnlicher.
   virtual void leftKeyPressLockable(uint8_t code) { leftKeyPress(code); }
   virtual void leftMousePressLockable(uint8_t buttons) { leftMousePress(buttons); }
@@ -1319,6 +1322,9 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
     case SPLIT_OP_CAPS_WORD_TOGGLE:
       sink.leftCapsWordToggle();
       return true;
+    case SPLIT_OP_SENTENCE_CASE_TOGGLE:
+      sink.leftSentenceCaseToggle();
+      return true;
     case SPLIT_OP_KEY_LOCK:
       sink.leftKeyLockArm();
       return true;
@@ -1399,6 +1405,7 @@ inline bool splitIsPressOp(uint8_t op) {
     case SPLIT_OP_MOUSE_SCROLL:
     case SPLIT_OP_ONE_SHOT_PRESS:
     case SPLIT_OP_CAPS_WORD_TOGGLE:
+    case SPLIT_OP_SENTENCE_CASE_TOGGLE:
       return true;
     default:
       return false;
@@ -1690,7 +1697,7 @@ public:
     if (ovrRight[k].repl) overrideRelease(ovrRight, k);
     else if (o && splitSetHasKey(right, k) && !splitSetHasKey(splitLeft.set, k)) releaseKeepingShift(k, splitLeft.set);
     // One-Shot und Caps Word gelten für die gesendete Taste (bei einer Überschreibung die Ersatztaste)
-    uint8_t mods = oneShotModsForKey(oneShot, heldOneShot(), o ? o->replacement : k, altInReport());
+    uint8_t mods = oneShotModsForKey(oneShot, heldOneShot(), o ? o->replacement : k, altInReport(), shiftInReport(), ctrlGuiInReport());
     if (o) {
       overridePress(ovrRight, k, o, mods);
       splitSetKey(right, k, true);
@@ -1715,6 +1722,7 @@ public:
     return p;
   }
   size_t press(const uint8_t k[3]) {
+    sentenceCaseCancel(oneShot);
     right.media |= splitMediaBits(k);
     return Hid::press(k);
   }
@@ -1733,6 +1741,7 @@ public:
     return p;
   }
   void mousePress(uint8_t b) {
+    sentenceCaseCancel(oneShot);
     uint8_t mods = oneShotModsForInput(oneShot, heldOneShot(), altInReport());
     right.mouse |= b;
     uint8_t added = beginMods(mods);
@@ -1753,6 +1762,7 @@ public:
       mouseRelease(b);
       return;
     }
+    sentenceCaseCancel(oneShot);
     uint8_t mods = oneShotModsForInput(oneShot, heldOneShot(), altInReport());
     uint8_t added = beginMods(mods);
     Hid::mouseClick(b);
@@ -1769,6 +1779,7 @@ public:
     if (rel) oneShotKeyUp(oneShot, rel, true);
   }
   void capsWordToggle() { oneShot.capsWord = !oneShot.capsWord; }
+  void sentenceCaseToggle() { ::sentenceCaseToggle(oneShot); }
 
   // --- Key lock (DactylKeyLock.h) ---
   void keyLockArm() { klArm(keyLock); }
@@ -1844,7 +1855,9 @@ public:
     overrideClear(ovrLeft);
     dynMacro.noteReleaseAll([](uint8_t) { return false; });
     dynMacro.stopRecording();  // ohne Mac erreicht keine Taste mehr den Report
+    bool keepSentenceCase = oneShot.sentenceCase;
     oneShotReset(oneShot);
+    oneShot.sentenceCase = keepSentenceCase;  // Dauermodus: nur die Vormerkung fällt weg
     klReset(keyLock);
     Hid::releaseAll();
   }
@@ -1862,7 +1875,7 @@ public:
   void leftKeyPress(uint8_t code) override {
     dynMacro.noteDown(code);
     const KeyOverride *o = overrideFor(code);
-    uint8_t mods = oneShotModsForKey(oneShot, heldOneShot(), o ? o->replacement : code, altInReport());
+    uint8_t mods = oneShotModsForKey(oneShot, heldOneShot(), o ? o->replacement : code, altInReport(), shiftInReport(), ctrlGuiInReport());
     if (o) {
       overridePress(ovrLeft, code, o, mods);
       return;
@@ -1892,6 +1905,7 @@ public:
     if (!splitSetHasKey(right, code) && !overrideReplacementActive(code)) releaseKeepingShift(code, right);
   }
   void leftMediaPress(uint32_t bits) override {
+    sentenceCaseCancel(oneShot);
     uint8_t r[3];
     splitMediaReport(bits, r);
     Hid::press(r);
@@ -1904,6 +1918,7 @@ public:
     Hid::release(r);
   }
   void leftMousePress(uint8_t b) override {
+    sentenceCaseCancel(oneShot);
     uint8_t added = beginMods(oneShotModsForInput(oneShot, heldOneShot(), altInReport()));
     Hid::mousePress(b);
     endMods(added);
@@ -1914,6 +1929,7 @@ public:
   }
   void leftMouseClick(uint8_t b) override {
     if (b & right.mouse) return;
+    sentenceCaseCancel(oneShot);
     uint8_t added = beginMods(oneShotModsForInput(oneShot, heldOneShot(), altInReport()));
     Hid::mouseClick(b);
     endMods(added);
@@ -1924,6 +1940,7 @@ public:
   void leftOneShotPress(uint8_t mask) override { oneShotKeyDown(oneShot, mask); }
   void leftOneShotRelease(uint8_t mask, bool arm) override { oneShotKeyUp(oneShot, mask, arm); }
   void leftCapsWordToggle() override { oneShot.capsWord = !oneShot.capsWord; }
+  void leftSentenceCaseToggle() override { ::sentenceCaseToggle(oneShot); }
 
 private:
   SplitHeldSet right = {};
@@ -2064,6 +2081,12 @@ private:
     if (needsShift(right) || needsShift(splitLeft.set)) m |= ONE_SHOT_SHIFT_BIT;
     return m;
   }
+  bool ctrlGuiInReport() const {
+    const uint8_t m = (uint8_t)((1u << (KEY_LEFT_CTRL - KEY_LEFT_CTRL)) | (1u << (KEY_LEFT_GUI - KEY_LEFT_CTRL)) |
+                                (1u << (KEY_RIGHT_CTRL - KEY_LEFT_CTRL)) | (1u << (KEY_RIGHT_GUI - KEY_LEFT_CTRL)));
+    return (reportMods() & m) != 0;
+  }
+  bool shiftInReport() const { return (reportMods() & ONE_SHOT_SHIFT_BIT) != 0; }
   // Alt im Report: Tottaste einer Umlaut-Folge oder Tastenpaar mit Alt. Solche Drücke verbrauchen nichts.
   bool altInReport() const {
     return (reportMods() & (uint8_t)((1u << (KEY_LEFT_ALT - KEY_LEFT_CTRL)) | (1u << (KEY_RIGHT_ALT - KEY_LEFT_CTRL)))) != 0;

@@ -51,7 +51,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isBleHostCode,
+             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -5242,6 +5242,27 @@ test("Key Lock: Combos lehnen die Aktion ab", () => {
   const cfg = copy(R.defaultConfig);
   cfg.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "KEY_LOCK" }];
   assert.throws(() => api.validateConfigShape(cfg, R), /Key Lock/);
+});
+
+test("Swap Hands: Code passt zur Firmware, Tastenpalette, Label und Rundlauf; Combos lehnen die Aktion ab", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(common, /#define ACT_SWAP_HANDS\s+0x18B/);
+  assert.strictEqual(api.actionCodeToNumeric("SWAP_HANDS"), 0x18B);
+  assert.strictEqual(api.keyToNumericActions({ tap: "SWAP_HANDS" }).tapCode, 0x18B);
+  assert.ok(api.isSwapHandsCode("SWAP_HANDS") && api.isSwapHandsCode("ACT_SWAP_HANDS") && !api.isSwapHandsCode("KEY_LOCK") && !api.isSwapHandsCode(""));
+  assert.ok(api.KEYCODES.some(g => g.keys.some(k => k.code === "SWAP_HANDS")));
+  assert.strictEqual(api.ONE_SHOT_LABELS.SWAP_HANDS, "Swap");
+  const copy = o => JSON.parse(JSON.stringify(o));
+  for (const profile of [R, L]) {
+    const cfg = copy(profile.defaultConfig);
+    cfg.layers[0][2][1] = { tap: "SWAP_HANDS" };
+    const norm = api.normalizeConfig(cfg, profile);
+    assert.strictEqual(norm.layers[0][2][1].tap, "SWAP_HANDS");
+    api.validateConfigShape(norm, profile);
+  }
+  const cfg = copy(R.defaultConfig);
+  cfg.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "SWAP_HANDS" }];
+  assert.throws(() => api.validateConfigShape(cfg, R), /Swap Hands/);
 });
 
 test("BLE-Host-Slots: Codes passen zu Firmware, Tastenpalette, Label und Rundlauf; Combos und linke Hälfte lehnen sie ab", () => {

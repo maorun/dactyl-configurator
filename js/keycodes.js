@@ -81,7 +81,8 @@ const KEYCODES = [
     { code: "KEY_LOCK", label: "Key Lock (nächste Taste bleibt gedrückt)", char: "" },
     { code: "HOST_1", label: "BLE-Host 1 (nur Master)", char: "" },
     { code: "HOST_2", label: "BLE-Host 2 (nur Master)", char: "" },
-    { code: "HOST_3", label: "BLE-Host 3 (nur Master)", char: "" }
+    { code: "HOST_3", label: "BLE-Host 3 (nur Master)", char: "" },
+    { code: "SWAP_HANDS", label: "Swap Hands (Hälften spiegeln)", char: "" }
   ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
@@ -292,6 +293,7 @@ const ACTION_TO_NUMERIC = {
   "HOST_1": 0x188,
   "HOST_2": 0x189,
   "HOST_3": 0x18A,
+  "SWAP_HANDS": 0x18B,
 
   // Mouse Actions (0x130..0x13A)
   "MOUSE_LEFT": 0x130,
@@ -329,7 +331,7 @@ const ONE_SHOT_LABELS = {
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
   CAPS_WORD: "CapsWd", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
   DM_REC: "DM Rec", DM_PLAY: "DM Play", LEADER: "Leader", KEY_LOCK: "KeyLock",
-  HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3"
+  HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3", SWAP_HANDS: "Swap"
 };
 
 // true für die Leader-Taste (keine Combo-Aktion)
@@ -340,6 +342,11 @@ function isLeaderCode(code) {
 // true für Key Lock (keine Combo-Aktion)
 function isKeyLockCode(code) {
   return /^(ACT_)?KEY_LOCK$/.test(String(code || ""));
+}
+
+// true für Swap Hands (keine Combo-Aktion)
+function isSwapHandsCode(code) {
+  return /^(ACT_)?SWAP_HANDS$/.test(String(code || ""));
 }
 
 // true für BLE-Host-Slots HOST_1 .. HOST_3 (nur Master, keine Combo-Aktion)

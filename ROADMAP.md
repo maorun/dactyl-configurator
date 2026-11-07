@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Swap hands (`SWAP_HANDS`)
-
-- **Rank:** Feature model. Total 26/40 (typing 7, configuration 2, harmony 9, safety 8). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylSplitHid.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** When one hand uses the mouse or holds an object, the keys of the other half are out of reach.
-- **Goal:** Add the action `SWAP_HANDS`. Holding `SWAP_HANDS` mirrors key lookups to the opposite column (`NUM_COLS - 1 - c` on the finger rows and mirrored thumb positions); a tap arms a one-shot swap for the next key press, and a double-tap toggles it until pressed again. `RELEASE_ALL`, host loss, standby and config mode clear the state. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test holds `SWAP_HANDS`, presses a key and expects the mirrored action; releasing `SWAP_HANDS` while the key is held still releases the mirrored action cleanly.
-
 ## Priority 3
 
 ### Sentence case (`SENTENCE_CASE`)

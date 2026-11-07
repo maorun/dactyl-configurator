@@ -170,6 +170,21 @@ Rules for this file:
 - `DACTYL_FW_VERSION` 27: an older master ignores `0x16F` and `SPLIT_OP_KEY_LOCK`; an older left half never sends `arg 1`. Flash both halves.
 - Tests: `test_firmware_logic.cpp` (`test_key_lock_*`: mouse button held and released by a second press, key across halves, only the next input, layer keys, `KEY_LOCK` and macros not locked, `RELEASE_ALL`, standby, no host, no combo action, combo candidate), `test_split_hid.cpp` (`test_key_lock_*`: left mouse and key lock, `arg 0` not locked, link timeout, host loss, `RELEASE_ALL` of the left half, standby keeps physically held keys, validation), `test_left_split_keyboard.cpp` (`test_left_key_lock_*`), `tests/test_app_logic.js` and `tests/test_server.py` (code, label, round trip, combo rejection).
 
+### Swap hands (`ACT_SWAP_HANDS`)
+
+- `ACT_SWAP_HANDS` (`0x18B`, app name `SWAP_HANDS`, keycap label `Swap`) mirrors the key lookup of its own half. Use it when one hand holds the mouse or an object and the other hand must reach the keys of both sides.
+- Hold: while `SWAP_HANDS` is held, a key press resolves the action of the mirrored matrix position (`swapMirrorCol` in `DactylLogic.h`). Finger rows: column `c` becomes `FINGER_COLS - 1 - c`. Thumb row (table `SWAP_THUMB_MIRROR` in `DactylMatrixConstants.h`, one per half): right `R5C0`<->`R5C3`, `R5C1`<->`R5C4`, `R5C2`<->`R5C6`, `R5C5` stays; left `R5C1`<->`R5C4`, `R5C2`<->`R5C5`, `R5C3`<->`R5C6`, `R5C0` stays. The mirror is an involution. It uses the layer, tap, hold and double-tap actions of the mirrored key (`resolveKeyActions`).
+- Tap time: `swapHandsRelease` uses the scan time of the matrix event (`swapEventMs`), so a replayed release from the deferred queue measures the real press length. A key that a combo consumed is no tap.
+- Tap (press and release inside the tapping term with no other key press): arms a one-shot swap (`swapArmed`) for the next key press. That press clears it. A tap while a swap is locked releases the lock.
+- An armed swap has no timeout, like `OSL_n`: it waits for the next key press or a reset trigger. A key press of another key clears the armed swap and breaks a running double-tap.
+- Double-tap (second tap inside the tapping term): locks the swap (`swapLocked`) until the next tap of `SWAP_HANDS`.
+- A `SWAP_HANDS` key never mirrors itself, so a lock can always be released.
+- Release while a key is held: `dispatchRelease` reads `pressedAction[r][c]`, which holds the action of the press. The mirrored action therefore releases cleanly, whatever the swap state is at the release.
+- Reset: `oslClearAll()` calls `swapClearAll()`. It runs on `RELEASE_ALL`, link timeout, host loss, entering config mode and a BLE host switch. `enterStandby()` on both halves calls `swapClearAll()` too. In config mode the action does nothing.
+- Scope: the state lives on each half. The left half and the master do not share it. `SWAP_HANDS` is no combo action (`ADD_COMBO`, `generate_combos_cpp`, `validateConfigShape` and the app reject it) and `REPEAT` does not repeat it.
+- `DACTYL_FW_VERSION` is 32. Flash both halves.
+- Tests: `test_firmware_logic.cpp` (`test_swap_hands_*`: mirror table, hold, thumb keys, tap one-shot, double-tap lock, slow second tap, hold with key press, reset triggers, config mode, no combo action), `tests/test_app_logic.js` and `tests/test_server.py` (code, label, round trip, combo rejection).
+
 ### Repeat the last action (`ACT_REPEAT`, `SPLIT_OP_REPEAT`, `SPLIT_OP_REPEAT_RUN`)
 
 - `ACT_REPEAT` (`0x169`, app name `REPEAT`) runs the last resolved action again. A held `REPEAT` acts like the held original: it presses the action and releases it with the key. Each half records its own last action in `lastRepeatAction` (`DactylLogic.h`, `recordRepeatAction`). It stores the resolved action, not the matrix position.

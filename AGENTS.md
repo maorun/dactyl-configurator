@@ -211,6 +211,7 @@ Keys in the matrix use `uint16_t` action codes:
 | `0x16E` | Leader (`LEADER`) | Starts a capture of up to four keys of the same half; a matching sequence from `userLeaderSeqs[]` runs its action (key, key pair or macro), the sequence keys send nothing; see `FEATURES.md`, section "Leader key" |
 | `0x16F` | Key Lock (`KEY_LOCK`) | The next key or mouse button press of either half stays held after the release; a second press releases it; layer keys, `KEY_LOCK` and macros are not locked; see `FEATURES.md`, section "Key lock" |
 | `0x188` .. `0x18A` | BLE host slot (`HOST_1`..`HOST_3`) | Master only: releases all keys, stores the slot in the NVS and restarts BLE with the static random address of the slot; see `FEATURES.md`, section "BLE host slots" |
+| `0x18B` | Swap hands (`SWAP_HANDS`) | Held: mirrors the key lookup of the own half; a tap arms one press; a double-tap locks until the next tap; see `FEATURES.md`, section "Swap hands" |
 | `0x170` .. `0x17F` | Macro (`MACRO_0`..`MACRO_15`) | Plays a sequence of tap, down, up and pause steps; index into `userMacros[]`; see "Macros" |
 
 ### Key Pairs (`userKeyPairs`)

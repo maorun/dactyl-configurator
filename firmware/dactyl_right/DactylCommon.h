@@ -115,6 +115,9 @@
 // BLE mit der statischen Random-Adresse des Slots neu (DactylBleHost.h). 0x170..0x17F gehören den Makros.
 #define ACT_HOST_BASE            0x188
 #define NUM_HOST_ACTIONS         3
+// Swap hands: Halten spiegelt die Tastensuche dieser Hälfte (Fingerspalte c -> FINGER_COLS - 1 - c, Daumentasten gespiegelt),
+// Tippen merkt den Wechsel für den nächsten Tastendruck vor, Doppel-Tippen rastet ihn bis zum nächsten Tippen ein
+#define ACT_SWAP_HANDS           0x18B
 
 #define NUM_LAYERS 8
 

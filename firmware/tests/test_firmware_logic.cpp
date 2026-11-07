@@ -141,6 +141,7 @@ static int testsPassed = 0;
 
 // Reset mock state before tests
 void resetState() {
+  swapClearAll();
   remoteMomentaryLayers = 0;
   oslArmed = remoteOslArmed = oslHeld = oslUsed = oslUsedToSend = remoteOslIgnore = 0;
   for (int l = 0; l < NUM_LAYERS; l++) { oslTerm[l] = 0; oslPressTime[l] = 0; }
@@ -9348,6 +9349,228 @@ TEST(test_ble_host_slot_in_device_info) {
   assert(sawSlot);
   assert(mockChar.value.find("DEVICE_INFO:") == 0);          // DEVICE_INFO bleibt die letzte Zeile
   assert(DACTYL_FW_VERSION >= 30);
+}
+
+// Swap hands (ACT_SWAP_HANDS): Halten spiegelt die Tastensuche, Tippen merkt vor, Doppel-Tippen rastet ein
+static void shTap(uint8_t r, uint8_t c, unsigned long at) {
+  setMillis(at);
+  pressKey(r, c);
+  setMillis(at + 20);
+  releaseKey(r, c);
+}
+
+TEST(test_swap_hands_mirror_is_an_involution) {
+  assert(ACT_SWAP_HANDS > ACT_HOST_BASE + NUM_HOST_ACTIONS - 1 && ACT_SWAP_HANDS < 0x190);
+  for (uint8_t r = 0; r < NUM_ROWS; r++)
+    for (uint8_t c = 0; c < NUM_COLS; c++) assert(swapMirrorCol(r, swapMirrorCol(r, c)) == c);
+  assert(swapMirrorCol(2, 0) == FINGER_COLS - 1 && swapMirrorCol(2, FINGER_COLS - 1) == 0);
+  assert(swapMirrorCol(5, 0) == 3 && swapMirrorCol(5, 6) == 2);
+}
+
+TEST(test_swap_hands_hold_mirrors_lookup_and_release_is_clean) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][4] = 'b';
+  setMillis(1000);
+  pressKey(5, 0);                                  // halten
+  pressKey(2, 1);
+  assert(pressedAction[2][1] == 'b');              // gespiegelte Spalte 1 -> 4
+  assert(std::count(bleKeyboard.pressedKeys.begin(), bleKeyboard.pressedKeys.end(), 'b') == 1);
+  setMillis(1500);
+  releaseKey(5, 0);                                // SWAP_HANDS zuerst loslassen, die Taste bleibt gehalten
+  assert(!swapActive());
+  releaseKey(2, 1);                                // das Loslassen trifft weiter 'b', nicht 'a'
+  assert(bleKeyboard.pressedKeys.empty());
+  pressKey(2, 1);                                  // ohne Wechsel gilt wieder 'a'
+  assert(pressedAction[2][1] == 'a');
+  releaseKey(2, 1);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(swapHeldKeys == 0 && !swapArmed && !swapLocked);
+}
+
+TEST(test_swap_hands_hold_mirrors_thumb_keys) {
+  resetState();
+  KEYMAP[0][0][0] = ACT_SWAP_HANDS;
+  KEYMAP[0][5][3] = ' ';
+  KEYMAP[0][5][0] = 'x';
+  setMillis(1000);
+  pressKey(0, 0);
+  pressKey(5, 3);                                  // Daumen 3 -> 0
+  assert(pressedAction[5][3] == 'x');
+  releaseKey(5, 3);
+  releaseKey(0, 0);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_swap_hands_tap_arms_one_shot_for_next_press_only) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][4] = 'b';
+  shTap(5, 0, 1000);
+  assert(swapArmed && !swapLocked);
+  assert(bleKeyboard.pressedKeys.empty() && bleKeyboard.pressHistory.empty());   // der Tipp sendet nichts
+  setMillis(2000);
+  pressKey(2, 1);
+  assert(pressedAction[2][1] == 'b' && !swapArmed);
+  releaseKey(2, 1);
+  pressKey(2, 1);                                  // verbraucht: wieder 'a'
+  assert(pressedAction[2][1] == 'a');
+  releaseKey(2, 1);
+}
+
+TEST(test_swap_hands_double_tap_toggles_until_tapped_again) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][4] = 'b';
+  shTap(5, 0, 1000);
+  shTap(5, 0, 1000 + 20 + 50);                     // zweiter Tipp im Tapping-Term
+  assert(swapLocked && !swapArmed);
+  for (int i = 0; i < 2; i++) {                    // bleibt über mehrere Drücke
+    setMillis(3000 + i * 100);
+    pressKey(2, 1);
+    assert(pressedAction[2][1] == 'b' && swapLocked);
+    releaseKey(2, 1);
+  }
+  shTap(5, 0, 5000);                               // ein Tipp löst die Einrastung
+  assert(!swapLocked && !swapArmed);
+  setMillis(6000);
+  pressKey(2, 1);
+  assert(pressedAction[2][1] == 'a');
+  releaseKey(2, 1);
+}
+
+TEST(test_swap_hands_slow_second_tap_arms_again_instead_of_locking) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  shTap(5, 0, 1000);
+  shTap(5, 0, 1000 + tappingTermMs + 500);
+  assert(swapArmed && !swapLocked);
+}
+
+TEST(test_swap_hands_hold_with_key_press_is_no_tap) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][4] = 'b';
+  setMillis(1000);
+  pressKey(5, 0);
+  setMillis(1010);
+  pressKey(2, 1);
+  releaseKey(2, 1);
+  setMillis(1030);
+  releaseKey(5, 0);                                // kurz, aber eine Taste dazwischen: kein Vormerken
+  assert(!swapActive());
+}
+
+TEST(test_swap_hands_is_cleared_by_reset_triggers) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  // Einrastung und Vormerkung: oslClearAll() deckt Host-Verlust, Link-Ausfall, RELEASE_ALL und Config Mode ab
+  shTap(5, 0, 1000);
+  shTap(5, 0, 1070);
+  assert(swapLocked);
+  oslClearAll();
+  assert(!swapActive());
+  shTap(5, 0, 2000);
+  assert(swapArmed);
+  oslClearAll();
+  assert(!swapActive());
+  // Gehaltene SWAP_HANDS-Taste (Standby): swapClearAll()
+  setMillis(3000);
+  pressKey(5, 0);
+  assert(swapActive());
+  swapClearAll();
+  assert(!swapActive());
+  releaseKey(5, 0);                                // das Loslassen nach dem Löschen vormerkt nichts
+  assert(!swapActive());
+}
+
+TEST(test_swap_hands_without_host_arms_nothing_in_config_mode) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  isConfigMode = true;
+  shTap(5, 0, 1000);
+  assert(!swapActive());
+  isConfigMode = false;
+}
+
+TEST(test_swap_hands_is_no_combo_action) {
+  resetState();
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 395", false);      // ACT_SWAP_HANDS = 0x18B
+  assert(numCombos == 0);
+  assert(DACTYL_FW_VERSION >= 32);
+}
+
+TEST(test_swap_hands_left_thumb_table_is_an_involution_without_missing_key) {
+  static const uint8_t left[7] = SWAP_THUMB_MIRROR_LEFT;
+  static const uint8_t right[7] = SWAP_THUMB_MIRROR_RIGHT;
+  for (int c = 0; c < 7; c++) { assert(left[left[c]] == c); assert(right[right[c]] == c); }
+  assert(left[0] == 0);                            // links fehlt R5C0: es bleibt an seinem Platz
+  assert(right[5] == 5);                           // rechts fehlt R5C5: es bleibt an seinem Platz
+}
+
+TEST(test_swap_hands_key_does_not_swap_after_combo_consumed_it) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  userCombos[0] = { 5, 0, 2, 1, 0, 'z' };
+  numCombos = 1;
+  comboRuntime[0] = {};
+  setMillis(1000);
+  pressKey(5, 0);
+  setMillis(1010);
+  pressKey(2, 1);
+  checkUserCombos();                               // Combo löst aus
+  assert(comboRuntime[0].active);
+  setMillis(1030);
+  releaseKey(2, 1);
+  releaseKey(5, 0);
+  checkUserCombos();
+  assert(!swapArmed && !swapLocked);               // der kurze Druck zählt nach einer Combo nicht als Tipp
+  numCombos = 0;
+}
+
+TEST(test_swap_hands_real_release_all_path_clears_state) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  shTap(5, 0, 1000);
+  assert(swapArmed);
+  // Host-Verlust und Config Mode rufen oslClearAll() (dactyl_right.ino); der Standby ruft swapClearAll()
+  oslClearAll();
+  assert(!swapActive());
+  shTap(5, 0, 2000);
+  shTap(5, 0, 2070);
+  assert(swapLocked);
+  swapClearAll();
+  assert(!swapActive());
+}
+
+TEST(test_swap_hands_tap_key_tap_does_not_lock) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][4] = 'b';
+  shTap(5, 0, 1000);
+  shTap(2, 1, 1030);                               // verbraucht die Vormerkung
+  assert(!swapArmed);
+  shTap(5, 0, 1060);                               // innerhalb des Tapping-Terms nach dem ersten Tipp
+  assert(!swapLocked && swapArmed);                // vormerken, nicht einrasten
+}
+
+TEST(test_swap_hands_mirrored_swap_key_still_consumes_armed_swap) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_SWAP_HANDS;
+  KEYMAP[0][2][4] = ACT_SWAP_HANDS;                // die gespiegelte Zelle der Taste R2C1 ist SWAP_HANDS
+  KEYMAP[0][2][1] = 'a';
+  shTap(5, 0, 1000);
+  assert(swapArmed);
+  setMillis(1500);
+  pressKey(2, 1);                                  // gespiegelt = SWAP_HANDS (Spalte 4): verbraucht die Vormerkung
+  assert(!swapArmed);
+  releaseKey(2, 1);
 }
 
 int main() {

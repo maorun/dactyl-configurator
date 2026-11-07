@@ -184,6 +184,7 @@ void stopMacro(bool releaseKeys);
 void resetMouseMove();
 void oslClearAll();
 void keyLockReleaseAll();
+void swapClearAll();
 void dynamicMacroReset();
 void sendSplitLayerRelease();
 void sendSplitSleep();
@@ -327,6 +328,7 @@ void enterStandby() {
   if (!isStandby) {
     isStandby = true;
     keyLockReleaseAll();
+    swapClearAll();
     setCpuFrequencyMhz(80);
     bleKeyboard.setStandbyMode(true);
     applySplitWakeWindow(true);

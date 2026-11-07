@@ -147,6 +147,16 @@ Rules for this file:
 - Tests: `test_firmware_logic.cpp` (`test_leader_*`: match, no sequence key at the host, release of all keys after the sequence, timeout, timeout setting, no match, key pair and macro action, prefix sequence, four-key limit, no host, release-all, layer keys and modifiers, combos, commands, NVS, `GET_CONFIG`, `DEVICE_INFO`), `tests/test_app_logic.js` (validation, tuples, snapshot round trip, diff, sync steps, pair and macro deletion), `tests/test_server.py` (constants, rendering for both halves, setting range, combo rejection).
 
 
+### BLE host slots (`ACT_HOST_BASE`, `DactylBleHost.h`)
+
+- Actions `HOST_1` .. `HOST_3` (`0x188` .. `0x18A`; `0x170` .. `0x17F` belong to the macros) switch the BLE host of the master. Master only: the left half has no BLE host, so `server.py` and `js/config-model.js` reject the actions on the left half. Combos reject them.
+- Each slot has its own static random address: `bleHostAddress()` takes the BLE base MAC, sets the top 2 bits of `addr[0]` (`|= 0xC0`) and mixes the slot into byte 1. The addresses of slot 1..3 and of the config mode (`DactylConfigBle.h`) are pairwise different, so each host bonds on its own and macOS caches the report map per address.
+- A switch to another slot calls `releaseAll()` (both halves, macro, mouse movement and one-shot state are cleared), stores the slot in the NVS (namespace `dactyl`, key `ble_host`, default 1, invalid value = 1) and restarts the board. The start sets the address of the slot (`DactylBleComposite::hostSlot`). The action for the active slot only releases the keys. In config mode, the action does nothing. It works without a Mac connection, so a lost host never blocks the change to another one. A failed NVS write sends `ERR NVS BLE_HOST` and keeps the slot.
+- The config mode keeps its own address (`startConfigModeBle`). It does not change the stored slot.
+- The master sends the line `BLE_HOST:<n>` before each `DEVICE_INFO` (own line, because `DEVICE_INFO` has only a few bytes of reserve under 512). The app shows the pill `Host <n>` (`#bleHostPill`).
+- Every slot, slot 1 included, now uses a static random address. The bond of the old controller address does not match it: pair the keyboard once again on each host after the update ("Dieses Gerät ignorieren..." in macOS first).
+- `DACTYL_FW_VERSION` is 30. Flash both halves.
+
 ### Key lock (`ACT_KEY_LOCK`, `DactylKeyLock.h`)
 
 - `ACT_KEY_LOCK` (`0x16F`, app name `KEY_LOCK`, keycap label `KeyLock`) arms the lock. The next key press or mouse button press of either half stays held after the physical release of the key. A second press of the same input releases it. Use it for a long drag with a mouse button, a held `Shift` for a selection or a held game key.

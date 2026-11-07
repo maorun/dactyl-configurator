@@ -453,6 +453,9 @@ const ON_SCREEN_KEYBOARD_TABS = {
         { code: "DM_PLAY", label: "Makro PLAY", width: 2 },
         { code: "LEADER", label: "Leader", width: 2 },
         { code: "KEY_LOCK", label: "Key Lock", width: 2 },
+        { code: "HOST_1", label: "Host 1", width: 2 },
+        { code: "HOST_2", label: "Host 2", width: 2 },
+        { code: "HOST_3", label: "Host 3", width: 2 },
         { code: "MAC_GLOBE", label: "🌐 Globus / Fn", width: 2 }
       ]
     ]

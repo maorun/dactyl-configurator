@@ -51,7 +51,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode,
+             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -1232,6 +1232,7 @@ function captureDeviceSnapshotLine(line, side) { calls.captured.push(side); retu
 function showToast() {}
 function updateConfigModeUI() {}
 function updateBatteryUI() {}
+function updateBleHostUI(slot) { calls.bleHost = slot; }
 function switchLayerUI(l) { calls.layers.push(l); }
 function renderMatrix() { calls.applied++; }
 function renderMatrixTest() { calls.rendered++; }
@@ -1401,6 +1402,16 @@ test("serial.js: host_leds in DEVICE_INFO der linken Hälfte ändert den Stand n
   const s = serialLineHarness();
   s.handle('DEVICE_INFO:{"side":"L","fw":15,"host_leds":{"num":0,"caps":1,"scroll":0}}', "L", "usb");
   assert.strictEqual(!!s.hostCaps(), false);
+});
+
+test("serial.js: BLE_HOST: meldet nur Slots 1 bis 3 und die Trennung blendet die Anzeige aus", () => {
+  const s = serialLineHarness();
+  s.handle("BLE_HOST:2", "R", "usb");
+  assert.strictEqual(s.calls.bleHost, 2);
+  s.handle("BLE_HOST:0", "R", "usb");
+  assert.strictEqual(s.calls.bleHost, 0);
+  s.handle("BLE_HOST:9", "R", "usb");
+  assert.strictEqual(s.calls.bleHost, 9);
 });
 
 test("serial.js: HOST_LEDS zeigt Caps Lock nur vom Master über USB", () => {
@@ -5216,6 +5227,32 @@ test("Key Lock: Combos lehnen die Aktion ab", () => {
   const cfg = copy(R.defaultConfig);
   cfg.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "KEY_LOCK" }];
   assert.throws(() => api.validateConfigShape(cfg, R), /Key Lock/);
+});
+
+test("BLE-Host-Slots: Codes passen zu Firmware, Tastenpalette, Label und Rundlauf; Combos und linke Hälfte lehnen sie ab", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(common, /#define ACT_HOST_BASE\s+0x188/);
+  assert.match(common, /#define NUM_HOST_ACTIONS\s+3/);
+  for (let n = 1; n <= 3; n++) {
+    assert.strictEqual(api.actionCodeToNumeric(`HOST_${n}`), 0x188 + n - 1);
+    assert.strictEqual(api.keyToNumericActions({ tap: `HOST_${n}` }).tapCode, 0x188 + n - 1);
+    assert.ok(api.isBleHostCode(`HOST_${n}`) && api.isBleHostCode(`ACT_HOST_${n}`));
+    assert.ok(api.KEYCODES.some(g => g.keys.some(k => k.code === `HOST_${n}`)));
+    assert.strictEqual(api.ONE_SHOT_LABELS[`HOST_${n}`], `Host ${n}`);
+  }
+  assert.ok(!api.isBleHostCode("HOST_0") && !api.isBleHostCode("HOST_4") && !api.isBleHostCode("KEY_LOCK") && !api.isBleHostCode(""));
+  const copy = o => JSON.parse(JSON.stringify(o));
+  const cfg = copy(R.defaultConfig);
+  cfg.layers[0][2][1] = { tap: "HOST_2" };
+  const norm = api.normalizeConfig(cfg, R);
+  assert.strictEqual(norm.layers[0][2][1].tap, "HOST_2");
+  api.validateConfigShape(norm, R);
+  const combo = copy(R.defaultConfig);
+  combo.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "HOST_1" }];
+  assert.throws(() => api.validateConfigShape(combo, R), /BLE-Host/);
+  const left = copy(L.defaultConfig);
+  left.layers[0][2][1] = { tap: "HOST_3" };
+  assert.throws(() => api.validateConfigShape(left, L), /BLE-Host/);
 });
 
 test("One-Shot-Ebene: Codes passen zu Firmware und server.py, Combos lehnen sie ab", () => {

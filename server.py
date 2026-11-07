@@ -285,6 +285,7 @@ KEY_TO_CPP = {
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
     "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "REPEAT": "ACT_REPEAT", "ALT_REPEAT": "ACT_ALT_REPEAT",
     "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY", "LEADER": "ACT_LEADER", "KEY_LOCK": "ACT_KEY_LOCK",
+    "HOST_1": "(ACT_HOST_BASE + 0)", "HOST_2": "(ACT_HOST_BASE + 1)", "HOST_3": "(ACT_HOST_BASE + 2)",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -572,6 +573,9 @@ LEADER_CPP = {"ACT_LEADER"}
 # Key Lock merkt die nächste Eingabe vor; als Combo-Aktion ergibt es nichts
 KEY_LOCK_CPP = {"ACT_KEY_LOCK"}
 
+# BLE-Host-Slots wechseln die Verbindung des Masters; als Combo-Aktion und auf der linken Hälfte ergeben sie nichts
+BLE_HOST_CPP = {f"(ACT_HOST_BASE + {n})" for n in range(3)}
+
 def generate_combos_cpp(combos):
     if combos is None:
         combos = []
@@ -606,6 +610,8 @@ def generate_combos_cpp(combos):
             raise ValueError("Combos unterstützen kein Leader.")
         if act in KEY_LOCK_CPP:
             raise ValueError("Combos unterstützen kein Key Lock.")
+        if act in BLE_HOST_CPP:
+            raise ValueError("Combos unterstützen keine BLE-Host-Slots.")
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts
         if beh != 0 and act == "ACT_LAYER_LOCK":
             raise ValueError("Layer Lock funktioniert nur mit dem Verhalten \"Einzeltaste senden\".")
@@ -1090,6 +1096,8 @@ def validate_config(config, side="R"):
                     raise ValueError(f"Taste R{r_idx}C{c_idx} existiert auf der linken Hälfte nicht (Ebene {l_idx}).")
                 if side == "L" and any(code_to_cpp(a) in DYNAMIC_MACRO_CPP for a in cell_actions(cell)):
                     raise ValueError(f"Dynamische Makros (DM_REC, DM_PLAY) gelten nur für die rechte Hälfte (Master), Taste R{r_idx}C{c_idx} in Ebene {l_idx}.")
+                if side == "L" and any(code_to_cpp(a) in BLE_HOST_CPP for a in cell_actions(cell)):
+                    raise ValueError(f"BLE-Host-Slots (HOST_1 .. HOST_3) gelten nur für die rechte Hälfte (Master), Taste R{r_idx}C{c_idx} in Ebene {l_idx}.")
     # Codegen prüft Combos und Einstellungen vollständig (Bereiche identisch zur Firmware)
     generate_combos_cpp(config.get("combos"))
     generate_key_pairs_cpp(config.get("keyPairs"))

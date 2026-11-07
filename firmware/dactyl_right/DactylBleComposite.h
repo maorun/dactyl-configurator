@@ -9,6 +9,7 @@
 #include <esp_bt.h>
 #include <esp_gap_ble_api.h>
 #include "HIDTypes.h"
+#include "DactylBleHost.h"
 #include "Print.h"
 #include "DactylKeycodes.h" // Keycodes & Report-Typen (keine externe BleKeyboard-Bibliothek nötig)
 
@@ -90,8 +91,24 @@ public:
     deviceName = name.substr(0, 31);
   }
 
+  // Statische Random-Adresse des Host-Slots (DactylBleHost.h); 0 = Standardadresse des Controllers
+  uint8_t hostSlot = 0;
+
   void begin() {
     BLEDevice::init(String(deviceName.c_str()));
+    uint8_t hostAddr[6];
+    bool hostAddrSet = false;
+    if (hostSlot != 0) {
+      esp_bd_addr_t base;
+      esp_read_mac(base, ESP_MAC_BT);
+      if (bleHostAddress(base, hostSlot, hostAddr)) {
+        esp_err_t rc = esp_ble_gap_set_rand_addr(hostAddr);
+        hostAddrSet = (rc == ESP_OK);
+        Serial.printf("[BLE] Host-Slot %u: %02X:%02X:%02X:%02X:%02X:%02X (rc=%d)\n", hostSlot,
+          hostAddr[0], hostAddr[1], hostAddr[2], hostAddr[3], hostAddr[4], hostAddr[5], (int)rc);
+        if (!hostAddrSet) Serial.println("[BLE] ERR BLE_HOST: Adresse nicht gesetzt, der Slot teilt die Adresse des Controllers");
+      }
+    }
     esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_DEFAULT, BLE_HID_TX_POWER);
     esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_ADV, BLE_HID_TX_POWER);
     BLEServer* pServer = BLEDevice::createServer();
@@ -125,6 +142,7 @@ public:
     advertising->setAppearance(HID_KEYBOARD);
     advertising->addServiceUUID(hid->hidService()->getUUID());
     advertising->setScanResponse(true);
+    if (hostAddrSet) advertising->setDeviceAddress(hostAddr, BLE_ADDR_TYPE_RANDOM);
     advertising->start();
     hid->setBatteryLevel(batteryLevel);
 

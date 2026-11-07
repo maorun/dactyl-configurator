@@ -738,6 +738,7 @@ function validateConfigShape(cfg, profile) {
   if ((cfg.combos || []).some(cb => cb && isDynamicMacroCode(cb.action))) throw new Error("Combos unterstützen keine dynamischen Makros.");
   if ((cfg.combos || []).some(cb => cb && isLeaderCode(cb.action))) throw new Error("Combos unterstützen kein Leader.");
   if ((cfg.combos || []).some(cb => cb && isKeyLockCode(cb.action))) throw new Error("Combos unterstützen kein Key Lock.");
+  if ((cfg.combos || []).some(cb => cb && isBleHostCode(cb.action))) throw new Error("Combos unterstützen keine BLE-Host-Slots.");
   // Den Slot hat nur der Master: auf der anderen Hälfte tun DM_REC und DM_PLAY nichts (wie validate_config in server.py)
   if (profile && !profile.master && Array.isArray(cfg.layers) &&
       cfg.layers.some(layer => Array.isArray(layer) && layer.some(row => Array.isArray(row) && row.some(cell => {
@@ -745,6 +746,14 @@ function validateConfigShape(cfg, profile) {
         return actions.some(isDynamicMacroCode);
       })))) {
     throw new Error(`Dynamische Makros (DM_REC, DM_PLAY) gelten nur für die ${Dactyl.SIDE_PROFILES[Dactyl.getMasterSide()].label} (Master).`);
+  }
+  // Auch den Host-Slot hat nur der Master (wie validate_config in server.py)
+  if (profile && !profile.master && Array.isArray(cfg.layers) &&
+      cfg.layers.some(layer => Array.isArray(layer) && layer.some(row => Array.isArray(row) && row.some(cell => {
+        const actions = typeof cell === "string" ? [cell] : (cell && typeof cell === "object" ? [cell.tap, cell.hold, cell.dtap] : []);
+        return actions.some(isBleHostCode);
+      })))) {
+    throw new Error(`BLE-Host-Slots (HOST_1 .. HOST_3) gelten nur für die ${Dactyl.SIDE_PROFILES[Dactyl.getMasterSide()].label} (Master).`);
   }
   if (cfg.layerNames !== undefined && !Array.isArray(cfg.layerNames)) throw new Error("'layerNames' muss eine Liste sein.");
   if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");

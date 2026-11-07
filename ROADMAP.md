@@ -158,16 +158,6 @@ Rules for this file:
 - **Goal:** Add `suggestErgonomicSwaps(stats, config, profile)` in `js/config-model.js` and a list in the heatmap panel that ranks up to 5 swaps between high-count keys on high-effort positions (outer pinky column, top row, or same-finger bigram pairs) and low-count keys on home-row index, middle or ring positions, leaving modifiers and layer keys untouched.
 - **Acceptance test:** Unit tests in `tests/test_app_logic.js` verify that high-frequency outer keys are paired with low-frequency home-row keys and that modifiers, layer keys and absent keys are excluded.
 
-### BLE host slots
-
-- **Rank:** Feature model. Total 16/40 (typing 6, configuration 3, harmony 4, safety 3). Effort L. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylBleComposite.h`, `firmware/dactyl_right/dactyl_right.ino` (BLE address, advertising), `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `js/keycodes.js`.
-- **Problem:** The master bonds to one host. A user with a second Mac or an iPad must forget and pair the keyboard again for each change.
-- **Goal:** Add up to three host slots. Each slot uses its own static random BLE address and its own bond. The actions `HOST_1` .. `HOST_3` switch the slot; the active slot is stored in NVS. The config mode keeps its own address. The app shows the active slot.
-- **Risk:** macOS caches the report map per address (see "macOS Bluetooth GATT Report Map Caching" in `AGENTS.md`). A wrong address change can break the current bond.
-- **Acceptance test:** A firmware test checks the address per slot, the NVS persistence and the release of all keys before a slot change.
-
 ## Priority 5
 
 No open entry.

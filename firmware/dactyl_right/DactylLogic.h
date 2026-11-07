@@ -1,6 +1,7 @@
 #pragma once
 #include "DactylCommon.h"
 #include "DactylLeader.h"
+#include "DactylBleHost.h"
 
 /*
  * =============================================================================
@@ -892,6 +893,53 @@ void dynamicMacroReset() {
 #endif
 }
 
+// BLE-Host-Slot (ACT_HOST_1 .. ACT_HOST_3, nur Master): aktiver Slot 1..3 (NVS "ble_host", Standard 1).
+// Der Wechsel gibt zuerst alle Tasten frei und meldet den Wunsch; dactyl_right.ino speichert den Slot und startet BLE
+// mit der Adresse des Slots neu. Im Config Mode und ohne Mac passiert nichts (wie bei den anderen Host-Aktionen).
+void resetMouseMove();
+uint8_t bleHostSlot = BLE_HOST_DEFAULT;
+volatile uint8_t bleHostSwitchRequested = 0;   // 0 = keiner, sonst der Zielslot
+
+void bleHostSwitchPress(uint16_t action) {
+#ifdef DACTYL_BLE_HOST
+  // Auch ohne Mac-Verbindung: ein verlorener Host darf den Wechsel zu einem anderen nicht sperren
+  if (isConfigMode || !isBleHostAction(action)) return;
+  uint8_t slot = (uint8_t)(action - ACT_HOST_BASE + 1);
+  Serial.printf("BLE-Host-Slot %u angefordert (aktiv: %u)\n", slot, bleHostSlot);
+  stopMacro(false);
+  dynamicMacroReset();
+  resetMouseMove();
+  oslClearAll();
+  bleKeyboard.releaseAll();
+  if (slot == bleHostSlot) return;                // gleicher Slot: nur freigeben, kein Neustart
+  bleHostSwitchRequested = slot;
+#else
+  (void)action;   // die linke Hälfte hat keinen Host-Slot
+#endif
+}
+
+bool saveBleHostToNVS(uint8_t slot) {
+  if (!isValidBleHostSlot(slot)) return false;
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("ble_host", slot) > 0;
+  preferences.end();
+  if (ok) bleHostSlot = slot;
+  else sendConfigNotification("ERR NVS BLE_HOST");
+  Serial.printf("NVS: BLE-Host-Slot %s: %u\n", ok ? "gespeichert" : "FEHLER", slot);
+  return ok;
+}
+
+// Liest den Slot beim Start; fehlender oder ungültiger Wert = Slot 1
+void loadBleHostFromNVS() {
+  bleHostSlot = BLE_HOST_DEFAULT;
+  if (!preferences.begin("dactyl", false)) return;
+  if (preferences.isKey("ble_host")) {
+    uint8_t v = preferences.getUChar("ble_host", BLE_HOST_DEFAULT);
+    if (isValidBleHostSlot(v)) bleHostSlot = v;
+  }
+  preferences.end();
+}
+
 // Im Hauptdurchlauf: neue Zeile "DM_REC:0|1" auf USB-Serial (nie über BLE), wenn sich der Aufnahmestand ändert
 void dynamicMacroService() {
 #ifdef DACTYL_DYNAMIC_MACRO
@@ -1247,7 +1295,7 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
     // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
     if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
         isDynamicMacroAction(action) || isOneShotAction(action) || action == ACT_CAPS_WORD || action == ACT_LEADER ||
-        action == ACT_KEY_LOCK) {
+        action == ACT_KEY_LOCK || isBleHostAction(action)) {
       leaderState.reset();
     }
     return false;
@@ -1429,6 +1477,16 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
       if (isComboCandidateKey(r, c)) leaderBuffered[r][c] = true;
       else { leaderState.start(millis()); keySentToHost[r][c] = true; }
     }
+#ifdef DACTYL_BLE_HOST
+  } else if (isBleHostAction(action)) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"Host %d\",\"code\":%d,\"layer\":%d}", r, c, action - ACT_HOST_BASE + 1, action, currentLayer);
+    sendConfigNotification(String(buf));
+    if (!isConfigMode && !isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
+      bleHostSwitchPress(action);
+      keySentToHost[r][c] = true;
+    }
+#endif
   } else if (isDynamicMacroAction(action)) {
     const char* dmName = action == ACT_DM_REC ? "DM Rec" : "DM Play";
     char buf[128];
@@ -1625,6 +1683,12 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
       leaderState.start(millis());
     }
     leaderBuffered[r][c] = false;
+  } else if (isBleHostAction(action)) {
+    if (keySentToHost[r][c]) {
+      keySentToHost[r][c] = false;
+    } else if (!isConfigMode && !wasComboRecentlyActive(r, c) && !isConfigComboKey(r, c)) {
+      bleHostSwitchPress(action);
+    }
   } else if (isDynamicMacroAction(action)) {
     // Die Aktion lief schon beim Drücken; nur ein gepufferter Combo-Kandidat führt sie jetzt aus
     if (!isConfigMode && bleKeyboard.isConnected()) {
@@ -1991,6 +2055,9 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       keySentToHost[r][c] = true;
     } else if (isMacroAction(act)) {
       startMacro(act, millis());
+      keySentToHost[r][c] = true;
+    } else if (isBleHostAction(act)) {
+      bleHostSwitchPress(act);
       keySentToHost[r][c] = true;
     } else if (isDynamicMacroAction(act)) {
       dynamicMacroPress(act, millis());
@@ -2394,6 +2461,9 @@ void processDeferredKeys(unsigned long now) {
               keySentToHost[r][c] = true;
             } else if (isMacroAction(act)) {
               startMacro(act, now);
+              keySentToHost[r][c] = true;
+            } else if (isBleHostAction(act)) {
+              bleHostSwitchPress(act);
               keySentToHost[r][c] = true;
             } else if (isDynamicMacroAction(act)) {
               dynamicMacroPress(act, now);
@@ -3702,7 +3772,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && !isBleHostAction((uint16_t)act) &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;
@@ -3885,6 +3955,10 @@ void handleConfigCommand(String cmd, bool fromBle) {
       hn += (size_t)hostLedsJson(hostJson + hn, sizeof(hostJson) - hn, (uint8_t)DEVICE_INFO_HOST_LEDS_BITS());
       snprintf(hostJson + hn, sizeof(hostJson) - hn, ",\"caps_led\":%u", (unsigned)capsLedEnabled);
     }
+#endif
+#ifdef DACTYL_BLE_HOST
+    // Eigene Zeile vor DEVICE_INFO: die Zeile hat nur wenige Bytes Reserve unter dem BLE-Attributlimit (512)
+    sendConfigNotification("BLE_HOST:" + String((int)bleHostSlot));
 #endif
     char buf[768];
     int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"require_prior_idle_ms\":%u,\"chordal_hold\":%u,\"as\":%u,\"at\":%u,\"leader_timeout_ms\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",

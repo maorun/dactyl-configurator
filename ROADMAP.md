@@ -43,15 +43,6 @@ Rules for this file:
 - **Dependency:** "macOS system keys" also changes the report map. Do both changes in one pull request, so the user pairs again only once.
 - **Acceptance test:** A firmware test checks the report descriptor and the report bytes for each wheel direction. A test holds a wheel key and checks the repeat and the acceleration.
 
-### Auto Shift
-
-- **Rank:** Feature model. Total 18/40 (typing 5, configuration 2, harmony 6, safety 5). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h` (tap/hold resolution), `firmware/dactyl_right/DactylVersion.h`, `server.py` (`[[[START_SETTINGS]]]`), `js/editor.js`.
-- **Problem:** `Shift` on a little finger or on a Mod-Tap key causes strain and timing errors.
-- **Goal:** Add a setting per half (default off) and a timeout (default 175 ms). A letter, digit or symbol key without a hold action sends its shifted character when the user holds it longer than the timeout. Keys with a hold action, modifiers and layer keys stay unchanged. Caps Word and One-Shot `Shift` keep their behavior.
-- **Acceptance test:** A firmware test checks a short tap (`a`), a long hold (`A`), a key with a hold action (no Auto Shift) and the character order during a fast roll.
-
 ### macOS system keys
 
 - **Rank:** Feature model. Total 17/40 (typing 5, configuration 1, harmony 6, safety 5). Effort S. Estimate.

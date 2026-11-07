@@ -71,6 +71,18 @@ test("Links: Config-Combo, BLE-Name, Gerätename und Hälfte entsprechen dactyl_
   assert.strictEqual(define(leftIno, "DEVICE_SIDE"), "L");
 });
 
+test("Einstellung autoShift: beide Sketche deklarieren sie, DactylLogic.h kennt Befehle und Server rendert sie", () => {
+  for (const [name, src] of [["rechts", read("firmware/dactyl_right/dactyl_right.ino")], ["links", read("firmware/dactyl_left/dactyl_left.ino")]]) {
+    assert.ok(/^uint8_t autoShift = 0;$/m.test(src), `${name}: autoShift fehlt im Sketch`);
+    assert.ok(/^uint16_t autoShiftMs = 175;$/m.test(src), `${name}: autoShiftMs fehlt im Sketch`);
+  }
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  assert.ok(logic.includes('cmd.startsWith("SET_AUTO_SHIFT ")') && logic.includes('cmd.startsWith("SET_AUTO_SHIFT_TERM ")'), "SET_AUTO_SHIFT fehlt");
+  assert.ok(logic.includes('\\"as\\":%u,\\"at\\":%u'), "GET_INFO meldet as/at nicht");
+  const server = read("server.py");
+  assert.ok(server.includes('uint8_t autoShift = {values["autoShift"]};') && server.includes('uint16_t autoShiftMs = {values["autoShiftMs"]};'), "server.py rendert Auto Shift nicht");
+});
+
 test("Einstellung chordalHold: beide Sketche deklarieren sie, DactylLogic.h meldet sie und der Server rendert sie", () => {
   for (const [name, src] of [["rechts", rightIno], ["links", leftIno]]) {
     assert.ok(/^uint8_t chordalHold = 0;$/m.test(src), `${name}: chordalHold fehlt im Sketch`);

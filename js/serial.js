@@ -485,6 +485,14 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("chordalHoldSelect", info.chordal_hold);
         if (settingsTarget) settingsTarget.chordalHold = info.chordal_hold;
       }
+      if (info.as !== undefined) {
+        setInput("autoShiftSelect", info.as);
+        if (settingsTarget) settingsTarget.autoShift = info.as;
+      }
+      if (info.at !== undefined) {
+        setInput("autoShiftTermInput", info.at);
+        if (settingsTarget) settingsTarget.autoShiftMs = info.at;
+      }
       if (Array.isArray(info.tri_layer)) {
         const rules = normalizeTriLayers(info.tri_layer.map(r => Array.isArray(r) ? { a: r[0], b: r[1], target: r[2] } : null));
         if (isEditSide && !holdSettings) applyTriLayersToInputs(rules);

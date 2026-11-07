@@ -19,6 +19,8 @@ const SETTINGS_RANGES = {
   leaderTimeoutMs: [100, 5000, 1000],
   requirePriorIdleMs: [0, 500, 0],
   chordalHold: [0, 1, 0],
+  autoShift: [0, 1, 0],
+  autoShiftMs: [50, 500, 175],
   capsLed: [0, 1, 0],
   standbyTimeoutMinutes: [0, 120, 5],
   sleepTimeoutMinutes: [0, 240, 60]
@@ -818,6 +820,8 @@ function normalizeConfig(cfg, profile) {
     leaderTimeoutMs: clampSetting("leaderTimeoutMs", s.leaderTimeoutMs ?? 1000),
     requirePriorIdleMs: clampSetting("requirePriorIdleMs", s.requirePriorIdleMs ?? 0),
     chordalHold: clampSetting("chordalHold", s.chordalHold ?? 0),
+    autoShift: clampSetting("autoShift", s.autoShift ?? 0),
+    autoShiftMs: clampSetting("autoShiftMs", s.autoShiftMs ?? 175),
     triLayers: normalizeTriLayers(s.triLayers),
     capsLed: clampSetting("capsLed", s.capsLed ?? 0),
     standbyTimeoutMinutes: clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5),
@@ -1276,7 +1280,8 @@ function settingsFromDeviceInfo(info, base) {
   const map = {
     standby_timeout: "standbyTimeoutMinutes", sleep_timeout: "sleepTimeoutMinutes", debounce_ms: "debounceMs",
     combo_timeout_ms: "comboTimeoutMs", tapping_term_ms: "tappingTermMs", hold_tap_mode: "holdTapMode",
-    quick_tap_ms: "quickTapMs", leader_timeout_ms: "leaderTimeoutMs", require_prior_idle_ms: "requirePriorIdleMs", chordal_hold: "chordalHold"
+    quick_tap_ms: "quickTapMs", leader_timeout_ms: "leaderTimeoutMs", require_prior_idle_ms: "requirePriorIdleMs", chordal_hold: "chordalHold",
+    as: "autoShift", at: "autoShiftMs"
   };
   for (const [key, field] of Object.entries(map)) if (info[key] !== undefined) out[field] = info[key];
   if (Array.isArray(info.tri_layer)) {

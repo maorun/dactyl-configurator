@@ -197,6 +197,19 @@ test("Config-Normalisierung: Namen, Einstellungen und Zellen werden bereinigt", 
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { chordalHold: 5 } }, R).settings.chordalHold, 1);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { chordalHold: -1 } }, R).settings.chordalHold, 0);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { chordalHold: "x" } }, R).settings.chordalHold, 0);
+  // Auto Shift: Standard aus und 175 ms; Werte außerhalb des Bereichs werden begrenzt
+  assert.strictEqual(n.settings.autoShift, 0);
+  assert.strictEqual(n.settings.autoShiftMs, 175);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: 1, autoShiftMs: 220 } }, R).settings.autoShift, 1);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: 1, autoShiftMs: 220 } }, R).settings.autoShiftMs, 220);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: 5 } }, R).settings.autoShift, 1);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: "x", autoShiftMs: "x" } }, R).settings.autoShift, 0);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShiftMs: 10 } }, R).settings.autoShiftMs, 50);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShiftMs: 9999 } }, R).settings.autoShiftMs, 500);
+  // DEVICE_INFO-Rundreise
+  const asInfo = api.settingsFromDeviceInfo({ as: 1, at: 200 }, {});
+  assert.strictEqual(asInfo.autoShift, 1);
+  assert.strictEqual(asInfo.autoShiftMs, 200);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 1 } }, R).settings.holdTapMode, 1);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 2 } }, R).settings.holdTapMode, 2);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { holdTapMode: 99 } }, R).settings.holdTapMode, 2);
@@ -2477,7 +2490,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT) |CLEAR_TAP_TERMS$)/.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM) |CLEAR_TAP_TERMS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -2560,8 +2573,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 14);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "CLEAR_TAP_TERMS"]);
+  assert.strictEqual(cmds.length, 16);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "CLEAR_TAP_TERMS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
@@ -2579,7 +2592,19 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(cmds[11].cmd, "SET_CAPS_LED 0");
   assert.strictEqual(ctx.build({ capsLed: 1 }, R)[11].cmd, "SET_CAPS_LED 1");
   // Die linke Hälfte hat keinen Host: kein Befehl
-  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 13);
+  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 15);
+  // Auto Shift: Schalter 0/1, Zeitlimit 50..500 (Standard 175); beide Befehle sind optional (ältere Firmware)
+  const asCmd = (c, a) => c.find(x => x.ack === a);
+  assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 0");
+  assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").optional, true);
+  assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT_TERM").cmd, "SET_AUTO_SHIFT_TERM 175");
+  assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT_TERM").optional, true);
+  assert.strictEqual(asCmd(ctx.build({ autoShift: 1 }, R), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 1");
+  assert.strictEqual(asCmd(ctx.build({ autoShift: 7 }, L), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 1");
+  assert.strictEqual(asCmd(ctx.build({ autoShift: -2 }, R), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 0");
+  assert.strictEqual(asCmd(ctx.build({ autoShiftMs: 220 }, R), "SET_AUTO_SHIFT_TERM").cmd, "SET_AUTO_SHIFT_TERM 220");
+  assert.strictEqual(asCmd(ctx.build({ autoShiftMs: 5 }, R), "SET_AUTO_SHIFT_TERM").cmd, "SET_AUTO_SHIFT_TERM 50");
+  assert.strictEqual(asCmd(ctx.build({ autoShiftMs: 9999 }, L), "SET_AUTO_SHIFT_TERM").cmd, "SET_AUTO_SHIFT_TERM 500");
   // Leader-Wartezeit: Standard 1000, Bereich 100..5000
   const leaderCmd = c => c.find(x => x.ack === "SET_LEADER_TIMEOUT");
   assert.strictEqual(leaderCmd(cmds).cmd, "SET_LEADER_TIMEOUT 1000");

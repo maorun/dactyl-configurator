@@ -132,6 +132,16 @@ class TestServerAndCodegen(unittest.TestCase):
             server.generate_settings_cpp({"chordalHold": 2})
         with self.assertRaises(ValueError):
             server.generate_settings_cpp({"chordalHold": -1})
+        self.assertIn("uint8_t autoShift = 0;", server.generate_settings_cpp({}))
+        self.assertIn("uint16_t autoShiftMs = 175;", server.generate_settings_cpp({}))
+        out = server.generate_settings_cpp({"autoShift": 1, "autoShiftMs": 220})
+        self.assertIn("uint8_t autoShift = 1;", out)
+        self.assertIn("uint16_t autoShiftMs = 220;", out)
+        self.assertIn("uint16_t autoShiftMs = 50;", server.generate_settings_cpp({"autoShiftMs": 50}))
+        self.assertIn("uint16_t autoShiftMs = 500;", server.generate_settings_cpp({"autoShiftMs": 500}))
+        for bad in ({"autoShift": 2}, {"autoShift": -1}, {"autoShiftMs": 49}, {"autoShiftMs": 501}):
+            with self.assertRaises(ValueError):
+                server.generate_settings_cpp(bad)
         self.assertIn("uint8_t holdTapMode = 1;", server.generate_settings_cpp({"holdTapMode": 1}))
         self.assertIn("uint8_t holdTapMode = 2;", server.generate_settings_cpp({"holdTapMode": 2}))
         self.assertIn("uint8_t holdTapMode = 0;", server.generate_settings_cpp({}))

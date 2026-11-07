@@ -740,6 +740,17 @@
           <small class="form-hint">Drückst du eine Taste derselben Hälfte, während eine Mod-Tap-Taste offen ist, gilt die Mod-Tap-Taste sofort als Tipp. Tasten der anderen Hälfte, die Daumenreihe und Layer-Tap mit MO_n folgen weiter der Mod-Tap-Entscheidung. Erfordert Firmware-Version 20 oder neuer.</small>
         </div>
 
+        <div class="form-group">
+          <label for="autoShiftSelect">Auto Shift:</label>
+          <select id="autoShiftSelect" class="form-control">
+            <option value="0">Aus</option>
+            <option value="1">An</option>
+          </select>
+          <label for="autoShiftTermInput">Auto-Shift-Zeitlimit (Millisekunden, 50 bis 500):</label>
+          <input type="number" id="autoShiftTermInput" class="form-control" value="175" min="50" max="500">
+          <small class="form-hint">Eine Buchstaben-, Ziffern- oder Symboltaste ohne Halte-Aktion sendet das umgeschaltete Zeichen, wenn du sie länger als das Zeitlimit hältst. Modifikatoren, Layer-Tasten und Mod-Tap-Tasten bleiben unverändert. Erfordert Firmware-Version 27 oder neuer.</small>
+        </div>
+
         <div class="form-group" id="triLayerGroup">
           <label>Tri-Layer (bedingte Ebene):</label>
           <div class="form-row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">

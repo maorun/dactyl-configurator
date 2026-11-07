@@ -1311,6 +1311,7 @@ function renderCombosTable() {
   renderKeyPairs();
   renderKeyOverrides();
   renderLeaderSequences();
+  renderAltRepeats();
   renderMacros();
   renderActionSearch();
   const tbody = document.getElementById("combosTableBody");

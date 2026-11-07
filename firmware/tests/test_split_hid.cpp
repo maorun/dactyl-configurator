@@ -2438,6 +2438,13 @@ struct FakeRepeatEnv {
   uint16_t last = 'a';
   std::vector<std::string> log;
   uint16_t lastAction() { return last; }
+  // Eigene Paare vor der festen Tabelle, wie altRepeatResolve() in DactylLogic.h
+  AltRepeatPair custom[MAX_ALT_REPEATS] = {};
+  uint8_t numCustom = 0;
+  uint16_t altAction(uint16_t a) {
+    uint16_t c = altRepeatCustom(custom, numCustom, a);
+    return c ? c : altRepeatAction(a);
+  }
   void press(uint16_t a) { log.push_back("P" + std::to_string(a)); }
   void release(uint16_t a) { log.push_back("R" + std::to_string(a)); }
   void localPress(uint16_t a) { press(a); }
@@ -2445,6 +2452,36 @@ struct FakeRepeatEnv {
   std::vector<SplitHidEvent> sent;
   void sendRun(const SplitHidEvent &e) { sent.push_back(e); }
 };
+
+TEST(test_alt_repeat_custom_pair_applies_on_the_master_local_press) {
+  FakeRepeatEnv env;
+  env.last = 'e';
+  env.custom[0] = { 'e', 'u' };
+  env.numCustom = 1;
+  SplitLeftHeld held = {};
+  SplitRepeatSender s = {};
+  splitRepeatMasterEvent(held, s, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, 3), 100, env);
+  assert(env.log.size() == 1 && env.log[0] == "P" + std::to_string('u'));
+  // Ohne eigenes Paar gilt die feste Tabelle weiter
+  FakeRepeatEnv plain;
+  plain.last = KEY_LEFT_ARROW;
+  SplitLeftHeld held2 = {};
+  SplitRepeatSender s2 = {};
+  splitRepeatMasterEvent(held2, s2, makeSplitHidEvent(SPLIT_OP_REPEAT, SPLIT_REPEAT_CODE_ALT_PRESS, 3), 100, plain);
+  assert(plain.log.size() == 1 && plain.log[0] == "P" + std::to_string(KEY_RIGHT_ARROW));
+}
+
+TEST(test_alt_repeat_custom_pair_applies_on_the_left_run) {
+  FakeRepeatEnv env;
+  env.last = 'e';
+  env.custom[0] = { 'e', 'u' };
+  env.numCustom = 1;
+  SplitRepeatRun r = {};
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(true, 4, true), 1000, env);
+  assert(env.log.size() == 1 && env.log[0] == "P" + std::to_string('u'));
+  splitRepeatLeftRunEvent(r, makeSplitRepeatRun(false, 4), 1010, env);
+  assert(env.log.size() == 2 && env.log[1] == "R" + std::to_string('u'));
+}
 
 TEST(test_left_run_timeout_releases_a_held_repeat_without_refresh) {
   SplitRepeatRun r = {};

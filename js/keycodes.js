@@ -392,6 +392,9 @@ const KEY_OVERRIDE_MOD_LABELS = { ctrl: "Ctrl", shift: "Shift", alt: "Alt", gui:
 const MAX_LEADER_SEQS = 16;
 const LEADER_MAX_KEYS = 4;
 
+// Eigene Alternate-Repeat-Paare (currentConfig.altRepeats): { key, alt } vor der festen Tabelle der Firmware
+const MAX_ALT_REPEATS = 16;
+
 // Makro MACRO_<n>: Folge aus Tippen, Drücken, Loslassen und Pausen (Index in currentConfig.macros)
 const ACT_MACRO_BASE = 0x170;
 const MAX_MACROS = 16;

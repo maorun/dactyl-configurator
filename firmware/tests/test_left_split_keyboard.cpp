@@ -68,6 +68,8 @@ static uint32_t deepSleepTimeoutMinutes = 60;
 static uint8_t numCombos = 0;
 static KeyCombo userCombos[MAX_COMBOS];
 static uint8_t numKeyPairs = 0;
+static uint8_t numAltRepeats = 0;
+static AltRepeatPair userAltRepeats[MAX_ALT_REPEATS];
 static KeyPair userKeyPairs[MAX_KEY_PAIRS];
 static uint8_t numLeaderSeqs = 0;
 static LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS];

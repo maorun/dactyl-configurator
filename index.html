@@ -461,6 +461,33 @@
           </div>
         </div>
 
+        <!-- Eigene Alt-Repeat-Paare: ALT_REPEAT sendet nach einer Taste eine andere (beide Hälften) -->
+        <div id="altRepeatSection">
+          <div class="combos-header key-pairs-header">
+            <div>
+              <h3>Alt-Repeat-Paare (Taste → Alt-Repeat-Taste)</h3>
+              <p class="subtitle">Die Taste <code>Alt Repeat</code> sendet nach der Taste links die Taste rechts, zum Beispiel <code>E</code> → <code>U</code> gegen eine häufige Folge mit demselben Finger. Eigene Paare gelten vor der festen Tabelle (Pfeile, Bild, Lautstärke). Die Richtung ist fest: <code>E</code> → <code>U</code> sagt nichts über <code>U</code> → <code>E</code>. Jede Hälfte hat ihre eigene Liste und braucht die Firmware ab Stand 34.</p>
+            </div>
+          </div>
+          <div class="combos-list-card" id="altRepeatCard">
+            <div class="key-pair-form">
+              <select id="altRepeatKeySelect" class="form-control" title="Taste, nach der Alt Repeat wirkt"></select>
+              <strong>→</strong>
+              <select id="altRepeatAltSelect" class="form-control" title="Taste, die Alt Repeat sendet"></select>
+              <button id="btnAddAltRepeat" class="btn btn-primary btn-sm" type="button">+ Paar hinzufügen</button>
+            </div>
+            <table class="combos-table">
+              <thead>
+                <tr><th>Nr.</th><th>Taste</th><th>Alt Repeat sendet</th><th>Aktionen</th></tr>
+              </thead>
+              <tbody id="altRepeatTableBody"></tbody>
+            </table>
+            <div class="empty-state" id="emptyAltRepeatState" style="display: none;">
+              <p>Noch keine eigenen Alt-Repeat-Paare definiert.</p>
+            </div>
+          </div>
+        </div>
+
         <!-- Makros: eine Taste spielt eine Tastenfolge ab -->
         <div class="combos-header key-pairs-header">
           <div>
@@ -649,6 +676,7 @@
           <span class="live-label">Gleicher Finger nacheinander:</span>
           <span class="stat-badge" id="sameFingerTotal" title="Zwei verschiedene Tasten desselben Fingers (ohne Daumen) direkt nacheinander">0</span>
           <span class="finger-load-pairs" id="sameFingerPairs"></span>
+          <button id="btnAltRepeatsFromPairs" class="hand-btn" type="button" title="Legt aus den häufigsten Folgen Alt-Repeat-Paare an (beide Richtungen, Tap-Aktion der Ebene 0)">+ Alt-Repeat-Paare</button>
         </div>
 
         <div class="combo-active-alert" id="comboActiveAlert" style="display: none;">
@@ -1048,6 +1076,7 @@
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/key-overrides-ui.js?v=1"></script>
   <script src="js/leader-ui.js?v=1"></script>
+  <script src="js/alt-repeats-ui.js?v=1"></script>
   <script src="js/macros-ui.js?v=2"></script>
   <script src="js/layout-profiles-ui.js?v=2"></script>
   <script src="js/flash-log.js?v=1"></script>

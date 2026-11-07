@@ -69,6 +69,8 @@ static KeyCombo userCombos[MAX_COMBOS];
 #define NUM_ONE_SHOT_ACTIONS 8
 
 static uint8_t numKeyPairs = 0;
+static uint8_t numAltRepeats = 0;
+static AltRepeatPair userAltRepeats[MAX_ALT_REPEATS];
 static KeyPair userKeyPairs[MAX_KEY_PAIRS];
 
 static uint8_t numLeaderSeqs = 0;
@@ -174,6 +176,8 @@ void resetState() {
   for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) comboPressLayer1[r][c] = 0;
   numKeyPairs = 0;
   for (int i = 0; i < MAX_KEY_PAIRS; i++) userKeyPairs[i] = { 0, 0 };
+  numAltRepeats = 0;
+  for (int i = 0; i < MAX_ALT_REPEATS; i++) userAltRepeats[i] = { 0, 0 };
   numLeaderSeqs = 0;
   for (int i = 0; i < MAX_LEADER_SEQS; i++) userLeaderSeqs[i] = { { 0, 0, 0, 0 }, 0 };
   leaderTimeoutMs = 1000;
@@ -7039,8 +7043,8 @@ TEST(test_prior_idle_command_nvs_and_info) {
 // -----------------------------------------------------------------------------
 // Alternate repeat (ACT_ALT_REPEAT): das Gegenteil der letzten Aktion
 // -----------------------------------------------------------------------------
-struct AltRepeatPair { uint16_t a, b; };
-static const AltRepeatPair ALT_REPEAT_TABLE[] = {
+struct DefaultAltPair { uint16_t a, b; };
+static const DefaultAltPair ALT_REPEAT_TABLE[] = {
   {KEY_LEFT_ARROW, KEY_RIGHT_ARROW}, {KEY_UP_ARROW, KEY_DOWN_ARROW}, {KEY_PAGE_UP, KEY_PAGE_DOWN},
   {KEY_HOME, KEY_END}, {KEY_BACKSPACE, KEY_DELETE}, {0x133, 0x134}, {0x122, 0x123}, {0x124, 0x125},
 };
@@ -7113,6 +7117,119 @@ TEST(test_alt_repeat_twice_goes_back_and_forth_from_the_last_real_action) {
   tapKeyAt(2, 2, 1200, 1220);
   assert(countPresses(KEY_LEFT_ARROW) == 1);
   assert(countPresses(KEY_RIGHT_ARROW) == 2);                     // beide Male das Gegenteil der echten Aktion
+}
+
+TEST(test_custom_alt_repeat_pair_sends_the_alt_key) {
+  resetState();
+  handleConfigCommand("ADD_ALT_REPEAT 101 117", false);           // e -> u
+  assert(mockChar.value == "OK ADD_ALT_REPEAT 0" && numAltRepeats == 1);
+  KEYMAP[0][2][1] = 'e';
+  KEYMAP[0][2][2] = ACT_ALT_REPEAT;
+  tapKeyAt(2, 1, 1000, 1020);
+  bleKeyboard.keyEvents.clear();
+  pressKey(2, 2);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'u');
+  releaseKey(2, 2);
+  assert(bleKeyboard.pressedKeys.empty());
+  assert(lastRepeatAction == 'e');                                // ALT_REPEAT zeichnet nichts auf
+}
+
+TEST(test_custom_alt_repeat_pair_is_directed) {
+  resetState();
+  handleConfigCommand("ADD_ALT_REPEAT 101 117", false);
+  assert(altRepeatResolve('e') == 'u' && altRepeatResolve('u') == 0);
+}
+
+TEST(test_custom_alt_repeat_is_checked_before_the_default_table) {
+  resetState();
+  assert(altRepeatResolve(KEY_LEFT_ARROW) == KEY_RIGHT_ARROW);
+  handleConfigCommand("ADD_ALT_REPEAT 216 10", false);            // Left Arrow (0xD8) -> Zeilenumbruch
+  assert(altRepeatResolve(KEY_LEFT_ARROW) == 10);
+  assert(altRepeatResolve(KEY_RIGHT_ARROW) == KEY_LEFT_ARROW);    // die feste Tabelle gilt weiter für den Rest
+  assert(altRepeatResolve(KEY_UP_ARROW) == KEY_DOWN_ARROW);
+  handleConfigCommand("CLEAR_ALT_REPEATS", false);
+  assert(altRepeatResolve(KEY_LEFT_ARROW) == KEY_RIGHT_ARROW);
+}
+
+TEST(test_alt_repeat_commands_validate_and_clear) {
+  resetState();
+  handleConfigCommand("ADD_ALT_REPEAT 0 5", false);
+  assert(mockChar.value == "ERR ARGS ADD_ALT_REPEAT 0 5");
+  handleConfigCommand("ADD_ALT_REPEAT 5 256", false);
+  assert(mockChar.value == "ERR ARGS ADD_ALT_REPEAT 5 256");
+  handleConfigCommand("ADD_ALT_REPEAT 7 7", false);
+  assert(mockChar.value == "ERR ARGS ADD_ALT_REPEAT 7 7" && numAltRepeats == 0);
+  handleConfigCommand("ADD_ALT_REPEAT 5 6 7", false);
+  assert(mockChar.value == "ERR ARGS ADD_ALT_REPEAT 5 6 7");
+  handleConfigCommand("ADD_ALT_REPEAT 5", false);
+  assert(mockChar.value == "ERR ARGS ADD_ALT_REPEAT 5");
+  handleConfigCommand("ADD_ALT_REPEAT 101 117", false);
+  handleConfigCommand("ADD_ALT_REPEAT 101 118", false);          // derselbe Auslöser
+  assert(mockChar.value == "ERR ARGS ADD_ALT_REPEAT 101 118" && numAltRepeats == 1);
+  handleConfigCommand("CLEAR_ALT_REPEATS", false);
+  assert(mockChar.value == "OK CLEAR_ALT_REPEATS" && numAltRepeats == 0);
+  for (int i = 0; i < MAX_ALT_REPEATS; i++) handleConfigCommand((std::string("ADD_ALT_REPEAT ") + std::to_string(33 + i) + " 65").c_str(), false);
+  assert(numAltRepeats == MAX_ALT_REPEATS);
+  handleConfigCommand("ADD_ALT_REPEAT 120 65", false);
+  assert(mockChar.value == "ERR ARGS ADD_ALT_REPEAT 120 65" && numAltRepeats == MAX_ALT_REPEATS);
+}
+
+TEST(test_alt_repeats_persist_in_nvs) {
+  resetState();
+  handleConfigCommand("ADD_ALT_REPEAT 101 117", false);
+  handleConfigCommand("ADD_ALT_REPEAT 105 111", false);
+  handleConfigCommand("SAVE_ALT_REPEATS", false);
+  assert(mockChar.value == "OK SAVE_ALT_REPEATS");
+  numAltRepeats = 0;
+  userAltRepeats[0] = { 0, 0 };
+  userAltRepeats[1] = { 0, 0 };
+  loadKeymapFromNVS();
+  assert(numAltRepeats == 2);
+  assert(userAltRepeats[0].key == 101 && userAltRepeats[0].alt == 117 && userAltRepeats[1].key == 105 && userAltRepeats[1].alt == 111);
+  // Leere Liste gespeichert: die einkompilierte Liste gilt beim nächsten Start nicht mehr
+  handleConfigCommand("CLEAR_ALT_REPEATS", false);
+  handleConfigCommand("SAVE_ALT_REPEATS", false);
+  numAltRepeats = 1;
+  userAltRepeats[0] = { 120, 121 };
+  loadKeymapFromNVS();
+  assert(numAltRepeats == 0);
+  // Anzahl und Daten passen nicht: die einkompilierte Liste bleibt
+  preferences.putUChar("num_altrep", 3);
+  preferences.putBytes("altrep_data", userAltRepeats, sizeof(AltRepeatPair));
+  numAltRepeats = 1;
+  userAltRepeats[0] = { 120, 121 };
+  loadKeymapFromNVS();
+  assert(numAltRepeats == 1 && userAltRepeats[0].key == 120);
+}
+
+TEST(test_app_flash_discards_stored_alt_repeats) {
+  resetState();
+  handleConfigCommand("ADD_ALT_REPEAT 101 117", false);
+  handleConfigCommand("SAVE_ALT_REPEATS", false);
+  loadKeymapFromNVS();
+  assert(preferences.isKey("num_altrep") && preferences.isKey("altrep_data"));
+  testDefaultsId = 0xBEEF;
+  numAltRepeats = 1;
+  userAltRepeats[0] = { 98, 99 };
+  loadKeymapFromNVS();
+  assert(numAltRepeats == 1 && userAltRepeats[0].key == 98 && userAltRepeats[0].alt == 99);
+  assert(!preferences.isKey("num_altrep") && !preferences.isKey("altrep_data"));
+}
+
+TEST(test_alt_repeats_get_config_sends_the_list) {
+  resetState();
+  loadKeymapFromNVS();
+  handleConfigCommand("CLEAR_ALT_REPEATS", false);
+  handleConfigCommand("ADD_ALT_REPEAT 101 117", false);
+  handleConfigCommand("ADD_ALT_REPEAT 105 111", false);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool count = false, data = false;
+  for (const auto &n : mockChar.notifications) {
+    if (n == "ALTREP_COUNT:2") count = true;
+    if (n == "ALTREP_DATA:{\"o\":0,\"e\":[[101,117],[105,111]]}") data = true;
+  }
+  assert(count && data);
 }
 
 TEST(test_alt_repeat_keeps_held_modifiers_applied) {

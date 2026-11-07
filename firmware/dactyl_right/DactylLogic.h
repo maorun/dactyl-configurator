@@ -16,6 +16,7 @@
  *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], TAPTERMMAP[][][], layerNames[],
  *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
  *   nur Master (DACTYL_KEY_OVERRIDES): KeyOverride, userKeyOverrides[], numKeyOverrides (DactylKeyOverride.h),
+ *   MAX_ALT_REPEATS, AltRepeatPair, userAltRepeats[], numAltRepeats (eigene Alternate-Repeat-Paare),
  *   MAX_LEADER_SEQS, LeaderSeq, userLeaderSeqs[], numLeaderSeqs, leaderTimeoutMs (Leader-Folgen, DactylLeader.h),
  *   MAX_MACROS, MAX_MACRO_STEPS, ACT_MACRO_BASE, MacroStep, userMacros[][], macroLengths[], numMacros,
  *   momentaryLayers[], toggleLayers[], keyState[][], pressedAction[][],
@@ -1247,6 +1248,12 @@ void repeatRelease(uint16_t a) {
   }
 }
 
+// Alternate repeat: eigene Paare zuerst, dann die feste Tabelle
+inline uint16_t altRepeatResolve(uint16_t a) {
+  uint16_t custom = altRepeatCustom(userAltRepeats, numAltRepeats, a);
+  return custom ? custom : altRepeatAction(a);
+}
+
 // REPEAT-Taste (r, c) drückt: die andere Hälfte führt aus (Hook) oder diese Hälfte wiederholt ihre Aktion
 // alt (ALT_REPEAT): das Gegenteil der letzten Aktion; ohne Gegenteil geschieht nichts
 bool repeatStartAt(uint8_t r, uint8_t c, bool alt = false) {
@@ -1256,7 +1263,7 @@ bool repeatStartAt(uint8_t r, uint8_t c, bool alt = false) {
     repeatRemote[r][c] = true;
     return true;
   }
-  uint16_t a = alt ? altRepeatAction(lastRepeatAction) : lastRepeatAction;
+  uint16_t a = alt ? altRepeatResolve(lastRepeatAction) : lastRepeatAction;
   if (a == 0) return false;
   repeatResolved[r][c] = a;
   repeatPress(a);
@@ -2744,6 +2751,8 @@ void loadKeymapFromNVS() {
 #endif
       // Leader-Folgen verweisen auf Tastenpaare und Makros: die einkompilierte Liste ersetzt die gespeicherte
       preferences.remove("num_leader");
+      preferences.remove("num_altrep");
+      preferences.remove("altrep_data");
       preferences.remove("leader_data");
       // Makros ebenso: MACRO_n verweist auf die einkompilierten Makros
       preferences.remove("num_macros");
@@ -2918,6 +2927,28 @@ void loadKeymapFromNVS() {
     Serial.printf("NVS: %d Tasten-Überschreibungen geladen.\n", numKeyOverrides);
   }
 #endif
+  // Eigene Alternate-Repeat-Paare: gespeicherte Liste (auch leer nach CLEAR_ALT_REPEATS + SAVE_ALT_REPEATS) überschreibt die einkompilierte
+  if (preferences.isKey("num_altrep")) {
+    uint8_t n = preferences.getUChar("num_altrep", 0);
+    if (n == 0) {
+      numAltRepeats = 0;
+    } else if (n <= MAX_ALT_REPEATS && preferences.isKey("altrep_data") &&
+               preferences.getBytesLength("altrep_data") == n * sizeof(AltRepeatPair)) {
+      AltRepeatPair loaded[MAX_ALT_REPEATS];
+      preferences.getBytes("altrep_data", loaded, n * sizeof(AltRepeatPair));
+      bool valid = true;
+      for (uint8_t i = 0; i < n; i++) valid = valid && loaded[i].key != 0 && loaded[i].alt != 0;
+      if (valid) {
+        memcpy(userAltRepeats, loaded, n * sizeof(AltRepeatPair));
+        numAltRepeats = n;
+        Serial.printf("NVS: %d Alt-Repeat-Paare geladen.\n", numAltRepeats);
+      } else {
+        Serial.println("NVS: Alt-Repeat-Paare ungültig, die einkompilierte Liste bleibt.");
+      }
+    } else {
+      Serial.println("NVS: Alt-Repeat-Paare unvollständig (Anzahl und Daten passen nicht), die einkompilierte Liste bleibt.");
+    }
+  }
   // Leader-Folgen: gespeicherte Liste (auch leer nach CLEAR_LEADER + SAVE_LEADER) überschreibt die einkompilierte
   if (preferences.isKey("num_leader")) {
     uint8_t n = preferences.getUChar("num_leader", 0);
@@ -3277,6 +3308,22 @@ bool saveCombosToNVS() {
   return ok;
 }
 
+bool saveAltRepeatsToNVS() {
+  if (!preferences.begin("dactyl", false)) return false;
+  // Daten zuerst, Anzahl zuletzt: ein Fehler beim Schreiben der Daten lässt die alte Anzahl nicht mit neuen Daten stehen
+  bool ok = true;
+  size_t len = numAltRepeats * sizeof(AltRepeatPair);
+  if (len > 0) {
+    ok = preferences.putBytes("altrep_data", userAltRepeats, len) == len;
+  } else {
+    preferences.remove("altrep_data");
+  }
+  if (ok) ok = preferences.putUChar("num_altrep", numAltRepeats) > 0;
+  preferences.end();
+  Serial.printf("NVS: %d Alt-Repeat-Paare %s.\n", numAltRepeats, ok ? "gespeichert" : "FEHLER beim Speichern");
+  return ok;
+}
+
 bool saveLeaderSeqsToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
   // Daten zuerst, Anzahl zuletzt: ein Fehler beim Schreiben der Daten lässt die alte Anzahl nicht mit neuen Daten stehen
@@ -3417,6 +3464,7 @@ void sendMatrixData(const char* prefix, uint16_t (*matrix)[NUM_ROWS][NUM_COLS], 
 #define GET_CONFIG_PAIRS_PER_LINE  8
 #define GET_CONFIG_OVERRIDES_PER_LINE 6
 #define GET_CONFIG_LEADER_PER_LINE 4
+#define GET_CONFIG_ALTREP_PER_LINE 8
 #define GET_CONFIG_STEPS_PER_LINE  8
 void sendCombosPairsMacros() {
   sendConfigNotification("COMBO_COUNT:" + String(numCombos), true);
@@ -3457,6 +3505,14 @@ void sendCombosPairsMacros() {
       out += String(i > o ? "," : "") + "[" + ls.action;
       for (int k = 0; k < LEADER_MAX_KEYS; k++) out += String(",") + ls.keys[k];
       out += "]";
+    }
+    sendConfigNotification(out + "]}", true);
+  }
+  sendConfigNotification("ALTREP_COUNT:" + String(numAltRepeats), true);
+  for (int o = 0; o < numAltRepeats; o += GET_CONFIG_ALTREP_PER_LINE) {
+    String out = "ALTREP_DATA:{\"o\":" + String(o) + ",\"e\":[";
+    for (int i = o; i < numAltRepeats && i < o + GET_CONFIG_ALTREP_PER_LINE; i++) {
+      out += String(i > o ? "," : "") + "[" + userAltRepeats[i].key + "," + userAltRepeats[i].alt + "]";
     }
     sendConfigNotification(out + "]}", true);
   }
@@ -3969,6 +4025,24 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd == "SAVE_OVERRIDES") {
     sendConfigNotification(saveKeyOverridesToNVS() ? "OK SAVE_OVERRIDES" : "ERR NVS SAVE_OVERRIDES");
 #endif
+  } else if (cmd == "CLEAR_ALT_REPEATS") {
+    numAltRepeats = 0;
+    sendConfigNotification("OK CLEAR_ALT_REPEATS");
+  } else if (cmd.startsWith("ADD_ALT_REPEAT ")) {
+    // ADD_ALT_REPEAT <Taste> <Alt>: Tastaturcodes 1..255, Taste != Alt; gerichtet; derselbe Auslöser nur einmal (der erste Eintrag gilt)
+    int key, alt;
+    char extra;
+    if (sscanf(cmd.c_str(), "ADD_ALT_REPEAT %d %d %c", &key, &alt, &extra) == 2 && numAltRepeats < MAX_ALT_REPEATS &&
+        key >= 1 && key <= 255 && alt >= 1 && alt <= 255 && key != alt && altRepeatCustom(userAltRepeats, numAltRepeats, (uint16_t)key) == 0) {
+      userAltRepeats[numAltRepeats].key = (uint8_t)key;
+      userAltRepeats[numAltRepeats].alt = (uint8_t)alt;
+      numAltRepeats++;
+      sendConfigNotification("OK ADD_ALT_REPEAT " + String(numAltRepeats - 1));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd == "SAVE_ALT_REPEATS") {
+    sendConfigNotification(saveAltRepeatsToNVS() ? "OK SAVE_ALT_REPEATS" : "ERR NVS SAVE_ALT_REPEATS");
   } else if (cmd == "CLEAR_LEADER") {
     leaderReset();
     numLeaderSeqs = 0;

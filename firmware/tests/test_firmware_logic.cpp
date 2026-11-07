@@ -8485,6 +8485,368 @@ TEST(test_auto_shift_command_nvs_and_info) {
   assert(autoShiftMs == 175);
 }
 
+
+// -----------------------------------------------------------------------------
+// HID-Reports: horizontales Scrollen (AC Pan) und macOS-Systemtasten (24-Bit-Consumer-Report)
+// -----------------------------------------------------------------------------
+// Liefert die Items ab dem Report-ID-Item `reportId` bis zum Ende der umgebenden Application-Collection
+// (Mouse: einschließlich der Physical-Collection). Items werden mit Präfix und Datenbytes zurückgegeben.
+static std::vector<uint8_t> descriptorSection(uint8_t reportId) {
+  std::vector<uint8_t> out;
+  const uint8_t *d = _compositeReportDescriptor;
+  size_t n = sizeof(_compositeReportDescriptor);
+  bool in = false;
+  int depth = 0;
+  for (size_t i = 0; i < n;) {
+    uint8_t b = d[i];
+    size_t len = (b & 0x03) == 3 ? 4 : (b & 0x03);
+    if (b == REPORT_ID(1) && d[i + 1] == reportId) in = true;
+    if (in && b == END_COLLECTION(0) && depth-- <= 0) break;
+    if (b == COLLECTION(1) && in) depth++;
+    if (in) out.insert(out.end(), d + i, d + i + 1 + len);
+    i += 1 + len;
+  }
+  return out;
+}
+
+static bool containsBytes(const std::vector<uint8_t> &hay, std::initializer_list<uint8_t> needle) {
+  return std::search(hay.begin(), hay.end(), needle.begin(), needle.end()) != hay.end();
+}
+
+TEST(test_consumer_descriptor_is_24_bit_with_new_system_usages) {
+  std::vector<uint8_t> sec = descriptorSection(MEDIA_KEYS_ID);
+  assert(!sec.empty());
+  // 20 Usages einzeln, dazu 4 Bit Padding: der Report ist 24 Bit breit
+  assert(containsBytes(sec, {REPORT_COUNT(1), 0x14}));
+  assert(containsBytes(sec, {REPORT_SIZE(1), 0x04}));
+  assert(MEDIA_REPORT_SIZE == 3);
+  assert(sizeof(MediaKeyReport) == 3);
+  // Item für Item zählen, damit Datenbytes nicht als Präfix gelten
+  size_t usages = 0;
+  for (size_t i = 0; i < sec.size();) {
+    uint8_t b = sec[i];
+    if (b == USAGE(1) || b == USAGE(2)) usages++;
+    i += 1 + ((b & 0x03) == 3 ? 4 : (b & 0x03));
+  }
+  assert(usages == 20);
+  // Reihenfolge = Bitposition: bisherige 16 Usages zuerst, danach die vier neuen
+  assert(containsBytes(sec, {USAGE(2), 0x8A, 0x01, USAGE(1), 0x6F, USAGE(1), 0x70,
+                              USAGE(2), 0x9F, 0x02, USAGE(2), 0xA2, 0x02, HIDINPUT(1), 0x02}));
+  // Das Padding folgt als Konstante
+  assert(containsBytes(sec, {REPORT_COUNT(1), 0x01, REPORT_SIZE(1), 0x04, HIDINPUT(1), 0x01}));
+}
+
+TEST(test_consumer_bits_of_new_keys_and_existing_keys_keep_theirs) {
+  // Bestehende Tasten behalten ihre Bits
+  assert(mediaBits(KEY_MEDIA_NEXT_TRACK) == 0x000001);
+  assert(mediaBits(KEY_MEDIA_PREVIOUS_TRACK) == 0x000002);
+  assert(mediaBits(KEY_MEDIA_STOP) == 0x000004);
+  assert(mediaBits(KEY_MEDIA_PLAY_PAUSE) == 0x000008);
+  assert(mediaBits(KEY_MEDIA_MUTE) == 0x000010);
+  assert(mediaBits(KEY_MEDIA_VOLUME_UP) == 0x000020);
+  assert(mediaBits(KEY_MEDIA_VOLUME_DOWN) == 0x000040);
+  assert(mediaBits(KEY_MEDIA_GLOBE) == 0x000400);
+  // Neue Tasten belegen die Bits 16..19
+  assert(mediaBits(KEY_MEDIA_BRIGHTNESS_UP) == 0x010000);
+  assert(mediaBits(KEY_MEDIA_BRIGHTNESS_DOWN) == 0x020000);
+  assert(mediaBits(KEY_MEDIA_MISSION_CONTROL) == 0x040000);
+  assert(mediaBits(KEY_MEDIA_LAUNCHPAD) == 0x080000);
+  // Report-Bytes: Byte 2 trägt die neuen Bits, die Padding-Bits bleiben 0
+  uint8_t r[MEDIA_REPORT_SIZE];
+  dactylBuildMediaReport(r, 0x0F0400 | 0xF00000);
+  assert(r[0] == 0x00 && r[1] == 0x04 && r[2] == 0x0F);
+  dactylBuildMediaReport(r, mediaBits(KEY_MEDIA_BRIGHTNESS_UP));
+  assert(r[0] == 0 && r[1] == 0 && r[2] == 0x01);
+  dactylBuildMediaReport(r, mediaBits(KEY_MEDIA_LAUNCHPAD));
+  assert(r[0] == 0 && r[1] == 0 && r[2] == 0x08);
+  // Die vier Tasten und Globe sind verschieden
+  uint32_t all = 0;
+  const MediaKeyReport *keys[] = {&KEY_MEDIA_NEXT_TRACK, &KEY_MEDIA_PREVIOUS_TRACK, &KEY_MEDIA_STOP, &KEY_MEDIA_PLAY_PAUSE,
+    &KEY_MEDIA_MUTE, &KEY_MEDIA_VOLUME_UP, &KEY_MEDIA_VOLUME_DOWN, &KEY_MEDIA_GLOBE, &KEY_MEDIA_BRIGHTNESS_UP,
+    &KEY_MEDIA_BRIGHTNESS_DOWN, &KEY_MEDIA_MISSION_CONTROL, &KEY_MEDIA_LAUNCHPAD};
+  for (const MediaKeyReport *k : keys) { assert((all & mediaBits(*k)) == 0); all |= mediaBits(*k); }
+}
+
+TEST(test_system_keys_send_their_consumer_report) {
+  resetState();
+  const struct { uint16_t act; const uint8_t *key; } cases[] = {
+    {ACT_MEDIA_BRIGHTNESS_UP, KEY_MEDIA_BRIGHTNESS_UP}, {ACT_MEDIA_BRIGHTNESS_DOWN, KEY_MEDIA_BRIGHTNESS_DOWN},
+    {ACT_MEDIA_MISSION_CONTROL, KEY_MEDIA_MISSION_CONTROL}, {ACT_MEDIA_LAUNCHPAD, KEY_MEDIA_LAUNCHPAD},
+  };
+  for (auto &cs : cases) {
+    bleKeyboard.releaseAll();
+    KEYMAP[0][2][1] = cs.act;
+    setMillis(1000);
+    onMatrixKeyChange(2, 1, true);
+    assert(bleKeyboard.writtenMediaKeys.size() == 1 && bleKeyboard.writtenMediaKeys[0] == mediaBits(cs.key));
+    onMatrixKeyChange(2, 1, false);
+  }
+  assert(ACT_MEDIA_BRIGHTNESS_UP == 0x128 && ACT_MEDIA_BRIGHTNESS_DOWN == 0x129);
+  assert(ACT_MEDIA_MISSION_CONTROL == 0x12A && ACT_MEDIA_LAUNCHPAD == 0x12B);
+  // Ohne Host sendet die Taste nichts
+  bleKeyboard.releaseAll();
+  bleKeyboard.connected = false;
+  KEYMAP[0][2][1] = ACT_MEDIA_LAUNCHPAD;
+  onMatrixKeyChange(2, 1, true);
+  onMatrixKeyChange(2, 1, false);
+  bleKeyboard.connected = true;
+  assert(bleKeyboard.writtenMediaKeys.empty());
+}
+
+TEST(test_key_pairs_accept_new_system_and_pan_codes) {
+  resetState();
+  assert(isValidKeyPairMemberCode(ACT_MEDIA_BRIGHTNESS_UP) && isValidKeyPairMemberCode(ACT_MEDIA_BRIGHTNESS_DOWN));
+  assert(isValidKeyPairMemberCode(ACT_MEDIA_MISSION_CONTROL) && isValidKeyPairMemberCode(ACT_MEDIA_LAUNCHPAD));
+  assert(isValidKeyPairMemberCode(ACT_MOUSE_WHEEL_LEFT) && isValidKeyPairMemberCode(ACT_MOUSE_WHEEL_RIGHT));
+  assert(!isValidKeyPairMemberCode(0x12C) && !isValidKeyPairMemberCode(0x13B));
+  handleConfigCommand("ADD_PAIR 129 298", false); // Shift + Mission Control (0x12A)
+  assert(mockChar.value == "OK ADD_PAIR 0");
+  handleConfigCommand("ADD_PAIR 299 296", false); // Launchpad (0x12B) + Helligkeit + (0x128)
+  assert(mockChar.value == "OK ADD_PAIR 1");
+  handleConfigCommand("ADD_PAIR 128 313", false); // Ctrl + Pan links (0x139)
+  assert(mockChar.value == "OK ADD_PAIR 2");
+  handleConfigCommand("ADD_PAIR 128 300", false); // 0x12C ist keine Aktion
+  assert(mockChar.value == "ERR ARGS ADD_PAIR 128 300");
+
+  KEYMAP[0][2][1] = ACT_KEY_PAIR_BASE + 0;
+  KEYMAP[0][2][2] = ACT_KEY_PAIR_BASE + 1;
+  KEYMAP[0][2][3] = ACT_KEY_PAIR_BASE + 2;
+  setMillis(1000);
+  onMatrixKeyChange(2, 1, true);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 129);
+  assert(bleKeyboard.pressedMediaKeys.size() == 1 && bleKeyboard.pressedMediaKeys[0] == mediaBits(KEY_MEDIA_MISSION_CONTROL));
+  onMatrixKeyChange(2, 1, false);
+  assert(bleKeyboard.pressedKeys.empty() && bleKeyboard.pressedMediaKeys.empty());
+
+  onMatrixKeyChange(2, 2, true);
+  assert(bleKeyboard.pressedMediaKeys.size() == 2);
+  assert(bleKeyboard.pressedMediaKeys[0] == mediaBits(KEY_MEDIA_LAUNCHPAD));
+  assert(bleKeyboard.pressedMediaKeys[1] == mediaBits(KEY_MEDIA_BRIGHTNESS_UP));
+  onMatrixKeyChange(2, 2, false);
+  assert(bleKeyboard.pressedMediaKeys.empty());
+
+  onMatrixKeyChange(2, 3, true);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 128);
+  assert(bleKeyboard.mousePans.size() == 1 && bleKeyboard.mousePans[0] == -1);
+  onMatrixKeyChange(2, 3, false);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_macros_accept_system_keys_as_steps) {
+  resetState();
+  // Consumer-Aktion: code 0, Aktion in ms
+  assert(isValidMacroStep(MACRO_STEP_TAP, 0, ACT_MEDIA_MISSION_CONTROL));
+  assert(isValidMacroStep(MACRO_STEP_DOWN, 0, ACT_MEDIA_BRIGHTNESS_UP));
+  assert(isValidMacroStep(MACRO_STEP_UP, 0, ACT_MEDIA_LAUNCHPAD));
+  assert(isValidMacroStep(MACRO_STEP_TAP, 0, ACT_MAC_GLOBE));
+  assert(!isValidMacroStep(MACRO_STEP_TAP, 0, 0));
+  assert(!isValidMacroStep(MACRO_STEP_TAP, 0, 0x12C));
+  assert(!isValidMacroStep(MACRO_STEP_TAP, 0, ACT_MOUSE_LEFT));
+  assert(!isValidMacroStep(MACRO_STEP_TAP, 97, ACT_MEDIA_LAUNCHPAD));  // Tastencode und Aktion nie zusammen
+  assert(!isValidMacroStep(MACRO_STEP_PAUSE, 0, 0));
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 0 298", false); // TAP Mission Control
+  assert(mockChar.value == "OK ADD_MACRO_STEP 0 0");
+  handleConfigCommand("ADD_MACRO_STEP 2 0 296", false); // DOWN Helligkeit +
+  handleConfigCommand("ADD_MACRO_STEP 4 0 20", false);
+  handleConfigCommand("ADD_MACRO_STEP 3 0 296", false); // UP Helligkeit +
+  assert(mockChar.value == "OK ADD_MACRO_STEP 0 3");
+  handleConfigCommand("ADD_MACRO_STEP 1 0 300", false);
+  assert(mockChar.value == "ERR ARGS ADD_MACRO_STEP 1 0 300");
+
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  onMatrixKeyChange(2, 1, true);
+  unsigned long t = 1000;
+  for (int i = 0; i < 40; i++) { t += 10; setMillis(t); processDeferredKeys(t); }
+  onMatrixKeyChange(2, 1, false);
+  // TAP: Druck und Loslassen; DOWN/UP desgleichen; nichts bleibt gedrückt
+  assert(bleKeyboard.pressedMediaKeys.empty());
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_macro_stop_releases_held_system_key) {
+  resetState();
+  handleConfigCommand("ADD_MACRO", false);
+  handleConfigCommand("ADD_MACRO_STEP 2 0 299", false); // DOWN Launchpad
+  handleConfigCommand("ADD_MACRO_STEP 4 0 1000", false);
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  onMatrixKeyChange(2, 1, true);
+  assert(macroRun.active);
+  assert(bleKeyboard.pressedMediaKeys.size() == 1 && bleKeyboard.pressedMediaKeys[0] == mediaBits(KEY_MEDIA_LAUNCHPAD));
+  stopMacro(true);
+  assert(bleKeyboard.pressedMediaKeys.empty());
+}
+
+TEST(test_mouse_descriptor_has_ac_pan_and_report_bytes) {
+  std::vector<uint8_t> sec = descriptorSection(MOUSE_ID);
+  assert(!sec.empty());
+  // AC Pan (0x0238) auf der Consumer-Seite, ein Byte relativ, nach X, Y und Wheel
+  assert(containsBytes(sec, {USAGE(1), 0x38, LOGICAL_MINIMUM(1), 0x81, LOGICAL_MAXIMUM(1), 0x7F, REPORT_SIZE(1), 0x08,
+                             REPORT_COUNT(1), 0x03, HIDINPUT(1), 0x06, USAGE_PAGE(1), 0x0C, USAGE(2), 0x38, 0x02,
+                             LOGICAL_MINIMUM(1), 0x81, LOGICAL_MAXIMUM(1), 0x7F, REPORT_SIZE(1), 0x08,
+                             REPORT_COUNT(1), 0x01, HIDINPUT(1), 0x06}));
+  assert(MOUSE_REPORT_SIZE == 5);
+  uint8_t m[MOUSE_REPORT_SIZE];
+  dactylBuildMouseReport(m, 0x05, 3, -4, 1, 0);
+  assert(m[0] == 0x05 && m[1] == 3 && m[2] == 0xFC && m[3] == 1 && m[4] == 0);
+  dactylBuildMouseReport(m, 0, 0, 0, 0, 1);  // Pan rechts
+  assert(m[0] == 0 && m[1] == 0 && m[2] == 0 && m[3] == 0 && m[4] == 1);
+  dactylBuildMouseReport(m, 0, 0, 0, 0, -1); // Pan links
+  assert(m[4] == 0xFF && m[3] == 0);
+}
+
+TEST(test_wheel_left_right_send_a_pan_step_at_press) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_WHEEL_LEFT;
+  KEYMAP[0][2][2] = ACT_MOUSE_WHEEL_RIGHT;
+  assert(ACT_MOUSE_WHEEL_LEFT == 0x139 && ACT_MOUSE_WHEEL_RIGHT == 0x13A);
+  setMillis(1000);
+  onMatrixKeyChange(2, 1, true);
+  assert(bleKeyboard.mousePans.size() == 1 && bleKeyboard.mousePans[0] == -1);
+  assert(bleKeyboard.mouseScrolls.empty());
+  onMatrixKeyChange(2, 1, false);
+  onMatrixKeyChange(2, 2, true);
+  assert(bleKeyboard.mousePans.size() == 2 && bleKeyboard.mousePans[1] == 1);
+  onMatrixKeyChange(2, 2, false);
+  assert(bleKeyboard.mousePans.size() == 2 && bleKeyboard.mouseScrolls.empty());
+}
+
+TEST(test_held_wheel_key_repeats_with_acceleration_and_stops_at_release) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_WHEEL_UP;
+  KEYMAP[0][2][2] = ACT_MOUSE_WHEEL_RIGHT;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  assert(bleKeyboard.mouseScrolls.size() == 1 && bleKeyboard.mouseScrolls[0] == 1);
+  // Vor Ablauf der Verzögerung wiederholt nichts
+  processDeferredKeys(1000 + WHEEL_REPEAT_DELAY_MS - 10);
+  assert(bleKeyboard.mouseScrolls.size() == 1);
+  processDeferredKeys(1000 + WHEEL_REPEAT_DELAY_MS);
+  assert(bleKeyboard.mouseScrolls.size() == 2 && bleKeyboard.mouseScrolls[1] == 1);
+  // Der Abstand zwischen zwei Schritten ist WHEEL_REPEAT_INTERVAL_MS
+  processDeferredKeys(1000 + WHEEL_REPEAT_DELAY_MS + WHEEL_REPEAT_INTERVAL_MS - 1);
+  assert(bleKeyboard.mouseScrolls.size() == 2);
+  processDeferredKeys(1000 + WHEEL_REPEAT_DELAY_MS + WHEEL_REPEAT_INTERVAL_MS);
+  assert(bleKeyboard.mouseScrolls.size() == 3);
+  // Der Schritt wächst mit der Haltezeit und endet bei WHEEL_MAX_STEP
+  processDeferredKeys(1000 + WHEEL_REPEAT_DELAY_MS + WHEEL_ACCEL_MS);
+  assert(bleKeyboard.mouseScrolls.back() == 2);
+  processDeferredKeys(1000 + WHEEL_REPEAT_DELAY_MS + 3 * WHEEL_ACCEL_MS);
+  assert(bleKeyboard.mouseScrolls.back() == 4);
+  processDeferredKeys(1000 + WHEEL_REPEAT_DELAY_MS + 100 * WHEEL_ACCEL_MS);
+  assert(bleKeyboard.mouseScrolls.back() == WHEEL_MAX_STEP);
+  assert(bleKeyboard.mousePans.empty());
+  // Loslassen stoppt sofort
+  applyMatrixKeyChange(2, 1, false, 60000);
+  size_t n = bleKeyboard.mouseScrolls.size();
+  processDeferredKeys(61000);
+  processDeferredKeys(62000);
+  assert(bleKeyboard.mouseScrolls.size() == n);
+  // Pan wiederholt wie das Mausrad, in seine Richtung
+  bleKeyboard.mousePans.clear();
+  setMillis(70000);
+  applyMatrixKeyChange(2, 2, true, 70000);
+  assert(bleKeyboard.mousePans.size() == 1 && bleKeyboard.mousePans[0] == 1);
+  processDeferredKeys(70000 + WHEEL_REPEAT_DELAY_MS);
+  processDeferredKeys(70000 + WHEEL_REPEAT_DELAY_MS + WHEEL_ACCEL_MS);
+  assert(bleKeyboard.mousePans.size() == 3 && bleKeyboard.mousePans[1] == 1 && bleKeyboard.mousePans[2] == 2);
+  applyMatrixKeyChange(2, 2, false, 71000);
+  n = bleKeyboard.mousePans.size();
+  processDeferredKeys(72000);
+  assert(bleKeyboard.mousePans.size() == n);
+}
+
+TEST(test_wheel_stepFor_is_monotonic_and_capped) {
+  assert(wheelStepFor(0) == 1);
+  assert(wheelStepFor(WHEEL_REPEAT_DELAY_MS) == 1);
+  int8_t last = 1;
+  for (unsigned long ms = 0; ms < 20000; ms += 50) {
+    int8_t st = wheelStepFor(ms);
+    assert(st >= last && st >= 1 && st <= WHEEL_MAX_STEP);
+    last = st;
+  }
+  assert(wheelStepFor(100000) == WHEEL_MAX_STEP);
+}
+
+TEST(test_held_wheel_key_pauses_without_host_and_restarts_acceleration) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_WHEEL_DOWN;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  processDeferredKeys(1000 + WHEEL_REPEAT_DELAY_MS + 5 * WHEEL_ACCEL_MS);
+  assert(bleKeyboard.mouseScrolls.back() == 6 * -1 || bleKeyboard.mouseScrolls.back() <= -1);
+  bleKeyboard.mouseScrolls.clear();
+  bleKeyboard.connected = false;
+  processDeferredKeys(10000);
+  processDeferredKeys(11000);
+  assert(bleKeyboard.mouseScrolls.empty());
+  bleKeyboard.connected = true;
+  processDeferredKeys(11010);
+  assert(bleKeyboard.mouseScrolls.empty()); // Verzögerung beginnt neu
+  processDeferredKeys(11010 + WHEEL_REPEAT_DELAY_MS + 50);
+  assert(bleKeyboard.mouseScrolls.size() == 1 && bleKeyboard.mouseScrolls[0] == -1);
+  applyMatrixKeyChange(2, 1, false, 12000);
+}
+
+TEST(test_wheel_hold_is_cleared_by_reset_and_by_combo) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_WHEEL_LEFT;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  assert(wheelActive[2][1]);
+  resetMouseMove();
+  assert(!wheelActive[2][1]);
+  bleKeyboard.mousePans.clear();
+  processDeferredKeys(5000);
+  assert(bleKeyboard.mousePans.empty());
+}
+
+TEST(test_wheel_and_system_keys_are_repeatable_and_have_alt_repeat) {
+  assert(isRepeatableAction(ACT_MOUSE_WHEEL_LEFT) && isRepeatableAction(ACT_MOUSE_WHEEL_RIGHT));
+  assert(isRepeatableAction(ACT_MEDIA_BRIGHTNESS_UP) && isRepeatableAction(ACT_MEDIA_LAUNCHPAD));
+  assert(altRepeatAction(ACT_MOUSE_WHEEL_LEFT) == ACT_MOUSE_WHEEL_RIGHT);
+  assert(altRepeatAction(ACT_MOUSE_WHEEL_RIGHT) == ACT_MOUSE_WHEEL_LEFT);
+  assert(altRepeatAction(ACT_MEDIA_BRIGHTNESS_UP) == ACT_MEDIA_BRIGHTNESS_DOWN);
+  assert(altRepeatAction(ACT_MEDIA_BRIGHTNESS_DOWN) == ACT_MEDIA_BRIGHTNESS_UP);
+  assert(altRepeatAction(ACT_MEDIA_MISSION_CONTROL) == 0);
+  resetState();
+  KEYMAP[0][2][1] = ACT_MEDIA_MISSION_CONTROL;
+  setMillis(1000);
+  onMatrixKeyChange(2, 1, true);
+  onMatrixKeyChange(2, 1, false);
+  bleKeyboard.writtenMediaKeys.clear();
+  repeatPress(lastRepeatAction);
+  assert(bleKeyboard.writtenMediaKeys.size() == 1 && bleKeyboard.writtenMediaKeys[0] == mediaBits(KEY_MEDIA_MISSION_CONTROL));
+  bleKeyboard.mousePans.clear();
+  repeatPress(ACT_MOUSE_WHEEL_LEFT);
+  assert(bleKeyboard.mousePans.size() == 1 && bleKeyboard.mousePans[0] == -1);
+}
+
+TEST(test_wheel_key_as_hold_action_repeats_and_stops_at_release) {
+  resetState();
+  KEYMAP[0][2][1] = 'j';
+  HOLDMAP[0][2][1] = ACT_MOUSE_WHEEL_RIGHT;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  processDeferredKeys(1000 + 400);              // über dem Tapping-Term: die Halte-Aktion greift
+  assert(!bleKeyboard.mousePans.empty() && bleKeyboard.mousePans[0] == 1);
+  size_t n = bleKeyboard.mousePans.size();
+  processDeferredKeys(1000 + 400 + WHEEL_REPEAT_DELAY_MS + WHEEL_REPEAT_INTERVAL_MS);
+  assert(bleKeyboard.mousePans.size() > n);
+  applyMatrixKeyChange(2, 1, false, 3000);
+  n = bleKeyboard.mousePans.size();
+  processDeferredKeys(4000);
+  assert(bleKeyboard.mousePans.size() == n);
+  assert(!wheelActive[2][1]);
+  assert(bleKeyboard.mouseScrolls.empty());
+}
+
+TEST(test_fw_version_increased_for_report_map_change) {
+  assert(DACTYL_FW_VERSION >= 28);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

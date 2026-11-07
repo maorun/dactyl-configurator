@@ -489,9 +489,14 @@ const ON_SCREEN_KEYBOARD_TABS = {
         { code: "MEDIA_STOP", label: "⏹ Stop" }
       ],
       [
+        { code: "MEDIA_BRIGHTNESS_UP", label: "🔆 Hell +" }, { code: "MEDIA_BRIGHTNESS_DOWN", label: "🔅 Hell -" },
+        { code: "MEDIA_MISSION_CONTROL", label: "🪟 Mission Ctrl" }, { code: "MEDIA_LAUNCHPAD", label: "🚀 Launchpad" }
+      ],
+      [
         { code: "MOUSE_LEFT", label: "🖱️ Linksklick" }, { code: "MOUSE_MIDDLE", label: "🖱️ Mittelklick" },
         { code: "MOUSE_RIGHT", label: "🖱️ Rechtsklick" },
-        { code: "MOUSE_WHEEL_UP", label: "🖱️ Rad Hoch" }, { code: "MOUSE_WHEEL_DOWN", label: "🖱️ Rad Runter" }
+        { code: "MOUSE_WHEEL_UP", label: "🖱️ Rad Hoch" }, { code: "MOUSE_WHEEL_DOWN", label: "🖱️ Rad Runter" },
+        { code: "MOUSE_WHEEL_LEFT", label: "🖱️ Rad ←" }, { code: "MOUSE_WHEEL_RIGHT", label: "🖱️ Rad →" }
       ],
       [
         { code: "MOUSE_LEFT_MOVE", label: "Maus ←" }, { code: "MOUSE_UP", label: "Maus ↑" },

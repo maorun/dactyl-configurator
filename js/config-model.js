@@ -280,11 +280,17 @@ function normalizeKeyCell(cell) {
   };
 }
 
-// Ein Tastenpaar-Mitglied ist eine normale Taste, ein Modifier, eine Mediataste, Mac Globe oder eine Mausaktion
+// Consumer-Aktion (Media, Globe, Helligkeit, Mission Control, Launchpad): Aktionscode 0x120..0x12B
+function isConsumerActionNumber(n) {
+  return Number.isInteger(n) && n >= 0x120 && n <= 0x12B;
+}
+
+// Ein Tastenpaar-Mitglied ist eine normale Taste, ein Modifier, eine Consumer-Taste (Media, Globe, Systemtasten)
+// oder eine Mausaktion (Klick, Rad, Pan)
 function isKeyPairMember(code) {
   if (typeof code !== "string" || pairIndexFromCode(code) >= 0 || macroIndexFromCode(code) >= 0) return false;
   const n = actionCodeToNumeric(code);
-  return (n >= 1 && n <= 0xFF) || (n >= 0x120 && n <= 0x127) || (n >= 0x130 && n <= 0x134);
+  return (n >= 1 && n <= 0xFF) || isConsumerActionNumber(n) || (n >= 0x130 && n <= 0x134) || n === 0x139 || n === 0x13A;
 }
 
 // Eine Standard-Taste oder ein Modifier (Code 1..255, für Makro-Schritte und Überschreibungen)
@@ -457,11 +463,30 @@ function revertResolvedPairs(pairs, layers, firstIdx, count, sequences) {
   return removed;
 }
 
-// Makro-Schritt wie in server.py/Firmware: tap/down/up mit Tastatur-Code 1..255, pause mit ms 1..MACRO_MAX_PAUSE_MS
+// Makro-Schritt wie in server.py/Firmware: tap/down/up mit Tastatur-Code 1..255 oder einer Consumer-Taste (Media, Globe,
+// Systemtasten), pause mit ms 1..MACRO_MAX_PAUSE_MS
 function isValidMacroStep(step) {
   if (!step || typeof step !== "object" || !Object.prototype.hasOwnProperty.call(MACRO_STEP_TYPES, step.type)) return false;
   if (step.type === "pause") return Number.isInteger(step.ms) && step.ms >= 1 && step.ms <= MACRO_MAX_PAUSE_MS;
-  return isStandardKeyOrModifier(step.code);
+  return isStandardKeyOrModifier(step.code) || isMacroConsumerCode(step.code);
+}
+
+// Eine Consumer-Taste als Makro-Schritt (kein Pair-, Makro- oder Layer-Code)
+function isMacroConsumerCode(code) {
+  if (typeof code !== "string" || pairIndexFromCode(code) >= 0 || macroIndexFromCode(code) >= 0) return false;
+  return isConsumerActionNumber(actionCodeToNumeric(code));
+}
+
+// Firmware-Triple [typ, code, ms] eines tap/down/up-Schritts: eine Consumer-Taste steht als code 0 mit der Aktion in ms
+function macroStepTuple(step) {
+  if (step.type === "pause") return [MACRO_STEP_TYPES.pause, 0, step.ms];
+  const n = actionCodeToNumeric(step.code);
+  return isConsumerActionNumber(n) ? [MACRO_STEP_TYPES[step.type], 0, n] : [MACRO_STEP_TYPES[step.type], n, 0];
+}
+
+// Der Aktionscode eines Triples aus dem Gerät (Umkehrung von macroStepTuple)
+function macroTupleActionNumber(st) {
+  return st[1] === 0 ? st[2] : st[1];
 }
 
 function isValidMacro(macro) {
@@ -540,9 +565,7 @@ function normalizeMacroStep(step) {
 
 // Firmware-Befehle eines Makros: ADD_MACRO, dann je Schritt ADD_MACRO_STEP <typ> <code> <ms>
 function macroCommands(macro) {
-  return ["ADD_MACRO", ...macro.steps.map(st => st.type === "pause"
-    ? `ADD_MACRO_STEP ${MACRO_STEP_TYPES.pause} 0 ${st.ms}`
-    : `ADD_MACRO_STEP ${MACRO_STEP_TYPES[st.type]} ${actionCodeToNumeric(st.code)} 0`)];
+  return ["ADD_MACRO", ...macro.steps.map(st => `ADD_MACRO_STEP ${macroStepTuple(st).join(" ")}`)];
 }
 
 // Zielindex beim Speichern aus dem Makro-Editor: -1 = neues Makro (wird angehängt), sonst ein vorhandener Index.
@@ -1151,9 +1174,7 @@ function localLeaderTuples(cfg) {
 }
 
 function localMacroSteps(cfg) {
-  return (cfg.macros || []).slice(0, MAX_MACROS).map(m => m.steps.map(st => st.type === "pause"
-    ? [MACRO_STEP_TYPES.pause, 0, st.ms]
-    : [MACRO_STEP_TYPES[st.type], actionCodeToNumeric(st.code), 0]));
+  return (cfg.macros || []).slice(0, MAX_MACROS).map(m => m.steps.map(macroStepTuple));
 }
 
 const MACRO_STEP_NAMES = { 1: "Tippen", 2: "Drücken", 3: "Loslassen", 4: "Pause" };
@@ -1366,7 +1387,7 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
     macros: Array.from({ length: snapshot.counts.macros }, (_, i) => ({
       name: `Makro ${i}`,
       steps: snapshot.macros[i].map(st => st[0] === MACRO_STEP_TYPES.pause
-        ? { type: "pause", ms: st[2] } : { type: stepNames[st[0]], code: tapOf(st[1]) })
+        ? { type: "pause", ms: st[2] } : { type: stepNames[st[0]], code: tapOf(macroTupleActionNumber(st)) })
     })),
     settings: settingsFromDeviceInfo(snapshot.info, baseCfg && baseCfg.settings)
   };

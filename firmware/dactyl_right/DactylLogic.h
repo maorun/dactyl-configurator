@@ -527,6 +527,44 @@ bool isConfigComboSuppressed(uint8_t r, uint8_t c) {
 bool isComboCandidateKey(uint8_t r, uint8_t c);
 bool wasComboRecentlyActive(uint8_t r, uint8_t c);
 
+// Consumer-Aktion (Media, Globe, Helligkeit, Mission Control, Launchpad) und Maus-Rad-Aktion
+inline bool isMediaAction(uint16_t a) { return a >= ACT_MEDIA_FIRST && a <= ACT_MEDIA_LAST; }
+inline bool isWheelPanAction(uint16_t a) { return a == ACT_MOUSE_WHEEL_LEFT || a == ACT_MOUSE_WHEEL_RIGHT; }
+// Klick-, Rad- und Pan-Aktionen der Maus (ohne Bewegung)
+inline bool isMouseKeyAction(uint16_t a) {
+  return (a >= ACT_MOUSE_LEFT && a <= ACT_MOUSE_WHEEL_DOWN) || isWheelPanAction(a);
+}
+inline bool isWheelAction(uint16_t a) {
+  return a == ACT_MOUSE_WHEEL_UP || a == ACT_MOUSE_WHEEL_DOWN || isWheelPanAction(a);
+}
+
+// Der Consumer-Report zur Aktion oder nullptr
+const uint8_t *mediaKeyForAction(uint16_t a) {
+  switch (a) {
+    case ACT_MEDIA_PLAY_PAUSE: return KEY_MEDIA_PLAY_PAUSE;
+    case ACT_MEDIA_MUTE: return KEY_MEDIA_MUTE;
+    case ACT_MEDIA_VOLUME_UP: return KEY_MEDIA_VOLUME_UP;
+    case ACT_MEDIA_VOLUME_DOWN: return KEY_MEDIA_VOLUME_DOWN;
+    case ACT_MEDIA_NEXT_TRACK: return KEY_MEDIA_NEXT_TRACK;
+    case ACT_MEDIA_PREVIOUS_TRACK: return KEY_MEDIA_PREVIOUS_TRACK;
+    case ACT_MEDIA_STOP: return KEY_MEDIA_STOP;
+    case ACT_MAC_GLOBE: return KEY_MEDIA_GLOBE;
+    case ACT_MEDIA_BRIGHTNESS_UP: return KEY_MEDIA_BRIGHTNESS_UP;
+    case ACT_MEDIA_BRIGHTNESS_DOWN: return KEY_MEDIA_BRIGHTNESS_DOWN;
+    case ACT_MEDIA_MISSION_CONTROL: return KEY_MEDIA_MISSION_CONTROL;
+    case ACT_MEDIA_LAUNCHPAD: return KEY_MEDIA_LAUNCHPAD;
+    default: return nullptr;
+  }
+}
+
+// Ein Schritt in Richtung der Rad-Aktion (Hoch/Rechts positiv)
+void wheelSend(uint16_t a, int8_t step) {
+  if (a == ACT_MOUSE_WHEEL_UP) bleKeyboard.mouseScroll(step);
+  else if (a == ACT_MOUSE_WHEEL_DOWN) bleKeyboard.mouseScroll(-step);
+  else if (a == ACT_MOUSE_WHEEL_RIGHT) bleKeyboard.mousePan(step);
+  else if (a == ACT_MOUSE_WHEEL_LEFT) bleKeyboard.mousePan(-step);
+}
+
 // -----------------------------------------------------------------------------
 // Tastenpaare (ACT_KEY_PAIR_BASE + Index): eine Taste drückt zwei Tasten gleichzeitig
 // -----------------------------------------------------------------------------
@@ -536,8 +574,7 @@ bool isKeyPairAction(uint16_t action) {
 
 bool isValidKeyPairMemberCode(uint16_t code) {
   return (code >= 1 && code <= 0xFF) ||
-         (code >= ACT_MEDIA_PLAY_PAUSE && code <= ACT_MAC_GLOBE) ||
-         (code >= ACT_MOUSE_LEFT && code <= ACT_MOUSE_WHEEL_DOWN);
+         isMediaAction(code) || isMouseKeyAction(code);
 }
 
 // Liefert das Paar zur Aktion oder nullptr, wenn der Index nicht (mehr) belegt ist
@@ -551,42 +588,25 @@ const KeyPair* keyPairForAction(uint16_t action) {
 void pressKeyPairMember(uint16_t code) {
   if (code >= 1 && code <= 0xFF) {
     bleKeyboard.press((uint8_t)code);
-  } else if (code == ACT_MAC_GLOBE) {
-    bleKeyboard.press(KEY_MEDIA_GLOBE);
-  } else if (code >= 0x120 && code <= 0x126) {
-    if (code == ACT_MEDIA_PLAY_PAUSE) bleKeyboard.press(KEY_MEDIA_PLAY_PAUSE);
-    else if (code == ACT_MEDIA_MUTE) bleKeyboard.press(KEY_MEDIA_MUTE);
-    else if (code == ACT_MEDIA_VOLUME_UP) bleKeyboard.press(KEY_MEDIA_VOLUME_UP);
-    else if (code == ACT_MEDIA_VOLUME_DOWN) bleKeyboard.press(KEY_MEDIA_VOLUME_DOWN);
-    else if (code == ACT_MEDIA_NEXT_TRACK) bleKeyboard.press(KEY_MEDIA_NEXT_TRACK);
-    else if (code == ACT_MEDIA_PREVIOUS_TRACK) bleKeyboard.press(KEY_MEDIA_PREVIOUS_TRACK);
-    else if (code == ACT_MEDIA_STOP) bleKeyboard.press(KEY_MEDIA_STOP);
-  } else if (code >= 0x130 && code <= 0x134) {
+  } else if (const uint8_t *media = mediaKeyForAction(code)) {
+    bleKeyboard.press(media);
+  } else if (isMouseKeyAction(code)) {
     if (code == ACT_MOUSE_LEFT) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
     else if (code == ACT_MOUSE_RIGHT) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
     else if (code == ACT_MOUSE_MIDDLE) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
-    else if (code == ACT_MOUSE_WHEEL_UP) bleKeyboard.mouseScroll(1);
-    else if (code == ACT_MOUSE_WHEEL_DOWN) bleKeyboard.mouseScroll(-1);
+    else wheelSend(code, 1);
   }
 }
 
 void releaseKeyPairMember(uint16_t code) {
   if (code >= 1 && code <= 0xFF) {
     bleKeyboard.release((uint8_t)code);
-  } else if (code == ACT_MAC_GLOBE) {
-    bleKeyboard.release(KEY_MEDIA_GLOBE);
-  } else if (code >= 0x120 && code <= 0x126) {
-    if (code == ACT_MEDIA_PLAY_PAUSE) bleKeyboard.release(KEY_MEDIA_PLAY_PAUSE);
-    else if (code == ACT_MEDIA_MUTE) bleKeyboard.release(KEY_MEDIA_MUTE);
-    else if (code == ACT_MEDIA_VOLUME_UP) bleKeyboard.release(KEY_MEDIA_VOLUME_UP);
-    else if (code == ACT_MEDIA_VOLUME_DOWN) bleKeyboard.release(KEY_MEDIA_VOLUME_DOWN);
-    else if (code == ACT_MEDIA_NEXT_TRACK) bleKeyboard.release(KEY_MEDIA_NEXT_TRACK);
-    else if (code == ACT_MEDIA_PREVIOUS_TRACK) bleKeyboard.release(KEY_MEDIA_PREVIOUS_TRACK);
-    else if (code == ACT_MEDIA_STOP) bleKeyboard.release(KEY_MEDIA_STOP);
-  } else if (code >= 0x130 && code <= 0x132) {
+  } else if (const uint8_t *media = mediaKeyForAction(code)) {
+    bleKeyboard.release(media);
+  } else if (code >= ACT_MOUSE_LEFT && code <= ACT_MOUSE_MIDDLE) {
     if (code == ACT_MOUSE_LEFT) bleKeyboard.mouseRelease(MOUSE_BUTTON_LEFT);
     else if (code == ACT_MOUSE_RIGHT) bleKeyboard.mouseRelease(MOUSE_BUTTON_RIGHT);
-    else if (code == ACT_MOUSE_MIDDLE) bleKeyboard.mouseRelease(MOUSE_BUTTON_MIDDLE);
+    else bleKeyboard.mouseRelease(MOUSE_BUTTON_MIDDLE);
   }
 }
 
@@ -738,9 +758,9 @@ struct MacroRun {
   bool active;
   uint8_t index;
   uint8_t step;            // nächster Schritt in userMacros[index]
-  uint8_t tapCode;         // != 0: TAP gedrückt, sein Loslassen steht aus
+  uint16_t tapCode;        // != 0: TAP gedrückt, sein Loslassen steht aus (Tastencode 1..255 oder Consumer-Aktion)
   uint8_t numHeld;
-  uint8_t held[MAX_MACRO_STEPS]; // mit DOWN gedrückte Codes, das Makro-Ende lässt sie los
+  uint16_t held[MAX_MACRO_STEPS]; // mit DOWN gedrückte Codes, das Makro-Ende lässt sie los
   unsigned long stepTime;  // Zeitpunkt des letzten Schritts
   unsigned long waitMs;    // Wartezeit ab stepTime bis zum nächsten Schritt
 };
@@ -750,9 +770,11 @@ bool isMacroAction(uint16_t action) {
   return action >= ACT_MACRO_BASE && action < ACT_MACRO_BASE + MAX_MACROS;
 }
 
-// true, wenn der Schritt gültig ist: TAP/DOWN/UP mit Code 1..255 und ms 0, PAUSE mit Code 0 und ms 1..MACRO_MAX_PAUSE_MS
+// true, wenn der Schritt gültig ist: TAP/DOWN/UP mit Code 1..255 und ms 0 oder mit Code 0 und einer Consumer-Aktion
+// (Media, Globe, Helligkeit, Mission Control, Launchpad) in ms; PAUSE mit Code 0 und ms 1..MACRO_MAX_PAUSE_MS
 bool isValidMacroStep(int type, int code, int ms) {
   if (type == MACRO_STEP_TAP || type == MACRO_STEP_DOWN || type == MACRO_STEP_UP) {
+    if (code == 0) return ms >= ACT_MEDIA_FIRST && ms <= ACT_MEDIA_LAST && mediaKeyForAction((uint16_t)ms) != nullptr;
     return code >= 1 && code <= 0xFF && ms == 0;
   }
   if (type == MACRO_STEP_PAUSE) return code == 0 && ms >= 1 && ms <= MACRO_MAX_PAUSE_MS;
@@ -767,13 +789,26 @@ int macroIndexForAction(uint16_t action) {
   return idx;
 }
 
+// Der Code, den ein Makro-Schritt drückt: Tastencode 1..255 oder die Consumer-Aktion
+uint16_t macroStepCode(const MacroStep &st) { return st.code ? st.code : st.ms; }
+
+void macroPressCode(uint16_t code) {
+  if (code <= 0xFF) bleKeyboard.press((uint8_t)code);
+  else if (const uint8_t *media = mediaKeyForAction(code)) bleKeyboard.press(media);
+}
+
+void macroReleaseCode(uint16_t code) {
+  if (code <= 0xFF) bleKeyboard.release((uint8_t)code);
+  else if (const uint8_t *media = mediaKeyForAction(code)) bleKeyboard.release(media);
+}
+
 // Beendet ein laufendes Makro. releaseKeys: offene Codes loslassen; false, wenn der Aufrufer danach
 // ohnehin releaseAll() sendet.
 void stopMacro(bool releaseKeys) {
   if (!macroRun.active) return;
   if (releaseKeys && !isConfigMode && bleKeyboard.isConnected()) {
-    if (macroRun.tapCode) bleKeyboard.release(macroRun.tapCode);
-    while (macroRun.numHeld > 0) bleKeyboard.release(macroRun.held[--macroRun.numHeld]);
+    if (macroRun.tapCode) macroReleaseCode(macroRun.tapCode);
+    while (macroRun.numHeld > 0) macroReleaseCode(macroRun.held[--macroRun.numHeld]);
   }
   macroRun = {};
 }
@@ -877,11 +912,11 @@ void macroTick(unsigned long now) {
   macroRun.waitMs = MACRO_STEP_GAP_MS;
   bool pausing = false;
   if (macroRun.tapCode) {
-    bleKeyboard.release(macroRun.tapCode);
+    macroReleaseCode(macroRun.tapCode);
     macroRun.tapCode = 0;
   } else if (macroRun.step >= macroLengthOf(macroRun.index)) {
     // Ende: mit DOWN gedrückte Codes in umgekehrter Reihenfolge loslassen, einen pro Aufruf
-    if (macroRun.numHeld > 0) bleKeyboard.release(macroRun.held[--macroRun.numHeld]);
+    if (macroRun.numHeld > 0) macroReleaseCode(macroRun.held[--macroRun.numHeld]);
   } else {
     pausing = macroRunStep(macroStepOf(macroRun.index, macroRun.step++));
   }
@@ -899,18 +934,19 @@ bool macroRunStep(const MacroStep &st) {
     macroRun.waitMs = 0;
     return false;
   }
+  uint16_t code = macroStepCode(st);
   if (st.type == MACRO_STEP_TAP) {
-    bleKeyboard.press(st.code);
-    macroRun.tapCode = st.code;
+    macroPressCode(code);
+    macroRun.tapCode = code;
   } else if (st.type == MACRO_STEP_DOWN) {
     bool already = false;
-    for (uint8_t i = 0; i < macroRun.numHeld; i++) already = already || macroRun.held[i] == st.code;
-    bleKeyboard.press(st.code);
-    if (!already && macroRun.numHeld < MAX_MACRO_STEPS) macroRun.held[macroRun.numHeld++] = st.code;
+    for (uint8_t i = 0; i < macroRun.numHeld; i++) already = already || macroRun.held[i] == code;
+    macroPressCode(code);
+    if (!already && macroRun.numHeld < MAX_MACRO_STEPS) macroRun.held[macroRun.numHeld++] = code;
   } else if (st.type == MACRO_STEP_UP) {
-    bleKeyboard.release(st.code);
+    macroReleaseCode(code);
     for (uint8_t i = 0; i < macroRun.numHeld; i++) {
-      if (macroRun.held[i] != st.code) continue;
+      if (macroRun.held[i] != code) continue;
       for (uint8_t j = i + 1; j < macroRun.numHeld; j++) macroRun.held[j - 1] = macroRun.held[j];
       macroRun.numHeld--;
       break;
@@ -949,8 +985,54 @@ void mouseMoveStart(uint8_t r, uint8_t c, uint16_t action, unsigned long now) {
 
 void mouseMoveStop(uint8_t r, uint8_t c) { mouseMoveActive[r][c] = false; }
 
+// Gehaltene Rad-Taste (Hoch, Runter, Links, Rechts): der erste Schritt geht beim Drücken, nach WHEEL_REPEAT_DELAY_MS
+// folgt alle WHEEL_REPEAT_INTERVAL_MS ein Schritt. Der Schritt wächst mit der Haltezeit von 1 bis WHEEL_MAX_STEP.
+#define WHEEL_REPEAT_DELAY_MS    300
+#define WHEEL_REPEAT_INTERVAL_MS 40
+#define WHEEL_ACCEL_MS           400
+#define WHEEL_MAX_STEP           8
+
+bool wheelActive[NUM_ROWS][NUM_COLS] = {};
+uint16_t wheelAction[NUM_ROWS][NUM_COLS] = {};
+unsigned long wheelStartMs[NUM_ROWS][NUM_COLS] = {};
+unsigned long wheelLastMs[NUM_ROWS][NUM_COLS] = {};
+
+void wheelHoldStart(uint8_t r, uint8_t c, uint16_t action, unsigned long now) {
+  if (wheelActive[r][c]) return;
+  wheelActive[r][c] = true;
+  wheelAction[r][c] = action;
+  wheelStartMs[r][c] = now;
+  wheelLastMs[r][c] = now;
+}
+
+void wheelHoldStop(uint8_t r, uint8_t c) { wheelActive[r][c] = false; }
+
+int8_t wheelStepFor(unsigned long heldMs) {
+  unsigned long extra = heldMs > WHEEL_REPEAT_DELAY_MS ? heldMs - WHEEL_REPEAT_DELAY_MS : 0;
+  unsigned long step = 1 + extra / WHEEL_ACCEL_MS;
+  return (int8_t)(step > WHEEL_MAX_STEP ? WHEEL_MAX_STEP : step);
+}
+
+void wheelHoldTick(unsigned long now) {
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (!wheelActive[r][c]) continue;
+      // Ohne Host oder im Config Mode ruht die Taste; die Beschleunigung beginnt danach neu
+      if (isConfigMode || !bleKeyboard.isConnected()) {
+        wheelStartMs[r][c] = now;
+        wheelLastMs[r][c] = now;
+        continue;
+      }
+      unsigned long held = (unsigned long)(now - wheelStartMs[r][c]);
+      if (held < WHEEL_REPEAT_DELAY_MS || (unsigned long)(now - wheelLastMs[r][c]) < WHEEL_REPEAT_INTERVAL_MS) continue;
+      wheelLastMs[r][c] = now;
+      wheelSend(wheelAction[r][c], wheelStepFor(held));
+    }
+  }
+}
+
 void resetMouseMove() {
-  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) mouseMoveActive[r][c] = false;
+  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) { mouseMoveActive[r][c] = false; wheelActive[r][c] = false; }
 }
 
 int8_t mouseMoveStepFor(unsigned long heldMs) {
@@ -1009,8 +1091,7 @@ bool repeatRemote[NUM_ROWS][NUM_COLS] = {};
 bool isRepeatableAction(uint16_t a) {
   if (a == 0 || isRepeatKeyAction(a)) return false;
   if (a <= 0xFF) return a < KEY_LEFT_CTRL || a > KEY_RIGHT_GUI;
-  if (a >= 0x120 && a <= 0x127) return true;
-  if (a >= 0x130 && a <= 0x134) return true;
+  if (isMediaAction(a) || isMouseKeyAction(a)) return true;
   return isKeyPairAction(a) || isMacroAction(a) || isUmlautAction(a) || isOneShotAction(a) || a == ACT_CAPS_WORD;
 }
 
@@ -1025,21 +1106,14 @@ void recordRepeatAction(uint16_t a) {
 // Die Wiederholung drücken. Aufrufer prüfen Host und Config Mode nicht: hier wird beides geprüft.
 void repeatPress(uint16_t a) {
   if (isConfigMode || !bleKeyboard.isConnected()) return;
-  if (a >= 0x120 && a <= 0x127) {
-    if (a == 0x120) bleKeyboard.write(KEY_MEDIA_PLAY_PAUSE);
-    else if (a == 0x121) bleKeyboard.write(KEY_MEDIA_MUTE);
-    else if (a == 0x122) bleKeyboard.write(KEY_MEDIA_VOLUME_UP);
-    else if (a == 0x123) bleKeyboard.write(KEY_MEDIA_VOLUME_DOWN);
-    else if (a == 0x124) bleKeyboard.write(KEY_MEDIA_NEXT_TRACK);
-    else if (a == 0x125) bleKeyboard.write(KEY_MEDIA_PREVIOUS_TRACK);
-    else if (a == 0x126) bleKeyboard.write(KEY_MEDIA_STOP);
-    else bleKeyboard.press(KEY_MEDIA_GLOBE);
-  } else if (a >= 0x130 && a <= 0x134) {
+  if (isMediaAction(a)) {
+    if (a == ACT_MAC_GLOBE) bleKeyboard.press(KEY_MEDIA_GLOBE);
+    else bleKeyboard.write(mediaKeyForAction(a));
+  } else if (isMouseKeyAction(a)) {
     if (a == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
     else if (a == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
     else if (a == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
-    else if (a == 0x133) bleKeyboard.mouseScroll(1);
-    else bleKeyboard.mouseScroll(-1);
+    else wheelSend(a, 1);
   } else if (isKeyPairAction(a)) {
     pressKeyPair(a);
   } else if (isMacroAction(a)) {
@@ -1252,29 +1326,27 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"LAYER_LOCK\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, action, currentLayer, newL);
     sendConfigNotification(String(buf));
     Serial.printf("LAYER: LAYER_LOCK -> Layer %d\n", newL);
-  } else if (action >= 0x120 && action <= 0x127) {
-    const char* mediaName = "MEDIA";
+  } else if (isMediaAction(action)) {
+    static const char* const mediaNames[] = {"Play/Pause", "Mute", "Vol+", "Vol-", "Next", "Prev", "Stop", "Mac Globe (Fn)",
+                                             "Helligkeit +", "Helligkeit -", "Mission Control", "Launchpad"};
+    const char* mediaName = mediaNames[action - ACT_MEDIA_FIRST];
     if (!isConfigMode && bleKeyboard.isConnected()) {
-      if (action == 0x120) { mediaName = "Play/Pause"; bleKeyboard.write(KEY_MEDIA_PLAY_PAUSE); }
-      else if (action == 0x121) { mediaName = "Mute"; bleKeyboard.write(KEY_MEDIA_MUTE); }
-      else if (action == 0x122) { mediaName = "Vol+"; bleKeyboard.write(KEY_MEDIA_VOLUME_UP); }
-      else if (action == 0x123) { mediaName = "Vol-"; bleKeyboard.write(KEY_MEDIA_VOLUME_DOWN); }
-      else if (action == 0x124) { mediaName = "Next"; bleKeyboard.write(KEY_MEDIA_NEXT_TRACK); }
-      else if (action == 0x125) { mediaName = "Prev"; bleKeyboard.write(KEY_MEDIA_PREVIOUS_TRACK); }
-      else if (action == 0x126) { mediaName = "Stop"; bleKeyboard.write(KEY_MEDIA_STOP); }
-      else if (action == 0x127) { mediaName = "Mac Globe (Fn)"; bleKeyboard.press(KEY_MEDIA_GLOBE); }
+      if (action == ACT_MAC_GLOBE) bleKeyboard.press(KEY_MEDIA_GLOBE);
+      else bleKeyboard.write(mediaKeyForAction(action));
     }
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, mediaName, action, currentLayer);
     sendConfigNotification(String(buf));
     Serial.printf("Media-Taste gedrückt: [R%d, C%d] (L%d) -> %s (0x%02X)\n", r, c, currentLayer, mediaName, action);
-  } else if (action >= 0x130 && action <= 0x134) {
+  } else if (isMouseKeyAction(action)) {
     const char* mouseName = "MOUSE";
     if (action == 0x130) mouseName = "Linksklick";
     else if (action == 0x131) mouseName = "Rechtsklick";
     else if (action == 0x132) mouseName = "Mittelklick";
     else if (action == 0x133) mouseName = "Mausrad Hoch";
     else if (action == 0x134) mouseName = "Mausrad Runter";
+    else if (action == ACT_MOUSE_WHEEL_LEFT) mouseName = "Mausrad Links";
+    else if (action == ACT_MOUSE_WHEEL_RIGHT) mouseName = "Mausrad Rechts";
 
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, mouseName, action, currentLayer);
@@ -1286,8 +1358,7 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
         if (action == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
         else if (action == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
         else if (action == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
-        else if (action == 0x133) bleKeyboard.mouseScroll(1);
-        else if (action == 0x134) bleKeyboard.mouseScroll(-1);
+        else { wheelSend(action, 1); wheelHoldStart(r, c, action, millis()); }
         keySentToHost[r][c] = true;
       }
     }
@@ -1453,11 +1524,13 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
     Serial.printf("LAYER: MO(%d) gelöst -> Layer %d\n", l, getActiveLayer());
   } else if (isOslAction(action)) {
     oslRelease(action);
-  } else if (action >= 0x120 && action <= 0x127) {
-    if (!isConfigMode && action == 0x127 && bleKeyboard.isConnected()) {
+  } else if (isMediaAction(action)) {
+    if (!isConfigMode && action == ACT_MAC_GLOBE && bleKeyboard.isConnected()) {
       bleKeyboard.release(KEY_MEDIA_GLOBE);
     }
-  } else if (action >= 0x130 && action <= 0x134) {
+  } else if (isMouseKeyAction(action)) {
+    // Das Halten einer Rad-Taste endet beim Loslassen, auch nach Host-Verlust
+    wheelHoldStop(r, c);
     if (!isConfigMode && bleKeyboard.isConnected()) {
       if (keySentToHost[r][c]) {
         if (action == 0x130) bleKeyboard.mouseRelease(MOUSE_BUTTON_LEFT);
@@ -1469,8 +1542,7 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
         if (action == 0x130) bleKeyboard.mouseClick(MOUSE_BUTTON_LEFT);
         else if (action == 0x131) bleKeyboard.mouseClick(MOUSE_BUTTON_RIGHT);
         else if (action == 0x132) bleKeyboard.mouseClick(MOUSE_BUTTON_MIDDLE);
-        else if (action == 0x133) bleKeyboard.mouseScroll(1);
-        else if (action == 0x134) bleKeyboard.mouseScroll(-1);
+        else wheelSend(action, 1);
       }
     }
   } else if (isMouseMoveAction(action)) {
@@ -1913,6 +1985,10 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
       else bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
       keySentToHost[r][c] = true;
+    } else if (isWheelAction(act)) {
+      wheelSend(act, 1);
+      wheelHoldStart(r, c, act, millis());
+      keySentToHost[r][c] = true;
     } else if (isMouseMoveAction(act)) {
       mouseMoveStart(r, c, act, millis());
       keySentToHost[r][c] = true;
@@ -2302,12 +2378,11 @@ void processDeferredKeys(unsigned long now) {
               if (capsWordBuffered[r][c]) bleKeyboard.capsWordToggle();
               capsWordBuffered[r][c] = false;
               keySentToHost[r][c] = true;
-            } else if (act >= 0x130 && act <= 0x134) {
+            } else if (isMouseKeyAction(act)) {
               if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
               else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
               else if (act == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);
-              else if (act == 0x133) bleKeyboard.mouseScroll(1);
-              else if (act == 0x134) bleKeyboard.mouseScroll(-1);
+              else { wheelSend(act, 1); wheelHoldStart(r, c, act, now); }
               keySentToHost[r][c] = true;
             } else if (isMouseMoveAction(act)) {
               mouseMoveStart(r, c, act, now);
@@ -2320,6 +2395,7 @@ void processDeferredKeys(unsigned long now) {
   }
   macroTick(now);
   mouseMoveTick(now);
+  wheelHoldTick(now);
 }
 
 // -----------------------------------------------------------------------------
@@ -3617,7 +3693,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
     numKeyPairs = 0;
     sendConfigNotification("OK CLEAR_PAIRS");
   } else if (cmd.startsWith("ADD_PAIR ")) {
-    // ADD_PAIR <erste> <zweite>: Tastatur- oder HID-Codes (1..255, Media 0x120..0x126, Globe 0x127, Maus 0x130..0x134)
+    // ADD_PAIR <erste> <zweite>: Tastatur- oder HID-Codes (1..255, Media 0x120..0x12B, Maus 0x130..0x134, Pan 0x139..0x13A)
     int first, second;
     char extra;
     if (sscanf(cmd.c_str(), "ADD_PAIR %d %d %c", &first, &second, &extra) == 2 &&
@@ -3879,9 +3955,12 @@ void checkUserCombos() {
         keySentToHost[r2][c2] = true;
         mouseMoveStop(r1, c1);
         mouseMoveStop(r2, c2);
+        wheelHoldStop(r1, c1);
+        wheelHoldStop(r2, c2);
         if (comboHasThirdKey(i)) {
           keySentToHost[userCombos[i].r3][userCombos[i].c3] = true;
           mouseMoveStop(userCombos[i].r3, userCombos[i].c3);
+          wheelHoldStop(userCombos[i].r3, userCombos[i].c3);
         }
 
         // Sofort Einzeltasten auf Mac loslassen, damit der Combo-Chord die Einzeltasten überschreibt.
@@ -3897,21 +3976,14 @@ void checkUserCombos() {
           sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
         } else if (userCombos[i].behavior == 0) { // KEY_PRESS
           if (!isConfigMode && bleKeyboard.isConnected()) {
-            if (act >= 0x120 && act <= 0x127) {
-              if (act == 0x120) bleKeyboard.write(KEY_MEDIA_PLAY_PAUSE);
-              else if (act == 0x121) bleKeyboard.write(KEY_MEDIA_MUTE);
-              else if (act == 0x122) bleKeyboard.write(KEY_MEDIA_VOLUME_UP);
-              else if (act == 0x123) bleKeyboard.write(KEY_MEDIA_VOLUME_DOWN);
-              else if (act == 0x124) bleKeyboard.write(KEY_MEDIA_NEXT_TRACK);
-              else if (act == 0x125) bleKeyboard.write(KEY_MEDIA_PREVIOUS_TRACK);
-              else if (act == 0x126) bleKeyboard.write(KEY_MEDIA_STOP);
-              else if (act == 0x127) { bleKeyboard.press(KEY_MEDIA_GLOBE); delay(10); bleKeyboard.release(KEY_MEDIA_GLOBE); }
-            } else if (act >= 0x130 && act <= 0x134) {
+            if (isMediaAction(act)) {
+              if (act == ACT_MAC_GLOBE) { bleKeyboard.press(KEY_MEDIA_GLOBE); delay(10); bleKeyboard.release(KEY_MEDIA_GLOBE); }
+              else bleKeyboard.write(mediaKeyForAction(act));
+            } else if (isMouseKeyAction(act)) {
               if (act == 0x130) bleKeyboard.mouseClick(MOUSE_BUTTON_LEFT);
               else if (act == 0x131) bleKeyboard.mouseClick(MOUSE_BUTTON_RIGHT);
               else if (act == 0x132) bleKeyboard.mouseClick(MOUSE_BUTTON_MIDDLE);
-              else if (act == 0x133) bleKeyboard.mouseScroll(1);
-              else if (act == 0x134) bleKeyboard.mouseScroll(-1);
+              else wheelSend(act, 1);
             } else if (isUmlautAction(act)) {
               sendUmlaut(act);
             } else if (isOneShotAction(act)) {

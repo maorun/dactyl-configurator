@@ -50,7 +50,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              normalizeKeyOverride, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
-             isValidMacroStep, isValidMacro, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
+             isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
              macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
@@ -879,7 +879,7 @@ function listLines(cfg) {
   const macros = cfg.macros || [];
   lines.push("MACRO_COUNT:" + macros.length);
   macros.forEach((m, i) => {
-    const steps = m.steps.map(st => st.type === "pause" ? [4, 0, st.ms] : [api.MACRO_STEP_TYPES[st.type], api.actionCodeToNumeric(st.code), 0]);
+    const steps = m.steps.map(st => api.macroStepTuple(st));
     for (let o = 0; o === 0 || o < steps.length; o += 8) lines.push("MACRO_DATA:" + JSON.stringify({ i, n: steps.length, o, s: steps.slice(o, o + 8) }));
   });
   return lines;
@@ -2258,6 +2258,73 @@ test("Makros: Schritte, Validierung und Normalisierung", () => {
   assert.deepStrictEqual(JSON.parse(JSON.stringify(api.normalizeConfig({ layers: [[[]]] }, R).macros)), []);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(api.macroCommands(cfg.macros[0]))),
     ["ADD_MACRO", "ADD_MACRO_STEP 4 0 10", "ADD_MACRO_STEP 1 97 0"]);
+});
+
+test("Systemtasten und Rad links/rechts: Codes passen zur Firmware", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  const fw = name => Number(new RegExp(`#define ACT_${name}\\s+(0x[0-9A-F]+)`).exec(common)[1]);
+  const expected = {
+    MEDIA_BRIGHTNESS_UP: 0x128, MEDIA_BRIGHTNESS_DOWN: 0x129, MEDIA_MISSION_CONTROL: 0x12A, MEDIA_LAUNCHPAD: 0x12B,
+    MOUSE_WHEEL_LEFT: 0x139, MOUSE_WHEEL_RIGHT: 0x13A
+  };
+  for (const [code, num] of Object.entries(expected)) {
+    assert.strictEqual(api.actionCodeToNumeric(code), num, code);
+    assert.strictEqual(fw(code), num, code);
+    assert.strictEqual(api.findDefinitionByCode(num).tap, code, code);
+    assert.ok(api.KEYCODES.flatMap(g => g.keys).some(k => k.code === code), `${code} fehlt in der Auswahl`);
+    assert.strictEqual(api.actionCodeToNumeric(`ACT_${code}`), code.startsWith("MOUSE") ? num : 0);
+  }
+  // Die Tasten kommen in der Server-Tabelle vor (Codegen)
+  const py = read("server.py");
+  for (const code of Object.keys(expected)) assert.ok(py.includes(`"${code}": "ACT_${code}"`), code);
+  // Die Rad-Tasten liegen im Pan-Bereich der Firmware, die Systemtasten im Consumer-Bereich
+  assert.strictEqual(api.isMouseMoveCode("MOUSE_WHEEL_LEFT"), false);
+});
+
+test("Tastenpaar: Systemtasten und Pan sind erlaubte Mitglieder", () => {
+  for (const ok of ["MEDIA_BRIGHTNESS_UP", "MEDIA_BRIGHTNESS_DOWN", "MEDIA_MISSION_CONTROL", "MEDIA_LAUNCHPAD",
+                    "MOUSE_WHEEL_LEFT", "MOUSE_WHEEL_RIGHT"]) {
+    assert.ok(api.isKeyPairMember(ok), ok);
+  }
+  assert.ok(!api.isKeyPairMember("MOUSE_UP"));
+  const cfg = api.normalizeConfig({ layers: [[[{ tap: "PAIR_0" }]]], keyPairs: [
+    { first: "KEY_LEFT_SHIFT", second: "MEDIA_MISSION_CONTROL" }, { first: "MEDIA_LAUNCHPAD", second: "MOUSE_WHEEL_RIGHT" }
+  ] }, R);
+  assert.strictEqual(cfg.keyPairs.length, 2);
+  assert.strictEqual(cfg.keyPairs[1].second, "MOUSE_WHEEL_RIGHT");
+});
+
+test("Makros: Systemtasten sind Schritte (code 0, Aktion in ms), Maus und Pan nicht", () => {
+  for (const code of ["MEDIA_BRIGHTNESS_UP", "MEDIA_MISSION_CONTROL", "MEDIA_LAUNCHPAD", "MAC_GLOBE", "MEDIA_MUTE"]) {
+    for (const type of ["tap", "down", "up"]) assert.ok(api.isValidMacroStep({ type, code }), `${type} ${code}`);
+  }
+  for (const code of ["MOUSE_LEFT", "MOUSE_WHEEL_LEFT", "MOUSE_WHEEL_UP", "MOUSE_UP", "PAIR_0", "MACRO_0", "MO_1", "NONE"]) {
+    assert.ok(!api.isValidMacroStep({ type: "tap", code }), code);
+  }
+  const macro = { name: "m", steps: [
+    { type: "tap", code: "MEDIA_MISSION_CONTROL" }, { type: "down", code: "MEDIA_BRIGHTNESS_UP" },
+    { type: "pause", ms: 20 }, { type: "up", code: "MEDIA_BRIGHTNESS_UP" }, { type: "tap", code: "KEY_A" }] };
+  assert.ok(api.isValidMacro(macro));
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.macroCommands(macro))), [
+    "ADD_MACRO", "ADD_MACRO_STEP 1 0 298", "ADD_MACRO_STEP 2 0 296", "ADD_MACRO_STEP 4 0 20",
+    "ADD_MACRO_STEP 3 0 296", "ADD_MACRO_STEP 1 97 0"]);
+  // Rücklesen: aus code 0 und ms wird wieder die Taste (Hin- und Rückweg über GET_CONFIG)
+  const source = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  source.macros = [macro];
+  const snap = deviceSnapshotFor(source, {
+    name: "Dactyl", debounce_ms: 5, combo_timeout_ms: 50, tapping_term_ms: 200, hold_tap_mode: 0, quick_tap_ms: 0,
+    require_prior_idle_ms: 0, chordal_hold: 0, caps_led: 0, standby_timeout: 5, sleep_timeout: 60, tri_layer: []
+  });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(snap.macros[0])),
+    [[1, 0, 298], [2, 0, 296], [4, 0, 20], [3, 0, 296], [1, 97, 0]]);
+  const built = api.buildConfigFromSnapshot(snap, source, R);
+  assert.strictEqual(built.error, undefined);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(built.config.macros[0].steps)), macro.steps);
+  // Die Gerätezeile MACRO_DATA mit code 0 und einer Aktion in ms ist gültig
+  const one = api.createDeviceSnapshot();
+  assert.ok(api.captureListLine(one, "MACRO_COUNT:1"));
+  assert.ok(api.captureListLine(one, 'MACRO_DATA:{"i":0,"n":1,"o":0,"s":[[1,0,298]]}'));
+  assert.strictEqual(one.listsBroken, false);
 });
 
 test("Makros: Speicher-Index des Editors bleibt in der Liste", () => {

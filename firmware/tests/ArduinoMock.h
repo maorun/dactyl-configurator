@@ -316,7 +316,7 @@ inline int esp_ota_mark_app_valid_cancel_rollback() { return 0; }
 #include "../dactyl_right/DactylDynamicMacro.h"
 
 // Media-Report als 16-Bit-Wert (Bitposition wie im Consumer-Report-Descriptor)
-inline uint16_t mediaBits(const MediaKeyReport k) { return (uint16_t)(k[0] | (k[1] << 8)); }
+inline uint32_t mediaBits(const MediaKeyReport k) { return mediaReportBits(k); }
 
 // BleKeyboard Mock
 class BleKeyboard {
@@ -327,7 +327,7 @@ public:
   bool connected = true;
   std::vector<uint8_t> pressedKeys;
   std::vector<uint8_t> writtenKeys;
-  std::vector<uint16_t> pressedMediaKeys;
+  std::vector<uint32_t> pressedMediaKeys;
   uint8_t mouseButtons = 0;
   std::vector<uint8_t> clickedMouseButtons;
   std::vector<int8_t> mouseScrolls;
@@ -374,7 +374,7 @@ public:
     auto it = std::find(pressedKeys.begin(), pressedKeys.end(), k);
     if (it != pressedKeys.end()) pressedKeys.erase(it);
   }
-  std::vector<uint16_t> writtenMediaKeys;
+  std::vector<uint32_t> writtenMediaKeys;
   void press(const MediaKeyReport k) { pressedMediaKeys.push_back(mediaBits(k)); }
   void release(const MediaKeyReport k) {
     auto it = std::find(pressedMediaKeys.begin(), pressedMediaKeys.end(), mediaBits(k));
@@ -387,6 +387,8 @@ public:
   void mouseRelease(uint8_t btn) { mouseButtons &= ~btn; }
   void mouseClick(uint8_t btn) { clickedMouseButtons.push_back(btn); }
   void mouseScroll(int8_t wheel) { mouseScrolls.push_back(wheel); }
+  std::vector<int8_t> mousePans;
+  void mousePan(int8_t pan) { mousePans.push_back(pan); }
   std::vector<std::pair<int8_t, int8_t>> mouseMoves;
   void mouseMove(int8_t x, int8_t y) { mouseMoves.push_back({x, y}); }
 
@@ -398,6 +400,7 @@ public:
     mouseButtons = 0;
     clickedMouseButtons.clear();
     mouseScrolls.clear();
+    mousePans.clear();
     mouseMoves.clear();
   }
   void setDisconnected() { connected = false; }

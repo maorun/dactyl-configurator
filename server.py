@@ -293,6 +293,10 @@ KEY_TO_CPP = {
     "MEDIA_PREVIOUS_TRACK": "ACT_MEDIA_PREVIOUS_TRACK",
     "MEDIA_STOP": "ACT_MEDIA_STOP",
     "MAC_GLOBE": "ACT_MAC_GLOBE",
+    "MEDIA_BRIGHTNESS_UP": "ACT_MEDIA_BRIGHTNESS_UP",
+    "MEDIA_BRIGHTNESS_DOWN": "ACT_MEDIA_BRIGHTNESS_DOWN",
+    "MEDIA_MISSION_CONTROL": "ACT_MEDIA_MISSION_CONTROL",
+    "MEDIA_LAUNCHPAD": "ACT_MEDIA_LAUNCHPAD",
     "MO_0": "ACT_MO_0", "MO_1": "ACT_MO_1", "MO_2": "ACT_MO_2", "MO_3": "ACT_MO_3", "MO_4": "ACT_MO_4",
     "MO_5": "ACT_MO_5", "MO_6": "ACT_MO_6", "MO_7": "ACT_MO_7",
     "TG_0": "ACT_TG_0", "TG_1": "ACT_TG_1", "TG_2": "ACT_TG_2", "TG_3": "ACT_TG_3", "TG_4": "ACT_TG_4",
@@ -313,6 +317,10 @@ KEY_TO_CPP = {
     "ACT_MOUSE_MIDDLE": "ACT_MOUSE_MIDDLE",
     "ACT_MOUSE_WHEEL_UP": "ACT_MOUSE_WHEEL_UP",
     "ACT_MOUSE_WHEEL_DOWN": "ACT_MOUSE_WHEEL_DOWN",
+    "MOUSE_WHEEL_LEFT": "ACT_MOUSE_WHEEL_LEFT",
+    "MOUSE_WHEEL_RIGHT": "ACT_MOUSE_WHEEL_RIGHT",
+    "ACT_MOUSE_WHEEL_LEFT": "ACT_MOUSE_WHEEL_LEFT",
+    "ACT_MOUSE_WHEEL_RIGHT": "ACT_MOUSE_WHEEL_RIGHT",
     "MOUSE_UP": "ACT_MOUSE_UP",
     "MOUSE_DOWN": "ACT_MOUSE_DOWN",
     "MOUSE_LEFT_MOVE": "ACT_MOUSE_LEFT_MOVE",
@@ -620,6 +628,10 @@ def generate_combos_cpp(combos):
 
 KEY_PAIR_ALLOWED_ACTIONS = {
     "MAC_GLOBE": "ACT_MAC_GLOBE",
+    "MEDIA_BRIGHTNESS_UP": "ACT_MEDIA_BRIGHTNESS_UP",
+    "MEDIA_BRIGHTNESS_DOWN": "ACT_MEDIA_BRIGHTNESS_DOWN",
+    "MEDIA_MISSION_CONTROL": "ACT_MEDIA_MISSION_CONTROL",
+    "MEDIA_LAUNCHPAD": "ACT_MEDIA_LAUNCHPAD",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -637,6 +649,26 @@ KEY_PAIR_ALLOWED_ACTIONS = {
     "ACT_MOUSE_MIDDLE": "ACT_MOUSE_MIDDLE",
     "ACT_MOUSE_WHEEL_UP": "ACT_MOUSE_WHEEL_UP",
     "ACT_MOUSE_WHEEL_DOWN": "ACT_MOUSE_WHEEL_DOWN",
+    "MOUSE_WHEEL_LEFT": "ACT_MOUSE_WHEEL_LEFT",
+    "MOUSE_WHEEL_RIGHT": "ACT_MOUSE_WHEEL_RIGHT",
+    "ACT_MOUSE_WHEEL_LEFT": "ACT_MOUSE_WHEEL_LEFT",
+    "ACT_MOUSE_WHEEL_RIGHT": "ACT_MOUSE_WHEEL_RIGHT",
+}
+
+# Consumer-Aktionen (Media, Globe, Systemtasten): im Makro-Schritt steht die Aktion in ms, code ist 0
+MACRO_CONSUMER_CPP = {
+    "MAC_GLOBE": "ACT_MAC_GLOBE",
+    "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
+    "MEDIA_MUTE": "ACT_MEDIA_MUTE",
+    "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
+    "MEDIA_VOLUME_DOWN": "ACT_MEDIA_VOLUME_DOWN",
+    "MEDIA_NEXT_TRACK": "ACT_MEDIA_NEXT_TRACK",
+    "MEDIA_PREVIOUS_TRACK": "ACT_MEDIA_PREVIOUS_TRACK",
+    "MEDIA_STOP": "ACT_MEDIA_STOP",
+    "MEDIA_BRIGHTNESS_UP": "ACT_MEDIA_BRIGHTNESS_UP",
+    "MEDIA_BRIGHTNESS_DOWN": "ACT_MEDIA_BRIGHTNESS_DOWN",
+    "MEDIA_MISSION_CONTROL": "ACT_MEDIA_MISSION_CONTROL",
+    "MEDIA_LAUNCHPAD": "ACT_MEDIA_LAUNCHPAD",
 }
 
 def standard_key_member_cpp(code, field, err_msg=None):
@@ -816,14 +848,18 @@ def generate_key_pairs_cpp(pairs):
     return "\n".join(lines)
 
 def macro_step_cpp(step, label):
-    """Ein Makro-Schritt: tap/down/up mit Tastatur-Code 1..255, pause mit ms 1..MACRO_MAX_PAUSE_MS."""
+    """Ein Makro-Schritt: tap/down/up mit Tastatur-Code 1..255 oder einer Consumer-Taste (code 0, Aktion in ms),
+    pause mit ms 1..MACRO_MAX_PAUSE_MS."""
     if not isinstance(step, dict) or step.get("type") not in MACRO_STEP_TYPES:
         raise ValueError(f"{label}: Typ tap, down, up oder pause erwartet.")
     step_type = step["type"]
     if step_type == "pause":
         ms = validate_int(step.get("ms"), 1, MACRO_MAX_PAUSE_MS, f"{label} ms")
         return f"{{ {MACRO_STEP_TYPES[step_type]}, 0, {ms} }}"
-    return f"{{ {MACRO_STEP_TYPES[step_type]}, {standard_key_member_cpp(step.get('code'), f'{label} code')}, 0 }}"
+    code = step.get("code")
+    if isinstance(code, str) and code in MACRO_CONSUMER_CPP:
+        return f"{{ {MACRO_STEP_TYPES[step_type]}, 0, {MACRO_CONSUMER_CPP[code]} }}"
+    return f"{{ {MACRO_STEP_TYPES[step_type]}, {standard_key_member_cpp(code, f'{label} code')}, 0 }}"
 
 def generate_macros_cpp(macros):
     if macros is None:

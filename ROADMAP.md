@@ -32,28 +32,6 @@ Rules for this file:
 - **Goal:** Add the action `KEY_LOCK`. After it, the next key press of either half stays held after the release of the key. A second press of the same key releases it. Layer keys, `KEY_LOCK` itself and macros are not locked. `RELEASE_ALL`, a link timeout, a host loss, standby and config mode release each locked key. Increase `DACTYL_FW_VERSION`.
 - **Acceptance test:** A firmware test presses `KEY_LOCK`, then a mouse button key, releases it and expects the button still held; a second press releases it. A test checks the release after a link timeout and that a layer key is not locked.
 
-### Horizontal scroll and held wheel keys
-
-- **Rank:** Feature model. Total 18/40 (typing 4, configuration 2, harmony 7, safety 5). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylHidDescriptor.h` (mouse report), `firmware/dactyl_right/DactylBleComposite.h` (`sendMouseReport`), `firmware/dactyl_right/DactylLogic.h` (`ACT_MOUSE_WHEEL_UP`, `ACT_MOUSE_WHEEL_DOWN`, `MOUSE_MOVE_INTERVAL_MS`), `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** The mouse keys scroll only up and down, and each press gives one wheel step. A long page needs many presses, and wide tables cannot scroll sideways.
-- **Goal:** Add the actions `MOUSE_WHEEL_LEFT` and `MOUSE_WHEEL_RIGHT` with the usage AC Pan (`0x0238`, Consumer page) in the mouse report. A held wheel key repeats its step with an acceleration, like the mouse movement. Increase `DACTYL_FW_VERSION`.
-- **Risk:** The report map changes. macOS caches the report map per address (see "macOS Bluetooth GATT Report Map Caching" in `AGENTS.md`). The pull request must describe the steps to pair again.
-- **Dependency:** "macOS system keys" also changes the report map. Do both changes in one pull request, so the user pairs again only once.
-- **Acceptance test:** A firmware test checks the report descriptor and the report bytes for each wheel direction. A test holds a wheel key and checks the repeat and the acceleration.
-
-### macOS system keys
-
-- **Rank:** Feature model. Total 17/40 (typing 5, configuration 1, harmony 6, safety 5). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylHidDescriptor.h` (Consumer report, `MEDIA_KEYS_ID`), `firmware/dactyl_right/DactylBleComposite.h` (`MediaKeyReport`), `firmware/dactyl_right/DactylCommon.h` (media action codes), `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** The Consumer report has 16 bits, and all 16 usages are assigned. The keyboard cannot send display brightness, Mission Control or Launchpad.
-- **Goal:** Make the Consumer report 24 bits wide. Add the actions for Brightness Up (`0x006F`), Brightness Down (`0x0070`), Mission Control (AC Desktop Show All Windows, `0x029F`) and Launchpad (AC Desktop Show All Applications, `0x02A2`). Key pairs and macros accept the new codes. Increase `DACTYL_FW_VERSION`.
-- **Risk:** The report map changes. macOS caches the report map per address (see "macOS Bluetooth GATT Report Map Caching" in `AGENTS.md`). The pull request must describe the steps to pair again.
-- **Dependency:** "Horizontal scroll and held wheel keys" also changes the report map. Do both changes in one pull request.
-- **Acceptance test:** A firmware test checks the report descriptor, the report length and the bit of each new action. A test checks that the existing media keys keep their bits.
-
 ### BLE host slots
 
 - **Rank:** Feature model. Total 16/40 (typing 6, configuration 3, harmony 4, safety 3). Effort L. Estimate.

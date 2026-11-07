@@ -85,18 +85,20 @@ public:
   }
 
   size_t press(const MediaKeyReport k) {
-    held.media |= splitMediaBits(k);
-    return push(SPLIT_OP_MEDIA_PRESS, splitMediaBits(k));
+    uint32_t bits = splitMediaBits(k);
+    held.media |= bits;
+    return pushMedia(SPLIT_OP_MEDIA_PRESS, bits);
   }
   size_t release(const MediaKeyReport k) {
-    held.media &= (uint16_t)~splitMediaBits(k);
-    return push(SPLIT_OP_MEDIA_RELEASE, splitMediaBits(k));
+    uint32_t bits = splitMediaBits(k);
+    held.media &= ~bits;
+    return pushMedia(SPLIT_OP_MEDIA_RELEASE, bits);
   }
   size_t write(const MediaKeyReport k) {
-    uint16_t bits = splitMediaBits(k);
+    uint32_t bits = splitMediaBits(k);
     if (bits == 0 || (bits & held.media)) return 0;
-    size_t n = push(SPLIT_OP_MEDIA_PRESS, bits);
-    push(SPLIT_OP_MEDIA_RELEASE, bits);
+    size_t n = pushMedia(SPLIT_OP_MEDIA_PRESS, bits);
+    pushMedia(SPLIT_OP_MEDIA_RELEASE, bits);
     return n;
   }
 
@@ -115,6 +117,9 @@ public:
   }
   void mouseScroll(int8_t wheel) {
     if (wheel != 0) pushEvent(makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, wheel));
+  }
+  void mousePan(int8_t pan) {
+    if (pan != 0) pushEvent(makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 1, pan));
   }
 
   void mouseMove(int8_t x, int8_t y) {
@@ -153,6 +158,11 @@ private:
   bool quietStandby = false;
   unsigned long lastQuietMs = 0;
   bool hadQuietStandby = false;
+
+  size_t pushMedia(uint8_t op, uint32_t bits) {
+    if (bits == 0) return 0;
+    return pushEvent(makeSplitMediaEvent(op, bits)) ? 1 : 0;
+  }
 
   size_t push(uint8_t op, uint16_t code) {
     if (code == 0) return 0;

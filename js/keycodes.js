@@ -120,6 +120,12 @@ const KEYCODES = [
     { code: "MEDIA_PREVIOUS_TRACK", label: "⏮ Vorheriger Titel (Prev)", char: "" },
     { code: "MEDIA_STOP", label: "⏹ Stop", char: "" }
   ]},
+  { group: "macOS-Systemtasten", keys: [
+    { code: "MEDIA_BRIGHTNESS_UP", label: "🔆 Helligkeit +", char: "" },
+    { code: "MEDIA_BRIGHTNESS_DOWN", label: "🔅 Helligkeit -", char: "" },
+    { code: "MEDIA_MISSION_CONTROL", label: "🪟 Mission Control", char: "" },
+    { code: "MEDIA_LAUNCHPAD", label: "🚀 Launchpad", char: "" }
+  ]},
   { group: "Erweiterte Steuerung & System", keys: [
     { code: "MAC_GLOBE", label: "🌐 Mac Fn / Globus-Taste (Emoji & Sprache)", char: "" },
     { code: "KEY_CAPS_LOCK", label: "⇪ Caps Lock (Großschrift)", char: "" },
@@ -133,6 +139,8 @@ const KEYCODES = [
     { code: "MOUSE_MIDDLE", label: "🖱️ Mittelklick (Middle Click)", char: "" },
     { code: "MOUSE_WHEEL_UP", label: "🖱️ Mausrad Hoch (Scroll Up)", char: "" },
     { code: "MOUSE_WHEEL_DOWN", label: "🖱️ Mausrad Runter (Scroll Down)", char: "" },
+    { code: "MOUSE_WHEEL_LEFT", label: "🖱️ Mausrad Links (halten wiederholt)", char: "" },
+    { code: "MOUSE_WHEEL_RIGHT", label: "🖱️ Mausrad Rechts (halten wiederholt)", char: "" },
     { code: "MOUSE_UP", label: "🖱️ Maus nach oben (halten beschleunigt)", char: "" },
     { code: "MOUSE_DOWN", label: "🖱️ Maus nach unten (halten beschleunigt)", char: "" },
     { code: "MOUSE_LEFT_MOVE", label: "🖱️ Maus nach links (halten beschleunigt)", char: "" },
@@ -236,7 +244,7 @@ const ACTION_TO_NUMERIC = {
   // ISO-Taste zwischen linkem Shift und Z (HID 0x64)
   "KEY_NON_US_BACKSLASH": 0xEC,
 
-  // Media Keys (0x120..0x126)
+  // Media Keys (0x120..0x12B)
   "MEDIA_PLAY_PAUSE": 0x120,
   "MEDIA_MUTE": 0x121,
   "MEDIA_VOLUME_UP": 0x122,
@@ -245,6 +253,10 @@ const ACTION_TO_NUMERIC = {
   "MEDIA_PREVIOUS_TRACK": 0x125,
   "MEDIA_STOP": 0x126,
   "MAC_GLOBE": 0x127,
+  "MEDIA_BRIGHTNESS_UP": 0x128,
+  "MEDIA_BRIGHTNESS_DOWN": 0x129,
+  "MEDIA_MISSION_CONTROL": 0x12A,
+  "MEDIA_LAUNCHPAD": 0x12B,
 
   // Layer switches (0x100..0x107, 0x110..0x117, 0x118..0x119)
   "MO_0": 0x100, "MO_1": 0x101, "MO_2": 0x102, "MO_3": 0x103, "MO_4": 0x104,
@@ -273,7 +285,7 @@ const ACTION_TO_NUMERIC = {
   "DM_PLAY": 0x16D,
   "LEADER": 0x16E,
 
-  // Mouse Actions (0x130..0x138)
+  // Mouse Actions (0x130..0x13A)
   "MOUSE_LEFT": 0x130,
   "MOUSE_RIGHT": 0x131,
   "MOUSE_MIDDLE": 0x132,
@@ -284,6 +296,10 @@ const ACTION_TO_NUMERIC = {
   "ACT_MOUSE_MIDDLE": 0x132,
   "ACT_MOUSE_WHEEL_UP": 0x133,
   "ACT_MOUSE_WHEEL_DOWN": 0x134,
+  "MOUSE_WHEEL_LEFT": 0x139,
+  "MOUSE_WHEEL_RIGHT": 0x13A,
+  "ACT_MOUSE_WHEEL_LEFT": 0x139,
+  "ACT_MOUSE_WHEEL_RIGHT": 0x13A,
   "MOUSE_UP": 0x135,
   "MOUSE_DOWN": 0x136,
   "MOUSE_LEFT_MOVE": 0x137,

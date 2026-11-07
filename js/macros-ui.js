@@ -17,7 +17,8 @@ function macroStepLabel(step) {
 
 function macroSummary(macro) {
   const text = macro.steps.map(macroStepLabel).join(" → ");
-  return text.length > 80 ? `${text.slice(0, 79)}…` : (text || "(leer)");
+  const summary = text.length > 80 ? `${text.slice(0, 79)}…` : (text || "(leer)");
+  return macro.repeat ? `↻ ${summary}` : summary;
 }
 
 // Tap-, Halte- und Doppel-Tipp-Auswahl im Inspektor: Gruppe "Makros". Combos unterstützen keine Makros.
@@ -216,6 +217,7 @@ function openMacroEditor(idx) {
   macroEditSide = editSide;
   macroDraftSteps = macro ? macro.steps.map(st => ({ ...st })) : [];
   document.getElementById("macroNameInput").value = macro ? macro.name : `Makro ${currentConfig.macros.length}`;
+  document.getElementById("macroRepeatInput").checked = !!(macro && macro.repeat);
   document.getElementById("macroEditorTitle").textContent = macro ? `Makro ${idx} bearbeiten` : "Neues Makro";
   document.getElementById("macroEditor").style.display = "";
   clearSelectFilter("macroStepCode");
@@ -247,7 +249,7 @@ function applyMacroState(state) {
 
 function saveMacroFromUI() {
   const name = sanitizeCommandText(document.getElementById("macroNameInput").value, `Makro ${macroEditIndex >= 0 ? macroEditIndex : currentConfig.macros.length}`);
-  const macro = { name, steps: macroDraftSteps.map(normalizeMacroStep) };
+  const macro = { name, steps: macroDraftSteps.map(normalizeMacroStep), repeat: document.getElementById("macroRepeatInput").checked };
   if (!macro.steps.length) {
     showToast("Ein Makro braucht mindestens einen Schritt.");
     return;

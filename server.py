@@ -924,6 +924,7 @@ def generate_macros_cpp(macros):
     if len(macros) > MAX_MACROS:
         raise ValueError(f"Zu viele Makros: maximal {MAX_MACROS} erlaubt.")
     lengths = []
+    repeats = []
     rows = []
     for m_idx, macro in enumerate(macros):
         if not isinstance(macro, dict) or not isinstance(macro.get("steps"), list):
@@ -931,6 +932,9 @@ def generate_macros_cpp(macros):
         steps = macro["steps"]
         if len(steps) > MAX_MACRO_STEPS:
             raise ValueError(f"Makro {m_idx}: maximal {MAX_MACRO_STEPS} Schritte erlaubt.")
+        if macro.get("repeat") is not None and not isinstance(macro["repeat"], bool):
+            raise ValueError(f"Makro {m_idx}: 'repeat' muss true oder false sein.")
+        repeats.append("true" if macro.get("repeat") else "false")
         lengths.append(str(len(steps)))
         cells = [macro_step_cpp(st, f"Makro {m_idx} Schritt {s_idx}") for s_idx, st in enumerate(steps)]
         rows.append("  { " + (", ".join(cells) if cells else "{ 0, 0, 0 }") + " }")
@@ -938,6 +942,7 @@ def generate_macros_cpp(macros):
         "// [[[START_MACROS]]]",
         f"uint8_t numMacros = {len(macros)};",
         "uint8_t macroLengths[MAX_MACROS] = { " + (", ".join(lengths) if lengths else "0") + " };",
+        "bool userMacroRepeat[MAX_MACROS] = { " + (", ".join(repeats) if repeats else "false") + " };",
         "MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS] = {",
         ",\n".join(rows) if rows else "  { { 0, 0, 0 } }",
         "};",

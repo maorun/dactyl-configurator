@@ -910,6 +910,11 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("uint8_t macroLengths[MAX_MACROS] = { 4, 0 };", cpp)
         self.assertIn("{ { 2, KEY_LEFT_GUI, 0 }, { 1, 'c', 0 }, { 3, KEY_LEFT_GUI, 0 }, { 4, 0, 100 } }", cpp)
         self.assertIn("{ { 0, 0, 0 } }", cpp)
+        self.assertIn("bool userMacroRepeat[MAX_MACROS] = { false, false };", cpp)
+        rep = server.generate_macros_cpp([{"steps": [], "repeat": True}, {"steps": []}])
+        self.assertIn("bool userMacroRepeat[MAX_MACROS] = { true, false };", rep)
+        with self.assertRaises(ValueError):
+            server.generate_macros_cpp([{"steps": [], "repeat": "yes"}])
         self.assertIn("uint8_t numMacros = 0;", server.generate_macros_cpp(None))
         self.assertIn("{ { 0, 0, 0 } }", server.generate_macros_cpp([]))
         bad_steps = [

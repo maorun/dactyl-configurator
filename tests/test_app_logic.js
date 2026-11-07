@@ -1097,6 +1097,17 @@ function snapshotWithLists(cfg) {
   return snap;
 }
 
+test("Layout-Diff: ein Unterschied nur im Wiederholen-Flag eines Makros wird gemeldet", () => {
+  const cfg = api.normalizeConfig({ layers: [[[]]], macros: [{ name: "D", steps: [{ type: "tap", code: "KEY_A" }], repeat: true }] }, R);
+  const snap = snapshotWithLists({ ...cfg, macros: [{ name: "D", steps: cfg.macros[0].steps }] });
+  const dl = api.diffKeymap(cfg, snap, R).lists;
+  assert.strictEqual(dl.macros.length, 1);
+  assert.ok(dl.macros[0].local.startsWith("↻"));
+  assert.ok(!dl.macros[0].device.startsWith("↻"));
+  const same = api.diffKeymap(cfg, (() => { const s = snapshotWithLists(cfg); s.macroRep[0] = true; return s; })(), R).lists;
+  assert.strictEqual(same.macros.length, 0);
+});
+
 test("Layout-Diff: gleiche Combos, Tastenpaare und Makros ergeben keinen Unterschied", () => {
   const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
   cfg.keyPairs = [{ first: "KEY_LEFT_ALT", second: "KEY_A" }];
@@ -2564,6 +2575,27 @@ test("Makros: Schritte, Validierung und Normalisierung", () => {
   assert.deepStrictEqual(JSON.parse(JSON.stringify(api.normalizeConfig({ layers: [[[]]] }, R).macros)), []);
   assert.deepStrictEqual(JSON.parse(JSON.stringify(api.macroCommands(cfg.macros[0]))),
     ["ADD_MACRO", "ADD_MACRO_STEP 4 0 10", "ADD_MACRO_STEP 1 97 0"]);
+  // Wiederholen, solange die Taste gehalten wird: ADD_MACRO 1, normalizeConfig behält das Flag
+  const rep = api.normalizeConfig({ layers: [[[]]], macros: [
+    { name: "R", steps: [{ type: "tap", code: "a" }], repeat: true },
+    { name: "S", steps: [{ type: "tap", code: "a" }], repeat: "ja" }] }, R);
+  assert.strictEqual(rep.macros[0].repeat, true);
+  assert.ok(!("repeat" in rep.macros[1]));
+  assert.strictEqual(api.macroCommands(rep.macros[0])[0], "ADD_MACRO 1");
+  assert.strictEqual(api.macroCommands(rep.macros[1])[0], "ADD_MACRO");
+  // Ein ungültiger Flag-Wert gilt als "kein Wiederholen" und lässt die Schritte stehen
+  assert.strictEqual(api.isValidMacro({ steps: [], repeat: 1 }), true);
+  assert.strictEqual(rep.macros[1].steps.length, 1);
+  // Das Gerät meldet das Flag in MACRO_DATA ("r":1)
+  const snapRep = api.createDeviceSnapshot();
+  api.captureListLine(snapRep, "MACRO_COUNT:1");
+  assert.ok(api.captureListLine(snapRep, 'MACRO_DATA:{"i":0,"n":1,"o":0,"r":1,"s":[[1,97,0]]}'));
+  assert.strictEqual(snapRep.listsBroken, false);
+  assert.strictEqual(snapRep.macroRep[0], true);
+  const snapBad = api.createDeviceSnapshot();
+  api.captureListLine(snapBad, "MACRO_COUNT:1");
+  api.captureListLine(snapBad, 'MACRO_DATA:{"i":0,"n":1,"o":0,"r":2,"s":[[1,97,0]]}');
+  assert.strictEqual(snapBad.listsBroken, true);
 });
 
 test("Systemtasten und Rad links/rechts: Codes passen zur Firmware", () => {

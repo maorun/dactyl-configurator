@@ -77,6 +77,7 @@ static uint16_t leaderTimeoutMs = 1000;
 static uint16_t oneShotTimeoutMs = 0;
 static uint8_t numMacros = 0;
 static uint8_t macroLengths[MAX_MACROS] = {0};
+static bool userMacroRepeat[MAX_MACROS] = {false};
 static MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS];
 
 static SemaphoreHandle_t configMutex = xSemaphoreCreateMutex();
@@ -127,7 +128,7 @@ static void resetState() {
   leaderReset();
   for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) leaderConsumed[r][c] = leaderBuffered[r][c] = keyLockBuffered[r][c] = false;
   numMacros = 0;
-  for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
+  for (int i = 0; i < MAX_MACROS; i++) { macroLengths[i] = 0; userMacroRepeat[i] = false; }
   macroRun = {};
   lastRepeatAction = 0;
   for (int r = 0; r < NUM_ROWS; r++)
@@ -550,6 +551,35 @@ TEST(test_macro_waits_for_send_queue_room) {
     assert(is(all[i], SPLIT_OP_KEY_PRESS, 'a') && is(all[i + 1], SPLIT_OP_KEY_RELEASE, 'a'));
   }
   assert(bleKeyboard.droppedEvents() == droppedBefore);
+}
+
+// Wiederholendes Makro auf der linken Hälfte: läuft von vorn, solange die Taste gehalten wird, und endet beim Loslassen
+TEST(test_repeating_macro_runs_while_key_held_and_stops_on_release) {
+  handleConfigCommand("ADD_MACRO 1", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 97 0", false);
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  std::vector<SplitHidEvent> all;
+  for (int i = 0; i < 300; i++) {
+    advanceMillis(1);
+    processDeferredKeys(millis());
+    std::vector<SplitHidEvent> ev = drain();
+    all.insert(all.end(), ev.begin(), ev.end());
+  }
+  assert(macroRun.active && all.size() >= 8);          // mehrere Durchläufe
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  for (int i = 0; i < 50; i++) {
+    advanceMillis(1);
+    processDeferredKeys(millis());
+    std::vector<SplitHidEvent> ev = drain();
+    all.insert(all.end(), ev.begin(), ev.end());
+  }
+  assert(!macroRun.active);
+  int presses = 0, releases = 0;
+  for (const SplitHidEvent &e : all) { presses += is(e, SPLIT_OP_KEY_PRESS, 'a'); releases += is(e, SPLIT_OP_KEY_RELEASE, 'a'); }
+  assert(presses == releases && presses >= 4);         // kein Code bleibt gedrückt
 }
 
 // Wie loop() in dactyl_left.ino (serviceTapPending): TAP_FLUSH des Masters sendet den wartenden Tipp, danach

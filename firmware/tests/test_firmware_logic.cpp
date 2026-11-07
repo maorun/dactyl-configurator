@@ -89,6 +89,7 @@ static KeyOverride userKeyOverrides[MAX_KEY_OVERRIDES];
 
 static uint8_t numMacros = 0;
 static uint8_t macroLengths[MAX_MACROS] = {0};
+static bool userMacroRepeat[MAX_MACROS] = {false};
 static MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS];
 
 static SemaphoreHandle_t configMutex = xSemaphoreCreateMutex();
@@ -190,7 +191,7 @@ void resetState() {
   numKeyOverrides = 0;
   for (int i = 0; i < MAX_KEY_OVERRIDES; i++) userKeyOverrides[i] = { 0, 0, 0 };
   numMacros = 0;
-  for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
+  for (int i = 0; i < MAX_MACROS; i++) { macroLengths[i] = 0; userMacroRepeat[i] = false; }
   macroRun = {};
   bleKeyboard.dynMacro = DynamicMacro();
   lastRepeatAction = 0;
@@ -1227,6 +1228,7 @@ TEST(test_get_config_lines_stay_short_at_maximum) {
     handleConfigCommand("ADD_MACRO", false);
     for (int j = 0; j < 32; j++) handleConfigCommand("ADD_MACRO_STEP 4 0 5000", false);
   }
+  for (int i = 0; i < 16; i++) userMacroRepeat[i] = true;   // "r":1 verlängert jede Zeile
   assert(numCombos == 16 && numKeyPairs == 16 && numMacros == 16);
 
   mockChar.notifications.clear();
@@ -3599,6 +3601,188 @@ TEST(test_macro_up_releases_physically_held_modifier) {
   assert(bleKeyboard.keyEvents == expected);
   assert(bleKeyboard.pressedKeys.empty());
   assert(keySentToHost[3][0]);                            // die Taste gilt weiter als gehalten
+}
+
+// -----------------------------------------------------------------------------
+// Makro wiederholen, solange die Taste gehalten wird (ADD_MACRO 1, userMacroRepeat)
+// -----------------------------------------------------------------------------
+static void addRepeatTapMacro(int repeat) {
+  handleConfigCommand(repeat ? "ADD_MACRO 1" : "ADD_MACRO 0", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 120 0", false);   // TAP 'x'
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+}
+
+static int countEvents(int ev) {
+  int n = 0;
+  for (int e : bleKeyboard.keyEvents) n += e == ev;
+  return n;
+}
+
+TEST(test_macro_repeat_runs_multiple_passes_while_held) {
+  resetState();
+  addRepeatTapMacro(1);
+  assert(mockChar.value == "OK ADD_MACRO_STEP 0 0");
+  assert(userMacroRepeat[0]);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1200);
+  assert(macroRun.active && macroRun.repeat);
+  assert(countEvents('x') >= 5);                          // mehrere Durchläufe
+  assert(countEvents('x') == countEvents(-'x') || countEvents('x') == countEvents(-'x') + 1);
+}
+
+TEST(test_macro_repeat_stops_cleanly_on_release) {
+  resetState();
+  handleConfigCommand("ADD_MACRO 1", false);
+  handleConfigCommand("ADD_MACRO_STEP 2 131 0", false);   // DOWN Cmd
+  handleConfigCommand("ADD_MACRO_STEP 1 120 0", false);   // TAP 'x'
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1008);                                         // Cmd gedrückt, 'x' offen
+  assert(macroRun.active);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1010);
+  assert(!macroRun.active);
+  assert(bleKeyboard.pressedKeys.empty());                // alle Codes losgelassen
+  size_t n = bleKeyboard.keyEvents.size();
+  runTicks(1300);
+  assert(bleKeyboard.keyEvents.size() == n);              // danach läuft nichts mehr
+}
+
+TEST(test_macro_without_repeat_flag_plays_single_pass) {
+  resetState();
+  addRepeatTapMacro(0);
+  assert(!userMacroRepeat[0]);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1300);                                         // Taste bleibt gehalten
+  assert(!macroRun.active);
+  assert(countEvents('x') == 1 && countEvents(-'x') == 1);
+  // ADD_MACRO ohne Argument = ein Durchlauf
+  handleConfigCommand("ADD_MACRO", false);
+  assert(!userMacroRepeat[1]);
+}
+
+TEST(test_macro_repeat_as_tap_of_hold_and_double_tap_key_plays_once) {
+  // Mod-Tap: der Tipp löst erst beim Loslassen aus; die Taste ist dann nicht mehr gehalten, das Makro läuft einmal
+  resetState();
+  addRepeatTapMacro(1);
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  HOLDMAP[0][2][1] = KEY_LEFT_SHIFT;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  advanceMillis(50);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1400);
+  assert(!macroRun.active);
+  assert(countEvents('x') == 1 && countEvents(-'x') == 1);
+
+  // Doppel-Tipp: dieselbe Regel
+  resetState();
+  addRepeatTapMacro(1);
+  KEYMAP[0][2][4] = 'l';
+  DTAPMAP[0][2][4] = ACT_MACRO_BASE + 0;
+  tapKeyAt(2, 4, 1000, 1050);
+  setMillis(1100);
+  keyState[2][4] = true; onMatrixKeyChange(2, 4, true);
+  keyState[2][4] = false; onMatrixKeyChange(2, 4, false);
+  runTicks(1600);
+  assert(!macroRun.active);
+  assert(countEvents('x') == 1 && countEvents(-'x') == 1);
+}
+
+TEST(test_macro_repeat_survives_layer_change_and_second_macro_key) {
+  resetState();
+  addRepeatTapMacro(1);
+  handleConfigCommand("ADD_MACRO 0", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 121 0", false);   // Makro 1: TAP 'y'
+  KEYMAP[0][2][2] = ACT_MACRO_BASE + 1;
+  KEYMAP[0][3][0] = ACT_TG_BASE + 1;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1100);
+  int before = countEvents('x');
+  // Ebenenwechsel mitten im Lauf: die Taste bleibt gehalten, die Durchläufe gehen weiter
+  keyState[3][0] = true; onMatrixKeyChange(3, 0, true);
+  keyState[3][0] = false; onMatrixKeyChange(3, 0, false);
+  // Zweite Makro-Taste während des Laufs: der Start entfällt, der Lauf bleibt ununterbrochen
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false);
+  runTicks(1250);
+  assert(macroRun.active && macroRun.repeat && macroRun.index == 0);
+  assert(countEvents('x') > before && countEvents('y') == 0);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1260);
+  assert(!macroRun.active && bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_macro_repeat_with_trailing_pause_restarts) {
+  resetState();
+  handleConfigCommand("ADD_MACRO 1", false);
+  handleConfigCommand("ADD_MACRO_STEP 1 120 0", false);   // TAP 'x'
+  handleConfigCommand("ADD_MACRO_STEP 4 0 20", false);    // PAUSE 20 ms als letzter Schritt
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1300);
+  assert(macroRun.active && countEvents('x') >= 5);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  runTicks(1310);
+  assert(!macroRun.active && bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_macro_repeat_stops_on_release_all_and_host_loss) {
+  resetState();
+  addRepeatTapMacro(1);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1050);
+  assert(macroRun.active);
+  stopMacro(false);                                       // RELEASE_ALL-Pfad
+  bleKeyboard.releaseAll();
+  size_t n = bleKeyboard.keyEvents.size();
+  runTicks(1200);
+  assert(!macroRun.active && bleKeyboard.keyEvents.size() == n);   // Taste noch gehalten, kein Neustart
+
+  resetState();
+  addRepeatTapMacro(1);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  runTicks(1050);
+  assert(macroRun.active);
+  bleKeyboard.connected = false;                          // Host verloren
+  runTicks(1060);
+  assert(!macroRun.active);
+}
+
+TEST(test_macro_repeat_flag_args_and_nvs) {
+  resetState();
+  handleConfigCommand("ADD_MACRO 2", false);
+  assert(mockChar.value == "ERR ARGS ADD_MACRO 2" && numMacros == 0);
+  handleConfigCommand("ADD_MACRO 1 1", false);
+  assert(mockChar.value == "ERR ARGS ADD_MACRO 1 1" && numMacros == 0);
+  handleConfigCommand("ADD_MACRO 99999999999999999999", false);
+  assert(mockChar.value == "ERR ARGS ADD_MACRO 99999999999999999999" && numMacros == 0);
+  handleConfigCommand("ADD_MACRO 01", false);
+  assert(mockChar.value == "ERR ARGS ADD_MACRO 01" && numMacros == 0);
+  handleConfigCommand("ADD_MACRO 1", false);
+  assert(mockChar.value == "OK ADD_MACRO 0");
+  handleConfigCommand("ADD_MACRO 0", false);
+  handleConfigCommand("ADD_MACRO 1", false);
+  handleConfigCommand("SAVE_MACROS", false);
+  assert(mockChar.value == "OK SAVE_MACROS");
+  assert(preferences.getBytesLength("macro_rep") == 3);
+  for (int i = 0; i < MAX_MACROS; i++) userMacroRepeat[i] = false;
+  numMacros = 0;
+  loadKeymapFromNVS();
+  assert(numMacros == 3 && userMacroRepeat[0] && !userMacroRepeat[1] && userMacroRepeat[2]);
+  // Ohne Schlüssel (älterer Stand): kein Makro wiederholt
+  Preferences::bytesStore.erase("macro_rep");
+  loadKeymapFromNVS();
+  assert(numMacros == 3 && !userMacroRepeat[0] && !userMacroRepeat[2]);
+  handleConfigCommand("CLEAR_MACROS", false);
+  assert(!userMacroRepeat[0]);
 }
 
 TEST(test_caps_word_combo_candidate_is_buffered) {

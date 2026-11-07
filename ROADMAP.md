@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Macro repeat while held (`macroRepeat`)
-
-- **Rank:** Feature model. Total 22/40 (typing 5, configuration 4, harmony 6, safety 7). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `js/macros-ui.js`, `js/config-model.js`, `server.py`.
-- **Problem:** A macro always runs once per press. Repeating a step sequence requires tapping the key again and again.
-- **Goal:** Add an optional repeat-while-held flag per macro (`userMacroRepeat`, `ADD_MACRO [0|1]`, NVS key `macro_rep`). When set, `macroTick()` restarts the macro from step 0 while the triggering key remains physically held, and stops when the key is released, on host loss or on `RELEASE_ALL`. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test starts a repeating macro while holding the key, verifies that it runs multiple passes, releases the key and verifies that playback stops cleanly with all held codes released.
-
 ### Combined dual-half configuration export and import
 
 - **Rank:** Feature model. Total 21/40 (typing 1, configuration 8, harmony 5, safety 7). Effort S. Estimate.

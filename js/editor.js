@@ -1423,8 +1423,9 @@ function renderCombosTable() {
   }
   emptyState.style.display = "none";
 
-  currentConfig.combos.forEach((combo) => {
+  currentConfig.combos.forEach((combo, comboIndex) => {
     const tr = document.createElement("tr");
+    tr.dataset.comboIndex = String(comboIndex);
 
     const behaviorName = {
       "MODIFIER_HOLD": "Modifier Hold (z.B. Strg/Alt halten)",

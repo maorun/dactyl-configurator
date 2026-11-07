@@ -5497,7 +5497,8 @@ test("Layout-Prüfung: Combo-Taste mit Halte- oder Doppel-Tipp-Aktion ist ein Hi
   lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
   const found = lintCodes(lintBoth(cfg), "combo-hold-cancelled");
   assert.strictEqual(found.length, 1);
-  assert.strictEqual(found[0].level, "info");
+  assert.strictEqual(found[0].level, "warn");
+  assert.strictEqual(found[0].combo, 0);
   // Ebene 3 hat eine eigene Belegung ohne Halten, aber mit Doppel-Tipp; die übrigen Ebenen sind transparent und erben
   // wie in der Firmware die Halte-Aktion von Ebene 0
   assert.ok(found[0].message.startsWith("Taste R2C1 ist Teil von Combo 1 und hat auf allen Ebenen "), found[0].message);
@@ -5511,6 +5512,177 @@ test("Layout-Prüfung: Combo-Taste mit Halte- oder Doppel-Tipp-Aktion ist ein Hi
   const noCombo = lintCfg();
   lintSet(noCombo, 0, 2, 1, "KEY_J", "KEY_LEFT_CTRL");
   assert.deepStrictEqual(lintCodes(lintBoth(noCombo), "combo-hold-cancelled"), []);
+});
+
+// Regeln für Combos und Überschreibungen: je Regel ein Layout mit genau einem Befund, dazu ein sauberes Layout
+const LINT_COMBO_OVERRIDE_CODES = ["combo-hold-cancelled", "combo-duplicate", "override-key-unmapped"];
+function lintOverrideCfg(key = "KEY_BACKSPACE", layerMask) {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 2, 1, "KEY_BACKSPACE");
+  cfg.keyOverrides = [{ mods: ["shift"], key, replacement: "KEY_DELETE", ...(layerMask === undefined ? {} : { layerMask }) }];
+  return cfg;
+}
+function lintRuleFindings(cfg) {
+  return [...lintBoth(cfg)].filter(f => LINT_COMBO_OVERRIDE_CODES.includes(f.code));
+}
+
+test("Layout-Prüfung: Combo-Taste mit Halte-Aktion ist eine Warnung (combo-hold-cancelled)", () => {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 2, 1, "KEY_J", "KEY_LEFT_CTRL");
+  lintSet(cfg, 0, 2, 2, "KEY_K");
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  const found = lintRuleFindings(cfg);
+  assert.deepStrictEqual(found.map(f => [f.code, f.level, f.side, f.combo]), [["combo-hold-cancelled", "warn", "R", 0]]);
+  // Nur ein Doppel-Tipp bleibt ein Hinweis
+  const dtap = lintCfg();
+  lintSet(dtap, 0, 2, 1, "KEY_J", "NONE", "KEY_U");
+  lintSet(dtap, 0, 2, 2, "KEY_K");
+  lintCombo(dtap, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  assert.deepStrictEqual(lintRuleFindings(dtap).map(f => [f.code, f.level]), [["combo-hold-cancelled", "info"]]);
+});
+
+test("Layout-Prüfung: zwei Combos mit gleichen Tasten und überlappender Maske (combo-duplicate)", () => {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 2, 1, "KEY_J");
+  lintSet(cfg, 0, 2, 2, "KEY_K");
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  lintCombo(cfg, [2, 2], [2, 1], "KEY_PRESS", "KEY_TAB");
+  const found = lintRuleFindings(cfg);
+  assert.deepStrictEqual(found.map(f => [f.code, f.level, f.side, f.combo]), [["combo-duplicate", "warn", "R", 1]]);
+  cfg.combos[0].layerMask = 0b01;
+  cfg.combos[1].layerMask = 0b10;                            // Masken ohne Überlappung: kein Befund
+  assert.deepStrictEqual(lintRuleFindings(cfg), []);
+});
+
+test("Layout-Prüfung: Überschreibung ohne Taste auf ihrer Ebenenmaske (override-key-unmapped)", () => {
+  const found = lintRuleFindings(lintOverrideCfg("KEY_X"));
+  assert.deepStrictEqual(found.map(f => [f.code, f.level, f.side, f.override]), [["override-key-unmapped", "warn", "R", 0]]);
+  // Ebene 2 belegt die Position mit einer anderen Taste: die Maske nennt nur Ebene 2, also kein Weg zum Auslösen
+  const masked = lintOverrideCfg("KEY_BACKSPACE", 0b100);
+  lintSet(masked, 2, 2, 1, "KEY_Q");
+  assert.deepStrictEqual(lintRuleFindings(masked).map(f => f.code), ["override-key-unmapped"]);
+  masked.keyOverrides[0].layerMask = 0b101;                  // Ebene 0 sendet die Taste
+  assert.deepStrictEqual(lintRuleFindings(masked), []);
+  // Eine transparente Ebene erbt die Taste von Ebene 0
+  assert.deepStrictEqual(lintRuleFindings(lintOverrideCfg()), []);
+});
+
+test("Layout-Prüfung: Überschreibung zählt Tasten der anderen Hälfte, Doppel-Tipp, Tastenpaar, Makro und Combo", () => {
+  const sendersOf = cfgs => [...api.lintLayouts(cfgs, api.SIDE_PROFILES)].filter(f => f.code === "override-key-unmapped").length;
+  // Taste nur auf der linken Hälfte
+  const withLeft = lintOverrideCfg("KEY_X");
+  const left = lintCfg();
+  lintSet(left, 0, 2, 1, "KEY_X");
+  assert.strictEqual(sendersOf({ R: withLeft, L: left }), 0);
+  // Doppel-Tipp
+  const dtap = lintOverrideCfg("KEY_X");
+  lintSet(dtap, 0, 2, 2, "KEY_A", "NONE", "KEY_X");
+  assert.strictEqual(sendersOf({ R: dtap, L: lintCfg() }), 0);
+  // Tastenpaar
+  const pair = lintOverrideCfg("KEY_X");
+  pair.keyPairs = [{ first: "KEY_LEFT_ALT", second: "KEY_X" }];
+  lintSet(pair, 0, 2, 2, "PAIR_0");
+  assert.strictEqual(sendersOf({ R: pair, L: lintCfg() }), 0);
+  // Makro
+  const macro = lintOverrideCfg("KEY_X");
+  macro.macros = [{ name: "m", steps: [{ type: "tap", code: "KEY_X" }] }];
+  lintSet(macro, 0, 2, 2, "MACRO_0");
+  assert.strictEqual(sendersOf({ R: macro, L: lintCfg() }), 0);
+  // Combo
+  const combo = lintOverrideCfg("KEY_X");
+  lintSet(combo, 0, 2, 2, "KEY_K");
+  lintSet(combo, 0, 2, 3, "KEY_L");
+  lintCombo(combo, [2, 2], [2, 3], "KEY_PRESS", "KEY_X");
+  assert.strictEqual(sendersOf({ R: combo, L: lintCfg() }), 0);
+  // Umlaut-Taste sendet Alt + u und den Vokal
+  const umlaut = lintOverrideCfg("KEY_O");
+  lintSet(umlaut, 0, 2, 2, "UMLAUT_OE");
+  assert.strictEqual(sendersOf({ R: umlaut, L: lintCfg() }), 0);
+  // Andere Schreibweise derselben Taste ("x" statt KEY_X) in Taste, Tastenpaar und Makro-Schritt
+  const spelled = lintOverrideCfg("KEY_X");
+  lintSet(spelled, 0, 2, 2, "x");
+  assert.strictEqual(sendersOf({ R: spelled, L: lintCfg() }), 0);
+  const spelledPair = lintOverrideCfg("KEY_X");
+  spelledPair.keyPairs = [{ first: "KEY_LEFT_ALT", second: "x" }];
+  lintSet(spelledPair, 0, 2, 2, "PAIR_0");
+  assert.strictEqual(sendersOf({ R: spelledPair, L: lintCfg() }), 0);
+  const spelledMacro = lintOverrideCfg("KEY_X");
+  spelledMacro.macros = [{ name: "m", steps: [{ type: "tap", code: "x" }] }];
+  lintSet(spelledMacro, 0, 2, 2, "MACRO_0");
+  assert.strictEqual(sendersOf({ R: spelledMacro, L: lintCfg() }), 0);
+  // Ohne jede Quelle bleibt die Warnung
+  assert.strictEqual(sendersOf({ R: lintOverrideCfg("KEY_X"), L: lintCfg() }), 1);
+});
+
+test("Layout-Prüfung: Halte-Aktion nur auf einer Ebene der Combo-Maske ist eine Warnung", () => {
+  const cfg = lintCfg();
+  lintSet(cfg, 0, 2, 1, "KEY_J");
+  lintSet(cfg, 3, 2, 1, "KEY_J", "KEY_LEFT_CTRL");
+  lintSet(cfg, 0, 2, 2, "KEY_K");
+  lintCombo(cfg, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  assert.deepStrictEqual(lintRuleFindings(cfg).map(f => f.level), ["warn"]);
+  cfg.combos[0].layerMask = 0b0111;                          // Ebene 3 liegt außerhalb der Maske: kein Befund
+  assert.deepStrictEqual(lintRuleFindings(cfg), []);
+});
+
+test("Layout-Prüfung (Anzeige): Knopf \"Zum Eintrag\" springt zur Überschreibung", () => {
+  const { w, dom } = lintUiHarness(lintOverrideCfg("KEY_X"), lintCfg());
+  const calls = [];
+  const row = { classList: { add: c => calls.push("add:" + c), remove() {} }, scrollIntoView: () => calls.push("scroll") };
+  w.document.querySelector = sel => (sel.includes("combos-tab") ? { click: () => calls.push("tab") }
+    : sel.includes('#keyOverridesTableBody tr[data-override-index="0"]') ? row : null);
+  w.editSide = "R";
+  w.switchEditSide = () => calls.push("side");
+  w.setTimeout = () => 1; w.clearTimeout = () => {};
+  w.renderLayoutLint();
+  const li = dom.document.getElementById("layoutLintList").children[0];
+  li.children.find(ch => ch.textContent === "Zum Eintrag").listeners.click[0]();
+  assert.deepStrictEqual(calls, ["tab", "scroll", "add:lint-jump-highlight"]);
+});
+
+test("Combo- und Überschreibungstabelle setzen die Index-Attribute für den Sprung der Layout-Prüfung", () => {
+  const src = read("js/editor.js") + read("js/key-overrides-ui.js");
+  assert.ok(src.includes("dataset.comboIndex = String(comboIndex)"));
+  assert.ok(src.includes("dataset.overrideIndex = String(i)"));
+  // Die Layout-Prüfung folgt der Liste: Hinzufügen, Löschen und Rückgängig zeichnen die Matrix neu
+  const ui = read("js/key-overrides-ui.js");
+  assert.strictEqual((ui.match(/renderKeyOverrides\(\);\n\s*(\/\/[^\n]*\n\s*)?renderMatrix\(\);/g) || []).length, 4);
+});
+
+test("Layout-Prüfung (Anzeige): Knopf \"Zum Eintrag\" wechselt die Hälfte, den Tab und hebt die Zeile hervor", () => {
+  const right = lintCfg();
+  lintSet(right, 0, 2, 1, "KEY_J", "KEY_LEFT_CTRL");
+  lintSet(right, 0, 2, 2, "KEY_K");
+  lintCombo(right, [2, 1], [2, 2], "KEY_PRESS", "KEY_ESC");
+  const { w, dom } = lintUiHarness(right, lintCfg());
+  const calls = [];
+  const row = { classList: { add: c => calls.push("add:" + c), remove: c => calls.push("remove:" + c) }, scrollIntoView: () => calls.push("scroll") };
+  const tab = { click: () => calls.push("tab") };
+  w.document.querySelector = sel => (sel.includes("combos-tab") ? tab : sel.includes('data-combo-index="0"') ? row : null);
+  w.editSide = "L";
+  w.switchEditSide = side => { calls.push("side:" + side); w.editSide = side; };
+  w.showToast = t => calls.push("toast:" + t);
+  w.setTimeout = () => 1; w.clearTimeout = () => {};
+  w.renderLayoutLint();
+  const li = dom.document.getElementById("layoutLintList").children[0];
+  const btn = li.children.find(ch => ch.textContent === "Zum Eintrag");
+  assert.ok(btn, "Knopf fehlt");
+  btn.listeners.click[0]();
+  assert.deepStrictEqual(calls, ["side:R", "tab", "scroll", "add:lint-jump-highlight"]);
+  // Zeile fehlt: Hinweis statt Absturz
+  calls.length = 0;
+  w.document.querySelector = () => null;
+  btn.listeners.click[0]();
+  assert.ok(calls.some(c => c.startsWith("toast:")), calls.join(","));
+});
+
+test("Layout-Prüfung: sauberes Layout ohne Befund zu Combos und Überschreibungen", () => {
+  const cfg = lintOverrideCfg();
+  lintSet(cfg, 0, 2, 1, "KEY_BACKSPACE");
+  lintSet(cfg, 0, 2, 2, "KEY_K");
+  lintSet(cfg, 0, 2, 3, "KEY_L");
+  lintCombo(cfg, [2, 2], [2, 3], "KEY_PRESS", "KEY_ESC");
+  assert.deepStrictEqual([...lintBoth(cfg)], []);
 });
 
 test("Layout-Prüfung: Warnungen stehen vor Hinweisen, jede Hälfte wird zugeordnet", () => {

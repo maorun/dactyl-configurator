@@ -201,7 +201,25 @@ enum HoldTapMode : uint8_t {
 };
 #define DEFAULT_HOLD_TAP_MODE HOLD_MODE_OTHER_KEY_PRESS
 
+// Eigene Alternate-Repeat-Paare (userAltRepeats): key -> alt, Tastaturcodes 1..255, gerichtet (e -> u sagt nichts über u -> e)
+#define MAX_ALT_REPEATS 16
+struct AltRepeatPair {
+  uint8_t key;
+  uint8_t alt;
+};
+static_assert(sizeof(AltRepeatPair) == 2, "AltRepeatPair ist das 2-Byte-NVS-Format");
+
+// Alt-Aktion aus der eigenen Tabelle; 0 = kein Eintrag für a. Der erste Eintrag mit key == a gewinnt.
+inline uint16_t altRepeatCustom(const AltRepeatPair *table, uint8_t count, uint16_t a) {
+  if (a == 0 || a > 0xFF) return 0;
+  for (uint8_t i = 0; i < count; i++) {
+    if (table[i].key == a) return table[i].alt;
+  }
+  return 0;
+}
+
 // Alternate repeat: das Gegenteil einer Aktion; 0 = die Aktion hat keins (die Taste sendet dann nichts)
+// Die feste Tabelle; eigene Paare prüft altRepeatResolve() in DactylLogic.h zuerst.
 inline uint16_t altRepeatAction(uint16_t a) {
   static const uint16_t PAIRS[][2] = {
     {KEY_LEFT_ARROW, KEY_RIGHT_ARROW}, {KEY_UP_ARROW, KEY_DOWN_ARROW},

@@ -983,7 +983,7 @@ inline SplitRepeatStep splitRepeatLeftKey(SplitLeftHeld &h, const SplitHidEvent 
 }
 
 // Master: ein Repeat-Ereignis der linken Hälfte ausführen (SPLIT_OP_REPEAT oder RELEASE_ALL). Env liefert die
-// Ausführung: uint16_t lastAction(), void localPress(uint16_t), void localRelease(uint16_t) und
+// Ausführung: uint16_t lastAction(), uint16_t altAction(uint16_t) (eigene Paare vor der festen Tabelle), void localPress(uint16_t), void localRelease(uint16_t) und
 // void sendRun(const SplitHidEvent &). Der Aufrufer hält den Mutex der Logik (DactylLogic.h).
 template <class Env>
 inline void splitRepeatApplyEnd(const SplitRepeatEnd &e, Env &env) {
@@ -1004,7 +1004,7 @@ inline void splitRepeatMasterEvent(SplitLeftHeld &h, SplitRepeatSender &s, const
   splitRepeatApplyEnd(old, env);
   if (step == SPLIT_REPEAT_STEP_LOCAL_PRESS) {
     uint16_t a = env.lastAction();
-    if (ev.code == SPLIT_REPEAT_CODE_ALT_PRESS) a = altRepeatAction(a);
+    if (ev.code == SPLIT_REPEAT_CODE_ALT_PRESS) a = env.altAction(a);
     h.repeatReqAction = a;
     if (a) env.localPress(a);
   } else if (step == SPLIT_REPEAT_STEP_LOCAL_RELEASE) {
@@ -1117,7 +1117,7 @@ inline bool splitRepeatRunExpired(SplitRepeatRun &s, unsigned long nowMs) {
   return true;
 }
 
-// Links: ein REPEAT_RUN ausführen. Env: uint16_t lastAction(), void press(uint16_t), void release(uint16_t).
+// Links: ein REPEAT_RUN ausführen. Env: uint16_t lastAction(), uint16_t altAction(uint16_t), void press(uint16_t), void release(uint16_t).
 template <class Env>
 inline void splitRepeatLeftRunEvent(SplitRepeatRun &r, const SplitHidEvent &ev, unsigned long nowMs, Env &env) {
   bool wasActive = r.active;
@@ -1126,7 +1126,7 @@ inline void splitRepeatLeftRunEvent(SplitRepeatRun &r, const SplitHidEvent &ev, 
   if (res == SPLIT_REPEAT_RUN_PRESS) {
     if (wasActive && oldAction) env.release(oldAction);
     r.action = env.lastAction();
-    if (ev.code == SPLIT_REPEAT_RUN_CODE_ALT_PRESS) r.action = altRepeatAction(r.action);
+    if (ev.code == SPLIT_REPEAT_RUN_CODE_ALT_PRESS) r.action = env.altAction(r.action);
     if (r.action) env.press(r.action);
   } else if (res == SPLIT_REPEAT_RUN_RELEASE) {
     if (r.action) env.release(r.action);

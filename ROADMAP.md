@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Custom alternate repeat pairs (`userAltRepeats`)
-
-- **Rank:** Feature model. Total 25/40 (typing 7, configuration 4, harmony 7, safety 7). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `js/config-model.js`, `js/heatmap.js`, `server.py`.
-- **Problem:** `ALT_REPEAT` uses a fixed table in `DactylCommon.h` and cannot eliminate user-specific same-finger bigrams.
-- **Goal:** Add up to 16 custom alternate-repeat entries (`{ key, alt }`, keyboard codes `1..255`) per half (`CLEAR_ALT_REPEATS`, `ADD_ALT_REPEAT`, `SAVE_ALT_REPEATS`, NVS keys `num_altrep`, `altrep_data`, `GET_CONFIG` lines `ALTREP_COUNT` and `ALTREP_DATA`). `altRepeatAction()` checks the custom table before the default table. Add a UI card and a button in the finger-load panel to create entries from the top same-finger pairs. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test adds a custom pair `e -> u`, presses `e` then `ALT_REPEAT` and expects `u`; the app and server round-trip the list in `GET_CONFIG` and codegen.
-
 ### Mouse precision and turbo keys (`MOUSE_SLOW`, `MOUSE_FAST`)
 
 - **Rank:** Feature model. Total 24/40 (typing 6, configuration 2, harmony 8, safety 8). Effort S. Estimate.

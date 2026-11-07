@@ -144,6 +144,14 @@ KeyPair userKeyPairs[MAX_KEY_PAIRS] = {
 };
 // [[[END_KEY_PAIRS]]]
 
+// Eigene Alternate-Repeat-Paare (ACT_ALT_REPEAT): key -> alt vor der festen Tabelle
+// [[[START_ALT_REPEATS]]]
+uint8_t numAltRepeats = 0;
+AltRepeatPair userAltRepeats[MAX_ALT_REPEATS] = {
+  { 0, 0 }
+};
+// [[[END_ALT_REPEATS]]]
+
 // Leader-Folgen (ACT_LEADER): bis zu vier Tasten dieser Hälfte führen eine Aktion aus (DactylLeader.h)
 // [[[START_LEADER]]]
 uint8_t numLeaderSeqs = 0;
@@ -757,6 +765,7 @@ static void onSplitHoldResolve(const SplitHidEvent &ev) {
 // wiederholt (DactylSplitHid.h). Die Wiederholung rechts braucht den Mutex wie jede Ausführung einer Aktion.
 struct MasterRepeatEnv {
   uint16_t lastAction() { return lastRepeatAction; }
+  uint16_t altAction(uint16_t a) { return altRepeatResolve(a); }
   void localPress(uint16_t a) { repeatPress(a); }
   void localRelease(uint16_t a) { repeatRelease(a); }
   void sendRun(const SplitHidEvent &e) { sendRepeatRun(e); }

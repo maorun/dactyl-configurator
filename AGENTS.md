@@ -242,6 +242,11 @@ Keys in the matrix use `uint16_t` action codes:
 - Each half runs its own repeat. The master sends `REPEAT_RUN` to the left half only when the left half acted last.
 - `ALT_REPEAT` uses the same ops with a flag (`REPEAT` code 4, `REPEAT_RUN` code 2). The half that executes forms the opposite with `altRepeatAction`. Details: `FEATURES.md`, section "Alternate repeat".
 
+### Custom alternate repeat pairs (`userAltRepeats`)
+- Details: `FEATURES.md`, section "Custom alternate repeat pairs (`userAltRepeats`)". Read it only before you change this feature.
+- Each half has its own list (up to 16 directed pairs). `altRepeatResolve()` checks it before the fixed `altRepeatAction()` table. Codes in `DactylCommon.h` (`MAX_ALT_REPEATS`), `server.py` and `js/keycodes.js` must match; tests compare them.
+- In config mode, a nearby BLE client can store up to 16 pairs per half with `ADD_ALT_REPEAT`. They change what `ALT_REPEAT` sends and are not visible on the key matrix. The 3 min limit and the physical combo stay the only protection.
+
 ### Leader key (`DactylLeader.h`)
 - Details: `FEATURES.md`, section "Leader key". Read it only before you change this feature.
 - Each half has its own list (`userLeaderSeqs`, up to 16 sequences of up to 4 keys) and captures only its own keys. A key of a running capture sends nothing, neither at the press nor at the release. Keep `leaderConsumed` paired with the release.

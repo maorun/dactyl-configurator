@@ -537,6 +537,67 @@ class TestServerAndCodegen(unittest.TestCase):
             server.validate_config(dict(left_cfg, keyOverrides=override), "L")
         server.validate_config(dict(left_cfg, keyOverrides=[]), "L")
 
+    def test_alt_repeat_constants_match_firmware(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, rf"#define MAX_ALT_REPEATS\s+{server.MAX_ALT_REPEATS}\b")
+
+    def test_alt_repeat_codegen(self):
+        cpp = server.generate_alt_repeats_cpp([
+            {"key": "KEY_E", "alt": "KEY_U"},
+            {"key": "KEY_LEFT_ARROW", "alt": "KEY_RETURN"},
+            {"key": "KEY_129", "alt": "KEY_A"},
+        ])
+        self.assertIn("// [[[START_ALT_REPEATS]]]", cpp)
+        self.assertIn("uint8_t numAltRepeats = 3;", cpp)
+        self.assertIn("AltRepeatPair userAltRepeats[MAX_ALT_REPEATS] = {", cpp)
+        self.assertIn("{ 'e', 'u' }", cpp)
+        self.assertIn("{ 129, 'a' }", cpp)
+        self.assertIn("{ 0, 0 }", server.generate_alt_repeats_cpp([]))
+        self.assertIn("numAltRepeats = 0;", server.generate_alt_repeats_cpp(None))
+
+    def test_alt_repeat_validation(self):
+        ok = {"key": "KEY_E", "alt": "KEY_U"}
+        bad_entries = (
+            {"key": "KEY_E"},                                  # alt fehlt
+            {"key": "KEY_E", "alt": "e"},                      # key gleich alt
+            {"key": "NONE", "alt": "KEY_U"},                   # leere Taste
+            {"key": "PAIR_0", "alt": "KEY_U"},                 # Paar als Taste
+            {"key": "KEY_E", "alt": "MACRO_0"},                # Makro als Alt
+            {"key": "KEY_E", "alt": "LEADER"},                 # Aktion statt Taste
+            {"key": "KEY_256", "alt": "KEY_U"},                # außerhalb 1..255
+            "KEY_E",                                           # kein Objekt
+        )
+        for entry in bad_entries:
+            with self.assertRaises(ValueError, msg=str(entry)):
+                server.generate_alt_repeats_cpp([entry])
+        with self.assertRaises(ValueError):
+            server.generate_alt_repeats_cpp([ok, {"key": "KEY_E", "alt": "KEY_I"}])        # derselbe Auslöser
+        with self.assertRaises(ValueError):
+            server.generate_alt_repeats_cpp([dict(ok, key=f"KEY_{33 + i}") for i in range(server.MAX_ALT_REPEATS + 1)])
+        with self.assertRaises(ValueError):
+            server.generate_alt_repeats_cpp("KEY_E")
+
+    def test_alt_repeat_renders_in_both_sketches_and_validates(self):
+        entries = [{"key": "KEY_E", "alt": "KEY_U"}]
+        base = os.path.dirname(os.path.abspath(server.__file__))
+        for ino, side, cfg_file in (("firmware/dactyl_right/dactyl_right.ino", "R", server.DEFAULT_CONFIG_FILE),
+                                    ("firmware/dactyl_left/dactyl_left.ino", "L", server.LEFT_DEFAULT_CONFIG_FILE)):
+            with open(os.path.join(base, ino), encoding="utf-8") as f:
+                content = f.read()
+            with open(cfg_file, encoding="utf-8") as f:
+                cfg = json.load(f)
+            self.assertEqual(content.count("// [[[START_ALT_REPEATS]]]"), 1, ino)
+            self.assertEqual(content.count("// [[[END_ALT_REPEATS]]]"), 1, ino)
+            out = server.render_ino_content(content, dict(cfg, altRepeats=entries), side=side)
+            self.assertIn("uint8_t numAltRepeats = 1;", out)
+            self.assertIn("{ 'e', 'u' }", out)
+            self.assertEqual(server.render_ino_content(content, cfg, side=side).count("// [[[START_ALT_REPEATS]]]"), 1)
+            server.validate_config(dict(cfg, altRepeats=entries), side)
+            with self.assertRaises(ValueError):
+                server.validate_config(dict(cfg, altRepeats=[{"key": "NONE", "alt": "KEY_U"}]), side)
+        self.assertIn("/js/alt-repeats-ui.js", server.STATIC_ALLOWLIST)
+
     def test_leader_constants_match_firmware(self):
         with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
             common = f.read()

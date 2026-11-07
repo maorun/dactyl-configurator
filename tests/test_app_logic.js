@@ -48,6 +48,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
              MAX_KEY_OVERRIDES, KEY_OVERRIDE_MODS, isValidKeyOverride, isKeyOverrideMember, keyOverrideModsValue,
              normalizeKeyOverride, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
+             MAX_ALT_REPEATS, isValidAltRepeat, hasDuplicateAltRepeat, normalizeAltRepeat, altRepeatsFromSameFingerPairs, localAltRepeatTuples, describeAltRepeatTuple,
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
@@ -880,6 +881,11 @@ function listLines(cfg) {
     lines.push("LEADER_COUNT:" + leader.length);
     for (let o = 0; o < leader.length; o += 4) lines.push("LEADER_DATA:" + JSON.stringify({ o, e: leader.slice(o, o + 4) }));
   }
+  if (cfg.altRepeats) {
+    const alt = cfg.altRepeats.map(e => [api.actionCodeToNumeric(e.key), api.actionCodeToNumeric(e.alt)]);
+    lines.push("ALTREP_COUNT:" + alt.length);
+    for (let o = 0; o < alt.length; o += 8) lines.push("ALTREP_DATA:" + JSON.stringify({ o, e: alt.slice(o, o + 8) }));
+  }
   const macros = cfg.macros || [];
   lines.push("MACRO_COUNT:" + macros.length);
   macros.forEach((m, i) => {
@@ -905,6 +911,88 @@ test("Layout-Diff: gleiche Combos, Tastenpaare und Makros ergeben keinen Untersc
   const d = api.diffKeymap(cfg, snap, R).lists;
   assert.strictEqual(d.known, true);
   assert.strictEqual(d.combos.length + d.pairs.length + d.macros.length, 0);
+});
+
+test("Alt-Repeat-Paare: Validierung, Duplikate und Normalisierung", () => {
+  assert.strictEqual(api.MAX_ALT_REPEATS, 16);
+  assert.ok(api.isValidAltRepeat({ key: "KEY_E", alt: "KEY_U" }));
+  assert.ok(api.isValidAltRepeat({ key: "KEY_LEFT_SHIFT", alt: "KEY_U" }));       // Modifier sind 1..255
+  assert.ok(!api.isValidAltRepeat({ key: "KEY_E", alt: "PAIR_0" }));
+  assert.ok(!api.isValidAltRepeat({ key: "KEY_E", alt: "MACRO_0" }));
+  assert.ok(!api.isValidAltRepeat({ key: "NONE", alt: "KEY_U" }));
+  assert.ok(!api.isValidAltRepeat({ key: "KEY_E" }));
+  assert.ok(!api.isValidAltRepeat({ key: "KEY_E", alt: "e" }));                      // gleiche Taste
+  assert.ok(api.hasDuplicateAltRepeat([{ key: "KEY_E", alt: "KEY_U" }, { key: "e", alt: "KEY_I" }]));
+  assert.ok(!api.hasDuplicateAltRepeat([{ key: "KEY_E", alt: "KEY_U" }, { key: "KEY_U", alt: "KEY_E" }]));
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  assert.strictEqual(JSON.stringify(cfg.altRepeats), JSON.stringify([]));
+  const raw = JSON.parse(JSON.stringify(R.defaultConfig));
+  raw.altRepeats = [{ key: "KEY_E", alt: "KEY_U", extra: 1 }, { key: "KEY_E", alt: "KEY_I" }, { key: "KEY_A", alt: "PAIR_0" }, null];
+  assert.strictEqual(JSON.stringify(api.normalizeConfig(raw, R).altRepeats), JSON.stringify([{ key: "KEY_E", alt: "KEY_U" }]));
+  raw.altRepeats = Array.from({ length: 17 }, (_, i) => ({ key: `KEY_${33 + i}`, alt: "KEY_U" }));
+  assert.throws(() => api.validateConfigShape(raw, R), /altRepeats/);
+  raw.altRepeats = [{ key: "KEY_E", alt: "KEY_U" }, { key: "KEY_E", alt: "KEY_I" }];
+  assert.throws(() => api.validateConfigShape(raw, R), /dieselbe Taste/);
+});
+
+test("Alt-Repeat-Paare: Fingerlast-Button leitet beide Richtungen aus den häufigsten Folgen ab", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.layers[0][2][1] = { tap: "KEY_E", hold: "NONE", dtap: "NONE" };
+  cfg.layers[0][3][1] = { tap: "KEY_U", hold: "NONE", dtap: "NONE" };
+  cfg.layers[0][2][2] = { tap: "KEY_I", hold: "NONE", dtap: "NONE" };
+  const added = api.altRepeatsFromSameFingerPairs(cfg, [{ a: "2_1", b: "3_1", count: 9 }]);
+  assert.strictEqual(JSON.stringify(added), JSON.stringify([{ key: "KEY_E", alt: "KEY_U" }, { key: "KEY_U", alt: "KEY_E" }]));
+  // Vorhandener Auslöser bleibt, nur die fehlende Richtung kommt dazu
+  cfg.altRepeats = [{ key: "KEY_E", alt: "KEY_I" }];
+  assert.strictEqual(JSON.stringify(api.altRepeatsFromSameFingerPairs(cfg, [{ a: "2_1", b: "3_1", count: 9 }])), JSON.stringify([{ key: "KEY_U", alt: "KEY_E" }]));
+  // Leere Taste, ungültige Position und gleiche Tasten ergeben nichts
+  cfg.altRepeats = [];
+  cfg.layers[0][3][1] = { tap: "NONE", hold: "NONE", dtap: "NONE" };
+  assert.strictEqual(JSON.stringify(api.altRepeatsFromSameFingerPairs(cfg, [{ a: "2_1", b: "3_1", count: 9 }, { a: "99_1", b: "2_1", count: 1 }])), JSON.stringify([]));
+  // Eine Mod-Tap-Taste ohne Tap-Aktion liefert ihre Halte-Aktion nicht als Alt-Repeat-Taste
+  cfg.layers[0][3][1] = { tap: "NONE", hold: "KEY_LEFT_SHIFT", dtap: "NONE" };
+  assert.strictEqual(api.altRepeatsFromSameFingerPairs(cfg, [{ a: "2_1", b: "3_1", count: 9 }]).length, 0);
+  // Obergrenze
+  cfg.layers[0][3][1] = { tap: "KEY_U", hold: "NONE", dtap: "NONE" };
+  cfg.altRepeats = Array.from({ length: 15 }, (_, i) => ({ key: `KEY_${33 + i}`, alt: "KEY_U" }));
+  assert.strictEqual(api.altRepeatsFromSameFingerPairs(cfg, [{ a: "2_1", b: "3_1", count: 9 }]).length, 1);
+});
+
+test("Alt-Repeat-Paare: GET_CONFIG-Zeilen laufen durch Snapshot, Diff und Config", () => {
+  const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  cfg.altRepeats = [{ key: "KEY_E", alt: "KEY_U" }, { key: "KEY_I", alt: "KEY_O" }];
+  const snap = snapshotWithLists(cfg);
+  assert.strictEqual(snap.counts.altrep, 2);
+  assert.strictEqual(api.snapshotListsState(snap), "complete");
+  assert.strictEqual(JSON.stringify(snap.altrep), JSON.stringify(api.localAltRepeatTuples(cfg)));
+  assert.strictEqual(api.diffKeymap(cfg, snap, R).lists.altrep.length, 0);
+  const changed = JSON.parse(JSON.stringify(cfg));
+  changed.altRepeats[1].alt = "KEY_P";
+  const d = api.diffKeymap(changed, snap, R).lists.altrep;
+  assert.strictEqual(d.length, 1);
+  assert.strictEqual(d[0].where, "Alt-Repeat 1");
+  // Ungültige Zeilen machen den Snapshot unvollständig
+  const bad = snapshotOf(cfg);
+  assert.ok(api.captureListLine(bad, "ALTREP_COUNT:1"));
+  api.captureListLine(bad, 'ALTREP_DATA:{"o":0,"e":[[0,5]]}');
+  assert.strictEqual(bad.listsBroken, true);
+  const tooMany = snapshotOf(cfg);
+  api.captureListLine(tooMany, "ALTREP_COUNT:17");
+  assert.strictEqual(tooMany.listsBroken, true);
+  // buildConfigFromSnapshot: Geräteliste ersetzt die lokale; ohne ALTREP_COUNT (Firmware vor Stand 34) bleiben die lokalen Paare
+  const info = { name: "X", debounce_ms: 5, combo_timeout_ms: 50, tapping_term_ms: 200, hold_tap_mode: 0, quick_tap_ms: 0, require_prior_idle_ms: 0,
+    chordal_hold: 0, caps_led: 0, standby_timeout: 5, sleep_timeout: 60, tri_layer: [] };
+  const local = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
+  local.altRepeats = [{ key: "KEY_A", alt: "KEY_B" }];
+  const plain = v => JSON.parse(JSON.stringify(v));
+  const fromDevice = api.buildConfigFromSnapshot(deviceSnapshotFor(cfg, info), local, R);
+  assert.strictEqual(fromDevice.error, undefined);
+  assert.strictEqual(JSON.stringify(plain(fromDevice.config.altRepeats)), JSON.stringify([{ key: "KEY_E", alt: "KEY_U" }, { key: "KEY_I", alt: "KEY_O" }]));
+  const noAlt = JSON.parse(JSON.stringify(cfg));
+  delete noAlt.altRepeats;
+  const fromOld = api.buildConfigFromSnapshot(deviceSnapshotFor(noAlt, info), local, R);
+  assert.strictEqual(fromOld.error, undefined);
+  assert.strictEqual(JSON.stringify(plain(fromOld.config.altRepeats)), JSON.stringify([{ key: "KEY_A", alt: "KEY_B" }]));
 });
 
 test("Layout-Diff: geändertes Makro, Tastenpaar und Combo erscheinen", () => {
@@ -2421,6 +2509,7 @@ function fullSyncHarness(reply, holdMs = null) {
   cfg.leaderSequences = [
     { keys: ["KEY_A", "KEY_B"], action: "MACRO_0" }, { keys: ["KEY_C"], action: "PAIR_0" }, { keys: ["KEY_D"], action: "KEY_Z" }
   ];
+  cfg.altRepeats = [{ key: "KEY_E", alt: "KEY_U" }, { key: "KEY_I", alt: "KEY_O" }];
   cfg.macros = [
     { name: "Copy", steps: [{ type: "down", code: "KEY_LEFT_GUI" }, { type: "tap", code: "KEY_C" }, { type: "up", code: "KEY_LEFT_GUI" }] },
     { name: "Warten", steps: [{ type: "pause", ms: 250 }, { type: "tap", code: "a" }] }
@@ -2591,9 +2680,12 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(leader, 3);
   assert.ok(sent.includes("CLEAR_LEADER") && sent.includes("SAVE_LEADER") && sent.includes("ADD_LEADER 368 97 98") && sent.includes("ADD_LEADER 320 99"));
   assert.ok(sent.some(c => c === "SET_LEADER_TIMEOUT 1000"));
+  const altRepeats = sent.filter(c => c.startsWith("ADD_ALT_REPEAT ")).length;
+  assert.strictEqual(altRepeats, 2);
+  assert.ok(sent.includes("CLEAR_ALT_REPEATS") && sent.includes("SAVE_ALT_REPEATS") && sent.includes("ADD_ALT_REPEAT 101 117") && sent.includes("ADD_ALT_REPEAT 105 111"));
   // SAVE_NVS, SAVE_COMBOS, die Tastenpaar-Phase, je Überschreibung ein Schritt und SAVE_OVERRIDES,
-  // je Makro ein Schritt und SAVE_MACROS
-  assert.strictEqual(steps.length, settings + names + keys + 1 + combos + 1 + 1 + overrides + 1 + macros + 1 + leader + 1);
+  // je Makro ein Schritt und SAVE_MACROS, Leader-Phase, Alt-Repeat-Phase
+  assert.strictEqual(steps.length, settings + names + keys + 1 + combos + 1 + 1 + overrides + 1 + macros + 1 + leader + 1 + altRepeats + 1);
   assert.strictEqual(steps.at(-1), 100);
   assert.ok(steps.every(p => p <= 100), `Fortschritt über 100 %: ${Math.max(...steps)}`);
 }]);
@@ -2656,8 +2748,10 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   // Eine weitere Einstellung erhöht die Schrittzahl (früher fest "+ 9")
   assert.strictEqual(ctx.count(7, 8, 2) - ctx.count(6, 8, 2), 1);
   assert.strictEqual(ctx.count(6, 8, 3) - ctx.count(6, 8, 2), 1);
-  assert.strictEqual(ctx.count(6, 8, 0), 6 + 8 + 8 * 6 * 7 + 5);
+  assert.strictEqual(ctx.count(6, 8, 0), 6 + 8 + 8 * 6 * 7 + 6);
   assert.strictEqual(ctx.count(6, 8, 0, 3) - ctx.count(6, 8, 0), 3);
+  // Alt-Repeat-Paare: je Paar ein Schritt plus die Phase (CLEAR/SAVE)
+  assert.strictEqual(ctx.count(6, 8, 0, 0, -1, 0, 2) - ctx.count(6, 8, 0), 2);
   // Überschreibungen des Masters: je Eintrag ein Schritt plus die Phase (CLEAR/SAVE); die andere Hälfte hat keine
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
@@ -2805,9 +2899,10 @@ asyncTests.push(["Sync: Makros gehen als CLEAR_MACROS, ADD_MACRO, ADD_MACRO_STEP
     "ADD_MACRO", "ADD_MACRO_STEP 4 0 250", "ADD_MACRO_STEP 1 97 0",
     "SAVE_MACROS"
   ]);
-  // Danach folgt die Leader-Phase
+  // Danach folgen die Leader-Phase und die Alt-Repeat-Phase
   assert.deepStrictEqual(sent.slice(sent.indexOf("SAVE_MACROS") + 1), [
-    "CLEAR_LEADER", "ADD_LEADER 368 97 98", "ADD_LEADER 320 99", "ADD_LEADER 122 100", "SAVE_LEADER"
+    "CLEAR_LEADER", "ADD_LEADER 368 97 98", "ADD_LEADER 320 99", "ADD_LEADER 122 100", "SAVE_LEADER",
+    "CLEAR_ALT_REPEATS", "ADD_ALT_REPEAT 101 117", "ADD_ALT_REPEAT 105 111", "SAVE_ALT_REPEATS"
   ]);
 }]);
 
@@ -6750,8 +6845,14 @@ test("Sync: Leader-Phase sendet CLEAR_LEADER, ADD_LEADER und SAVE_LEADER und zä
   assert.ok(src.includes("`ADD_LEADER ${actionCodeToNumeric(q.action)} ${keys}`"));
   assert.ok(src.includes('"SAVE_LEADER", "SAVE_LEADER", 5000'));
   // Zahl der updateProgress()-Aufrufe der Leader-Phase: je Sequenz einer (gesendet oder übersprungen) plus einer für die Phase
-  const phase = src.slice(src.indexOf("CLEAR_LEADER"), src.indexOf("Nur die tatsächlich übertragenen"));
+  const phase = src.slice(src.indexOf("CLEAR_LEADER"), src.indexOf("Eigene Alt-Repeat-Paare synchronisieren"));
   assert.strictEqual((phase.match(/updateProgress\(\)/g) || []).length, 3);
+  // Alt-Repeat-Phase: gleiche Zählung (je Paar einer, gesendet oder übersprungen, plus einer für die Phase)
+  assert.ok(src.includes('"CLEAR_ALT_REPEATS", "CLEAR_ALT_REPEATS", 3000, true'));
+  assert.ok(src.includes("`ADD_ALT_REPEAT ${actionCodeToNumeric(e.key)} ${actionCodeToNumeric(e.alt)}`"));
+  assert.ok(src.includes('"SAVE_ALT_REPEATS", "SAVE_ALT_REPEATS", 5000'));
+  const altPhase = src.slice(src.indexOf("CLEAR_ALT_REPEATS"), src.indexOf("Nur die tatsächlich übertragenen"));
+  assert.strictEqual((altPhase.match(/updateProgress\(\)/g) || []).length, 3);
 });
 
 (async () => {

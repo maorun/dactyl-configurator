@@ -374,6 +374,7 @@ MAX_COMBOS = 16
 MAX_KEY_PAIRS = 16
 MAX_KEY_OVERRIDES = 16
 MAX_LEADER_SEQS = 16
+MAX_ALT_REPEATS = 16
 LEADER_MAX_KEYS = 4
 MAX_MACROS = 16
 MAX_MACRO_STEPS = 32
@@ -394,7 +395,7 @@ STATIC_ALLOWLIST = {
     "/js/side-right.js": "js/side-right.js", "/js/side-left.js": "js/side-left.js",
 }
 # Module der Web-App (Reihenfolge in index.html)
-APP_MODULES = ("matrix-constants", "keycodes", "config-model", "editor", "key-pairs-ui", "key-overrides-ui", "leader-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
+APP_MODULES = ("matrix-constants", "keycodes", "config-model", "editor", "key-pairs-ui", "key-overrides-ui", "leader-ui", "alt-repeats-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
                "live-monitor", "heatmap", "matrix-test", "layout-lint-ui", "layer-sheet-ui", "practice-ui", "keyboard-hooks", "config-sync")
 STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 
@@ -842,6 +843,38 @@ def generate_leader_cpp(sequences):
     ]
     return "\n".join(lines)
 
+def generate_alt_repeats_cpp(entries):
+    """Eigene Alternate-Repeat-Paare { key, alt }: Tastaturcodes 1..255; derselbe Auslöser nur einmal."""
+    if entries is None:
+        entries = []
+    if not isinstance(entries, list):
+        raise ValueError("Ungültige Alt-Repeat-Paare: Liste erwartet.")
+    if len(entries) > MAX_ALT_REPEATS:
+        raise ValueError(f"Zu viele Alt-Repeat-Paare: maximal {MAX_ALT_REPEATS} erlaubt.")
+    lines_cpp = []
+    seen = set()
+    for e in entries:
+        if not isinstance(e, dict):
+            raise ValueError("Ungültiger Eintrag eines Alt-Repeat-Paars.")
+        key_cpp = standard_key_member_cpp(e.get("key"), "key", "Alt-Repeat-Paar: 'key' muss eine normale Taste sein.")
+        alt_cpp = standard_key_member_cpp(e.get("alt"), "alt", "Alt-Repeat-Paar: 'alt' muss eine normale Taste sein.")
+        ident = leader_key_identity(key_cpp)
+        if ident == leader_key_identity(alt_cpp):
+            raise ValueError("Alt-Repeat-Paar: 'key' und 'alt' müssen verschieden sein.")
+        if ident in seen:
+            raise ValueError("Zwei Alt-Repeat-Paare haben dieselbe Taste.")
+        seen.add(ident)
+        lines_cpp.append(f"  {{ {key_cpp}, {alt_cpp} }}")
+    lines = [
+        "// [[[START_ALT_REPEATS]]]",
+        f"uint8_t numAltRepeats = {len(lines_cpp)};",
+        "AltRepeatPair userAltRepeats[MAX_ALT_REPEATS] = {",
+        ",\n".join(lines_cpp) if lines_cpp else "  { 0, 0 }",
+        "};",
+        "// [[[END_ALT_REPEATS]]]"
+    ]
+    return "\n".join(lines)
+
 def generate_key_pairs_cpp(pairs):
     if pairs is None:
         pairs = []
@@ -1006,6 +1039,8 @@ def render_ino_content(content, config, defaults_id=None, side="R"):
     if "keyPairs" in config:
         content = replace_marked_block(content, "KEY_PAIRS", generate_key_pairs_cpp(config.get("keyPairs")))
     # Nur der Master trägt Überschreibungen; der linken Vorlage fehlt der Block
+    if "altRepeats" in config:
+        content = replace_marked_block(content, "ALT_REPEATS", generate_alt_repeats_cpp(config.get("altRepeats")))
     if "leaderSequences" in config:
         content = replace_marked_block(content, "LEADER", generate_leader_cpp(config.get("leaderSequences")))
     if "keyOverrides" in config and side == "R":
@@ -1110,6 +1145,7 @@ def validate_config(config, side="R"):
     generate_key_pairs_cpp(config.get("keyPairs"))
     generate_key_overrides_cpp(config.get("keyOverrides"))
     generate_leader_cpp(config.get("leaderSequences"))
+    generate_alt_repeats_cpp(config.get("altRepeats"))
     if side == "L" and config.get("keyOverrides"):
         raise ValueError("Tasten-Überschreibungen gelten nur für die rechte Hälfte (Master).")
     generate_macros_cpp(config.get("macros"))

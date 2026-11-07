@@ -348,6 +348,27 @@ function isLeaderAction(code) {
   return isLeaderKey(code) || pairIndexFromCode(code) >= 0 || macroIndexFromCode(code) >= 0;
 }
 
+// Alternate-Repeat-Paar { key, alt }: Tastaturcodes 1..255 (Modifier erlaubt), gerichtet, key != alt (wie Firmware und server.py)
+function isValidAltRepeat(e) {
+  return !!e && typeof e === "object" && isStandardKeyOrModifier(e.key) && isStandardKeyOrModifier(e.alt) &&
+    actionCodeToNumeric(e.key) !== actionCodeToNumeric(e.alt);
+}
+
+// true, wenn zwei Paare der Liste denselben Auslöser haben
+function hasDuplicateAltRepeat(list) {
+  const seen = new Set();
+  for (const e of list) {
+    const id = actionCodeToNumeric(e.key);
+    if (seen.has(id)) return true;
+    seen.add(id);
+  }
+  return false;
+}
+
+function normalizeAltRepeat(e) {
+  return { key: e.key, alt: e.alt };
+}
+
 function isValidLeaderSequence(q) {
   return !!q && typeof q === "object" && Array.isArray(q.keys) && q.keys.length >= 1 && q.keys.length <= LEADER_MAX_KEYS &&
     q.keys.every(isLeaderKey) && isLeaderAction(q.action);
@@ -723,6 +744,15 @@ function validateConfigShape(cfg, profile) {
     });
     if (hasDuplicateLeaderSequence(cfg.leaderSequences)) throw new Error("Zwei Leader-Sequenzen haben dieselben Tasten.");
   }
+  if (cfg.altRepeats !== undefined) {
+    if (!Array.isArray(cfg.altRepeats) || cfg.altRepeats.length > MAX_ALT_REPEATS) {
+      throw new Error(`'altRepeats' muss eine Liste mit maximal ${MAX_ALT_REPEATS} Einträgen sein.`);
+    }
+    cfg.altRepeats.forEach((e, i) => {
+      if (!isValidAltRepeat(e)) throw new Error(`Alt-Repeat-Paar ${i} braucht zwei Tasten (key, alt) mit Codes 1..255.`);
+    });
+    if (hasDuplicateAltRepeat(cfg.altRepeats)) throw new Error("Zwei Alt-Repeat-Paare haben dieselbe Taste.");
+  }
   if (cfg.macros !== undefined) {
     if (!Array.isArray(cfg.macros) || cfg.macros.length > MAX_MACROS) {
       throw new Error(`'macros' muss eine Liste mit maximal ${MAX_MACROS} Einträgen sein.`);
@@ -835,6 +865,13 @@ function normalizeConfig(cfg, profile) {
     if (!hasDuplicateLeaderSequence([...leaderList, q])) leaderList.push(normalizeLeaderSequence(q));
   }
   cfg.leaderSequences = leaderList;
+  // Ungültige oder doppelte Alt-Repeat-Paare entfallen (das erste mit derselben Taste gewinnt)
+  const altList = [];
+  for (const e of Array.isArray(cfg.altRepeats) ? cfg.altRepeats : []) {
+    if (!isValidAltRepeat(e) || altList.length >= MAX_ALT_REPEATS) continue;
+    if (!hasDuplicateAltRepeat([...altList, e])) altList.push(normalizeAltRepeat(e));
+  }
+  cfg.altRepeats = altList;
   // Ein ungültiges Makro wird leer, nicht entfernt: MACRO_<n> verweist per Index, die Indizes bleiben gleich
   cfg.macros = Array.isArray(cfg.macros)
     ? cfg.macros.slice(0, MAX_MACROS).map((m, i) => ({
@@ -1023,6 +1060,32 @@ function topSameFingerPairs(stats, limit = SAME_FINGER_TOP) {
     });
 }
 
+// Alt-Repeat-Paare aus den häufigsten Folgen eines Fingers: je Folge a|b die Richtungen a → b und b → a, damit die
+// Alt-Repeat-Taste (eines anderen Fingers) die zweite Taste der Folge ersetzt. Tasten kommen aus der Tap-Aktion der
+// Ebene 0 (normale Taste oder Modifier, 1..255). Vorhandene Auslöser, doppelte und ungültige Richtungen entfallen,
+// die Liste bleibt unter MAX_ALT_REPEATS. Ändert cfg nicht; liefert nur die neuen Einträge.
+function altRepeatsFromSameFingerPairs(cfg, pairs) {
+  const existing = Array.isArray(cfg && cfg.altRepeats) ? cfg.altRepeats : [];
+  const taken = new Set(existing.filter(isValidAltRepeat).map(e => actionCodeToNumeric(e.key)));
+  const added = [];
+  const tapAt = id => {
+    const [r, c] = id.split("_").map(Number);
+    return isValidIndex(r, NUM_ROWS) && isValidIndex(c, NUM_COLS) ? lintCellAt(cfg, 0, r, c).tap : "NONE";
+  };
+  for (const p of pairs || []) {
+    const a = tapAt(p.a);
+    const b = tapAt(p.b);
+    if (!isStandardKeyOrModifier(a) || !isStandardKeyOrModifier(b) || a === b) continue;
+    for (const [key, alt] of [[a, b], [b, a]]) {
+      const n = actionCodeToNumeric(key);
+      if (taken.has(n) || existing.length + added.length >= MAX_ALT_REPEATS) continue;
+      taken.add(n);
+      added.push({ key, alt });
+    }
+  }
+  return added;
+}
+
 // Zähler für die Heatmap: alle Ebenen (layer null) oder nur eine Ebene
 function heatmapCounts(stats, layer) {
   return isValidIndex(layer, NUM_LAYERS) ? stats.layerCounts[layer] : stats.counts;
@@ -1062,7 +1125,7 @@ function maxKeyCount(stats, layer = null) {
 function createDeviceSnapshot() {
   return {
     names: null, tap: [], hold: [], dtap: [], term: [],
-    counts: { combos: null, pairs: null, macros: null, overrides: null, leader: null }, combos: [], pairs: [], macros: [], overrides: [], leader: [], macroLens: [], listsBroken: false,
+    counts: { combos: null, pairs: null, macros: null, overrides: null, leader: null, altrep: null }, combos: [], pairs: [], macros: [], overrides: [], leader: [], altrep: [], macroLens: [], listsBroken: false,
     // DEVICE_INFO der Hälfte (nur beim Laden der kompletten Config gelesen), sonst null
     info: null
   };
@@ -1070,8 +1133,8 @@ function createDeviceSnapshot() {
 
 const COMBO_BEHAVIOR_CODES = { KEY_PRESS: 0, MODIFIER_HOLD: 1, LAYER_TOGGLE: 2 };
 
-const LIST_COUNT_MAX = { "COMBO_COUNT:": MAX_COMBOS, "PAIR_COUNT:": MAX_KEY_PAIRS, "MACRO_COUNT:": MAX_MACROS, "OVERRIDE_COUNT:": MAX_KEY_OVERRIDES, "LEADER_COUNT:": MAX_LEADER_SEQS };
-const LIST_DATA_PREFIXES = ["COMBO_DATA:", "PAIR_DATA:", "MACRO_DATA:", "OVERRIDE_DATA:", "LEADER_DATA:"];
+const LIST_COUNT_MAX = { "COMBO_COUNT:": MAX_COMBOS, "PAIR_COUNT:": MAX_KEY_PAIRS, "MACRO_COUNT:": MAX_MACROS, "OVERRIDE_COUNT:": MAX_KEY_OVERRIDES, "LEADER_COUNT:": MAX_LEADER_SEQS, "ALTREP_COUNT:": MAX_ALT_REPEATS };
+const LIST_DATA_PREFIXES = ["COMBO_DATA:", "PAIR_DATA:", "MACRO_DATA:", "OVERRIDE_DATA:", "LEADER_DATA:", "ALTREP_DATA:"];
 
 // Übernimmt eine Zeile ..._COUNT: oder ..._DATA: in den Snapshot. Gibt true zurück, wenn die Zeile eine dieser
 // Arten ist (auch bei ungültigem Inhalt: verbraucht, der Snapshot gilt dann als unvollständig).
@@ -1085,7 +1148,7 @@ function captureListLine(snapshot, line) {
     if (LIST_COUNT_MAX[prefix] !== undefined) {
       const n = /^\d{1,3}$/.test(body) ? Number(body) : -1;
       if (n < 0 || n > LIST_COUNT_MAX[prefix]) return fail();
-      const kind = { "COMBO_COUNT:": "combos", "PAIR_COUNT:": "pairs", "MACRO_COUNT:": "macros", "OVERRIDE_COUNT:": "overrides", "LEADER_COUNT:": "leader" }[prefix];
+      const kind = { "COMBO_COUNT:": "combos", "PAIR_COUNT:": "pairs", "MACRO_COUNT:": "macros", "OVERRIDE_COUNT:": "overrides", "LEADER_COUNT:": "leader", "ALTREP_COUNT:": "altrep" }[prefix];
       snapshot.counts[kind] = n;
       snapshot[kind] = [];
       if (kind === "macros") snapshot.macroLens = [];
@@ -1106,14 +1169,15 @@ function captureListLine(snapshot, line) {
     const isCombo = prefix === "COMBO_DATA:";
     const isOverride = prefix === "OVERRIDE_DATA:";
     const isLeader = prefix === "LEADER_DATA:";
-    const kind = isCombo ? "combos" : isOverride ? "overrides" : isLeader ? "leader" : "pairs";
+    const isAltRepeat = prefix === "ALTREP_DATA:";
+    const kind = isCombo ? "combos" : isOverride ? "overrides" : isLeader ? "leader" : isAltRepeat ? "altrep" : "pairs";
     const count = snapshot.counts[kind];
     const list = snapshot[kind];
     if (count === null || data.o !== list.length || !Array.isArray(data.e) || list.length + data.e.length > count ||
         !data.e.every(e => isCombo ? (nums(e, 6, t => t[4] <= 2) || nums(e, 7, t => t[4] <= 2 && isValidComboLayerMask(t[6])) ||
             nums(e, 10, t => t[4] <= 2 && isValidComboLayerMask(t[6]) && isDeviceComboThirdAndWindow(t)))
           : isOverride ? nums(e, 3, t => t[0] >= 1 && t[0] <= 15)
-          : isLeader ? nums(e, 5, isDeviceLeaderTuple) : nums(e, 2))) return fail();
+          : isLeader ? nums(e, 5, isDeviceLeaderTuple) : isAltRepeat ? nums(e, 2, t => t[0] >= 1 && t[0] <= 0xFF && t[1] >= 1 && t[1] <= 0xFF) : nums(e, 2))) return fail();
     // Firmware vor der Ebenenmaske sendet 6 Werte je Combo (alle Ebenen), vor Stand 24 sieben (zwei Tasten, globales
     // Fenster). Alle Einträge werden auf zehn Werte ergänzt: ..., Maske, r3, c3, Fenster.
     list.push(...(isCombo ? data.e.map(e => [...e, ...[COMBO_ALL_LAYERS, COMBO_NO_KEY, COMBO_NO_KEY, 0].slice(e.length - 6)]) : data.e));
@@ -1146,7 +1210,7 @@ function isDeviceComboThirdAndWindow(t) {
 function snapshotListsState(snapshot) {
   if (!snapshot) return "absent";
   const c = snapshot.counts;
-  const none = c.combos === null && c.pairs === null && c.macros === null && c.overrides === null && c.leader === null;
+  const none = c.combos === null && c.pairs === null && c.macros === null && c.overrides === null && c.leader === null && c.altrep === null;
   if (none && !snapshot.listsBroken) return "absent";
   if (snapshot.listsBroken || c.combos === null || c.pairs === null || c.macros === null) return "incomplete";
   if (snapshot.combos.length !== c.combos || snapshot.pairs.length !== c.pairs) return "incomplete";
@@ -1155,6 +1219,8 @@ function snapshotListsState(snapshot) {
   if (c.overrides !== null && snapshot.overrides.length !== c.overrides) return "incomplete";
   // Die Leader-Sequenzen senden beide Hälften ab Stand 26; Firmware davor sendet keinen Zähler
   if (c.leader !== null && snapshot.leader.length !== c.leader) return "incomplete";
+  // Die Alt-Repeat-Paare senden beide Hälften ab Stand 34
+  if (c.altrep !== null && snapshot.altrep.length !== c.altrep) return "incomplete";
   for (let i = 0; i < c.macros; i++) {
     if (snapshot.macroLens[i] === undefined || snapshot.macros[i].length !== snapshot.macroLens[i]) return "incomplete";
   }
@@ -1180,6 +1246,14 @@ function localPairTuples(cfg) {
 
 function localOverrideTuples(cfg) {
   return (cfg.keyOverrides || []).slice(0, MAX_KEY_OVERRIDES).map(o => [keyOverrideModsValue(o.mods), actionCodeToNumeric(o.key), actionCodeToNumeric(o.replacement)]);
+}
+
+function localAltRepeatTuples(cfg) {
+  return (cfg.altRepeats || []).slice(0, MAX_ALT_REPEATS).map(e => [actionCodeToNumeric(e.key), actionCodeToNumeric(e.alt)]);
+}
+
+function describeAltRepeatTuple(t) {
+  return `${findDefinitionByCode(t[0]).label} → ${findDefinitionByCode(t[1]).label}`;
 }
 
 function localLeaderTuples(cfg) {
@@ -1286,7 +1360,7 @@ function diffKeymap(cfg, snapshot, profile) {
 // nichts wird verglichen.
 function diffLists(cfg, snapshot) {
   const state = snapshotListsState(snapshot);
-  const out = { known: state === "complete", state, combos: [], pairs: [], overrides: [], leader: [], macros: [] };
+  const out = { known: state === "complete", state, combos: [], pairs: [], overrides: [], leader: [], altrep: [], macros: [] };
   if (!out.known) return out;
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   const compare = (target, label, device, local, describe) => {
@@ -1302,6 +1376,8 @@ function diffLists(cfg, snapshot) {
   if (snapshot.counts.overrides !== null) compare(out.overrides, "Überschreibung", snapshot.overrides, localOverrideTuples(cfg), describeOverrideTuple);
   // Nur wenn das Gerät Leader-Sequenzen meldet (ab Stand 26)
   if (snapshot.counts.leader !== null) compare(out.leader, "Leader", snapshot.leader, localLeaderTuples(cfg), describeLeaderTuple);
+  // Nur wenn das Gerät Alt-Repeat-Paare meldet (ab Stand 34)
+  if (snapshot.counts.altrep !== null) compare(out.altrep, "Alt-Repeat", snapshot.altrep, localAltRepeatTuples(cfg), describeAltRepeatTuple);
   const deviceMacros = Array.from({ length: snapshot.counts.macros }, (_, i) => snapshot.macros[i]);
   compare(out.macros, "Makro", deviceMacros, localMacroSteps(cfg), describeMacroSteps);
   return out;
@@ -1397,6 +1473,10 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
     leaderSequences: snapshot.counts.leader === null
       ? JSON.parse(JSON.stringify((baseCfg && baseCfg.leaderSequences) || []))
       : snapshot.leader.map(t => ({ keys: t.slice(1).filter(n => n > 0).map(tapOf), action: tapOf(t[0]) })),
+    // Ohne ALTREP_COUNT (Firmware vor Stand 34) bleiben die lokalen Paare
+    altRepeats: snapshot.counts.altrep === null
+      ? JSON.parse(JSON.stringify((baseCfg && baseCfg.altRepeats) || []))
+      : snapshot.altrep.map(t => ({ key: tapOf(t[0]), alt: tapOf(t[1]) })),
     macros: Array.from({ length: snapshot.counts.macros }, (_, i) => ({
       name: `Makro ${i}`,
       steps: snapshot.macros[i].map(st => st[0] === MACRO_STEP_TYPES.pause

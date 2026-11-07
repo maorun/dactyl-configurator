@@ -523,6 +523,177 @@ class TestServerAndCodegen(unittest.TestCase):
             server.validate_config(dict(left_cfg, keyOverrides=override), "L")
         server.validate_config(dict(left_cfg, keyOverrides=[]), "L")
 
+    def test_leader_constants_match_firmware(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_LEADER\s+0x16E")
+        self.assertRegex(common, rf"#define MAX_LEADER_SEQS\s+{server.MAX_LEADER_SEQS}\b")
+        self.assertRegex(common, rf"#define LEADER_MAX_KEYS\s+{server.LEADER_MAX_KEYS}\b")
+        self.assertEqual(server.code_to_cpp("LEADER"), "ACT_LEADER")
+
+    def test_leader_codegen(self):
+        cpp = server.generate_leader_cpp([
+            {"keys": ["KEY_A", "KEY_B"], "action": "MACRO_0"},
+            {"keys": ["KEY_C"], "action": "PAIR_2"},
+            {"keys": ["KEY_D", "KEY_E", "KEY_F", "KEY_G"], "action": "KEY_Z"},
+        ])
+        self.assertIn("// [[[START_LEADER]]]", cpp)
+        self.assertIn("uint8_t numLeaderSeqs = 3;", cpp)
+        self.assertIn("LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS] = {", cpp)
+        self.assertIn("{ {'a', 'b', 0, 0}, (ACT_MACRO_BASE + 0) }", cpp)
+        self.assertIn("{ {'c', 0, 0, 0}, (ACT_KEY_PAIR_BASE + 2) }", cpp)
+        self.assertIn("{ {'d', 'e', 'f', 'g'}, 'z' }", cpp)
+        self.assertIn("{ {0, 0, 0, 0}, 0 }", server.generate_leader_cpp([]))
+        self.assertIn("numLeaderSeqs = 0;", server.generate_leader_cpp(None))
+
+    def test_leader_validation(self):
+        ok = {"keys": ["KEY_A"], "action": "KEY_Z"}
+        bad_entries = (
+            {"keys": [], "action": "KEY_Z"},                                          # keine Taste
+            {"keys": ["KEY_A", "KEY_B", "KEY_C", "KEY_D", "KEY_E"], "action": "KEY_Z"},  # fünf Tasten
+            {"keys": "KEY_A", "action": "KEY_Z"},                                     # keine Liste
+            {"keys": ["KEY_LEFT_SHIFT"], "action": "KEY_Z"},                          # Modifier als Taste
+            {"keys": ["KEY_129"], "action": "KEY_Z"},                                 # Modifier-Code als Zahl
+            {"keys": ["PAIR_0"], "action": "KEY_Z"},                                  # Paar als Taste
+            {"keys": ["NONE"], "action": "KEY_Z"},                                    # leere Taste
+            {"keys": ["KEY_A"], "action": "KEY_LEFT_CTRL"},                           # Modifier als Aktion
+            {"keys": ["KEY_A"], "action": "MO_1"},                                    # Layer-Aktion
+            {"keys": ["KEY_A"], "action": "NONE"},                                    # keine Aktion
+            {"keys": ["KEY_A"], "action": "LEADER"},                                  # Leader in Leader
+            {"keys": ["KEY_A"], "action": "PAIR_16"},                                 # Paar außerhalb
+            {"keys": ["KEY_A"]},                                                      # Aktion fehlt
+            "kaputt",
+        )
+        for bad in bad_entries:
+            with self.subTest(entry=bad), self.assertRaises(ValueError):
+                server.generate_leader_cpp([bad])
+        with self.assertRaises(ValueError):
+            server.generate_leader_cpp("x")
+        with self.assertRaises(ValueError):
+            server.generate_leader_cpp([ok, {"keys": ["KEY_A"], "action": "KEY_Y"}])  # dieselben Tasten
+        with self.assertRaises(ValueError):
+            server.generate_leader_cpp([{"keys": [f"KEY_{n}"], "action": "KEY_Z"} for n in range(4, 21)])  # 17 Einträge
+        server.generate_leader_cpp([{"keys": [f"KEY_{n}"], "action": "KEY_Z"} for n in range(4, 20)])  # 16 Einträge
+
+    def test_leader_errors_name_the_leader_feature(self):
+        for bad in ({"keys": ["KEY_LEFT_SHIFT"], "action": "KEY_Z"}, {"keys": ["KEY_A"], "action": "KEY_LEFT_CTRL"},
+                    {"keys": ["KEY_A"], "action": "NONE"}):
+            with self.subTest(entry=bad), self.assertRaises(ValueError) as ctx:
+                server.generate_leader_cpp([bad])
+            self.assertIn("Leader-Sequenz", str(ctx.exception))
+            self.assertNotIn("Überschreibung", str(ctx.exception))
+
+    def test_leader_named_key_without_known_value_is_rejected(self):
+        with mock.patch.object(server, "keycode_values", return_value={}):
+            with self.assertRaises(ValueError):
+                server.generate_leader_cpp([{"keys": ["KEY_RETURN"], "action": "KEY_Z"}])
+
+    def test_leader_keys_with_leading_zero_render_as_decimal(self):
+        # KEY_0200 wäre in C++ ein Oktal-Literal (0x80, ein Modifier)
+        self.assertEqual(server.standard_key_member_cpp("KEY_0200", "keys"), "200")
+        self.assertIn("{ {200, 0, 0, 0}, ", server.generate_leader_cpp([{"keys": ["KEY_0200"], "action": "KEY_Z"}]))
+        self.assertEqual(server.standard_key_member_cpp("KEY_097", "keys"), "97")
+        with self.assertRaises(ValueError):
+            server.generate_leader_cpp([{"keys": ["KEY_0128"], "action": "KEY_Z"}])   # Modifier
+
+    def test_leader_digit_keys_are_ascii_and_match_the_app(self):
+        # KEY_0 .. KEY_9 sind Zifferntasten ('0'..'9'), kein Zahlenwert 0..9
+        self.assertEqual(server.standard_key_member_cpp("KEY_5", "keys"), "'5'")
+        self.assertEqual(server.standard_key_member_cpp("KEY_0", "keys"), "'0'")
+        self.assertIn("{ {'0', 0, 0, 0}, ", server.generate_leader_cpp([{"keys": ["KEY_0"], "action": "KEY_Z"}]))
+        for a, b in (("KEY_5", "5"), ("KEY_0", "0")):
+            with self.subTest(a=a), self.assertRaises(ValueError):
+                server.generate_leader_cpp([{"keys": [a], "action": "KEY_Z"}, {"keys": [b], "action": "KEY_Y"}])
+        # Zahlenwerte bleiben Zahlen, auch zweistellig
+        self.assertEqual(server.standard_key_member_cpp("KEY_53", "keys"), "53")
+        with self.assertRaises(ValueError):
+            server.generate_leader_cpp([{"keys": ["KEY_5"], "action": "KEY_Z"}, {"keys": ["KEY_53"], "action": "KEY_Y"}])
+
+    def test_digit_keys_render_as_ascii_for_pairs_macros_and_overrides(self):
+        # standard_key_member_cpp speist auch Paare, Makros und Überschreibungen: KEY_0 und KEY_5 bleiben Zifferntasten
+        self.assertIn("'0'", server.generate_key_pairs_cpp([{"first": "KEY_0", "second": "KEY_5"}]))
+        self.assertIn("'5'", server.generate_key_pairs_cpp([{"first": "KEY_0", "second": "KEY_5"}]))
+        macro = server.generate_macros_cpp([{"name": "d", "steps": [{"type": "tap", "code": "KEY_0"}, {"type": "tap", "code": "KEY_5"}]}])
+        self.assertIn("'0'", macro)
+        self.assertIn("'5'", macro)
+        ovr = server.generate_key_overrides_cpp([{"mods": ["shift"], "key": "KEY_5", "replacement": "KEY_0"}])
+        self.assertIn("'5'", ovr)
+        self.assertIn("'0'", ovr)
+
+    def test_keycode_values_are_not_cached_when_empty(self):
+        saved = server._KEYCODE_VALUES
+        saved_ino = server.INO_FILE
+        try:
+            server._KEYCODE_VALUES = None
+            server.INO_FILE = os.path.join(tempfile.gettempdir(), "no-such-dir", "x.ino")
+            self.assertEqual(server.keycode_values(), {})
+            self.assertIsNone(server._KEYCODE_VALUES)       # ein Fehlschlag wird nicht gemerkt
+            server.INO_FILE = saved_ino
+            self.assertIn("KEY_RETURN", server.keycode_values())
+        finally:
+            server._KEYCODE_VALUES = saved
+            server.INO_FILE = saved_ino
+
+    def test_leader_duplicate_check_compares_key_values(self):
+        for other in ("KEY_97", "a", "KEY_097"):
+            with self.subTest(other=other), self.assertRaises(ValueError):
+                server.generate_leader_cpp([{"keys": ["KEY_97"], "action": "KEY_Z"}, {"keys": [other], "action": "KEY_Y"}]
+                                           if other != "KEY_97" else
+                                           [{"keys": ["a"], "action": "KEY_Z"}, {"keys": [other], "action": "KEY_Y"}])
+        with self.assertRaises(ValueError):
+            server.generate_leader_cpp([{"keys": ["KEY_RETURN"], "action": "KEY_Z"}, {"keys": ["KEY_176"], "action": "KEY_Y"}])
+        # Verschiedene Folgen bleiben gültig, auch mit gleichem Anfang
+        server.generate_leader_cpp([{"keys": ["a"], "action": "KEY_Z"}, {"keys": ["a", "b"], "action": "KEY_Y"}])
+
+    def test_leader_renders_in_both_sketches_and_validates_on_both_sides(self):
+        seqs = [{"keys": ["KEY_A", "KEY_B"], "action": "KEY_Z"}]
+        base = os.path.dirname(os.path.abspath(server.__file__))
+        for ino, side, cfg_file in (("firmware/dactyl_right/dactyl_right.ino", "R", server.DEFAULT_CONFIG_FILE),
+                                    ("firmware/dactyl_left/dactyl_left.ino", "L", server.LEFT_DEFAULT_CONFIG_FILE)):
+            with open(os.path.join(base, ino), encoding="utf-8") as f:
+                content = f.read()
+            with open(cfg_file, encoding="utf-8") as f:
+                cfg = json.load(f)
+            self.assertEqual(content.count("// [[[START_LEADER]]]"), 1, ino)
+            self.assertEqual(content.count("// [[[END_LEADER]]]"), 1, ino)
+            out = server.render_ino_content(content, dict(cfg, leaderSequences=seqs), side=side)
+            self.assertIn("uint8_t numLeaderSeqs = 1;", out)
+            self.assertIn("{ {'a', 'b', 0, 0}, 'z' }", out)
+            # Ohne Schlüssel bleibt die Liste der Vorlage unverändert
+            self.assertEqual(server.render_ino_content(content, cfg, side=side).count("// [[[START_LEADER]]]"), 1)
+            server.validate_config(dict(cfg, leaderSequences=seqs), side)
+            with self.assertRaises(ValueError):
+                server.validate_config(dict(cfg, leaderSequences=[{"keys": [], "action": "KEY_Z"}]), side)
+
+    def test_leader_timeout_setting(self):
+        self.assertEqual(server.SETTINGS_RANGES["leaderTimeoutMs"], (100, 5000, 1000))
+        self.assertIn("uint16_t leaderTimeoutMs = 1000;", server.generate_settings_cpp({}))
+        self.assertIn("uint16_t leaderTimeoutMs = 750;", server.generate_settings_cpp({"leaderTimeoutMs": 750}))
+        for bad in (99, 5001, -1, "x", True):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_settings_cpp({"leaderTimeoutMs": bad})
+        # Beide Sketches tragen die Einstellung im Settings-Block
+        base = os.path.dirname(os.path.abspath(server.__file__))
+        for ino in ("firmware/dactyl_right/dactyl_right.ino", "firmware/dactyl_left/dactyl_left.ino"):
+            with open(os.path.join(base, ino), encoding="utf-8") as f:
+                self.assertIn("uint16_t leaderTimeoutMs", f.read(), ino)
+
+    def test_leader_is_no_combo_action(self):
+        for behavior in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
+            combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": behavior, "action": "LEADER"}
+            with self.subTest(behavior=behavior), self.assertRaises(ValueError):
+                server.generate_combos_cpp([combo])
+
+    def test_leader_key_is_allowed_on_both_halves(self):
+        layer = [[{"tap": "NONE"}] * 7 for _ in range(6)]
+        layer[2] = list(layer[2])
+        layer[2][1] = {"tap": "LEADER", "hold": "NONE"}
+        server.validate_config({"layers": [layer]}, "R")
+        server.validate_config({"layers": [layer]}, "L")
+
+    def test_leader_ui_module_is_served(self):
+        self.assertIn("/js/leader-ui.js", server.STATIC_ALLOWLIST)
+
     def test_pair_action_code_maps_to_firmware_constant(self):
         self.assertEqual(server.code_to_cpp("PAIR_0"), "(ACT_KEY_PAIR_BASE + 0)")
         self.assertEqual(server.code_to_cpp("PAIR_15"), "(ACT_KEY_PAIR_BASE + 15)")

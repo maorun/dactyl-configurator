@@ -93,6 +93,9 @@
 // RAM-Slot (höchstens MAX_MACRO_STEPS Schritte), DM_PLAY spielt ihn mit der Makro-Engine ab (DactylDynamicMacro.h)
 #define ACT_DM_REC               0x16C
 #define ACT_DM_PLAY              0x16D
+// Leader-Taste: danach sammelt die Hälfte bis zu LEADER_MAX_KEYS Tasten (Zeitlimit leaderTimeoutMs je Taste); eine passende
+// Folge aus userLeaderSeqs[] führt ihre Aktion aus, ohne Treffer passiert nichts. Die Tasten der Folge senden nichts.
+#define ACT_LEADER               0x16E
 // One-Shot-Ebene (OSL_0 .. OSL_7): Tippen merkt die Ebene für den nächsten Tastendruck beider Hälften vor, danach
 // ist sie wieder gelöst; ein zweites Tippen nimmt die Vormerkung zurück; Halten wirkt wie MO_n und merkt nichts vor
 #define ACT_OSL_BASE             0x180
@@ -135,6 +138,20 @@ struct KeyPair {
   uint16_t first;
   uint16_t second;
 };
+
+#define MAX_LEADER_SEQS  16
+#define LEADER_MAX_KEYS  4
+#define LEADER_TIMEOUT_MIN_MS 100
+#define LEADER_TIMEOUT_MAX_MS 5000
+#define LEADER_TIMEOUT_DEFAULT_MS 1000
+
+// Leader-Folge (exakt 6 Bytes, NVS-Format): keys = Tastencodes 1..255 ohne Modifier, ungenutzte Plätze 0 (die belegten
+// stehen vorn); action = Tastencode 1..255 ohne Modifier, Tastenpaar (ACT_KEY_PAIR_BASE + n) oder Makro (ACT_MACRO_BASE + n)
+struct LeaderSeq {
+  uint8_t keys[LEADER_MAX_KEYS];
+  uint16_t action;
+};
+static_assert(sizeof(LeaderSeq) == 6, "LeaderSeq ist das 6-Byte-NVS-Format");
 
 // Makro: eine Taste spielt eine Folge aus Tippen, Drücken, Loslassen und Pausen ab; Index in userMacros[]
 #define ACT_MACRO_BASE           0x170

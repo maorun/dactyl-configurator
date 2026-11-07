@@ -94,11 +94,13 @@ function addKeyPairFromUI() {
 function deleteKeyPair(idx) {
   const plan = planKeyPairDeletion(currentConfig, idx);
   if (!plan) return;
-  if (plan.used && !confirm(`Tastenpaar ${idx} ist noch Tasten oder Combos zugewiesen. Diese Belegungen werden geleert. Trotzdem löschen?`)) return;
+  if (plan.used && !confirm(`Tastenpaar ${idx} ist noch Tasten, Combos oder Leader-Sequenzen zugewiesen. Diese Belegungen werden geleert. Trotzdem löschen?`)) return;
   const apply = state => {
     currentConfig.keyPairs = state.keyPairs;
     currentConfig.layers = state.layers;
     currentConfig.combos = state.combos;
+    currentConfig.leaderSequences = state.leaderSequences;
+    renderLeaderSequences();
     renderMatrix();
     renderCombosTable();
     if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);

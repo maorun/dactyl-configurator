@@ -66,6 +66,9 @@ static uint8_t numCombos = 0;
 static KeyCombo userCombos[MAX_COMBOS];
 static uint8_t numKeyPairs = 0;
 static KeyPair userKeyPairs[MAX_KEY_PAIRS];
+static uint8_t numLeaderSeqs = 0;
+static LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS];
+static uint16_t leaderTimeoutMs = 1000;
 static uint8_t numMacros = 0;
 static uint8_t macroLengths[MAX_MACROS] = {0};
 static MacroStep userMacros[MAX_MACROS][MAX_MACRO_STEPS];
@@ -114,6 +117,9 @@ static void resetState() {
   tapPendingReporter = {};
   numCombos = 0;
   numKeyPairs = 0;
+  numLeaderSeqs = 0;
+  leaderReset();
+  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) leaderConsumed[r][c] = leaderBuffered[r][c] = false;
   numMacros = 0;
   for (int i = 0; i < MAX_MACROS; i++) macroLengths[i] = 0;
   macroRun = {};
@@ -1037,6 +1043,33 @@ TEST(test_chordal_hold_on_left_half) {
   keyState[3][0] = false; onMatrixKeyChange(3, 0, false);
   drain();
   chordalHold = 0;
+}
+
+// Leader auf der linken Hälfte: die Folge läuft als normale Tastenoperation zum Master, die Folgentasten senden nichts
+TEST(test_leader_on_left_half_sends_only_the_action) {
+  KEYMAP[0][1][0] = ACT_LEADER;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'b';
+  userLeaderSeqs[0] = { { 'a', 'b', 0, 0 }, 'z' };
+  numLeaderSeqs = 1;
+  tap(1, 0);
+  assert(drain().empty());                        // die Leader-Taste sendet nichts
+  tap(2, 1);
+  tap(2, 2);
+  std::vector<SplitHidEvent> ev = drain();
+  bool z = false, other = false;
+  for (const auto &e : ev) {
+    if (e.code == 'z') z = true;
+    else if ((e.op == SPLIT_OP_KEY_PRESS || e.op == SPLIT_OP_KEY_WRITE) && (e.code == 'a' || e.code == 'b')) other = true;
+  }
+  assert(z && !other);
+  // Ohne Treffer sendet die Hälfte nichts, danach tippt a normal
+  tap(1, 0);
+  tap(2, 2);
+  assert(drain().empty());
+  tap(2, 1);
+  assert(!drain().empty());
+  leaderReset();
 }
 
 // Übergabe der Master-Druckzeit vom Empfangs-Callback an loop()

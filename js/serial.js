@@ -473,6 +473,10 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("quickTapInput", info.quick_tap_ms);
         if (settingsTarget) settingsTarget.quickTapMs = info.quick_tap_ms;
       }
+      if (info.leader_timeout_ms !== undefined) {
+        setInput("leaderTimeoutInput", info.leader_timeout_ms);
+        if (settingsTarget) settingsTarget.leaderTimeoutMs = info.leader_timeout_ms;
+      }
       if (info.require_prior_idle_ms !== undefined) {
         setInput("priorIdleInput", info.require_prior_idle_ms);
         if (settingsTarget) settingsTarget.requirePriorIdleMs = info.require_prior_idle_ms;

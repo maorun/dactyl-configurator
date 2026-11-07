@@ -109,6 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initMatrixTestUI();
   initKeyPairsUI();
   initKeyOverridesUI();
+  initLeaderUI();
   initMacrosUI();
   initLayoutProfilesUI();
   initLayerSheetUI();
@@ -448,6 +449,7 @@ function applySettingsToInputs(settings) {
   setVal("tappingTermInput", settings.tappingTermMs);
   setVal("holdTapModeSelect", settings.holdTapMode ?? 0);
   setVal("quickTapInput", settings.quickTapMs ?? 0);
+  setVal("leaderTimeoutInput", settings.leaderTimeoutMs ?? 1000);
   setVal("priorIdleInput", settings.requirePriorIdleMs ?? 0);
   setVal("chordalHoldSelect", settings.chordalHold ?? 0);
   applyTriLayersToInputs(settings.triLayers);

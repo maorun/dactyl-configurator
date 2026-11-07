@@ -26,6 +26,9 @@
 #include <stdint.h>
 #include "DactylKeycodes.h"
 
+// Caps Word endet nach dieser Zeit ohne Tastendruck (beide Hälften)
+#define CAPS_WORD_IDLE_MS 5000
+
 // Bit i = Modifier-Code KEY_LEFT_CTRL + i
 #define ONE_SHOT_SHIFT_BIT ((uint8_t)(1u << (KEY_LEFT_SHIFT - KEY_LEFT_CTRL)))
 
@@ -38,6 +41,9 @@ struct OneShotState {
   uint8_t sentenceStage;  // 0 = nichts, 1 = Satzzeichen gesehen, 2 = danach Leertaste(n) gesehen
   uint8_t seenArmed;      // armed beim letzten oneShotExpire(): ein anderer Wert startet die Frist neu
   unsigned long armedMs;  // Zeitpunkt, an dem oneShotExpire() die aktuelle Vormerkung zuerst sah
+  uint16_t capsActivity;      // zählt Tastendrücke und Umschalten von Caps Word
+  uint16_t capsSeenActivity;  // capsActivity beim letzten oneShotExpire(): ein anderer Wert startet die Frist neu
+  unsigned long capsMs;       // Zeitpunkt, an dem oneShotExpire() die aktuelle Aktivität zuerst sah
 };
 
 inline void oneShotReset(OneShotState &s) {
@@ -47,6 +53,13 @@ inline void oneShotReset(OneShotState &s) {
   s.sentenceStage = 0;
   s.seenArmed = 0;
   s.armedMs = 0;
+  s.capsActivity = s.capsSeenActivity = 0;
+  s.capsMs = 0;
+}
+
+inline void capsWordToggle(OneShotState &s) {
+  s.capsWord = !s.capsWord;
+  s.capsActivity++;
 }
 
 inline void oneShotKeyDown(OneShotState &s, uint8_t mask) {
@@ -64,8 +77,16 @@ inline void oneShotKeyUp(OneShotState &s, uint8_t mask, bool arm) {
 
 // Zeitlimit der Vormerkung (oneShotTimeoutMs, 0 = aus): ohne verbrauchenden Druck verfällt sie nach timeoutMs. Der Aufruf
 // aus loop() stempelt jede Änderung der Vormerkung; eine neue Vormerkung startet die Frist für alle neu. Gehaltene Tasten
-// und Caps Word bleiben unberührt. Liefert true, wenn eine Vormerkung verfallen ist.
+// bleiben unberührt. Caps Word endet unabhängig davon nach CAPS_WORD_IDLE_MS ohne Tastendruck. Liefert true, wenn eine
+// Vormerkung verfallen ist.
 inline bool oneShotExpire(OneShotState &s, unsigned long now, uint16_t timeoutMs) {
+  // Caps Word: ohne Tastendruck endet es nach CAPS_WORD_IDLE_MS, unabhängig von timeoutMs
+  if (s.capsActivity != s.capsSeenActivity) {
+    s.capsSeenActivity = s.capsActivity;
+    s.capsMs = now;
+  } else if (s.capsWord && (unsigned long)(now - s.capsMs) >= CAPS_WORD_IDLE_MS) {
+    s.capsWord = false;
+  }
   if (s.armed != s.seenArmed) {
     s.seenArmed = s.armed;
     s.armedMs = now;
@@ -92,6 +113,7 @@ inline bool capsWordContinues(uint8_t code) {
 // held = gehaltene One-Shot-Bits beider Hälften. Liefert die Modifier für einen Druck und verbraucht
 // die Vormerkung.
 inline uint8_t oneShotModsForInput(OneShotState &s, uint8_t held, bool altInReport) {
+  s.capsActivity++;  // auch Maus-Drücke und Tastenpaare halten Caps Word wach
   if (altInReport) return 0;
   uint8_t mods = (uint8_t)(held | s.armed);
   s.used |= held;
@@ -124,6 +146,7 @@ inline void sentenceCaseCancel(OneShotState &s) { s.sentenceStage = 0; }
 
 inline uint8_t oneShotModsForKey(OneShotState &s, uint8_t held, uint8_t code, bool altInReport, bool shiftInReport = false,
                                   bool ctrlGuiInReport = false) {
+  s.capsActivity++;
   if (isModifierCode(code) || altInReport) return 0;
   uint8_t mods = oneShotModsForInput(s, held, false);
   if (s.capsWord) {

@@ -1647,6 +1647,64 @@ TEST(test_caps_word_letter_report) {
   assert((k.log == Log{"P49", "R49"}) && k.oneShot.capsWord);
 }
 
+// Schutztest: dieses Verhalten besteht schon; der Test hält es für Caps Word fest
+TEST(test_caps_word_umlaut_sequence_is_uppercase_and_keeps_caps_word) {
+  // Umlaut-Folge Alt + u, 'a' (auch von der linken Hälfte): der Vokal bekommt Shift, Caps Word bleibt an
+  Kbd k;
+  k.capsWordToggle();
+  k.press((uint8_t)KEY_LEFT_ALT);
+  k.press((uint8_t)'u');
+  k.release((uint8_t)'u');
+  k.release((uint8_t)KEY_LEFT_ALT);
+  k.log.clear();
+  k.press((uint8_t)'a');
+  assert((k.log == Log{"BEGIN", "P129", "P97", "END", "BEGIN", "R129", "END"}));
+  assert(k.oneShot.capsWord);
+  k.release((uint8_t)'a');
+  left(k, SPLIT_OP_KEY_PRESS, KEY_LEFT_ALT);
+  left(k, SPLIT_OP_KEY_PRESS, 'u');
+  left(k, SPLIT_OP_KEY_RELEASE, 'u');
+  left(k, SPLIT_OP_KEY_RELEASE, KEY_LEFT_ALT);
+  k.log.clear();
+  left(k, SPLIT_OP_KEY_PRESS, 'o');
+  assert((k.log == Log{"BEGIN", "P129", "P111", "END", "BEGIN", "R129", "END"}));
+  assert(k.oneShot.capsWord);
+}
+
+TEST(test_caps_word_expires_after_idle_time) {
+  Kbd k;
+  oneShotExpire(k.oneShot, 1000, 0);
+  k.capsWordToggle();
+  assert(!oneShotExpire(k.oneShot, 1000, 0) && k.oneShot.capsWord);   // Frist startet
+  oneShotExpire(k.oneShot, 5900, 0);
+  assert(k.oneShot.capsWord);
+  k.write((uint8_t)'a');                                              // Tastendruck startet neu
+  oneShotExpire(k.oneShot, 6000, 0);
+  oneShotExpire(k.oneShot, 10900, 0);
+  assert(k.oneShot.capsWord);
+  oneShotExpire(k.oneShot, 11000, 0);                                 // 5000 ms ohne Druck
+  assert(!k.oneShot.capsWord);
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"P98", "R98"}));
+}
+
+TEST(test_caps_word_mouse_click_and_reset_follow_idle_rules) {
+  Kbd k;
+  oneShotExpire(k.oneShot, 1000, 0);
+  k.capsWordToggle();
+  oneShotExpire(k.oneShot, 1000, 0);
+  k.mouseClick(1);                                  // Mausdruck zählt als Aktivität
+  oneShotExpire(k.oneShot, 5000, 0);
+  oneShotExpire(k.oneShot, 9900, 0);
+  assert(k.oneShot.capsWord);
+  oneShotExpire(k.oneShot, 10000, 0);
+  assert(!k.oneShot.capsWord);
+  k.capsWordToggle();
+  oneShotReset(k.oneShot);                          // Reset (Host-Verlust) schaltet Caps Word aus
+  assert(!k.oneShot.capsWord);
+}
+
 TEST(test_caps_word_toggle_off_and_modifier_keeps_it) {
   Kbd k;
   k.capsWordToggle();

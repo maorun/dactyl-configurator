@@ -1819,7 +1819,7 @@ public:
     right.oneShot &= (uint8_t)~rel;
     if (rel) oneShotKeyUp(oneShot, rel, true);
   }
-  void capsWordToggle() { oneShot.capsWord = !oneShot.capsWord; }
+  void capsWordToggle() { ::capsWordToggle(oneShot); }
   void sentenceCaseToggle() { ::sentenceCaseToggle(oneShot); }
 
   // --- Key lock (DactylKeyLock.h) ---
@@ -1980,7 +1980,7 @@ public:
   void leftMouseMove(int8_t x, int8_t y) override { Hid::mouseMove(x, y); }
   void leftOneShotPress(uint8_t mask) override { oneShotKeyDown(oneShot, mask); }
   void leftOneShotRelease(uint8_t mask, bool arm) override { oneShotKeyUp(oneShot, mask, arm); }
-  void leftCapsWordToggle() override { oneShot.capsWord = !oneShot.capsWord; }
+  void leftCapsWordToggle() override { ::capsWordToggle(oneShot); }
   void leftSentenceCaseToggle() override { ::sentenceCaseToggle(oneShot); }
 
 private:

@@ -2562,3 +2562,17 @@ body {
 .ble-host-pill[hidden] {
   display: none;
 }
+
+.ergonomic-swaps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.ergonomic-swap-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}

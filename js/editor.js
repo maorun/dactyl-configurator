@@ -129,12 +129,14 @@ function mirrorActiveLayerToOtherSide() {
 }
 
 // Ziehen einer Taste auf eine andere derselben Hälfte und Ebene: tauscht beide Zellen
-function swapKeysByDrag(fromR, fromC, toR, toC) {
-  const targetLayer = activeLayerIndex;
+// Gibt true zurück, wenn getauscht wurde; onRevert läuft nach dem Rückgängig-Machen
+function swapKeysByDrag(fromR, fromC, toR, toC, layer = activeLayerIndex, onRevert = null) {
+  const targetLayer = layer;
+  if (!currentConfig.layers[targetLayer]) return false;
   const next = swapLayerKeys(currentConfig.layers[targetLayer], fromR, fromC, toR, toC);
-  if (!next) return;
+  if (!next) return false;
   currentConfig.layers[targetLayer] = next;
-  if (selectedKey && selectedKey.side === editSide) selectedKey = swappedSelectionPosition(selectedKey, fromR, fromC, toR, toC);
+  if (targetLayer === activeLayerIndex && selectedKey && selectedKey.side === editSide) selectedKey = swappedSelectionPosition(selectedKey, fromR, fromC, toR, toC);
   renderMatrix();
   if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
   saveConfigToServer();
@@ -146,11 +148,13 @@ function swapKeysByDrag(fromR, fromC, toR, toC) {
     revert: () => {
       const restored = swapLayerKeys(currentConfig.layers[targetLayer], fromR, fromC, toR, toC);
       if (restored) currentConfig.layers[targetLayer] = restored;
+      if (onRevert) onRevert();
       renderMatrix();
       if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
       saveConfigToServer();
     }
   });
+  return true;
 }
 
 function updateLayerNameInput() {

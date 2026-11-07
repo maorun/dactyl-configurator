@@ -2430,3 +2430,51 @@ function practiceTextFromHeatmap(sources, keyCount = 8, wordCount = 12) {
   }
   return words.join(" ");
 }
+
+// Beide Hälften in einer Datei: { bundleVersion: 1, sides: { R: ..., L: ... } }. configs: Config je Hälfte;
+// jede Hälfte der Profile muss vorhanden sein, sonst ein Fehler (kein halbes Bündel).
+const DUAL_BUNDLE_VERSION = 1;
+
+function buildDualSideBundle(configs, profiles) {
+  const sides = {};
+  for (const side of Object.keys(profiles || {})) {
+    if (!configs || !configs[side]) throw new Error(`Konfiguration der Hälfte ${side} fehlt.`);
+    sides[side] = JSON.parse(JSON.stringify(configs[side]));
+  }
+  if (Object.keys(sides).length === 0) throw new Error("Keine Hälfte zum Exportieren.");
+  return { bundleVersion: DUAL_BUNDLE_VERSION, sides };
+}
+
+// Liest eine importierte Datei (bereits geparstes JSON): Einzel-Config (für activeSide) oder Bündel beider Hälften.
+// Prüft und normalisiert ALLE Hälften, bevor es etwas zurückgibt; ein Fehler in einer Hälfte wirft für den ganzen
+// Import. Die Eingabe bleibt unverändert. Ergebnis: { kind: "single"|"bundle", configs: { <Hälfte>: normalisiert } }.
+function parseConfigImport(raw, profiles, activeSide) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Konfiguration muss ein Objekt sein.");
+  const clone = () => JSON.parse(JSON.stringify(raw));
+  const check = (cfg, side) => {
+    const profile = profiles && profiles[side];
+    if (!profile) throw new Error(`Unbekannte Hälfte: ${side}`);
+    try {
+      validateConfigShape(cfg, profile);
+      return normalizeConfig(cfg, profile);
+    } catch (e) {
+      throw new Error(`Hälfte ${side}: ${e.message}`);
+    }
+  };
+  if (raw.bundleVersion === undefined && raw.sides === undefined) {
+    if (!profiles || !profiles[activeSide]) throw new Error(`Unbekannte Hälfte: ${activeSide}`);
+    return { kind: "single", configs: { [activeSide]: check(clone(), activeSide) } };
+  }
+  if (raw.bundleVersion !== DUAL_BUNDLE_VERSION) throw new Error(`Unbekannte Bündel-Version: ${raw.bundleVersion}`);
+  const sides = clone().sides;
+  if (!sides || typeof sides !== "object" || Array.isArray(sides)) throw new Error("'sides' muss ein Objekt sein.");
+  const expected = Object.keys(profiles || {});
+  const extra = Object.keys(sides).filter(side => !expected.includes(side));
+  if (extra.length) throw new Error(`Unbekannte Hälfte: ${extra[0]}`);
+  const configs = {};
+  for (const side of expected) {
+    if (!sides[side]) throw new Error(`Hälfte ${side} fehlt im Bündel.`);
+    configs[side] = check(sides[side], side);
+  }
+  return { kind: "bundle", configs };
+}

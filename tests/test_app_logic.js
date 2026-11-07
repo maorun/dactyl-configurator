@@ -60,7 +60,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              moveKeySelection, ARROW_KEY_DIRECTIONS,
              createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES,
              buildLayerOverview, buildLayerSheet, buildDualSideBundle, parseConfigImport,
-             findCharPosition, buildPracticeSteps, createPracticeSession, practiceKeyPress, practiceSpeed, practiceTextFromHeatmap, practiceCharForCode,
+             findCharPosition, buildPracticeSteps, createPracticeSession, practiceKeyPress, practiceSpeed, practiceTextFromHeatmap, practiceCharForCode, practiceDrillText, PRACTICE_FIXED_TEXT,
              ON_SCREEN_KEYBOARD_ROWS: typeof ON_SCREEN_KEYBOARD_ROWS !== "undefined" ? ON_SCREEN_KEYBOARD_ROWS : undefined,
              KEYCODE_OPTIONS: typeof KEYCODE_OPTIONS !== "undefined" ? KEYCODE_OPTIONS : undefined,
              pickActionFromOnScreenKey: typeof pickActionFromOnScreenKey !== "undefined" ? pickActionFromOnScreenKey : undefined };`, ctx);
@@ -6862,6 +6862,72 @@ test("Übungsmodus: Wortliste aus den häufigsten Tasten der Heatmap", () => {
   assert.ok(text.length > 0 && /^[ab ]+$/.test(text), `nur die zwei häufigsten Zeichen: ${text}`);
   assert.strictEqual(text, api.practiceTextFromHeatmap([{ config: configs.R, stats }], 2, 4), "deterministisch");
   assert.strictEqual(api.practiceTextFromHeatmap([], 2, 4), "", "ohne Daten leer");
+});
+
+test("Übungsmodus: Schwache-Tasten-Übung nutzt die Taste mit dem höchsten Korrekturanteil am häufigsten", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][2][1] = cell("KEY_A");
+    c.R.layers[0][2][2] = cell("KEY_S");
+    c.R.layers[0][2][3] = cell("KEY_D");
+  });
+  const stats = api.createTypingStats(null, R);
+  stats.counts["2_1"] = 10; stats.corrections["2_1"] = 2;
+  stats.counts["2_2"] = 10; stats.corrections["2_2"] = 8;
+  stats.counts["2_3"] = 10; stats.corrections["2_3"] = 4;
+  stats.counts["9_9"] = 10; stats.corrections["9_9"] = 9;
+  const text = api.practiceDrillText([{ config: configs.R, stats }]);
+  const freq = {};
+  for (const ch of text.replace(/ /g, "")) freq[ch] = (freq[ch] || 0) + 1;
+  const best = Object.entries(freq).sort((a, b) => b[1] - a[1])[0][0];
+  assert.strictEqual(best, "s", `s hat den höchsten Anteil: ${JSON.stringify(freq)}`);
+  assert.ok(freq.s > freq.d && freq.d > freq.a, "Rangfolge nach Korrekturanteil");
+  assert.strictEqual(text, api.practiceDrillText([{ config: configs.R, stats }]), "deterministisch");
+  assert.ok(text.length <= 500);
+});
+
+test("Übungsmodus: Schwache-Tasten-Übung ohne Statistik oder ohne Zeichen liefert den festen Text", () => {
+  const configs = practiceConfigs(() => {});
+  const empty = api.createTypingStats(null, R);
+  assert.strictEqual(api.practiceDrillText([{ config: configs.R, stats: empty }]), api.PRACTICE_FIXED_TEXT);
+  assert.strictEqual(api.practiceDrillText([]), api.PRACTICE_FIXED_TEXT);
+  const stats = api.createTypingStats(null, R);
+  stats.counts["2_2"] = 10; stats.corrections["2_2"] = 8;
+  assert.strictEqual(api.practiceDrillText([{ config: configs.R, stats }], "x"), "x", "Taste ohne Zeichen");
+});
+
+test("Übungsmodus: Schwache-Tasten-Übung ergänzt Folgen desselben Fingers", () => {
+  const configs = practiceConfigs((c, cell) => {
+    c.R.layers[0][2][1] = cell("KEY_A");
+    c.R.layers[0][2][2] = cell("KEY_S");
+    c.R.layers[0][3][2] = cell("KEY_X");
+    c.R.layers[0][4][2] = cell("KEY_Z");
+  });
+  const stats = api.createTypingStats(null, R);
+  stats.counts["2_1"] = 10; stats.corrections["2_1"] = 5;
+  stats.sameFingerPairs[api.sameFingerPairKey("3_2", "4_2", R)] = 4;
+  const words = api.practiceDrillText([{ config: configs.R, stats }]).split(" ");
+  assert.ok(words.includes("xz") && words.includes("zx"), words.join(" "));
+});
+
+test("Übungsmodus: Schwache-Tasten-Übung bleibt unter dem Limit und behält die Paar-Wörter", () => {
+  const configs = practiceConfigs((c, cell) => {
+    "ABCDE".split("").forEach((ch, i) => { c.R.layers[0][2][i] = cell(`KEY_${ch}`); });
+    c.L.layers[0][1][0] = cell("KEY_F"); c.L.layers[0][1][1] = cell("KEY_G"); c.L.layers[0][1][2] = cell("KEY_H");
+    c.L.layers[0][1][3] = cell("KEY_I"); c.L.layers[0][1][4] = cell("KEY_J");
+    c.R.layers[0][3][2] = cell("KEY_X"); c.R.layers[0][4][2] = cell("KEY_Z");
+  });
+  const mk = (side, ids) => {
+    const stats = api.createTypingStats(null, side === "R" ? R : L);
+    ids.forEach((id, i) => { stats.counts[id] = 10; stats.corrections[id] = 9 - i; });
+    return stats;
+  };
+  const right = mk("R", ["2_0", "2_1", "2_2", "2_3", "2_4"]);
+  right.sameFingerPairs[api.sameFingerPairKey("3_2", "4_2", R)] = 4;
+  const left = mk("L", ["1_0", "1_1", "1_2", "1_3", "1_4"]);
+  const text = api.practiceDrillText([{ config: configs.R, stats: right }, { config: configs.L, stats: left }]);
+  assert.ok(text.length <= 500, `Länge ${text.length}`);
+  assert.ok(text.endsWith("xz zx"), "Paar-Wörter bleiben am Ende ganz");
+  assert.ok(!text.endsWith(" "), "kein Leerzeichen am Ende");
 });
 
 test("Übungsmodus: Ziel an der Position der Ebenentaste bleibt das Ziel", () => {

@@ -139,6 +139,13 @@ function practiceUseHeatmapText() {
   if (!text) showToast("Die Heatmap hat noch keine Daten.");
 }
 
+function practiceUseWeakKeyDrill() {
+  const sources = Dactyl.SIDE_IDS.map(side => ({ config: configFor(side), stats: typingStatsFor(side) }));
+  const text = practiceDrillText(sources);
+  document.getElementById("practiceText").value = text;
+  if (text === PRACTICE_FIXED_TEXT) showToast("Keine Schwächen in der Heatmap. Fester Übungstext gesetzt.");
+}
+
 function openPracticeDialog() {
   const modal = document.getElementById("practiceModal");
   if (!modal) return;
@@ -167,4 +174,5 @@ function initPracticeUI() {
   modal.addEventListener("keydown", practiceSwallowKey);
   modal.addEventListener("keyup", practiceSwallowKey);
   document.getElementById("btnPracticeHeatmap").addEventListener("click", practiceUseHeatmapText);
+  document.getElementById("btnPracticeWeak").addEventListener("click", practiceUseWeakKeyDrill);
 }

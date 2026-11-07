@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Weak-key drills in practice mode (`js/practice-ui.js`)
-
-- **Rank:** Feature model. Total 29/40 (typing 6, configuration 6, harmony 8, safety 9). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/practice-ui.js`, `js/config-model.js`, `js/heatmap.js`.
-- **Problem:** Practice mode uses fixed text. A user who learns a new layout does not practice the keys that cause the most errors.
-- **Goal:** Add the button "Schwache Tasten üben". It builds a text from the keys with the highest correction share (see "Backspace correction heatmap") and the top same-finger pairs. Use only keys that exist on the active layout. Fall back to the fixed text when the statistics are empty.
-- **Acceptance test:** A unit test gives statistics with `s` as the weakest key and expects a drill text in which `s` has the highest share; empty statistics return the fixed text.
-
 ### Layout check rules for combos and overrides (`lintLayouts`)
 
 - **Rank:** Feature model. Total 28/40 (typing 3, configuration 8, harmony 8, safety 9). Effort S. Estimate.

@@ -2698,6 +2698,58 @@ function practiceTextFromHeatmap(sources, keyCount = 8, wordCount = 12) {
   return words.join(" ");
 }
 
+// Fester Übungstext, wenn die Statistik keine Schwächen zeigt
+const PRACTICE_FIXED_TEXT = "the quick brown fox jumps over the lazy dog";
+const DRILL_PAIR_LIMIT = 3;
+const DRILL_RANK_STEP = 8;
+
+// Das Zeichen der Taste "r_c" auf Ebene 0 der Config, sonst ""; Positionen ohne Taste geben "".
+function practiceCharForKeyId(config, id) {
+  const [r, c] = String(id).split("_").map(Number);
+  const cell = config && config.layers && config.layers[0] && config.layers[0][r] && config.layers[0][r][c];
+  return cell ? practiceCharForCode(cell.tap) : "";
+}
+
+// Übungstext für schwache Tasten. sources: [{ config, stats }]. Die Tasten mit dem höchsten Korrekturanteil
+// (topCorrectedKeys) kommen nach Rang gestuft vor, der erste Rang am häufigsten (Gewicht je Rang um DRILL_RANK_STEP
+// kleiner). Dazu kommen die häufigsten Folgen desselben Fingers (topSameFingerPairs) als Wörter
+// "ab ba". Nur Tasten mit Zeichen auf Ebene 0 zählen (die Statistik zählt je Position, nicht je Ebene).
+// Die Paar-Wörter behalten ihren Platz: die Tastenwörter werden als ganze Wörter gekürzt. Ohne Schwächen gilt fallback. Deterministisch.
+function practiceDrillText(sources, fallback = PRACTICE_FIXED_TEXT) {
+  const weak = new Map();
+  const pairWords = [];
+  for (const { config, stats } of sources || []) {
+    if (!config || !stats) continue;
+    for (const k of topCorrectedKeys(stats)) {
+      const ch = practiceCharForKeyId(config, k.id);
+      if (ch) weak.set(ch, Math.max(weak.get(ch) || 0, k.share));
+    }
+    for (const p of topSameFingerPairs(stats, DRILL_PAIR_LIMIT)) {
+      const a = practiceCharForKeyId(config, p.a);
+      const b = practiceCharForKeyId(config, p.b);
+      if (a && b && a !== b) pairWords.push(a + b, b + a);
+    }
+  }
+  if (!weak.size) return fallback;
+  const ranked = [...weak.entries()].sort((x, y) => (y[1] - x[1]) || (x[0] < y[0] ? -1 : 1)).map(e => e[0]);
+  const left = ranked.map((ch, i) => [ch, (ranked.length - i) * DRILL_RANK_STEP]);
+  const pool = [];
+  while (left.some(e => e[1] > 0)) {
+    for (const e of left) if (e[1] > 0) { pool.push(e[0]); e[1]--; }
+  }
+  const pairText = pairWords.join(" ");
+  const budget = PRACTICE_MAX_CHARS - (pairText ? pairText.length + 1 : 0);
+  const words = [];
+  let used = 0;
+  for (let i = 0; i < pool.length; i += 3) {
+    const word = pool.slice(i, i + 3).join("");
+    if (used + word.length + (words.length ? 1 : 0) > budget) break;
+    used += word.length + (words.length ? 1 : 0);
+    words.push(word);
+  }
+  return [...words, ...(pairText ? [pairText] : [])].join(" ").slice(0, PRACTICE_MAX_CHARS);
+}
+
 // Beide Hälften in einer Datei: { bundleVersion: 1, sides: { R: ..., L: ... } }. configs: Config je Hälfte;
 // jede Hälfte der Profile muss vorhanden sein, sonst ein Fehler (kein halbes Bündel).
 const DUAL_BUNDLE_VERSION = 1;

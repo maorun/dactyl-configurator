@@ -1168,6 +1168,11 @@ const FINGER_LABELS = { pinky: "Kleiner Finger", ring: "Ringfinger", middle: "Mi
 const SAME_FINGER_TOP = 5;
 // Größter Abstand zweier Anschläge, der noch eine Folge ergibt; nach einer längeren Pause beginnt eine neue
 const SAME_FINGER_MAX_GAP_MS = 1000;
+// Ein Backspace korrigiert die Taste davor nur innerhalb dieses Fensters
+const CORRECTION_WINDOW_MS = 1500;
+// Eine Taste braucht so viele Anschläge, bevor ihr Korrekturanteil zählt (1 von 1 wäre sonst 100 %)
+const CORRECTION_MIN_PRESSES = 5;
+const CORRECTION_TOP = 5;
 
 // Finger der Taste: Daumenzeile (Zeile 5) und Spalte 6 sind der Daumen, sonst gilt profile.fingerCols
 function fingerOfKey(r, c, profile) {
@@ -1234,9 +1239,13 @@ function sanitizeKeyCounts(counts, profile) {
 function createTypingStats(stored, profile) {
   const base = sanitizeKeyCounts(stored, profile);
   const same = sanitizeSameFinger(stored, profile);
+  const hasCorrections = stored && typeof stored === "object" && !Array.isArray(stored)
+    && Object.prototype.hasOwnProperty.call(stored, "corrections");
+  const corrections = sanitizeKeyCounts(hasCorrections ? stored.corrections : null, profile);
   const stats = {
     counts: base.counts, total: base.total, layerCounts: [], recent: [], profile,
-    sameFingerPairs: same.pairs, sameFingerTotal: same.total, lastKeyId: null, lastKeyMs: 0
+    sameFingerPairs: same.pairs, sameFingerTotal: same.total, lastKeyId: null, lastKeyMs: 0,
+    corrections: corrections.counts, lastTypedId: null, lastTypedMs: 0
   };
   for (let l = 0; l < NUM_LAYERS; l++) stats.layerCounts.push({});
   const layers = stored && typeof stored === "object" && !Array.isArray(stored)
@@ -1258,11 +1267,15 @@ function serializeTypingStats(stats) {
   });
   const out = { ...stats.counts, layers };
   if (stats.sameFingerTotal > 0) out.sameFinger = { pairs: { ...stats.sameFingerPairs } };
+  if (Object.keys(stats.corrections).length) out.corrections = { ...stats.corrections };
   return out;
 }
 
 // layer: Ebene beim Drücken (KEY_PRESS / SPLIT_KEY); ohne gültige Ebene zählt die Taste nur gesamt
-function recordKeyPress(stats, r, c, nowMs, layer) {
+// role (keyPressRole): "backspace" zählt als Korrektur der Taste davor (gleiche Hälfte, höchstens
+// CORRECTION_WINDOW_MS früher); danach gibt es keine Taste davor mehr, ein gehaltener Backspace korrigiert einmal.
+// "silent" (Modifier, Ebenen-Taste, keine Belegung) ändert die Taste davor nicht; sonst gilt die Taste als getippt.
+function recordKeyPress(stats, r, c, nowMs, layer, role = "typed") {
   if (!isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS) || !isPhysicalKey(r, c, stats.profile)) return false;
   const id = `${r}_${c}`;
   stats.counts[id] = (stats.counts[id] || 0) + 1;
@@ -1275,6 +1288,15 @@ function recordKeyPress(stats, r, c, nowMs, layer) {
   }
   stats.lastKeyId = id;
   stats.lastKeyMs = nowMs;
+  if (role === "backspace") {
+    if (stats.lastTypedId && !(nowMs - stats.lastTypedMs > CORRECTION_WINDOW_MS)) {
+      stats.corrections[stats.lastTypedId] = (stats.corrections[stats.lastTypedId] || 0) + 1;
+    }
+    stats.lastTypedId = null;
+  } else if (role !== "silent") {
+    stats.lastTypedId = id;
+    stats.lastTypedMs = nowMs;
+  }
   if (isValidIndex(layer, NUM_LAYERS)) {
     const layerCounts = stats.layerCounts[layer];
     layerCounts[id] = (layerCounts[id] || 0) + 1;
@@ -1418,6 +1440,39 @@ function maxKeyCount(stats, layer = null) {
   let max = 0;
   for (const n of Object.values(heatmapCounts(stats, layer))) if (n > max) max = n;
   return max;
+}
+
+// Rolle einer Aktion für recordKeyPress: Backspace, ohne Zeichen (keine Belegung, Modifier, Ebenen- und
+// One-Shot-Tasten) oder getippt
+function keyPressRole(tap) {
+  if (tap === "KEY_BACKSPACE") return "backspace";
+  const n = actionCodeToNumeric(tap);
+  const silent = n === 0 || (n >= 0x80 && n <= 0x87) || (n >= 0x100 && n <= 0x119) || (n >= 0x160 && n <= 0x167)
+    || (n >= 0x180 && n <= 0x18B);
+  return silent ? "silent" : "typed";
+}
+
+// Korrekturanteil je Taste: Korrekturen / Anschläge (alle Ebenen); Tasten unter CORRECTION_MIN_PRESSES
+// Anschlägen fehlen. Liefert { shares: { "r_c": anteil }, max }.
+function correctionShares(stats) {
+  const shares = {};
+  let max = 0;
+  for (const [id, n] of Object.entries(stats.corrections)) {
+    const presses = stats.counts[id] || 0;
+    if (presses < CORRECTION_MIN_PRESSES) continue;
+    const share = Math.min(1, n / presses);
+    shares[id] = share;
+    if (share > max) max = share;
+  }
+  return { shares, max };
+}
+
+// Die Tasten mit dem höchsten Korrekturanteil: [{ id, corrections, presses, share }], absteigend, bei Gleichstand nach Schlüssel
+function topCorrectedKeys(stats, limit = CORRECTION_TOP) {
+  return Object.entries(correctionShares(stats).shares)
+    .sort((x, y) => (y[1] - x[1]) || (x[0] < y[0] ? -1 : 1))
+    .slice(0, limit)
+    .map(([id, share]) => ({ id, corrections: stats.corrections[id], presses: stats.counts[id], share }));
 }
 
 // =============================================================================

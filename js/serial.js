@@ -554,7 +554,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
       }
       feedKeyCapture(lineSide, evt.r, evt.c, true);
       triggerVisualKeyPress(evt.r, evt.c, typeof evt.key === "string" ? evt.key : "", lineSide, pressedLayer);
-      if (recordKeyPress(typingStatsFor(lineSide), evt.r, evt.c, Date.now(), pressedLayer)) onTypingStatsChanged(lineSide);
+      if (recordKeyPress(typingStatsFor(lineSide), evt.r, evt.c, Date.now(), pressedLayer, pressedKeyRole(lineSide, evt.r, evt.c, pressedLayer))) onTypingStatsChanged(lineSide);
       if (markMatrixKeyTested(matrixTestFor(lineSide), evt.r, evt.c) && isEditSide) renderMatrixTest();
       practiceHandleKeyPress(lineSide, evt.r, evt.c, pressedLayer);
     } catch (e) {
@@ -625,7 +625,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
     }
     splitKeyTracker.press(id);
     triggerVisualKeyPress(evt.r, evt.c, "", evt.side, evt.layer);
-    if (recordKeyPress(typingStatsFor(evt.side), evt.r, evt.c, Date.now(), evt.layer)) onTypingStatsChanged(evt.side);
+    if (recordKeyPress(typingStatsFor(evt.side), evt.r, evt.c, Date.now(), evt.layer, pressedKeyRole(evt.side, evt.r, evt.c, evt.layer))) onTypingStatsChanged(evt.side);
     if (markMatrixKeyTested(matrixTestFor(evt.side), evt.r, evt.c) && evt.side === editSide) renderMatrixTest();
     practiceHandleKeyPress(evt.side, evt.r, evt.c, evt.layer);
   }

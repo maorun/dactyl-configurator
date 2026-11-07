@@ -58,7 +58,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
              moveKeySelection, ARROW_KEY_DIRECTIONS,
              createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES,
-             buildLayerOverview, buildLayerSheet,
+             buildLayerOverview, buildLayerSheet, buildDualSideBundle, parseConfigImport,
              findCharPosition, buildPracticeSteps, createPracticeSession, practiceKeyPress, practiceSpeed, practiceTextFromHeatmap, practiceCharForCode,
              ON_SCREEN_KEYBOARD_ROWS: typeof ON_SCREEN_KEYBOARD_ROWS !== "undefined" ? ON_SCREEN_KEYBOARD_ROWS : undefined,
              KEYCODE_OPTIONS: typeof KEYCODE_OPTIONS !== "undefined" ? KEYCODE_OPTIONS : undefined,
@@ -4040,6 +4040,9 @@ var pendingBySide = { R: [], L: [] };
 function activeProfile() { return SIDE_PROFILES[editSide]; }
 function markPendingSync(change, side = editSide) { change.id = pendingBySide[side].length + 1; pendingBySide[side].push(change); log.pending.push(change); }
 function pendingFor(side) { return pendingBySide[side]; }
+var otherConfigs = { L: normalizeConfig(JSON.parse(JSON.stringify(SIDE_PROFILES.L.defaultConfig)), SIDE_PROFILES.L) };
+function configFor(side) { return side === editSide ? currentConfig : otherConfigs[side]; }
+function setConfigFor(side, cfg) { if (side === editSide) currentConfig = cfg; else otherConfigs[side] = cfg; }
 function showToast(t) { log.toasts.push(t); }
 function saveConfigToServer() { log.saved++; }
 function renderMatrix() {} function renderLayerButtons() {} function renderCombosTable() {} function renderKeyPairs() {} function renderLeaderSequences() {}
@@ -4372,6 +4375,58 @@ asyncTests.push(["Combo-Dialog: Ebenenmaske wird gespeichert, alle Ebenen bleibe
   await save([0, 1, 2, 3, 4, 5, 6, 7]);
   assert.strictEqual(count(), before + 2);
   assert.ok(!("layerMask" in last()), "alle Ebenen ist der Standard und steht nicht in der Datei");
+}]);
+
+asyncTests.push(["Import: Bündel ersetzt beide Hälften, ungültige Hälfte ändert nichts", async () => {
+  const { w, dom, log } = applyKeyHarness();
+  const run = async cfg => {
+    w.FileReader = function () {
+      this.readAsText = () => Promise.resolve().then(() => this.onload({ target: { result: JSON.stringify(cfg) } }));
+    };
+    await dom.document.getElementById("fileInput").fire("change", { target: { files: [{ name: "b.json" }], value: "" } });
+    await new Promise(r => setImmediate(r));
+  };
+  const cell = t => ({ tap: t, hold: "NONE", dtap: "NONE", label: t });
+  const mk = side => {
+    const c = JSON.parse(JSON.stringify(api.SIDE_PROFILES[side].defaultConfig));
+    c.layers[0][0][1] = cell("KEY_F5");
+    return c;
+  };
+  const tap = expr => vm.runInContext(expr, w);
+  const bad = mk("L");
+  bad.layers = "kaputt";
+  await run({ bundleVersion: 1, sides: { R: mk("R"), L: bad } });
+  assert.strictEqual(log.alerts.length, 1);
+  assert.strictEqual(log.pending.length, 0);
+  assert.notStrictEqual(tap("currentConfig.layers[0][0][1].tap"), "KEY_F5");
+  assert.notStrictEqual(tap("otherConfigs.L.layers[0][0][1].tap"), "KEY_F5");
+  await run({ bundleVersion: 1, sides: { R: mk("R"), L: mk("L") } });
+  assert.strictEqual(tap("currentConfig.layers[0][0][1].tap"), "KEY_F5");
+  assert.strictEqual(tap("otherConfigs.L.layers[0][0][1].tap"), "KEY_F5");
+  assert.deepStrictEqual(log.pending.map(c => c.type), ["import", "import"]);
+  log.pending[1].revert();
+  assert.notStrictEqual(tap("otherConfigs.L.layers[0][0][1].tap"), "KEY_F5");
+  assert.strictEqual(tap("currentConfig.layers[0][0][1].tap"), "KEY_F5");
+}]);
+
+asyncTests.push(["Import: Einzel-Config merkt genau eine Änderung der gewählten Hälfte vor", async () => {
+  const { w, dom, log } = applyKeyHarness();
+  const cfg = JSON.parse(JSON.stringify(api.SIDE_PROFILES.R.defaultConfig));
+  cfg.layers[0][0][1] = { tap: "KEY_F5", hold: "NONE", dtap: "NONE", label: "F5" };
+  w.FileReader = function () {
+    this.readAsText = () => {
+      // Hälfte wechselt, bevor das Lesen endet: das Ziel bleibt die beim Auswählen bearbeitete Hälfte
+      // (Die Harness hält die nicht bearbeitete Hälfte in otherConfigs: R wandert dorthin, L wird bearbeitet.)
+      vm.runInContext('otherConfigs.R = currentConfig; currentConfig = otherConfigs.L; editSide = "L";', w);
+      Promise.resolve().then(() => this.onload({ target: { result: JSON.stringify(cfg) } }));
+    };
+  };
+  await dom.document.getElementById("fileInput").fire("change", { target: { files: [{ name: "s.json" }], value: "" } });
+  await new Promise(r => setImmediate(r));
+  assert.deepStrictEqual(log.alerts, []);
+  assert.strictEqual(log.pending.length, 1);
+  assert.strictEqual(vm.runInContext("otherConfigs.R.layers[0][0][1].tap", w), "KEY_F5");
+  assert.notStrictEqual(vm.runInContext("currentConfig.layers[0][0][1].tap", w), "KEY_F5");
 }]);
 
 asyncTests.push(["Import: vorgemerkte Änderung trägt pairs und macros", async () => {
@@ -7124,6 +7179,44 @@ test("Sync: Leader-Phase sendet CLEAR_LEADER, ADD_LEADER und SAVE_LEADER und zä
   assert.ok(src.includes('"SAVE_ALT_REPEATS", "SAVE_ALT_REPEATS", 5000'));
   const altPhase = src.slice(src.indexOf("CLEAR_ALT_REPEATS"), src.indexOf("Nur die tatsächlich übertragenen"));
   assert.strictEqual((altPhase.match(/updateProgress\(\)/g) || []).length, 3);
+});
+
+test("Beide Hälften: Export und Import eines Bündels ergibt dieselben Configs", () => {
+  const profiles = { R, L };
+  const configs = { R: api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R), L: api.normalizeConfig(JSON.parse(JSON.stringify(L.defaultConfig)), L) };
+  configs.R.layers[0][0][1] = { tap: "KEY_F5", hold: "NONE", dtap: "NONE", label: "F5" };
+  const bundle = api.buildDualSideBundle(configs, profiles);
+  assert.strictEqual(bundle.bundleVersion, 1);
+  assert.deepStrictEqual(Object.keys(bundle.sides).sort(), ["L", "R"]);
+  bundle.sides.R.layers[0][0][1].tap = "KEY_F6";
+  assert.strictEqual(configs.R.layers[0][0][1].tap, "KEY_F5", "Export kopiert die Config");
+  bundle.sides.R.layers[0][0][1].tap = "KEY_F5";
+  const parsed = api.parseConfigImport(JSON.parse(JSON.stringify(bundle)), profiles, "R");
+  assert.strictEqual(parsed.kind, "bundle");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(parsed.configs)), JSON.parse(JSON.stringify(configs)));
+  assert.throws(() => api.buildDualSideBundle({ R: configs.R }, profiles), /fehlt/);
+});
+
+test("Beide Hälften: Einzel-Config wird für die bearbeitete Hälfte gelesen", () => {
+  const profiles = { R, L };
+  const single = JSON.parse(JSON.stringify(L.defaultConfig));
+  const parsed = api.parseConfigImport(single, profiles, "L");
+  assert.strictEqual(parsed.kind, "single");
+  assert.deepStrictEqual(Object.keys(parsed.configs), ["L"]);
+});
+
+test("Beide Hälften: ungültige Hälfte bricht den ganzen Import ab, ohne Eingabe zu ändern", () => {
+  const profiles = { R, L };
+  const good = JSON.parse(JSON.stringify(R.defaultConfig));
+  const bad = JSON.parse(JSON.stringify(L.defaultConfig));
+  bad.layers = "kaputt";
+  const raw = { bundleVersion: 1, sides: { R: good, L: bad } };
+  const before = JSON.stringify(raw);
+  assert.throws(() => api.parseConfigImport(raw, profiles, "R"), /Hälfte L/);
+  assert.strictEqual(JSON.stringify(raw), before);
+  assert.throws(() => api.parseConfigImport({ bundleVersion: 1, sides: { R: good } }, profiles, "R"), /L fehlt/);
+  assert.throws(() => api.parseConfigImport({ bundleVersion: 2, sides: {} }, profiles, "R"), /Version/);
+  assert.throws(() => api.parseConfigImport({ bundleVersion: 1, sides: { R: good, L: good, X: good } }, profiles, "R"), /Unbekannte/);
 });
 
 (async () => {

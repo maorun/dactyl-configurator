@@ -290,6 +290,23 @@ function setupEventListeners() {
     dlAnchorElem.click();
   });
 
+  document.getElementById("btnExportBundle").addEventListener("click", () => {
+    const configs = {};
+    for (const side of Dactyl.SIDE_IDS) configs[side] = configFor(side);
+    let bundle;
+    try {
+      bundle = buildDualSideBundle(configs, SIDE_PROFILES);
+    } catch (err) {
+      showToast(`⚠️ Export nicht möglich: ${err.message}`, 6000);
+      return;
+    }
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(bundle, null, 2));
+    const dlAnchorElem = document.createElement("a");
+    dlAnchorElem.setAttribute("href", dataStr);
+    dlAnchorElem.setAttribute("download", `dactyl_config_beide_${new Date().toISOString().slice(0, 10)}.json`);
+    dlAnchorElem.click();
+  });
+
   document.getElementById("btnImportJson").addEventListener("click", () => {
     document.getElementById("fileInput").click();
   });
@@ -297,38 +314,48 @@ function setupEventListeners() {
   document.getElementById("fileInput").addEventListener("change", (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    // Zielhälfte einer Einzel-Config gilt beim Auswählen der Datei, nicht beim Ende des Lesens
+    const targetSide = editSide;
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const parsed = JSON.parse(event.target.result);
-        // Vollständig validieren, BEVOR der Zustand ersetzt oder auf dem Server gespeichert wird
-        validateConfigShape(parsed, activeProfile());
-        if (!confirm(`Konfiguration aus "${file.name || "Backup"}" importieren? Die aktuelle Belegung wird ersetzt (Rückgängig über die vorgemerkten Änderungen).`)) {
+        // Alle Hälften vollständig validieren, BEVOR ein Zustand ersetzt oder auf dem Server gespeichert wird
+        const { kind, configs } = parseConfigImport(JSON.parse(event.target.result), SIDE_PROFILES, targetSide);
+        const sides = Object.keys(configs);
+        const what = kind === "bundle" ? "beide Hälften" : "die Konfiguration";
+        if (!confirm(`${what[0].toUpperCase()}${what.slice(1)} aus "${file.name || "Backup"}" importieren? Die aktuelle Belegung wird ersetzt (Rückgängig über die vorgemerkten Änderungen).`)) {
           return;
         }
-        const oldConfig = JSON.parse(JSON.stringify(currentConfig));
-        currentConfig = normalizeConfig(parsed, activeProfile());
-        renderLayerButtons();
-        renderMatrix();
-        renderCombosTable();
-        if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
-        saveConfigToServer();
-        markPendingSync({
-          type: "import",
-          snapshot: true,
-          pairs: true,
-          macros: true,
-          title: "JSON-Konfiguration importiert",
-          description: `${file.name || "Backup"} geladen`,
-          revert: () => {
-            currentConfig = oldConfig;
-            renderLayerButtons();
-            renderMatrix();
-            renderCombosTable();
-            if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
-            saveConfigToServer();
-          }
-        });
+        const rerender = () => {
+          applySettingsToInputs(currentConfig.settings);
+          renderLayerButtons();
+          renderMatrix();
+          renderCombosTable();
+          if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+        };
+        const olds = {};
+        for (const side of sides) {
+          olds[side] = JSON.parse(JSON.stringify(configFor(side)));
+          setConfigFor(side, configs[side]);
+        }
+        rerender();
+        for (const side of sides) {
+          saveConfigToServer(side);
+          markPendingSync({
+            type: "import",
+            snapshot: true,
+            pairs: true,
+            macros: true,
+            sideRevert: true,
+            title: "JSON-Konfiguration importiert",
+            description: `${file.name || "Backup"} geladen${kind === "bundle" ? ` (Hälfte ${side})` : ""}`,
+            revert: () => {
+              setConfigFor(side, olds[side]);
+              rerender();
+              saveConfigToServer(side);
+            }
+          }, side);
+        }
       } catch (err) {
         alert("Ungültige JSON-Datei: " + err.message);
       } finally {

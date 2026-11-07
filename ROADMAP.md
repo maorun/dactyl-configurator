@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Combined dual-half configuration export and import
-
-- **Rank:** Feature model. Total 21/40 (typing 1, configuration 8, harmony 5, safety 7). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js`, `js/editor-events.js`, `index.html`.
-- **Problem:** Saving or sharing a complete split-keyboard layout requires exporting and importing two separate JSON files (right and left).
-- **Goal:** Add `buildDualSideBundle(configs)` and `parseConfigImport(raw, profiles)` in `js/config-model.js` and a button "Beide Hälften exportieren". The import accepts both a single-half config and a dual-half bundle (`{ bundleVersion: 1, sides: { R: ..., L: ... } }`), validates both halves before applying any change, and marks both halves for sync.
-- **Acceptance test:** Unit tests in `tests/test_app_logic.js` verify round-trip export and import of a dual-half bundle and verify that an invalid left config aborts the import for both halves.
-
 ## Priority 4
 
 ### Physical key capture in the combo and leader editors

@@ -51,7 +51,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_ALT_REPEATS, isValidAltRepeat, hasDuplicateAltRepeat, normalizeAltRepeat, altRepeatsFromSameFingerPairs, localAltRepeatTuples, describeAltRepeatTuple,
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
-             createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
+             computeTimingRecommendations, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
              macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
@@ -1547,6 +1547,7 @@ function clearPendingSync() {}
 function onTypingStatsChanged(side) { calls.stats.push(side); }
 function practiceHandleKeyPress(side, r, c, layer) { calls.practice.push([side, r, c, layer]); }
 function feedKeyCapture(side, r, c, pressed) { calls.capture.push(side + r + c + (pressed ? "+" : "-")); }
+function feedTimingAssistant(side, evt) { calls.timing = (calls.timing || 0) + 1; }
 function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + c); }
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
 ${section("js/serial.js", "// LED-Zustand des Hosts:", "function switchLayerUI")}
@@ -1595,6 +1596,7 @@ test("serial.js: MATRIX: markiert nur Drücken, je nach Hälfte der Verbindung",
   // Live-Monitor und Heatmap bleiben bei KEY_PRESS
   assert.deepStrictEqual(s.calls.press, []);
   assert.deepStrictEqual(s.calls.stats, []);
+  assert.strictEqual(s.calls.timing, 3);             // jede gültige MATRIX:-Zeile geht an den Tapping-Term-Assistenten
 });
 
 test("serial.js: MATRIX: mit t erkennt Prellen je Hälfte, ohne t nicht", () => {
@@ -7350,6 +7352,38 @@ test("Tastenaufnahme: Wechsel der bearbeiteten Hälfte beendet die Aufnahme", ()
   assert.ok(section("js/editor.js", "function switchEditSide", "editSide = side;").includes("stopKeyCapture();"));
 });
 
+function timingGlueHarness() {
+  const s = captureGlueHarness();
+  s.document.getElementById = () => null;
+  vm.runInContext(`
+${section("js/editor-events.js", "const TIMING_MAX_SAMPLES", "function setupTimingAssistant")}
+this.api3 = { feed: feedTimingAssistant, ta: timingAssistant, setSide: v => { editSide = v; } };`, s);
+  return s;
+}
+
+test("Tapping-Term-Assistent: Aufnahme gilt nur für die bearbeitete Hälfte und endet an der Obergrenze", () => {
+  const s = timingGlueHarness(), g = s.api3;
+  const evt = t => ({ r: 0, c: 0, pressed: true, t });
+  g.feed("R", evt(1));                                  // keine Aufnahme: ignoriert
+  assert.strictEqual(g.ta.samples.length, 0);
+  g.ta.recording = true; g.ta.side = "R";
+  g.feed("L", evt(2));                                  // andere Hälfte: ignoriert
+  g.feed("R", { r: 0, c: 0, pressed: true });           // ohne Scan-Zeit: ignoriert
+  assert.strictEqual(g.ta.samples.length, 0);
+  g.feed("R", evt(3));
+  assert.strictEqual(g.ta.samples.length, 1);
+  g.setSide("L");                                       // Wechsel der bearbeiteten Hälfte beendet und leert
+  g.feed("R", evt(4));
+  assert.strictEqual(g.ta.recording, false);
+  assert.strictEqual(g.ta.samples.length, 0);
+  g.setSide("R");
+  g.ta.recording = true; g.ta.side = "R";
+  g.ta.samples = new Array(19999).fill({ r: 0, c: 0, pressed: true, t: 0 });
+  g.feed("R", evt(5));
+  assert.strictEqual(g.ta.recording, false);
+  assert.strictEqual(s.toasts.length, 1);
+});
+
 test("Tastenaufnahme: Browser-Tasten bleiben während der Aufnahme wirkungslos", () => {
   const s = captureGlueHarness(), g = s.api2;
   const evt = () => { const e = { prevented: false, stopped: false, preventDefault() { e.prevented = true; }, stopImmediatePropagation() { e.stopped = true; } }; return e; };
@@ -7426,6 +7460,75 @@ test("Tastenaufnahme: Leader-Knopf leert alle Plätze, Combo-Knopf leert Taste 3
   assert.strictEqual(s.keyOf(0, 0), "KEY_B");
   assert.strictEqual(s.keyOf(1, 1), null);
   assert.ok(section("js/editor-events.js", 'btnCaptureCombo.addEventListener("click"', "startKeyCapture(").includes('comboKey3Select").value = ""'));
+});
+
+test("Tapping-Term-Assistent: Perzentil, Klemmung und unvollständige Paare", () => {
+  assert.strictEqual(api.percentile([], 0.5), null);
+  assert.strictEqual(api.percentile([10, 20, 30, 40, 50], 0.5), 30);
+  assert.strictEqual(api.percentile([10, 20], 0.5), 15);
+  assert.strictEqual(api.percentile([5, 1, 9], 1), 9);
+  const ev = (r, c, pressed, t) => ({ r, c, pressed, t });
+  // 30 Tipps mit 90 ms Haltezeit, 400 ms Abstand: Tapping-Term = p95 + 30 = 120 -> 120
+  const taps = [];
+  for (let i = 0; i < 30; i++) taps.push(ev(2, 1, true, i * 350), ev(2, 1, false, i * 350 + 90));
+  let rec = api.computeTimingRecommendations(taps);
+  assert.strictEqual(rec.enough, true);
+  assert.strictEqual(rec.stats.holds, 30);
+  assert.strictEqual(rec.settings.tappingTermMs, 120);
+  assert.strictEqual(rec.settings.requirePriorIdleMs, 350);
+  assert.strictEqual(rec.settings.quickTapMs, 260);   // p5 der gleichen Abstände (alle 260 ms)
+  // Klemmung auf SETTINGS_RANGES: kurze Tipps -> Untergrenze 100; lange -> Obergrenze 500
+  const fast = [];
+  for (let i = 0; i < 25; i++) fast.push(ev(0, 0, true, i * 300), ev(0, 0, false, i * 300 + 20));
+  assert.strictEqual(api.computeTimingRecommendations(fast).settings.tappingTermMs, api.SETTINGS_RANGES.tappingTermMs[0]);
+  const slow = [];
+  for (let i = 0; i < 25; i++) slow.push(ev(0, 0, true, i * 2000), ev(0, 0, false, i * 2000 + 480));
+  assert.strictEqual(api.computeTimingRecommendations(slow).settings.tappingTermMs, api.SETTINGS_RANGES.tappingTermMs[1]);
+  // Rolls: Taste B wird 40 ms nach A gedrückt, bevor A losgelassen wird -> Combo-Fenster = 20 ms
+  const rolls = [];
+  for (let i = 0; i < 25; i++) rolls.push(ev(1, 0, true, i * 500), ev(1, 1, true, i * 500 + 40), ev(1, 0, false, i * 500 + 90), ev(1, 1, false, i * 500 + 120));
+  rec = api.computeTimingRecommendations(rolls);
+  assert.strictEqual(rec.stats.rolls, 25);
+  assert.strictEqual(rec.settings.comboTimeoutMs, 20);
+  // Unvollständige Paare: Loslassen ohne Druck, Druck ohne Loslassen, ungültige Ereignisse
+  rec = api.computeTimingRecommendations([ev(0, 0, false, 5), ev(0, 1, true, 10), ev(0, 1, true, 50), ev(0, 1, false, 90), ev(9, 9, true, 5), { r: 0, c: 0, pressed: true }, ev(3, 3, true, 200)]);
+  assert.strictEqual(rec.stats.holds, 1);
+  assert.strictEqual(rec.stats.incomplete, 5);
+  assert.strictEqual(rec.enough, false);
+  assert.deepStrictEqual({ ...rec.settings }, {});
+  // Zu wenige Tipps und Nicht-Liste
+  assert.strictEqual(api.computeTimingRecommendations(taps.slice(0, 10)).enough, false);
+  assert.strictEqual(api.computeTimingRecommendations(null).enough, false);
+  // Prellen (Druck 10 ms nach dem Loslassen) setzt die Haltezeit fort: eine Haltezeit von 100 ms, kein Paar aus 40 und 50 ms
+  const bounce = [];
+  for (let i = 0; i < 25; i++) bounce.push(ev(0, 0, true, i * 400), ev(0, 0, false, i * 400 + 40), ev(0, 0, true, i * 400 + 50), ev(0, 0, false, i * 400 + 100));
+  rec = api.computeTimingRecommendations(bounce);
+  assert.strictEqual(rec.stats.holds, 25);
+  assert.strictEqual(rec.stats.holdP95, 100);
+  assert.strictEqual(rec.stats.incomplete, 0);
+  // Zu lange Haltezeit (> 500 ms) zählt nicht; lange gehaltene Taste liefert keine Überlappung
+  const longHold = [];
+  for (let i = 0; i < 25; i++) longHold.push(ev(0, 0, true, i * 5000), ev(0, 0, false, i * 5000 + 90));
+  longHold.push(ev(4, 4, true, 200000), ev(4, 4, false, 200600));
+  rec = api.computeTimingRecommendations(longHold);
+  assert.strictEqual(rec.stats.holds, 25);
+  assert.strictEqual(rec.stats.incomplete, 1);
+  const shift = [ev(5, 0, true, 0)];
+  for (let i = 0; i < 25; i++) shift.push(ev(1, 1, true, 1000 + i * 100), ev(1, 1, false, 1050 + i * 100));
+  shift.push(ev(5, 0, false, 5000));
+  assert.strictEqual(api.computeTimingRecommendations(shift).stats.rolls, 0);
+  // Wenige Messwerte außer den Haltezeiten ergeben keine Einstellung
+  rec = api.computeTimingRecommendations(taps.slice(0, 40).concat([ev(1, 0, true, 100000), ev(1, 1, true, 100040), ev(1, 0, false, 100090), ev(1, 1, false, 100120)]));
+  assert.strictEqual(rec.stats.rolls, 1);
+  assert.strictEqual(rec.settings.comboTimeoutMs, undefined);
+  // Rücksprung der Scan-Zeit (Neustart) verwirft offene Drücke
+  rec = api.computeTimingRecommendations([ev(0, 0, true, 2000000000), ev(0, 0, false, 100)]);
+  assert.strictEqual(rec.stats.holds, 0);
+  assert.strictEqual(rec.stats.incomplete, 2);
+  // Überlauf von millis(): Haltezeit bleibt 90 ms
+  const wrap = [];
+  for (let i = 0; i < 25; i++) wrap.push(ev(0, 0, true, (0xFFFFFFFF - 2000 + i * 400) >>> 0), ev(0, 0, false, (0xFFFFFFFF - 2000 + i * 400 + 90) >>> 0));
+  assert.strictEqual(api.computeTimingRecommendations(wrap).stats.holdP95, 90);
 });
 
 (async () => {

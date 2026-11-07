@@ -23,15 +23,6 @@ Rules for this file:
 
 ## Priority 4
 
-### Interactive timing assistant (`Tapping-Term-Assistent`)
-
-- **Rank:** Feature model. Total 19/40 (typing 3, configuration 7, harmony 4, safety 5). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js`, `js/editor-events.js`, `index.html`.
-- **Problem:** Users configure `tappingTermMs`, `comboTimeoutMs`, `quickTapMs` and `requirePriorIdleMs` by trial and error without data from their own typing speed.
-- **Goal:** Add a pure analyzer `computeTimingRecommendations(samples)` in `js/config-model.js` and a dialog in the settings card that records `MATRIX:` press and release durations and inter-key roll gaps over USB, then calculates recommended values with a one-click apply button.
-- **Acceptance test:** Unit tests in `tests/test_app_logic.js` verify percentile calculation, clamping to `SETTINGS_RANGES` and rejection of incomplete press and release pairs.
-
 ### Layer mask for key overrides (`KeyOverride.layerMask`)
 
 - **Rank:** Feature model. Total 18/40 (typing 5, configuration 3, harmony 5, safety 5). Effort M. Estimate.

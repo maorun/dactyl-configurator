@@ -100,7 +100,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_KEY_LOCK = 28,     // links -> Master: KEY_LOCK vormerken (ohne Werte); KEY_PRESS und MOUSE_PRESS mit arg 1 sind sperrbar
   SPLIT_OP_MASTER_PRESS = 29, // nur Master -> links: eine Taste des Masters wurde gedrückt (retroTap, Tipp-Pause), ohne Werte
   SPLIT_OP_SENTENCE_CASE_TOGGLE = 30, // links -> Master: Satzanfang groß umschalten, ohne Werte
-  SPLIT_OP_COUNT = 31
+  SPLIT_OP_MOUSE_SPEED = 31,  // beide Richtungen: gehaltene Mauspräzisions-Tasten des Absenders (code Bit 0 = MOUSE_SLOW, Bit 1 = MOUSE_FAST), arg 0
+  SPLIT_OP_COUNT = 32
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -202,6 +203,8 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
       return ev.code != 0 && ev.arg == 0;
     case SPLIT_OP_OSL:
       return ev.arg == 0;
+    case SPLIT_OP_MOUSE_SPEED:
+      return ev.code <= 3 && ev.arg == 0;
     case SPLIT_OP_TAP_PENDING:
     case SPLIT_OP_HOLD_PENDING:
       return ev.code <= 1 && ev.arg == 0;
@@ -254,6 +257,7 @@ inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, i
             (ev.op == SPLIT_OP_HOLD_PENDING && ev.code <= 1 && ev.arg == 0) ||
             isValidSplitMasterLayerEvent(ev) ||
             (ev.op == SPLIT_OP_OSL && ev.arg == 0) ||
+            (ev.op == SPLIT_OP_MOUSE_SPEED && ev.code <= 3 && ev.arg == 0) ||
             (ev.op == SPLIT_OP_REPEAT_RUN && ev.code <= SPLIT_REPEAT_RUN_CODE_ALT_PRESS && ev.arg >= 1);
   if (!ok) return false;
   out = ev;
@@ -694,6 +698,43 @@ bool splitOslSendIfDue(SplitOslSync &s, uint8_t armed, uint8_t used, unsigned lo
   if (!send(makeSplitOslEvent(armed, used))) return false;
   s.sentArmed = armed;
   s.sentUsed = used;
+  s.lastSentMs = nowMs;
+  return true;
+}
+
+// -----------------------------------------------------------------------------
+// Mauspräzision beider Hälften (SPLIT_OP_MOUSE_SPEED)
+// -----------------------------------------------------------------------------
+// Jede Hälfte meldet ihre gehaltenen MOUSE_SLOW (Bit 0) und MOUSE_FAST (Bit 1). Das Paket trägt den ganzen Zustand:
+// das neueste gilt. Der Absender sendet bei jeder Änderung und, solange er etwas hält, jede Sekunde; der Empfänger
+// lässt das Spiegelbild nach MOUSE_SPEED_REMOTE_TIMEOUT_MS ohne Paket verfallen (kein hängendes Tempo bei Funkausfall).
+// Nach einer Änderung folgt nach SPLIT_LAYER_REPEAT_MS eine zweite Kopie (gleicher Zustand, Duplikate sind harmlos),
+// sonst hielte ein verlorenes Loslass-Paket das Tempo bis zum Verfall.
+struct SplitMouseSpeedSync {
+  uint8_t sentMask;
+  bool copyPending;
+  unsigned long lastSentMs;
+};
+
+inline void splitMouseSpeedReset(SplitMouseSpeedSync &s) {
+  memset(&s, 0, sizeof(s));
+}
+
+inline SplitHidEvent makeSplitMouseSpeedEvent(uint8_t mask) {
+  return makeSplitHidEvent(SPLIT_OP_MOUSE_SPEED, (uint16_t)(mask & 3), 0);
+}
+
+// Eigenen Zustand senden, wenn fällig. Ein Fehlschlag stellt den Stand vor dem Versuch wieder her.
+template <class SendFn>
+bool splitMouseSpeedSendIfDue(SplitMouseSpeedSync &s, uint8_t mask, unsigned long nowMs, bool linkUp, SendFn send,
+                              unsigned long refreshIntervalMs = SPLIT_LAYER_REFRESH_MS) {
+  bool changed = mask != s.sentMask;
+  unsigned long since = (unsigned long)(nowMs - s.lastSentMs);
+  bool due = (s.copyPending && since >= SPLIT_LAYER_REPEAT_MS) || (mask != 0 && linkUp && since >= refreshIntervalMs);
+  if (!changed && !due) return false;
+  if (!send(makeSplitMouseSpeedEvent(mask))) return false;
+  s.copyPending = changed;
+  s.sentMask = mask;
   s.lastSentMs = nowMs;
   return true;
 }
@@ -2252,7 +2293,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
                              SplitRxAppliedFn onBeforeLeftPress = nullptr, SplitRxAppliedFn onRepeat = nullptr,
                              SplitRxAppliedFn onHoldResolve = nullptr,
                              unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS,
-                             SplitRxAppliedFn onOsl = nullptr) {
+                             SplitRxAppliedFn onOsl = nullptr, SplitRxAppliedFn onMouseSpeed = nullptr) {
   SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -2269,6 +2310,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   bool haveLayer = false;
   SplitHidEvent oslEv = {};
   bool haveOsl = false;
+  SplitHidEvent speedEv = {};
+  bool haveSpeed = false;
   uint8_t keyEvents = 0;
   while (splitRxPop(q, ev)) {
     splitNoteLeftRx(kbd.splitLeft, ev, nowMs);
@@ -2310,6 +2353,14 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
       haveOsl = true;
       continue;
     }
+    // MOUSE_SPEED hat keine HID-Wirkung: das Tempo gilt auch ohne Host, zählt aber nicht als Aktivität (wie OSL)
+    if (ev.op == SPLIT_OP_MOUSE_SPEED) {
+      kbd.splitLeft.lastRxMs = nowMs;
+      kbd.splitLeft.linkUp = true;
+      speedEv = ev;
+      haveSpeed = true;
+      continue;
+    }
 
     if (!hostReady) {
       kbd.splitLeft.lastRxMs = nowMs;
@@ -2333,6 +2384,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
     if (ev.op == SPLIT_OP_RELEASE_ALL) {
       haveOsl = false;   // ein älteres OSL-Paket derselben Runde darf das Löschen nicht aufheben
       if (onOsl) onOsl(makeSplitOslEvent(0, 0));
+      haveSpeed = false;
+      if (onMouseSpeed) onMouseSpeed(makeSplitMouseSpeedEvent(0));
     }
     if (onBeforeLeftPress && splitIsPressOp(ev.op)) onBeforeLeftPress(ev);
     if (!splitApplyHidEvent(kbd.splitLeft, ev, nowMs, kbd)) continue;
@@ -2349,11 +2402,13 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   }
   if (haveLayer && onLayer) onLayer(layerEv);
   if (haveOsl && onOsl) onOsl(oslEv);
+  if (haveSpeed && onMouseSpeed) onMouseSpeed(speedEv);
   if (splitCheckLinkTimeout(kbd.splitLeft, nowMs, kbd, linkTimeoutMs)) rep.linkLost = true;
   // Link weg, Ring voll oder Mac getrennt: eine offene Repeat-Taste links endet ohne ihr Loslassen
   if (onRepeat && (rep.linkLost || rep.overflow || rep.hostLost)) onRepeat(makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
   // Link weg, Ring voll oder Mac getrennt: die vorgemerkten One-Shot-Ebenen der linken Hälfte gelten nicht mehr
   if (onOsl && (rep.linkLost || rep.overflow || rep.hostLost)) onOsl(makeSplitOslEvent(0, 0));
+  if (onMouseSpeed && (rep.linkLost || rep.overflow || rep.hostLost)) onMouseSpeed(makeSplitMouseSpeedEvent(0));
   return rep;
 }
 

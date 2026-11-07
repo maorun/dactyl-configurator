@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Mouse precision and turbo keys (`MOUSE_SLOW`, `MOUSE_FAST`)
-
-- **Rank:** Feature model. Total 24/40 (typing 6, configuration 2, harmony 8, safety 8). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylSplitHid.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** Mouse movement acceleration reaches 16 pixels per tick quickly, which makes fine cursor positioning difficult.
-- **Goal:** Add the actions `MOUSE_SLOW` and `MOUSE_FAST`. While `MOUSE_SLOW` is held, `mouseMoveTick()` and `wheelHoldTick()` cap the step at 1 without acceleration. While `MOUSE_FAST` is held, pointer movement uses `MOUSE_MOVE_MAX_STEP` from the first tick. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test holds `MOUSE_SLOW` and `MOUSE_RIGHT_MOVE` for 1000 ms and verifies that each step remains 1.
-
 ### Auto Shift character class filter (`autoShift` modes)
 
 - **Rank:** Feature model. Total 24/40 (typing 6, configuration 4, harmony 7, safety 7). Effort S. Estimate.

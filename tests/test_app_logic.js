@@ -3145,6 +3145,23 @@ test("Mausbewegung: Aktionscodes wie DactylCommon.h, Auswahl, Rückweg und kein 
   assert.throws(() => api.validateConfigShape({ layers, combos: [combo("ACT_MOUSE_RIGHT_MOVE")] }), /Mausbewegung/);
 });
 
+test("Mauspräzision: MOUSE_SLOW und MOUSE_FAST wie DactylCommon.h, Auswahl und kein Combo-Ziel", () => {
+  const common = fs.readFileSync(path.join(__dirname, "..", "firmware", "dactyl_right", "DactylCommon.h"), "utf8");
+  const all = api.KEYCODES.flatMap(g => g.keys);
+  for (const code of ["MOUSE_SLOW", "MOUSE_FAST"]) {
+    const fw = Number(new RegExp(`#define ACT_${code}\\s+(0x[0-9A-F]+)`).exec(common)[1]);
+    assert.strictEqual(api.actionCodeToNumeric(code), fw, code);
+    assert.strictEqual(api.actionCodeToNumeric(`ACT_${code}`), fw, code);
+    assert.strictEqual(api.findDefinitionByCode(fw).tap, code);
+    assert.ok(all.some(k => k.code === code), `${code} in der Auswahl`);
+    assert.ok(api.isMouseMoveCode(code) && api.isMouseMoveCode(`ACT_${code}`), code);
+  }
+  assert.deepStrictEqual(["MOUSE_SLOW", "MOUSE_FAST"].map(c => api.actionCodeToNumeric(c)), [0x13B, 0x13C]);
+  assert.ok(api.ACT_KEY_PAIR_BASE > 0x13C);
+  const combo = action => ({ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior: "KEY_PRESS", action });
+  assert.throws(() => api.validateConfigShape({ layers: [[[{ tap: "KEY_A" }]]], combos: [combo("MOUSE_SLOW")] }), /Mausbewegung/);
+});
+
 test("Preset Deutsch QWERTZ: Umlaut-Aktionen und US-Codes, keine deutschen Beschriftungen auf US-Tasten", () => {
   const usLabel = { KEY_SEMICOLON: ";", KEY_QUOTE: "'", KEY_LEFT_BRACKET: "[", KEY_RIGHT_BRACKET: "]", KEY_MINUS: "-",
                     KEY_SLASH: "/", KEY_EQUAL: "=", KEY_BACKSLASH: "\\", KEY_GRAVE: "`", KEY_Z: "Z", KEY_Y: "Y" };

@@ -60,6 +60,10 @@
 #define ACT_MOUSE_RIGHT_MOVE     0x138
 #define ACT_MOUSE_WHEEL_LEFT     0x139
 #define ACT_MOUSE_WHEEL_RIGHT    0x13A
+// Mauspräzision: solange MOUSE_SLOW gehalten wird, bewegt sich der Zeiger mit Schritt 1; solange MOUSE_FAST gehalten
+// wird, mit dem Höchstschritt ab dem ersten Takt. Beide oder keine gehalten: normale Beschleunigung. Wirkt über beide Hälften.
+#define ACT_MOUSE_SLOW           0x13B
+#define ACT_MOUSE_FAST           0x13C
 
 // Tastenpaar: eine Taste drückt zwei Tasten gleichzeitig (z. B. Shift + .); Index in userKeyPairs[]
 #define ACT_KEY_PAIR_BASE        0x140

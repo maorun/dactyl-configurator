@@ -40,6 +40,19 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertRegex(common, r"#define ACT_MOUSE_UP\s+0x135")
         self.assertRegex(common, r"#define ACT_MOUSE_RIGHT_MOVE\s+0x138")
 
+    def test_mouse_speed_codes_and_combo_rejection(self):
+        common = open(os.path.join(os.path.dirname(__file__), "..", "firmware", "dactyl_right", "DactylCommon.h"), encoding="utf-8").read()
+        self.assertRegex(common, r"#define ACT_MOUSE_SLOW\s+0x13B")
+        self.assertRegex(common, r"#define ACT_MOUSE_FAST\s+0x13C")
+        for code in ("MOUSE_SLOW", "MOUSE_FAST"):
+            with self.subTest(code=code):
+                self.assertEqual(server.code_to_cpp(code), f"ACT_{code}")
+                self.assertEqual(server.code_to_cpp(f"ACT_{code}"), f"ACT_{code}")
+                self.assertIn(f"ACT_{code}", server.generate_keymap_cpp([[[{"tap": code}]]]))
+                combo = {"key1": {"r": 0, "c": 0}, "key2": {"r": 0, "c": 1}, "behavior": "KEY_PRESS", "action": code}
+                with self.assertRaises(ValueError):
+                    server.generate_combos_cpp([combo])
+
     def test_code_to_cpp(self):
         self.assertEqual(server.code_to_cpp("KEY_A"), "'a'")
         self.assertEqual(server.code_to_cpp("KEY_Z"), "'z'")

@@ -150,7 +150,9 @@ const KEYCODES = [
     { code: "MOUSE_UP", label: "🖱️ Maus nach oben (halten beschleunigt)", char: "" },
     { code: "MOUSE_DOWN", label: "🖱️ Maus nach unten (halten beschleunigt)", char: "" },
     { code: "MOUSE_LEFT_MOVE", label: "🖱️ Maus nach links (halten beschleunigt)", char: "" },
-    { code: "MOUSE_RIGHT_MOVE", label: "🖱️ Maus nach rechts (halten beschleunigt)", char: "" }
+    { code: "MOUSE_RIGHT_MOVE", label: "🖱️ Maus nach rechts (halten beschleunigt)", char: "" },
+    { code: "MOUSE_SLOW", label: "🖱️ Maus langsam (halten: Schritt 1)", char: "" },
+    { code: "MOUSE_FAST", label: "🖱️ Maus schnell (halten: Höchstschritt)", char: "" }
   ]},
   { group: "Layer Umschalter", keys: [
     { code: "LAYER_UP", label: "⬆️ Layer +1 Hoch (Nächste Ebene)", char: "" },
@@ -319,7 +321,11 @@ const ACTION_TO_NUMERIC = {
   "ACT_MOUSE_UP": 0x135,
   "ACT_MOUSE_DOWN": 0x136,
   "ACT_MOUSE_LEFT_MOVE": 0x137,
-  "ACT_MOUSE_RIGHT_MOVE": 0x138
+  "ACT_MOUSE_RIGHT_MOVE": 0x138,
+  "MOUSE_SLOW": 0x13B,
+  "MOUSE_FAST": 0x13C,
+  "ACT_MOUSE_SLOW": 0x13B,
+  "ACT_MOUSE_FAST": 0x13C
 };
 
 // Beschriftung der Umlaut-Aktionen (Keycap, GET_CONFIG-Rückweg)
@@ -368,7 +374,7 @@ function isOslCode(code) {
 
 // true für Mausbewegung (Combos führen sie nicht aus)
 function isMouseMoveCode(code) {
-  return /^(ACT_)?MOUSE_(UP|DOWN|LEFT_MOVE|RIGHT_MOVE)$/.test(String(code || ""));
+  return /^(ACT_)?MOUSE_(UP|DOWN|LEFT_MOVE|RIGHT_MOVE|SLOW|FAST)$/.test(String(code || ""));
 }
 
 // true für One-Shot-, Caps-Word- und Repeat-Codes (Combos nur mit KEY_PRESS, nicht mit MODIFIER_HOLD)

@@ -334,6 +334,8 @@ function buildSettingCommands(s, profile) {
     // Caps-Lock-LED: nur die Hälfte mit dem Host-Dienst (Master) kennt den Befehl
     ...(profile.master ? [{ cmd: `SET_CAPS_LED ${clampSetting("capsLed", s.capsLed ?? 0)}`, ack: "SET_CAPS_LED", optional: true }] : []),
     { cmd: `SET_LEADER_TIMEOUT ${clampSetting("leaderTimeoutMs", s.leaderTimeoutMs ?? 1000)}`, ack: "SET_LEADER_TIMEOUT", optional: true },
+    { cmd: `SET_AUTO_SHIFT ${clampSetting("autoShift", s.autoShift ?? 0)}`, ack: "SET_AUTO_SHIFT", optional: true },
+    { cmd: `SET_AUTO_SHIFT_TERM ${clampSetting("autoShiftMs", s.autoShiftMs ?? 175)}`, ack: "SET_AUTO_SHIFT_TERM", optional: true },
     { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true }
   ];
 }

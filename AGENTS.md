@@ -258,6 +258,10 @@ Keys in the matrix use `uint16_t` action codes:
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 - Details: `FEATURES.md`, section "Tap-Dance / Double-Tap". Read it only before you change this feature.
 
+### Auto Shift (`autoShift`, `autoShiftMs`)
+- Details: `FEATURES.md`, section "Auto Shift". Read it only before you change this feature.
+- Keys with a hold or double-tap action, modifiers and layer keys never wait for Auto Shift. `DEVICE_INFO` uses the short fields `as` and `at`: the line must stay under 512 bytes.
+
 ### Tapping term per key (`TAPTERMMAP`)
 - Details: `FEATURES.md`, section "Mod-Tap / Layer-Tap" (own tapping term). Read it only before you change this feature.
 - `0` = the value of the half (`tappingTermMs`). Use `effectiveTapTerm()`; never compare against `tappingTermMs` directly in the hold or double-tap logic. `SET_KT` is RAM only, like `SET_K`.

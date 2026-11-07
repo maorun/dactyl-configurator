@@ -47,6 +47,8 @@ static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
 static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
+static uint8_t autoShift = 0;
+static uint16_t autoShiftMs = 175;
 static uint16_t leaderTimeoutMs = 1000;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
@@ -192,6 +194,8 @@ void resetState() {
   quickTapMs = 0;
   requirePriorIdleMs = 0;
   chordalHold = 0;
+  autoShift = 0;
+  autoShiftMs = 175;
   tapTermsCompiledIn = false;
   holdTapMode = 0;
   numTriLayers = 0;
@@ -8181,6 +8185,304 @@ TEST(test_eager_debounce_key_reset_clears_one_key) {
   resetMatrixDebounceKey(0, 0);
   assert(!debouncedMatrixKey(0, 0, false, 6001));          // reset key reports open at once
   assert(debouncedMatrixKey(4, 5, true, 6001));            // other key keeps its state
+}
+
+
+// Auto Shift: kurzer Tipp 'a', langes Halten 'A', Taste mit Halte-Aktion, Reihenfolge beim schnellen Rollen
+TEST(test_auto_shift_short_tap_sends_plain_character) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = 'a';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1100);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1100);
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == 'a');
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_long_hold_sends_shifted_character) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = 'a';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  assert(bleKeyboard.pressHistory.empty());           // vor dem Zeitlimit geht nichts raus
+  setMillis(1174); processDeferredKeys(1174);
+  assert(bleKeyboard.pressHistory.empty());
+  setMillis(1175); processDeferredKeys(1175);
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == 'A');
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1300);
+  assert(bleKeyboard.pressHistory.size() == 1);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_release_after_term_before_tick_sends_shifted) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = '1';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1200);   // Tick lief noch nicht
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == '!');
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_off_by_default_keeps_plain_character) {
+  resetState();
+  KEYMAP[0][2][1] = 'a';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == 'a');   // sofort, ohne Wartezeit
+  setMillis(1500); processDeferredKeys(1500);
+  assert(bleKeyboard.pressHistory.size() == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1600);
+}
+
+TEST(test_auto_shift_key_with_hold_action_is_unchanged) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1250); processDeferredKeys(1250);
+  assert(countPresses(KEY_LEFT_CTRL) == 1);            // Mod-Tap entscheidet Hold
+  assert(countPresses('A') == 0 && countPresses('a') == 0);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1300);
+  // Kurzer Tipp bleibt ein normaler Tipp 'a'
+  bleKeyboard.pressHistory.clear();
+  setMillis(2000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 2000);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 2050);
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == 'a');
+}
+
+TEST(test_auto_shift_modifier_and_layer_keys_are_unchanged) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = KEY_LEFT_SHIFT;
+  KEYMAP[0][2][2] = ACT_MO_BASE + 1;
+  KEYMAP[0][2][3] = ' ';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  assert(countPresses(KEY_LEFT_SHIFT) == 1);          // sofort, ohne Wartezeit
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1000);
+  assert(getActiveLayer() == 1);                      // Layer-Taste wirkt sofort
+  keyState[2][3] = true; onMatrixKeyChange(2, 3, true, 1000);   // Leerzeichen hat kein umgeschaltetes Zeichen
+  assert(countPresses(' ') == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1400);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1400);
+  keyState[2][3] = false; onMatrixKeyChange(2, 3, false, 1400);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_fast_roll_keeps_character_order) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1060);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1060);   // zweite Taste, bevor 'a' losgelassen ist
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1090);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1120);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'a' && bleKeyboard.pressHistory[1] == 'b');
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_fast_roll_second_key_held_long_is_shifted) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1060);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1060);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1090);
+  setMillis(1300); processDeferredKeys(1300);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'a' && bleKeyboard.pressHistory[1] == 'B');
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1400);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_custom_term_and_symbols) {
+  resetState();
+  autoShift = 1;
+  autoShiftMs = 300;
+  KEYMAP[0][2][1] = ';';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1250); processDeferredKeys(1250);
+  assert(bleKeyboard.pressHistory.empty());
+  setMillis(1300); processDeferredKeys(1300);
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == ':');
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1400);
+}
+
+TEST(test_auto_shift_mapping_covers_letters_digits_and_symbols) {
+  assert(autoShiftedAscii('a') == 'A' && autoShiftedAscii('z') == 'Z');
+  assert(autoShiftedAscii('1') == '!' && autoShiftedAscii('9') == '(' && autoShiftedAscii('0') == ')');
+  assert(autoShiftedAscii('-') == '_' && autoShiftedAscii('=') == '+' && autoShiftedAscii('/') == '?');
+  assert(autoShiftedAscii('\'') == '"' && autoShiftedAscii('\\') == '|' && autoShiftedAscii('`') == '~');
+  assert(autoShiftedAscii('A') == 0 && autoShiftedAscii('!') == 0 && autoShiftedAscii(' ') == 0);
+  assert(autoShiftedAscii(KEY_LEFT_SHIFT) == 0 && autoShiftedAscii(0) == 0);
+}
+
+TEST(test_auto_shift_combo_partner_keeps_combo) {
+  resetState();
+  autoShift = 1;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1010);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1010);
+  checkUserCombos();
+  assert(comboRuntime[0].active);                     // die Combo löst aus
+  assert(countPresses('j') == 0 && countPresses('k') == 0 && countPresses('J') == 0 && countPresses('K') == 0);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1100);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1120);
+  checkUserCombos();
+  processDeferredKeys(2000);
+  assert(countPresses('J') == 0 && countPresses('K') == 0);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_pending_key_counts_as_waiting_tap_for_other_half) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = 'a';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  assert(anyDoubleTapWaiting());                      // links: TAP_PENDING 1; Master: Druck der anderen Hälfte wartet
+  flushAllDoubleTaps();                               // Druck der anderen Hälfte: wartende Taste geht als Tipp raus
+  assert(!anyDoubleTapWaiting());
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == 'a');
+  setMillis(1400); processDeferredKeys(1400);
+  assert(bleKeyboard.pressHistory.size() == 1);       // kein zweites, umgeschaltetes Zeichen
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_held_modifier_or_shift_disables_it) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][0] = KEY_LEFT_GUI;
+  KEYMAP[0][2][1] = 'z';
+  setMillis(1000);
+  keyState[2][0] = true; onMatrixKeyChange(2, 0, true, 1000);
+  setMillis(1050);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1050);
+  assert(countPresses('z') == 1);                     // Cmd+Z: sofort, ohne Wartezeit
+  setMillis(1400); processDeferredKeys(1400);
+  assert(countPresses('Z') == 0 && countPresses('z') == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1450);
+  keyState[2][0] = false; onMatrixKeyChange(2, 0, false, 1500);
+  assert(bleKeyboard.pressedKeys.empty());
+  // Gehaltenes Shift: kein zweites Shift durch Auto Shift
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][0] = KEY_LEFT_SHIFT;
+  KEYMAP[0][2][1] = 'a';
+  setMillis(1000);
+  keyState[2][0] = true; onMatrixKeyChange(2, 0, true, 1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1010);
+  assert(countPresses('a') == 1);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1500);
+  keyState[2][0] = false; onMatrixKeyChange(2, 0, false, 1510);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_with_mod_tap_in_every_hold_tap_mode_and_chordal) {
+  for (uint8_t mode = 0; mode <= 2; mode++) {
+    for (uint8_t chordal = 0; chordal <= 1; chordal++) {
+      resetState();
+      autoShift = 1;
+      holdTapMode = mode;
+      chordalHold = chordal;
+      KEYMAP[0][2][1] = 'a';
+      HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+      KEYMAP[0][2][2] = 'b';
+      setMillis(1000);
+      keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+      setMillis(1050);
+      keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+      setMillis(1150);
+      keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1150);   // 'b' kürzer als das Zeitlimit gehalten
+      setMillis(1300); processDeferredKeys(1300);
+      keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1340);
+      processDeferredKeys(1400);
+      // Das gepufferte 'b' ist nicht umgeschaltet, kein hängender Druck
+      assert(countPresses('b') == 1);
+      assert(countPresses('B') == 0);
+      assert(bleKeyboard.pressedKeys.empty());
+    }
+  }
+}
+
+TEST(test_auto_shift_keeps_layer_of_the_press) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[1][2][1] = 'x';
+  KEYMAP[0][2][2] = ACT_MO_BASE + 1;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1010);   // Ebene 1 aktiv, während 'a' wartet
+  setMillis(1300); processDeferredKeys(1300);
+  assert(countPresses('A') == 1 || countPresses('a') == 1);     // die Ebene des Drucks gilt, nicht 'x'
+  assert(countPresses('x') == 0 && countPresses('X') == 0);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1400);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1410);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_auto_shift_is_off_during_leader_capture) {
+  resetState();
+  autoShift = 1;
+  KEYMAP[0][2][1] = 'a';
+  leaderState.start(1000);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  assert(!anyDoubleTapWaiting());                     // kein Warten: die Leader-Erfassung sieht 'a' sofort
+  setMillis(1400); processDeferredKeys(1400);
+  assert(countPresses('A') == 0);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1450);
+}
+
+TEST(test_auto_shift_command_nvs_and_info) {
+  resetState();
+  handleConfigCommand("SET_AUTO_SHIFT 2", false);
+  assert(mockChar.value == "ERR ARGS SET_AUTO_SHIFT 2");
+  handleConfigCommand("SET_AUTO_SHIFT 1", false);
+  assert(mockChar.value == "OK SET_AUTO_SHIFT 1");
+  assert(autoShift == 1);
+  handleConfigCommand("SET_AUTO_SHIFT_TERM 49", false);
+  assert(mockChar.value == "ERR ARGS SET_AUTO_SHIFT_TERM 49");
+  handleConfigCommand("SET_AUTO_SHIFT_TERM 501", false);
+  assert(mockChar.value == "ERR ARGS SET_AUTO_SHIFT_TERM 501");
+  handleConfigCommand("SET_AUTO_SHIFT_TERM abc", false);
+  assert(mockChar.value == "ERR ARGS SET_AUTO_SHIFT_TERM abc");
+  assert(autoShiftMs == 175);
+  handleConfigCommand("SET_AUTO_SHIFT_TERM 220", false);
+  assert(mockChar.value == "OK SET_AUTO_SHIFT_TERM 220");
+  assert(autoShiftMs == 220);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"as\":1") != std::string::npos);
+  assert(mockChar.value.find("\"at\":220") != std::string::npos);
+  autoShift = 0; autoShiftMs = 175;
+  loadKeymapFromNVS();
+  assert(autoShift == 1 && autoShiftMs == 220);
+  Preferences::uintStore["auto_shift_ms"] = 9999;     // außerhalb des Bereichs
+  autoShiftMs = 175;
+  loadKeymapFromNVS();
+  assert(autoShiftMs == 175);
 }
 
 int main() {

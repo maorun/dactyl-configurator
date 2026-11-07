@@ -452,6 +452,8 @@ function applySettingsToInputs(settings) {
   setVal("leaderTimeoutInput", settings.leaderTimeoutMs ?? 1000);
   setVal("priorIdleInput", settings.requirePriorIdleMs ?? 0);
   setVal("chordalHoldSelect", settings.chordalHold ?? 0);
+  setVal("autoShiftSelect", settings.autoShift ?? 0);
+  setVal("autoShiftTermInput", settings.autoShiftMs ?? 175);
   applyTriLayersToInputs(settings.triLayers);
   const capsLed = document.getElementById("capsLedCheckbox");
   if (capsLed) capsLed.checked = !!settings.capsLed;

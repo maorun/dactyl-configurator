@@ -354,6 +354,8 @@ function setupEventListeners() {
       const leaderTimeout = clampSetting("leaderTimeoutMs", parseInt(document.getElementById("leaderTimeoutInput")?.value, 10));
       const priorIdle = clampSetting("requirePriorIdleMs", parseInt(document.getElementById("priorIdleInput")?.value, 10));
       const chordalHold = clampSetting("chordalHold", parseInt(document.getElementById("chordalHoldSelect")?.value, 10));
+      const autoShift = clampSetting("autoShift", parseInt(document.getElementById("autoShiftSelect")?.value, 10));
+      const autoShiftMs = clampSetting("autoShiftMs", parseInt(document.getElementById("autoShiftTermInput")?.value, 10));
       const standbyMinutes = clampSetting("standbyTimeoutMinutes", parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10));
       const sleepMinutes = clampSetting("sleepTimeoutMinutes", parseInt(document.getElementById("sleepTimeoutSelect")?.value, 10));
       const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = String(v); };
@@ -366,6 +368,8 @@ function setupEventListeners() {
       setVal("leaderTimeoutInput", leaderTimeout);
       setVal("priorIdleInput", priorIdle);
       setVal("chordalHoldSelect", chordalHold);
+      setVal("autoShiftSelect", autoShift);
+      setVal("autoShiftTermInput", autoShiftMs);
 
       const capsLedEl = document.getElementById("capsLedCheckbox");
       const capsLed = capsLedEl && capsLedEl.checked ? 1 : 0;
@@ -383,6 +387,8 @@ function setupEventListeners() {
         leaderTimeoutMs: leaderTimeout,
         requirePriorIdleMs: priorIdle,
         chordalHold: chordalHold,
+        autoShift: autoShift,
+        autoShiftMs: autoShiftMs,
         triLayers: triLayers,
         capsLed: capsLed,
         standbyTimeoutMinutes: standbyMinutes,

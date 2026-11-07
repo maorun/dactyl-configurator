@@ -24,7 +24,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, autoShift, autoShiftMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -170,6 +170,11 @@ void processOtaTimeout() {
 #define PRIOR_IDLE_MAX_MS 500
 // Opposite-Hand-Regel (chordalHold): 0 = aus, 1 = an. Die Daumenreihe (letzte Matrixzeile) ist ausgenommen.
 #define CHORDAL_THUMB_ROW (NUM_ROWS - 1)
+// Auto Shift (autoShift): 0 = aus, 1 = an. Eine Zeichentaste ohne Halte-Aktion sendet das umgeschaltete Zeichen, wenn sie
+// länger als autoShiftMs gehalten wird. Standardwert des Zeitlimits ohne NVS-Eintrag: AUTO_SHIFT_DEFAULT_MS.
+#define AUTO_SHIFT_MIN_MS 50
+#define AUTO_SHIFT_MAX_MS 500
+#define AUTO_SHIFT_DEFAULT_MS 175
 // Eigener Tapping-Term je Taste (TAPTERMMAP, je Ebene): 0 = Wert der Hälfte (tappingTermMs)
 
 // -----------------------------------------------------------------------------
@@ -1641,6 +1646,38 @@ void replayDeferredQueue();
 bool anyTapHoldPending();
 bool deferredKeysWaiting() { return deferredQueue.count > 0; }
 
+// Auto Shift: das umgeschaltete ASCII-Zeichen (US-Layout) einer unumgeschalteten Zeichentaste, sonst 0
+// (Leerzeichen, schon umgeschaltete Zeichen und alles außerhalb von 0x21..0x7E)
+static inline uint16_t autoShiftedAscii(uint16_t c) {
+  if (c >= 'a' && c <= 'z') return (uint16_t)(c - 'a' + 'A');
+  if (c >= '1' && c <= '9') return (uint16_t)("!@#$%^&*("[c - '1']);
+  switch (c) {
+    case '0': return ')';
+    case '-': return '_';
+    case '=': return '+';
+    case '[': return '{';
+    case ']': return '}';
+    case '\\': return '|';
+    case ';': return ':';
+    case '\'': return '"';
+    case '`': return '~';
+    case ',': return '<';
+    case '.': return '>';
+    case '/': return '?';
+    default: return 0;
+  }
+}
+
+// Auto Shift: Taste wartet auf das Zeitlimit; ein Loslassen oder eine andere Taste davor macht sie zum normalen Tipp
+struct AutoShiftKey {
+  bool pending;
+  uint16_t tapAction;
+  uint16_t shiftedAction;
+  uint8_t layer;
+  unsigned long pressTime;
+};
+AutoShiftKey autoShiftKeys[NUM_ROWS][NUM_COLS];
+
 struct TapHoldKey {
   bool pending;      // Gedrückt, Tap oder Hold noch nicht entschieden
   bool holdActive;   // Halte-Aktion ist aktiv
@@ -1687,6 +1724,7 @@ void resetTapHold() {
       quickTapValid[r][c] = false;
       quickTapAt[r][c] = 0;
       quickTapHeld[r][c] = false;
+      autoShiftKeys[r][c] = { false, 0, 0, 0, 0 };
     }
   }
   priorKeyValid = false;
@@ -1766,7 +1804,10 @@ void flushDoubleTapsExcept(uint8_t exceptR, uint8_t exceptC) {
 
 // Ein Tastendruck der anderen Hälfte: alle wartenden Einzel-Tipps vorher senden (Master: vor einem linken
 // Druck aus splitProcessRx; links: auf SPLIT_OP_TAP_FLUSH des Masters)
+// Eine wartende Auto-Shift-Taste (autoShiftKeys) zählt wie ein wartender Tipp: sie geht als normaler Tipp vor der Taste der anderen Hälfte raus.
+void autoShiftFlushExcept(uint8_t exceptR, uint8_t exceptC);
 void flushAllDoubleTaps() {
+  autoShiftFlushExcept(NUM_ROWS, NUM_COLS);
   flushDoubleTapsExcept(NUM_ROWS, NUM_COLS);
 }
 
@@ -1774,7 +1815,7 @@ void flushAllDoubleTaps() {
 bool anyDoubleTapWaiting() {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      if (doubleTap[r][c].waiting) return true;
+      if (doubleTap[r][c].waiting || autoShiftKeys[r][c].pending) return true;
     }
   }
   return false;
@@ -1917,6 +1958,7 @@ void cancelTapHoldForCombo(uint8_t r, uint8_t c) {
     dispatchRelease(r, c, k.holdAction);
   }
   k.pending = false;
+  autoShiftKeys[r][c].pending = false;
   DoubleTapKey &d = doubleTap[r][c];
   if (d.active) {
     d.active = false;
@@ -2054,6 +2096,28 @@ void tapHoldTick(unsigned long now) {
 // -----------------------------------------------------------------------------
 // Matrix-Ereignisse (vom Scan in loop() aufgerufen)
 // -----------------------------------------------------------------------------
+// Auto Shift: wartende Taste jetzt senden, mit dem umgeschalteten Zeichen (shifted) oder als normaler Tipp-Druck.
+// Der Druck bleibt gehalten; das Loslassen läuft über pressedAction.
+void autoShiftFire(uint8_t r, uint8_t c, bool shifted) {
+  AutoShiftKey &k = autoShiftKeys[r][c];
+  if (!k.pending) return;
+  k.pending = false;
+  dispatchPress(r, c, shifted ? k.shiftedAction : k.tapAction, k.layer);
+}
+
+// Eine andere Taste wird gedrückt: wartende Auto-Shift-Tasten vorher als Tipp senden (Reihenfolge der Zeichen bleibt)
+void autoShiftFlushExcept(uint8_t exceptR, uint8_t exceptC) {
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++)
+      if (!(r == exceptR && c == exceptC) && autoShiftKeys[r][c].pending) autoShiftFire(r, c, false);
+}
+
+void autoShiftTick(unsigned long now) {
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++)
+      if (autoShiftKeys[r][c].pending && (unsigned long)(now - autoShiftKeys[r][c].pressTime) >= autoShiftMs) autoShiftFire(r, c, true);
+}
+
 // now: Zeitpunkt des Anschlags. Der Master führt eine zurückgehaltene Änderung später aus (SplitLocalDefer) und
 // gibt ihre Scan-Zeit mit, damit Tapping-Term und Combo-Fenster die echten Abstände sehen.
 void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long now) {
@@ -2071,7 +2135,8 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
       resolveAllPendingTapHoldsAsHold();
       replayDeferredQueue();
     }
-    // Wartende Einzel-Tipps anderer Tasten zuerst senden, damit die Reihenfolge der Zeichen stimmt
+    // Wartende Einzel-Tipps und Auto-Shift-Tasten anderer Tasten zuerst senden, damit die Reihenfolge der Zeichen stimmt
+    autoShiftFlushExcept(r, c);
     flushDoubleTapsExcept(r, c);
     DoubleTapKey &d = doubleTap[r][c];
     bool isSecondTap = d.waiting && (unsigned long)(now - d.releaseTime) < effectiveTapTerm(d.term);
@@ -2126,6 +2191,10 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
     if (holdAct != 0 || dtapAct != 0) {
       tapHoldOnPress(r, c, tapAct, holdAct, layer, now, resolveKeyTapTerm(layer, r, c));
       tapHoldDtap[r][c] = dtapAct;
+    } else if (autoShift && autoShiftedAscii(tapAct) != 0 && !leaderState.active && heldModifierMask() == 0) {
+      // Auto Shift (nicht bei gehaltenem Modifikator dieser Hälfte, z. B. Cmd+Z, und nicht in einer Leader-Erfassung): erst nach dem Zeitlimit oder beim Loslassen entscheiden; Tasten mit Halte- oder Doppel-Tipp-Aktion,
+      // Modifikatoren und Layer-Tasten (kein ASCII-Zeichen) laufen nie hierher
+      autoShiftKeys[r][c] = { true, tapAct, autoShiftedAscii(tapAct), layer, now };
     } else {
       dispatchPress(r, c, tapAct, layer);
     }
@@ -2154,6 +2223,11 @@ void applyMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed, unsigned long no
       // Gehaltener Quick-Tap endet: der nächste Druck kann wieder ein Quick-Tap sein
       quickTapHeld[r][c] = false;
       if (quickTapMs > 0) { quickTapValid[r][c] = true; quickTapAt[r][c] = now; }
+      dispatchRelease(r, c, pressedAction[r][c]);
+    } else if (autoShiftKeys[r][c].pending) {
+      // Loslassen: nach dem Zeitlimit das umgeschaltete Zeichen, sonst ein normaler Tipp
+      bool shifted = (unsigned long)(now - autoShiftKeys[r][c].pressTime) >= autoShiftMs;
+      autoShiftFire(r, c, shifted);
       dispatchRelease(r, c, pressedAction[r][c]);
     } else if (d.active) {
       d.active = false;
@@ -2191,6 +2265,7 @@ void onMatrixKeyChange(uint8_t r, uint8_t c, bool isPressed) {
 // Zeitgesteuerte Entscheidungen: Mod-Tap Tapping-Term, gepufferte Combo-Kandidaten und laufende Makros
 void processDeferredKeys(unsigned long now) {
   tapHoldTick(now);
+  autoShiftTick(now);
   doubleTapTick(now);
   leaderTick(now);
 
@@ -2463,6 +2538,14 @@ void loadKeymapFromNVS() {
   if (preferences.isKey("chordal")) {
     uint8_t ch = preferences.getUChar("chordal", 0);
     if (ch <= 1) chordalHold = ch;
+  }
+  if (preferences.isKey("auto_shift")) {
+    uint8_t as = preferences.getUChar("auto_shift", 0);
+    if (as <= 1) autoShift = as;
+  }
+  if (preferences.isKey("auto_shift_ms")) {
+    uint16_t am = preferences.getUShort("auto_shift_ms", AUTO_SHIFT_DEFAULT_MS);
+    if (am >= AUTO_SHIFT_MIN_MS && am <= AUTO_SHIFT_MAX_MS) autoShiftMs = am;
   }
   if (preferences.isKey("hold_mode")) {
     uint8_t hm = preferences.getUChar("hold_mode", 0);
@@ -2753,6 +2836,24 @@ bool saveChordalHoldToNVS(uint8_t on) {
   preferences.end();
   if (ok) chordalHold = on;
   Serial.printf("NVS: Chordal-Hold %s: %u\n", ok ? "gespeichert" : "FEHLER", on);
+  return ok;
+}
+
+bool saveAutoShiftToNVS(uint8_t on) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("auto_shift", on) > 0;
+  preferences.end();
+  if (ok) autoShift = on;
+  Serial.printf("NVS: Auto Shift %s: %u\n", ok ? "gespeichert" : "FEHLER", on);
+  return ok;
+}
+
+bool saveAutoShiftMsToNVS(uint16_t ms) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUShort("auto_shift_ms", ms) > 0;
+  preferences.end();
+  if (ok) autoShiftMs = ms;
+  Serial.printf("NVS: Auto-Shift-Zeitlimit %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
   return ok;
 }
 
@@ -3383,6 +3484,25 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_AUTO_SHIFT ")) {
+    String arg = cmd.substring(15);
+    arg.trim();
+    if (arg == "0" || arg == "1") {
+      sendConfigNotification(saveAutoShiftToNVS(arg == "1" ? 1 : 0) ? "OK SET_AUTO_SHIFT " + arg : String("ERR NVS SET_AUTO_SHIFT"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd.startsWith("SET_AUTO_SHIFT_TERM ")) {
+    String arg = cmd.substring(20);
+    arg.trim();
+    bool digits = arg.length() > 0 && arg.length() <= 3;
+    for (unsigned i = 0; digits && i < arg.length(); i++) digits = arg.charAt(i) >= '0' && arg.charAt(i) <= '9';
+    int am = digits ? arg.toInt() : -1;
+    if (digits && am >= AUTO_SHIFT_MIN_MS && am <= AUTO_SHIFT_MAX_MS) {
+      sendConfigNotification(saveAutoShiftMsToNVS((uint16_t)am) ? "OK SET_AUTO_SHIFT_TERM " + String(am) : String("ERR NVS SET_AUTO_SHIFT_TERM"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd.startsWith("SET_QUICK_TAP ")) {
     int qt = cmd.substring(14).toInt();
     String arg = cmd.substring(14);
@@ -3656,12 +3776,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
 #endif
     char buf[768];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"require_prior_idle_ms\":%u,\"chordal_hold\":%u,\"leader_timeout_ms\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"require_prior_idle_ms\":%u,\"chordal_hold\":%u,\"as\":%u,\"at\":%u,\"leader_timeout_ms\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)leaderTimeoutMs, triJson, hostJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)autoShift, (unsigned)autoShiftMs, (unsigned)leaderTimeoutMs, triJson, hostJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

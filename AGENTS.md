@@ -196,8 +196,10 @@ Keys in the matrix use `uint16_t` action codes:
 | `0x16A` | Layer Lock (`LAYER_LOCK`) | Locks the highest held `MO_n` layer as a toggle layer; a second press, or a press without a held `MO_n`, releases it; see `FEATURES.md`, section "Layer lock" |
 | `0x180` .. `0x187` | One-Shot Layer (`OSL_0`..`OSL_7`) | A tap arms the layer for the next key press of either half; a second tap disarms it; a hold acts like `MO_n`; see `FEATURES.md`, section "One-shot layer" |
 | `0x120` .. `0x126` | Media Keys | Play/Pause (0x120), Mute (0x121), Vol+ (0x122), Vol- (0x123), Next (0x124), Prev (0x125), Stop (0x126) |
+| `0x128` .. `0x12B` | macOS System Keys | Brightness Up (0x128), Brightness Down (0x129), Mission Control (0x12A), Launchpad (0x12B) via the 24-bit Consumer report; see `FEATURES.md`, section "Consumer report and macOS system keys" |
 | `0x127` | Apple Mac Globe / Fn Key | Emits HID Consumer Usage `0x029D` (*AC Next Keyboard Layout Select* / Globe 🌐) |
 | `0x130` .. `0x134` | Mouse Actions | Left Click (0x130), Right Click (0x131), Middle Click (0x132), Scroll Up (0x133), Scroll Down (0x134) via Composite BLE HID Report ID 3 |
+| `0x139` .. `0x13A` | Wheel Left / Right (`MOUSE_WHEEL_LEFT`, `MOUSE_WHEEL_RIGHT`) | Horizontal scroll with AC Pan in the mouse report; a held wheel key repeats with acceleration; see `FEATURES.md`, section "Horizontal scroll and held wheel keys" |
 | `0x135` .. `0x138` | Mouse Movement (`MOUSE_UP`, `MOUSE_DOWN`, `MOUSE_LEFT_MOVE`, `MOUSE_RIGHT_MOVE`) | Held key moves the pointer with growing speed; see `FEATURES.md`, section "Mouse movement"; no combo action, not repeatable |
 | `0x140` .. `0x14F` | Key Pair (`PAIR_0`..`PAIR_15`) | Presses two keyboard codes at the same time (e.g. `Alt` + `*` = `°` with the macOS layout "U.S."); index into `userKeyPairs[]` |
 | `0x150` .. `0x156` | Umlaut (`UMLAUT_AE`, `UMLAUT_OE`, `UMLAUT_UE`, `UMLAUT_AE_UPPER`, `UMLAUT_OE_UPPER`, `UMLAUT_UE_UPPER`, `UMLAUT_SZ`) | Dead key `Alt` + `u`, then the vowel; `ß` = `Alt` + `s` (macOS layout "U.S.") |
@@ -387,8 +389,8 @@ python3 server.py
 5. **Composite BLE HID Architecture (`DactylBleComposite.h`):**
    - Implements a single unified HID service with three distinct Input Reports:
      - Report ID 1: Keyboard (8 bytes: modifier bitmask, reserved, 6 scancodes array). The key array declares usages `0x00`..`0x73`, so F13..F24 (`0x68`..`0x73`) are valid.
-     - Report ID 2: Consumer Control (2 bytes: 16 usages including Mac Globe `0x029D`).
-     - Report ID 3: Mouse (4 bytes: buttons bitmask [Bit 0 Left, Bit 1 Right, Bit 2 Middle], X [-127..127], Y [-127..127], Wheel [-127..127]).
+     - Report ID 2: Consumer Control (3 bytes: 20 usages including Mac Globe `0x029D`, Brightness, Mission Control and Launchpad, plus 4 padding bits).
+     - Report ID 3: Mouse (5 bytes: buttons bitmask [Bit 0 Left, Bit 1 Right, Bit 2 Middle], X [-127..127], Y [-127..127], Wheel [-127..127], AC Pan [-127..127]).
    - Appearance is set to `HID_KEYBOARD` (`0x03C1`).
 
 6. **macOS Bluetooth GATT Report Map Caching:**

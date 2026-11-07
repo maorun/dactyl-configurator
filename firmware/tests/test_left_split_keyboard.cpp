@@ -237,7 +237,7 @@ TEST(test_media_globe_and_mouse_are_forwarded) {
   for (const SplitHidEvent &e : ev) assert(isValidSplitHidEvent(e));
   assert(is(ev[0], SPLIT_OP_MEDIA_PRESS, 0x0400) && is(ev[1], SPLIT_OP_MEDIA_RELEASE, 0x0400));
   // Einmal-Aktionen kommen als PRESS + RELEASE (idempotent bei Retry-Duplikaten), nie als *_WRITE/CLICK
-  uint16_t mute = splitMediaBits(KEY_MEDIA_MUTE);
+  uint32_t mute = splitMediaBits(KEY_MEDIA_MUTE);
   assert(is(ev[2], SPLIT_OP_MEDIA_PRESS, mute) && is(ev[3], SPLIT_OP_MEDIA_RELEASE, mute));
   assert(is(ev[4], SPLIT_OP_MOUSE_PRESS, MOUSE_BUTTON_LEFT) && is(ev[5], SPLIT_OP_MOUSE_RELEASE, MOUSE_BUTTON_LEFT));
   assert(ev[6].op == SPLIT_OP_MOUSE_SCROLL && ev[6].arg < 0);
@@ -286,7 +286,7 @@ TEST(test_one_shot_actions_never_use_write_or_click_ops) {
   std::vector<SplitHidEvent> ev = drain();
   assert(ev.size() == 6);
   assert(is(ev[0], SPLIT_OP_KEY_PRESS, 'a') && is(ev[1], SPLIT_OP_KEY_RELEASE, 'a'));
-  uint16_t vol = splitMediaBits(KEY_MEDIA_VOLUME_UP);
+  uint32_t vol = splitMediaBits(KEY_MEDIA_VOLUME_UP);
   assert(is(ev[2], SPLIT_OP_MEDIA_PRESS, vol) && is(ev[3], SPLIT_OP_MEDIA_RELEASE, vol));
   assert(is(ev[4], SPLIT_OP_MOUSE_PRESS, MOUSE_BUTTON_RIGHT) && is(ev[5], SPLIT_OP_MOUSE_RELEASE, MOUSE_BUTTON_RIGHT));
 }
@@ -390,6 +390,29 @@ TEST(test_queue_full_counts_dropped_events) {
   assert(bleKeyboard.press('z') == 0);
   bleKeyboard.releaseAll();
   assert(bleKeyboard.droppedEvents() == before + 2);
+}
+
+TEST(test_left_sends_new_system_keys_and_pan_over_the_wire) {
+  bleKeyboard.write(KEY_MEDIA_LAUNCHPAD);
+  bleKeyboard.mousePan(-2);
+  bleKeyboard.mousePan(0);
+  bleKeyboard.mouseScroll(3);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 4);
+  for (const SplitHidEvent &e : ev) assert(isValidSplitHidEvent(e));
+  // Launchpad ist Bit 19: code trägt die Bits 0..15 (0), arg die Bits 16..19 (8)
+  assert(ev[0].op == SPLIT_OP_MEDIA_PRESS && ev[0].code == 0 && ev[0].arg == 8);
+  assert(ev[1].op == SPLIT_OP_MEDIA_RELEASE && ev[1].code == 0 && ev[1].arg == 8);
+  // Pan: SCROLL mit code 1; Mausrad: code 0
+  assert(ev[2].op == SPLIT_OP_MOUSE_SCROLL && ev[2].code == 1 && ev[2].arg == -2);
+  assert(ev[3].op == SPLIT_OP_MOUSE_SCROLL && ev[3].code == 0 && ev[3].arg == 3);
+  // Eine gehaltene neue Taste blockiert ein Tippen darauf wie bei den bisherigen
+  bleKeyboard.press(KEY_MEDIA_BRIGHTNESS_UP);
+  drain();
+  assert(bleKeyboard.write(KEY_MEDIA_BRIGHTNESS_UP) == 0);
+  bleKeyboard.release(KEY_MEDIA_BRIGHTNESS_UP);
+  std::vector<SplitHidEvent> rel = drain();
+  assert(rel.size() == 1 && rel[0].op == SPLIT_OP_MEDIA_RELEASE && rel[0].code == 0 && rel[0].arg == 1);
 }
 
 TEST(test_zero_codes_are_not_sent) {

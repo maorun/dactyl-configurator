@@ -41,6 +41,12 @@
 #define ACT_MEDIA_PREVIOUS_TRACK 0x125
 #define ACT_MEDIA_STOP           0x126
 #define ACT_MAC_GLOBE            0x127
+#define ACT_MEDIA_BRIGHTNESS_UP   0x128
+#define ACT_MEDIA_BRIGHTNESS_DOWN 0x129
+#define ACT_MEDIA_MISSION_CONTROL 0x12A
+#define ACT_MEDIA_LAUNCHPAD       0x12B
+#define ACT_MEDIA_FIRST           ACT_MEDIA_PLAY_PAUSE
+#define ACT_MEDIA_LAST            ACT_MEDIA_LAUNCHPAD
 
 #define ACT_MOUSE_LEFT           0x130
 #define ACT_MOUSE_RIGHT          0x131
@@ -52,6 +58,8 @@
 #define ACT_MOUSE_DOWN           0x136
 #define ACT_MOUSE_LEFT_MOVE      0x137
 #define ACT_MOUSE_RIGHT_MOVE     0x138
+#define ACT_MOUSE_WHEEL_LEFT     0x139
+#define ACT_MOUSE_WHEEL_RIGHT    0x13A
 
 // Tastenpaar: eine Taste drückt zwei Tasten gleichzeitig (z. B. Shift + .); Index in userKeyPairs[]
 #define ACT_KEY_PAIR_BASE        0x140
@@ -133,7 +141,7 @@ struct ComboRuntime {
 
 #define MAX_KEY_PAIRS 16
 
-// Tastenpaar (exakt 4 Bytes): beide Tasten sind HID-Codes (Standard-Tasten 0x01..0xFF, Media 0x120..0x126, Globe 0x127, Maus 0x130..0x134)
+// Tastenpaar (exakt 4 Bytes): beide Tasten sind HID-Codes (Standard-Tasten 0x01..0xFF, Media 0x120..0x12B, Maus 0x130..0x134, Pan 0x139..0x13A)
 struct KeyPair {
   uint16_t first;
   uint16_t second;
@@ -164,7 +172,8 @@ static_assert(sizeof(LeaderSeq) == 6, "LeaderSeq ist das 6-Byte-NVS-Format");
 #define MACRO_STEP_UP            3   // Code loslassen
 #define MACRO_STEP_PAUSE         4   // ms warten
 
-// Makro-Schritt (exakt 4 Bytes, NVS-Format): Code 0x01..0xFF für TAP/DOWN/UP, ms 1..MACRO_MAX_PAUSE_MS für PAUSE
+// Makro-Schritt (exakt 4 Bytes, NVS-Format): Code 0x01..0xFF für TAP/DOWN/UP, ms 1..MACRO_MAX_PAUSE_MS für PAUSE.
+// Eine Consumer-Aktion (ACT_MEDIA_FIRST..ACT_MEDIA_LAST) steht bei TAP/DOWN/UP mit code 0 und der Aktion in ms.
 struct MacroStep {
   uint8_t type;
   uint8_t code;
@@ -185,6 +194,8 @@ inline uint16_t altRepeatAction(uint16_t a) {
     {KEY_LEFT_ARROW, KEY_RIGHT_ARROW}, {KEY_UP_ARROW, KEY_DOWN_ARROW},
     {KEY_PAGE_UP, KEY_PAGE_DOWN}, {KEY_HOME, KEY_END}, {KEY_BACKSPACE, KEY_DELETE},
     {0x133, 0x134},  // Scroll up <-> down
+    {ACT_MOUSE_WHEEL_LEFT, ACT_MOUSE_WHEEL_RIGHT},  // Pan left <-> right
+    {ACT_MEDIA_BRIGHTNESS_UP, ACT_MEDIA_BRIGHTNESS_DOWN},  // Brightness up <-> down
     {0x122, 0x123},  // Volume up <-> down
     {0x124, 0x125},  // Next <-> previous track
   };

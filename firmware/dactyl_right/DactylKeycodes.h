@@ -83,17 +83,27 @@ const uint8_t KEY_NUM_PERIOD = 0xEB;
 // ISO-Taste zwischen linkem Shift und Z (HID 0x64; deutsches macOS: < und >)
 const uint8_t KEY_NON_US_BACKSLASH = 0xEC;
 
-// Consumer-Control-Report (Report ID 2): 16 Bit, Bitposition = Reihenfolge im Report-Descriptor
-typedef uint8_t MediaKeyReport[2];
+// Consumer-Control-Report (Report ID 2): 24 Bit, Bitposition = Reihenfolge im Report-Descriptor
+// (Byte 0 = Bits 0..7, Byte 1 = Bits 8..15, Byte 2 = Bits 16..23; Bits 20..23 sind Padding)
+typedef uint8_t MediaKeyReport[3];
 
-const MediaKeyReport KEY_MEDIA_NEXT_TRACK = {1, 0};
-const MediaKeyReport KEY_MEDIA_PREVIOUS_TRACK = {2, 0};
-const MediaKeyReport KEY_MEDIA_STOP = {4, 0};
-const MediaKeyReport KEY_MEDIA_PLAY_PAUSE = {8, 0};
-const MediaKeyReport KEY_MEDIA_MUTE = {16, 0};
-const MediaKeyReport KEY_MEDIA_VOLUME_UP = {32, 0};
-const MediaKeyReport KEY_MEDIA_VOLUME_DOWN = {64, 0};
-const MediaKeyReport KEY_MEDIA_GLOBE = {0, 4}; // Mac Globe (Fn) / AC Next Keyboard Layout Select (0x029D)
+const MediaKeyReport KEY_MEDIA_NEXT_TRACK = {1, 0, 0};
+const MediaKeyReport KEY_MEDIA_PREVIOUS_TRACK = {2, 0, 0};
+const MediaKeyReport KEY_MEDIA_STOP = {4, 0, 0};
+const MediaKeyReport KEY_MEDIA_PLAY_PAUSE = {8, 0, 0};
+const MediaKeyReport KEY_MEDIA_MUTE = {16, 0, 0};
+const MediaKeyReport KEY_MEDIA_VOLUME_UP = {32, 0, 0};
+const MediaKeyReport KEY_MEDIA_VOLUME_DOWN = {64, 0, 0};
+const MediaKeyReport KEY_MEDIA_GLOBE = {0, 4, 0}; // Mac Globe (Fn) / AC Next Keyboard Layout Select (0x029D)
+const MediaKeyReport KEY_MEDIA_BRIGHTNESS_UP = {0, 0, 1};    // Display Brightness Increment (0x006F)
+const MediaKeyReport KEY_MEDIA_BRIGHTNESS_DOWN = {0, 0, 2};  // Display Brightness Decrement (0x0070)
+const MediaKeyReport KEY_MEDIA_MISSION_CONTROL = {0, 0, 4};  // AC Desktop Show All Windows (0x029F)
+const MediaKeyReport KEY_MEDIA_LAUNCHPAD = {0, 0, 8};        // AC Desktop Show All Applications (0x02A2)
+
+// Bitmaske eines Consumer-Reports (Bit 0 = Byte 0, Bit 0)
+inline uint32_t mediaReportBits(const uint8_t report[3]) {
+  return (uint32_t)report[0] | ((uint32_t)report[1] << 8) | ((uint32_t)report[2] << 16);
+}
 
 // Keyboard-Report (Report ID 1): Modifier-Bitmaske, reserviert, 6 Scancodes
 typedef struct {

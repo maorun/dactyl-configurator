@@ -20,12 +20,13 @@ struct RecordingSink : SplitHidSink {
   std::vector<std::string> log;
   void leftKeyPress(uint8_t c) override { log.push_back("kp" + std::to_string(c)); }
   void leftKeyRelease(uint8_t c) override { log.push_back("kr" + std::to_string(c)); }
-  void leftMediaPress(uint16_t b) override { log.push_back("mp" + std::to_string(b)); }
-  void leftMediaRelease(uint16_t b) override { log.push_back("mr" + std::to_string(b)); }
+  void leftMediaPress(uint32_t b) override { log.push_back("mp" + std::to_string(b)); }
+  void leftMediaRelease(uint32_t b) override { log.push_back("mr" + std::to_string(b)); }
   void leftMousePress(uint8_t b) override { log.push_back("bp" + std::to_string(b)); }
   void leftMouseRelease(uint8_t b) override { log.push_back("br" + std::to_string(b)); }
   void leftMouseClick(uint8_t b) override { log.push_back("bc" + std::to_string(b)); }
   void leftMouseScroll(int8_t s) override { log.push_back("sc" + std::to_string(s)); }
+  void leftMousePan(int8_t s) override { log.push_back("pn" + std::to_string(s)); }
   void leftMouseMove(int8_t x, int8_t y) override { log.push_back("mm" + std::to_string(x) + "," + std::to_string(y)); }
   void leftOneShotPress(uint8_t m) override { log.push_back("op" + std::to_string(m)); }
   void leftOneShotRelease(uint8_t m, bool arm) override { log.push_back((arm ? "or" : "ox") + std::to_string(m)); }
@@ -126,7 +127,10 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 0),
     makeSplitHidEvent(SPLIT_OP_MOUSE_CLICK, 8),
     makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, 0),
-    makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 1, 1),
+    makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 1, 0),       // Pan ohne Schritt
+    makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 2, 1),       // nur Mausrad (0) und Pan (1)
+    makeSplitHidEvent(SPLIT_OP_MEDIA_PRESS, 1, 0x10),     // Bits über 19
+    makeSplitHidEvent(SPLIT_OP_MEDIA_RELEASE, 1, -1),
     makeSplitHidEvent(SPLIT_OP_ACTIVITY), // nur Master -> links, der Master führt sie nie aus
     makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(6, 0, true, 0)), // Zeile 6 existiert nicht
     makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(0, 7, true, 0)), // Spalte 7 existiert nicht
@@ -180,11 +184,22 @@ TEST(test_foreign_sender_and_length_are_rejected) {
 }
 
 TEST(test_media_report_roundtrip) {
-  const uint8_t globe[2] = {0, 4};
+  const uint8_t globe[3] = {0, 4, 0};
   assert(splitMediaBits(globe) == 0x0400);
-  uint8_t r[2];
+  uint8_t r[3];
   splitMediaReport(0x0408, r);
-  assert(r[0] == 0x08 && r[1] == 0x04);
+  assert(r[0] == 0x08 && r[1] == 0x04 && r[2] == 0);
+  // Die Bits 16..19 (Helligkeit, Mission Control, Launchpad) laufen über arg
+  const uint8_t launch[3] = {0, 0, 8};
+  assert(splitMediaBits(launch) == 0x80000);
+  SplitHidEvent ev = makeSplitMediaEvent(SPLIT_OP_MEDIA_PRESS, 0x80008);
+  assert(ev.code == 0x0008 && ev.arg == 8 && isValidSplitHidEvent(ev) && splitMediaEventBits(ev) == 0x80008);
+  splitMediaReport(0x80008, r);
+  assert(r[0] == 0x08 && r[1] == 0 && r[2] == 0x08);
+  // Bits über 19 und negative arg sind ungültig
+  assert(!isValidSplitHidEvent(makeSplitHidEvent(SPLIT_OP_MEDIA_PRESS, 1, 0x10)));
+  assert(!isValidSplitHidEvent(makeSplitHidEvent(SPLIT_OP_MEDIA_PRESS, 1, -1)));
+  assert(!isValidSplitHidEvent(makeSplitHidEvent(SPLIT_OP_MEDIA_PRESS, 0, 0)));
 }
 
 // -----------------------------------------------------------------------------
@@ -226,6 +241,21 @@ TEST(test_media_and_mouse_tracking) {
   assert(apply(SPLIT_OP_MOUSE_SCROLL, 0, -3)); // Scrollen ist eine Bewegung, kein Zustand
   assert((L() == std::vector<std::string>{"mp1024", "mp8", "mr8", "bp1", "bc2", "sc-3", "sc-3"}));
   assert(held.set.media == 0x0400 && held.set.mouse == 1);
+}
+
+TEST(test_new_system_keys_and_pan_reach_the_master_sink) {
+  // 20-Bit-Maske: code = Bits 0..15, arg = Bits 16..19
+  assert(splitApplyHidEvent(held, makeSplitMediaEvent(SPLIT_OP_MEDIA_PRESS, 0x80400), 0, sink));
+  assert(!splitApplyHidEvent(held, makeSplitMediaEvent(SPLIT_OP_MEDIA_PRESS, 0x80400), 0, sink)); // Duplikat
+  assert(held.set.media == 0x80400);
+  assert(splitApplyHidEvent(held, makeSplitMediaEvent(SPLIT_OP_MEDIA_RELEASE, 0x80000), 0, sink));
+  assert(held.set.media == 0x00400);
+  assert(splitApplyHidEvent(held, makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 1, -2), 0, sink));
+  assert(splitApplyHidEvent(held, makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, 2), 0, sink));
+  assert((L() == std::vector<std::string>{"mp525312", "mr524288", "pn-2", "sc2"}));
+  // Link-Ausfall löst alle Bits einzeln
+  splitReleaseHeld(held, sink);
+  assert(L().back() == "mr1024" && held.set.media == 0);
 }
 
 TEST(test_release_all_releases_only_left_held_inputs) {
@@ -305,12 +335,13 @@ struct FakeHid {
   FakeHid(const char * = "", const char * = "", int = 0) {}
   size_t press(uint8_t k) { log.push_back("P" + std::to_string(k)); return 1; }
   size_t release(uint8_t k) { log.push_back("R" + std::to_string(k)); return 1; }
-  size_t press(const uint8_t k[2]) { log.push_back("MP" + std::to_string(splitMediaBits(k))); return 1; }
-  size_t release(const uint8_t k[2]) { log.push_back("MR" + std::to_string(splitMediaBits(k))); return 1; }
+  size_t press(const uint8_t k[3]) { log.push_back("MP" + std::to_string(splitMediaBits(k))); return 1; }
+  size_t release(const uint8_t k[3]) { log.push_back("MR" + std::to_string(splitMediaBits(k))); return 1; }
   void mousePress(uint8_t b) { log.push_back("BP" + std::to_string(b)); }
   void mouseRelease(uint8_t b) { log.push_back("BR" + std::to_string(b)); }
   void mouseClick(uint8_t b) { log.push_back("BC" + std::to_string(b)); }
   void mouseScroll(int8_t s) { log.push_back("SC" + std::to_string(s)); }
+  void mousePan(int8_t s) { log.push_back("PN" + std::to_string(s)); }
   void mouseMove(int8_t x, int8_t y) { log.push_back("MM" + std::to_string(x) + "," + std::to_string(y)); }
   void releaseAll() { log.push_back("ALL"); }
   void beginReportBatch() { batching = true; log.push_back("BEGIN"); }

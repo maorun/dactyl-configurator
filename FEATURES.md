@@ -41,6 +41,28 @@ Rules for this file:
 - Not a combo action (`ADD_COMBO` movement is not executed; `server.py` and the app reject it), and not repeatable (`isRepeatableAction`).
 - The left half sends the movement as `SPLIT_OP_MOUSE_MOVE` (op 25, `arg` = X step, `code` low byte = Y step as int8; `(0, 0)` and `-128` are invalid). The master calls `mouseMove` on its BLE HID connection without any held state. The op is never retried (`splitEventRetryable`): a duplicate would jump twice, a lost step goes unnoticed. `DACTYL_FW_VERSION` 6 added it: flash both halves.
 
+### Horizontal scroll and held wheel keys (`ACT_MOUSE_WHEEL_LEFT`, `ACT_MOUSE_WHEEL_RIGHT`)
+
+- Codes `0x139` (left) and `0x13A` (right) in `DactylCommon.h`; names `MOUSE_WHEEL_LEFT`, `MOUSE_WHEEL_RIGHT` in `js/keycodes.js` and `server.py`. The pickers list them next to the wheel keys.
+- The mouse report (Report ID 3) has 5 bytes: buttons, X, Y, wheel and **AC Pan** (usage `0x0238`, Consumer page, one signed byte). `bleKeyboard.mousePan(step)` sends a positive step to the right. `dactylBuildMouseReport()` (`DactylHidDescriptor.h`) builds the bytes, so the unit tests check them.
+- A wheel key (`MOUSE_WHEEL_UP`, `MOUSE_WHEEL_DOWN`, left, right) sends one step at the press. When the key stays held, `wheelHoldTick()` (in `processDeferredKeys()`) sends a step each `WHEEL_REPEAT_INTERVAL_MS` (40 ms) after `WHEEL_REPEAT_DELAY_MS` (300 ms). The step grows from 1 by 1 each `WHEEL_ACCEL_MS` (400 ms) of extra hold time, at most `WHEEL_MAX_STEP` (8). The release stops the repeat at once; a new press starts at step 1.
+- Without a Mac connection or in config mode nothing is sent and the acceleration restarts. A combo that consumes the key, `resetMouseMove()` (config mode) and the key release stop the repeat.
+- The keys work as tap, hold and double-tap action, as buffered combo candidate, as combo action (one step), in key pairs (one step at the press), and with `REPEAT`. `ALT_REPEAT` maps left to right and the reverse.
+- Macros do not accept wheel or pan steps.
+- The left half sends a pan step as `SPLIT_OP_MOUSE_SCROLL` with `code` 1 (`code` 0 = wheel, `arg` = step). The op is never retried. `isValidSplitHidEvent` accepts only `code` 0 and 1.
+- **Pair again on macOS.** The report map changed (see "Consumer report and macOS system keys"). Both features share one report map change, so macOS needs one new pairing.
+
+### Consumer report and macOS system keys (`ACT_MEDIA_BRIGHTNESS_UP` .. `ACT_MEDIA_LAUNCHPAD`)
+
+- The Consumer report (Report ID 2, `MEDIA_KEYS_ID`) is 24 bits wide: 20 single-bit usages and 4 bits of padding. `MediaKeyReport` has 3 bytes; `mediaReportBits()` reads it as one mask.
+- The existing 16 usages keep bit 0 .. 15 (Next 1, Previous 2, Stop 4, Play/Pause 8, Mute 16, Vol+ 32, Vol- 64, Globe `0x0400`). The new usages take bits 16 .. 19: Display Brightness Increment (`0x006F`, `0x010000`), Display Brightness Decrement (`0x0070`, `0x020000`), AC Desktop Show All Windows = Mission Control (`0x029F`, `0x040000`) and AC Desktop Show All Applications = Launchpad (`0x02A2`, `0x080000`).
+- Codes `0x128` .. `0x12B` (`ACT_MEDIA_BRIGHTNESS_UP`, `ACT_MEDIA_BRIGHTNESS_DOWN`, `ACT_MEDIA_MISSION_CONTROL`, `ACT_MEDIA_LAUNCHPAD`); names `MEDIA_BRIGHTNESS_UP`, `MEDIA_BRIGHTNESS_DOWN`, `MEDIA_MISSION_CONTROL`, `MEDIA_LAUNCHPAD`. `isMediaAction()` and `mediaKeyForAction()` in `DactylLogic.h` map an action to its report; all paths (key, combo, key pair, repeat, macro) use them.
+- Key pairs accept the new codes and the pan codes (`isValidKeyPairMemberCode`, `isKeyPairMember`, `KEY_PAIR_ALLOWED_ACTIONS`).
+- Macros accept every Consumer key, the old ones too (Globe, Play/Pause, ...). A step is `{ type, code: 0, ms: <action code> }` on the wire: `MacroStep.code` stays 0 and `ms` carries the action (`0x120` .. `0x12B`). The app keeps `{ type, code: "MEDIA_LAUNCHPAD" }`; `macroStepTuple()` and `macroTupleActionNumber()` convert in both directions (`ADD_MACRO_STEP 1 0 299`, `MACRO_DATA`). `server.py` writes the same form (`MACRO_CONSUMER_CPP`). Mouse and pan stay invalid as macro steps. The dynamic macro records only keyboard codes.
+- Split: the 20-bit mask goes over the air as `code` (bits 0 .. 15) and `arg` (bits 16 .. 19) of the `MEDIA_*` ops. `arg` outside `0 .. 15` is invalid. `makeSplitMediaEvent()` and `splitMediaEventBits()` convert.
+- `DACTYL_FW_VERSION` is 28. Flash both halves: an old half cannot read the new `arg` and the new macro steps.
+- **Pair again on macOS.** macOS caches the HID report map (see `AGENTS.md`, "macOS Bluetooth GATT Report Map Caching"). After the flash: (1) open the Bluetooth settings of macOS, (2) forget the keyboard ("Dieses Gerät ignorieren..."), (3) put the keyboard into pairing mode and pair it again. Without the new pairing, the old report map stays and the new keys do nothing.
+
 ### Key overrides (`userKeyOverrides`)
 
 - A modifier plus a key gives another key, for example `Shift` + `Backspace` = `Delete` without `Shift`. The key alone stays unchanged. The list lives only on the master (right half) and applies to both halves, because only the master sees the modifiers of both halves.

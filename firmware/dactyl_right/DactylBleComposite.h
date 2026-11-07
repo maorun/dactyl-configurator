@@ -175,14 +175,19 @@ public:
     }
   }
 
-  void sendMouseReport(uint8_t buttons, int8_t x, int8_t y, int8_t wheel) {
+  void sendMouseReport(uint8_t buttons, int8_t x, int8_t y, int8_t wheel, int8_t pan = 0) {
     // Bewegung/Scrollen wird nie gesammelt; im Batch zählt nur der Button-Zustand
-    if (batching && x == 0 && y == 0 && wheel == 0) { pendingMouse = true; return; }
+    if (batching && x == 0 && y == 0 && wheel == 0 && pan == 0) { pendingMouse = true; return; }
     if (this->isConnected() && inputMouse != nullptr) {
-      uint8_t m[4] = { buttons, (uint8_t)x, (uint8_t)y, (uint8_t)wheel };
+      uint8_t m[MOUSE_REPORT_SIZE];
+      dactylBuildMouseReport(m, buttons, x, y, wheel, pan);
       inputMouse->setValue(m, sizeof(m));
       inputMouse->notify();
     }
+  }
+
+  void setMediaBits(uint32_t bits) {
+    dactylBuildMediaReport(_mediaKeyReport, bits);
   }
 
   size_t press(uint8_t k) {
@@ -272,21 +277,15 @@ public:
   }
 
   size_t press(const MediaKeyReport k) {
-    uint16_t k_16 = k[1] | (k[0] << 8);
-    uint16_t mediaKeyReport_16 = _mediaKeyReport[1] | (_mediaKeyReport[0] << 8);
-    mediaKeyReport_16 |= k_16;
-    _mediaKeyReport[0] = (uint8_t)((mediaKeyReport_16 & 0xFF00) >> 8);
-    _mediaKeyReport[1] = (uint8_t)(mediaKeyReport_16 & 0x00FF);
+    uint32_t bits = mediaReportBits(_mediaKeyReport) | mediaReportBits(k);
+    setMediaBits(bits);
     sendReport(&_mediaKeyReport);
     return 1;
   }
 
   size_t release(const MediaKeyReport k) {
-    uint16_t k_16 = k[1] | (k[0] << 8);
-    uint16_t mediaKeyReport_16 = _mediaKeyReport[1] | (_mediaKeyReport[0] << 8);
-    mediaKeyReport_16 &= ~k_16;
-    _mediaKeyReport[0] = (uint8_t)((mediaKeyReport_16 & 0xFF00) >> 8);
-    _mediaKeyReport[1] = (uint8_t)(mediaKeyReport_16 & 0x00FF);
+    uint32_t bits = mediaReportBits(_mediaKeyReport) & ~mediaReportBits(k);
+    setMediaBits(bits);
     sendReport(&_mediaKeyReport);
     return 1;
   }
@@ -318,8 +317,13 @@ public:
     sendMouseReport(_mouseButtons, 0, 0, wheel);
   }
 
-  void mouseMove(int8_t x, int8_t y, int8_t wheel = 0) {
-    sendMouseReport(_mouseButtons, x, y, wheel);
+  // Horizontales Scrollen (AC Pan): positiv = nach rechts
+  void mousePan(int8_t pan) {
+    sendMouseReport(_mouseButtons, 0, 0, 0, pan);
+  }
+
+  void mouseMove(int8_t x, int8_t y, int8_t wheel = 0, int8_t pan = 0) {
+    sendMouseReport(_mouseButtons, x, y, wheel, pan);
   }
 
   void releaseAll() {
@@ -330,6 +334,7 @@ public:
     _keyReport.reserved = 0;
     _mediaKeyReport[0] = 0;
     _mediaKeyReport[1] = 0;
+    _mediaKeyReport[2] = 0;
     _mouseButtons = 0;
     sendReport(&_keyReport);
     sendReport(&_mediaKeyReport);

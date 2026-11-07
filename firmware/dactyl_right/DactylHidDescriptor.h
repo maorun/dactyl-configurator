@@ -15,6 +15,26 @@
 #define MOUSE_BUTTON_RIGHT  0x02
 #define MOUSE_BUTTON_MIDDLE 0x04
 
+// Mouse-Report (Report ID 3): Buttons, X, Y, Wheel, AC Pan
+#define MOUSE_REPORT_SIZE 5
+// Consumer-Report (Report ID 2): 20 Usages + 4 Bit Padding
+#define MEDIA_REPORT_SIZE 3
+
+inline void dactylBuildMouseReport(uint8_t out[MOUSE_REPORT_SIZE], uint8_t buttons, int8_t x, int8_t y, int8_t wheel, int8_t pan) {
+  out[0] = buttons;
+  out[1] = (uint8_t)x;
+  out[2] = (uint8_t)y;
+  out[3] = (uint8_t)wheel;
+  out[4] = (uint8_t)pan;
+}
+
+// Schreibt eine Consumer-Bitmaske (Bits 0..19) in den Report; Padding-Bits bleiben 0
+inline void dactylBuildMediaReport(uint8_t out[MEDIA_REPORT_SIZE], uint32_t bits) {
+  out[0] = (uint8_t)(bits & 0xFF);
+  out[1] = (uint8_t)((bits >> 8) & 0xFF);
+  out[2] = (uint8_t)((bits >> 16) & 0x0F);
+}
+
 static const uint8_t _compositeReportDescriptor[] = {
   // ------------------------------------------------- Keyboard (Report ID 1)
   USAGE_PAGE(1),      0x01,          // USAGE_PAGE (Generic Desktop Ctrls)
@@ -60,7 +80,7 @@ static const uint8_t _compositeReportDescriptor[] = {
   LOGICAL_MINIMUM(1), 0x00,          //   LOGICAL_MINIMUM (0)
   LOGICAL_MAXIMUM(1), 0x01,          //   LOGICAL_MAXIMUM (1)
   REPORT_SIZE(1),     0x01,          //   REPORT_SIZE (1)
-  REPORT_COUNT(1),    0x10,          //   REPORT_COUNT (16)
+  REPORT_COUNT(1),    0x14,          //   REPORT_COUNT (20)
   USAGE(1),           0xB5,          //   Next Track
   USAGE(1),           0xB6,          //   Previous Track
   USAGE(1),           0xB7,          //   Stop
@@ -77,7 +97,14 @@ static const uint8_t _compositeReportDescriptor[] = {
   USAGE(2),           0x24, 0x02,    //   WWW back
   USAGE(2),           0x83, 0x01,    //   Media sel
   USAGE(2),           0x8A, 0x01,    //   Mail
-  HIDINPUT(1),        0x02,          //   INPUT (Data,Var,Abs)
+  USAGE(1),           0x6F,          //   Display Brightness Increment
+  USAGE(1),           0x70,          //   Display Brightness Decrement
+  USAGE(2),           0x9F, 0x02,    //   AC Desktop Show All Windows (Mission Control)
+  USAGE(2),           0xA2, 0x02,    //   AC Desktop Show All Applications (Launchpad)
+  HIDINPUT(1),        0x02,          //   INPUT (Data,Var,Abs) ; 20 Bits
+  REPORT_COUNT(1),    0x01,          //   REPORT_COUNT (1) ; 4 Bits Padding auf 24 Bit
+  REPORT_SIZE(1),     0x04,          //   REPORT_SIZE (4)
+  HIDINPUT(1),        0x01,          //   INPUT (Const,Array,Abs)
   END_COLLECTION(0),                 // END_COLLECTION
 
   // ------------------------------------------------- Mouse (Report ID 3)
@@ -106,6 +133,13 @@ static const uint8_t _compositeReportDescriptor[] = {
   LOGICAL_MAXIMUM(1), 0x7F,          //     LOGICAL_MAXIMUM (127)
   REPORT_SIZE(1),     0x08,          //     REPORT_SIZE (8)
   REPORT_COUNT(1),    0x03,          //     REPORT_COUNT (3)
+  HIDINPUT(1),        0x06,          //     INPUT (Data, Var, Rel)
+  USAGE_PAGE(1),      0x0C,          //     USAGE_PAGE (Consumer)
+  USAGE(2),           0x38, 0x02,    //     USAGE (AC Pan) ; horizontales Scrollen
+  LOGICAL_MINIMUM(1), 0x81,          //     LOGICAL_MINIMUM (-127)
+  LOGICAL_MAXIMUM(1), 0x7F,          //     LOGICAL_MAXIMUM (127)
+  REPORT_SIZE(1),     0x08,          //     REPORT_SIZE (8)
+  REPORT_COUNT(1),    0x01,          //     REPORT_COUNT (1)
   HIDINPUT(1),        0x06,          //     INPUT (Data, Var, Rel)
   END_COLLECTION(0),                 //   END_COLLECTION (Physical)
   END_COLLECTION(0)                  // END_COLLECTION (Application)

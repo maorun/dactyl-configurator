@@ -744,7 +744,7 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("{ { 0, 0, 0 } }", server.generate_macros_cpp([]))
         bad_steps = [
             {"type": "tap", "code": "MO_1"}, {"type": "tap", "code": "MACRO_0"}, {"type": "tap", "code": "PAIR_0"},
-            {"type": "tap", "code": "MAC_GLOBE"}, {"type": "tap", "code": "MEDIA_MUTE"}, {"type": "tap", "code": "MOUSE_LEFT"},
+            {"type": "tap", "code": "MOUSE_LEFT"}, {"type": "tap", "code": "MOUSE_WHEEL_LEFT"},
             {"type": "tap", "code": "UMLAUT_AE"}, {"type": "tap"}, {"type": "down", "code": "KEY_256"},
             {"type": "pause", "ms": 0}, {"type": "pause", "ms": 5001}, {"type": "pause", "ms": "100"},
             {"type": "pause", "ms": True}, {"type": "pause"}, {"type": "click", "code": "KEY_A"}, "tap", None,
@@ -850,6 +850,58 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertEqual(define("MACRO_MAX_PAUSE_MS"), server.MACRO_MAX_PAUSE_MS)
         for name, value in server.MACRO_STEP_TYPES.items():
             self.assertEqual(define(f"MACRO_STEP_{name.upper()}"), value)
+
+    def test_system_keys_and_wheel_pan_codegen(self):
+        # Neue Aktionen: Codes für Tasten, Combos (nur Medien), Tastenpaare und Makros
+        for name in ("MEDIA_BRIGHTNESS_UP", "MEDIA_BRIGHTNESS_DOWN", "MEDIA_MISSION_CONTROL", "MEDIA_LAUNCHPAD",
+                     "MOUSE_WHEEL_LEFT", "MOUSE_WHEEL_RIGHT"):
+            self.assertEqual(server.code_to_cpp(name), f"ACT_{name}", name)
+            self.assertEqual(server.code_to_cpp(f"ACT_{name}") if name.startswith("MOUSE") else f"ACT_{name}", f"ACT_{name}")
+        # Tastenpaar
+        cpp = server.generate_key_pairs_cpp([
+            {"first": "KEY_LEFT_SHIFT", "second": "MEDIA_MISSION_CONTROL"},
+            {"first": "MEDIA_LAUNCHPAD", "second": "MEDIA_BRIGHTNESS_UP"},
+            {"first": "KEY_LEFT_CTRL", "second": "MOUSE_WHEEL_LEFT"},
+            {"first": "MEDIA_BRIGHTNESS_DOWN", "second": "MOUSE_WHEEL_RIGHT"},
+        ])
+        self.assertIn("{ KEY_LEFT_SHIFT, ACT_MEDIA_MISSION_CONTROL }", cpp)
+        self.assertIn("{ ACT_MEDIA_LAUNCHPAD, ACT_MEDIA_BRIGHTNESS_UP }", cpp)
+        self.assertIn("{ KEY_LEFT_CTRL, ACT_MOUSE_WHEEL_LEFT }", cpp)
+        self.assertIn("{ ACT_MEDIA_BRIGHTNESS_DOWN, ACT_MOUSE_WHEEL_RIGHT }", cpp)
+        # Makro-Schritte: Consumer-Taste steht als code 0 mit der Aktion in ms
+        cpp = server.generate_macros_cpp([{"name": "m", "steps": [
+            {"type": "tap", "code": "MEDIA_MISSION_CONTROL"}, {"type": "down", "code": "MEDIA_BRIGHTNESS_UP"},
+            {"type": "up", "code": "MEDIA_BRIGHTNESS_UP"}, {"type": "tap", "code": "MAC_GLOBE"},
+            {"type": "tap", "code": "MEDIA_LAUNCHPAD"}, {"type": "tap", "code": "KEY_A"}]}])
+        self.assertIn("{ 1, 0, ACT_MEDIA_MISSION_CONTROL }", cpp)
+        self.assertIn("{ 2, 0, ACT_MEDIA_BRIGHTNESS_UP }", cpp)
+        self.assertIn("{ 3, 0, ACT_MEDIA_BRIGHTNESS_UP }", cpp)
+        self.assertIn("{ 1, 0, ACT_MAC_GLOBE }", cpp)
+        self.assertIn("{ 1, 0, ACT_MEDIA_LAUNCHPAD }", cpp)
+        self.assertIn("{ 1, 'a', 0 }", cpp)
+        # Maus und Pan bleiben als Makro-Schritt ungültig
+        for bad in ("MOUSE_LEFT", "MOUSE_WHEEL_RIGHT", "MEDIA_SCHROTT"):
+            with self.assertRaises(ValueError, msg=bad):
+                server.generate_macros_cpp([{"steps": [{"type": "tap", "code": bad}]}])
+        # Eine Combo darf eine Systemtaste und Pan ausführen
+        cfg = {"layers": [[]], "combos": [{"key1": {"r": 0, "c": 0}, "key2": {"r": 0, "c": 1}, "behavior": "KEY_PRESS",
+                                          "action": "MEDIA_LAUNCHPAD"}]}
+        server.validate_config(cfg)
+
+    def test_system_key_and_pan_codes_match_firmware(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        def define(name):
+            return int(re.search(rf"#define {name}\s+(0x[0-9A-Fa-f]+|\d+)", common).group(1), 0)
+        self.assertEqual(define("ACT_MEDIA_BRIGHTNESS_UP"), 0x128)
+        self.assertEqual(define("ACT_MEDIA_BRIGHTNESS_DOWN"), 0x129)
+        self.assertEqual(define("ACT_MEDIA_MISSION_CONTROL"), 0x12A)
+        self.assertEqual(define("ACT_MEDIA_LAUNCHPAD"), 0x12B)
+        self.assertEqual(define("ACT_MOUSE_WHEEL_LEFT"), 0x139)
+        self.assertEqual(define("ACT_MOUSE_WHEEL_RIGHT"), 0x13A)
+        # Jede Consumer-Aktion der Makro-Tabelle ist ein Aktionscode der Firmware im Bereich 0x120..0x12B
+        for cpp in server.MACRO_CONSUMER_CPP.values():
+            self.assertTrue(0x120 <= define(cpp) <= 0x12B, cpp)
 
     def test_app_flash_sets_new_nonzero_defaults_id(self):
         with tempfile.TemporaryDirectory() as d:

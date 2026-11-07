@@ -163,7 +163,7 @@ function addMacroStepFromUI() {
     ? { type, ms: Number(document.getElementById("macroStepMs").value) }
     : { type, code: document.getElementById("macroStepCode").value };
   if (!isValidMacroStep(step)) {
-    showToast(type === "pause" ? `Pause: 1 bis ${MACRO_MAX_PAUSE_MS} ms.` : "Bitte eine normale Taste oder einen Modifier wählen.");
+    showToast(type === "pause" ? `Pause: 1 bis ${MACRO_MAX_PAUSE_MS} ms.` : "Bitte eine normale Taste, einen Modifier oder eine Media-/Systemtaste wählen.");
     return;
   }
   macroDraftSteps.push(step);
@@ -308,12 +308,12 @@ function deleteMacro(idx) {
 function initMacrosUI() {
   const codeSel = document.getElementById("macroStepCode");
   if (!codeSel) return;
-  // Makroschritte: nur Tasten mit Code 1..255 (normale Tasten und Modifier)
+  // Makroschritte: Tasten mit Code 1..255 (normale Tasten und Modifier) und Consumer-Tasten (Media, Globe, Systemtasten)
   codeSel.innerHTML = "";
   KEYCODES.forEach(group => {
     const optgroup = document.createElement("optgroup");
     optgroup.label = group.group;
-    group.keys.filter(k => isStandardKeyOrModifier(k.code)).forEach(k => {
+    group.keys.filter(k => isStandardKeyOrModifier(k.code) || isMacroConsumerCode(k.code)).forEach(k => {
       const opt = document.createElement("option");
       opt.value = k.code;
       opt.textContent = `${k.label} (${k.code})`;

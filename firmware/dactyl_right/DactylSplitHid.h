@@ -73,13 +73,13 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_KEY_RELEASE = 2,
   SPLIT_OP_KEY_WRITE = 3,     // press + release
   SPLIT_OP_RELEASE_ALL = 4,   // löst alles, was die linke Hälfte gedrückt hält
-  SPLIT_OP_MEDIA_PRESS = 5,   // code = 16-Bit-Media-Bitmaske (MediaKeyReport: low = [0], high = [1])
+  SPLIT_OP_MEDIA_PRESS = 5,   // code = Bits 0..15 der Media-Bitmaske (MediaKeyReport [0], [1]), arg = Bits 16..19 ([2])
   SPLIT_OP_MEDIA_RELEASE = 6,
   SPLIT_OP_MEDIA_WRITE = 7,
   SPLIT_OP_MOUSE_PRESS = 8,   // code = Maus-Buttonmaske (1..7)
   SPLIT_OP_MOUSE_RELEASE = 9,
   SPLIT_OP_MOUSE_CLICK = 10,
-  SPLIT_OP_MOUSE_SCROLL = 11, // arg = Scrollschritte (int8, ungleich 0)
+  SPLIT_OP_MOUSE_SCROLL = 11, // arg = Scrollschritte (int8, ungleich 0); code 0 = Mausrad, code 1 = horizontal (AC Pan)
   SPLIT_OP_ACTIVITY = 12,     // nur Master -> links: Tippen am Master, setzt den Inaktivitäts-Timer links zurück
   SPLIT_OP_KEY_EVENT = 13,    // Diagnose: Matrix-Position links (splitKeyEventCode), ohne HID-Wirkung
   SPLIT_OP_ONE_SHOT_PRESS = 14,   // code = One-Shot-Modifier-Maske (1..255, Bit i = KEY_LEFT_CTRL + i)
@@ -112,6 +112,27 @@ inline SplitHidEvent makeSplitHidEvent(uint8_t op, uint16_t code = 0, int8_t arg
   ev.arg = arg;
   ev.code = code;
   return ev;
+}
+
+// Consumer-Maske: 20 genutzte Bits (Report-Descriptor). Auf dem Draht trägt code die Bits 0..15, arg die Bits 16..19.
+#define SPLIT_MEDIA_MASK 0xFFFFFu
+
+inline uint32_t splitMediaBits(const uint8_t report[3]) {
+  return ((uint32_t)report[0] | ((uint32_t)report[1] << 8) | ((uint32_t)report[2] << 16)) & SPLIT_MEDIA_MASK;
+}
+
+inline void splitMediaReport(uint32_t bits, uint8_t report[3]) {
+  report[0] = (uint8_t)(bits & 0xFF);
+  report[1] = (uint8_t)((bits >> 8) & 0xFF);
+  report[2] = (uint8_t)((bits >> 16) & 0x0F);
+}
+
+inline uint32_t splitMediaEventBits(const SplitHidEvent &ev) {
+  return (uint32_t)ev.code | ((uint32_t)(uint8_t)ev.arg << 16);
+}
+
+inline SplitHidEvent makeSplitMediaEvent(uint8_t op, uint32_t bits) {
+  return makeSplitHidEvent(op, (uint16_t)(bits & 0xFFFF), (int8_t)((bits >> 16) & 0x0F));
 }
 
 // Matrix-Ereignis der linken Hälfte für den Live-Monitor der App. code: Bit 15 = gedrückt,
@@ -152,13 +173,13 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
     case SPLIT_OP_MEDIA_PRESS:
     case SPLIT_OP_MEDIA_RELEASE:
     case SPLIT_OP_MEDIA_WRITE:
-      return ev.code != 0 && ev.arg == 0;
+      return ev.arg >= 0 && ev.arg <= 0x0F && splitMediaEventBits(ev) != 0;
     case SPLIT_OP_MOUSE_PRESS:
     case SPLIT_OP_MOUSE_RELEASE:
     case SPLIT_OP_MOUSE_CLICK:
       return ev.code >= 1 && ev.code <= 0x07 && ev.arg == 0;
     case SPLIT_OP_MOUSE_SCROLL:
-      return ev.code == 0 && ev.arg != 0;
+      return ev.code <= 1 && ev.arg != 0;
     case SPLIT_OP_MOUSE_MOVE:
       return ev.code <= 0xFF && ev.arg != -128 && (int8_t)ev.code != -128 && (ev.arg != 0 || ev.code != 0);
     case SPLIT_OP_ONE_SHOT_PRESS:
@@ -667,15 +688,6 @@ bool splitOslSendIfDue(SplitOslSync &s, uint8_t armed, uint8_t used, unsigned lo
   return true;
 }
 
-inline uint16_t splitMediaBits(const uint8_t report[2]) {
-  return (uint16_t)(report[0] | (report[1] << 8));
-}
-
-inline void splitMediaReport(uint16_t bits, uint8_t report[2]) {
-  report[0] = (uint8_t)(bits & 0xFF);
-  report[1] = (uint8_t)(bits >> 8);
-}
-
 // -----------------------------------------------------------------------------
 // Master: Zustand der gehaltenen Eingaben je Hälfte
 // -----------------------------------------------------------------------------
@@ -688,7 +700,7 @@ inline void splitMediaReport(uint16_t bits, uint8_t report[2]) {
 
 struct SplitHeldSet {
   uint8_t keys[32];     // Bitfeld für Tastatur-Codes 0..255
-  uint16_t media;       // Media-Bitmaske
+  uint32_t media;       // Media-Bitmaske (20 Bit)
   uint8_t mouse;        // Maus-Buttons
   uint8_t oneShot;      // gehaltene One-Shot-Modifier-Tasten (kein HID-Report, nur Zustand)
 };
@@ -1123,12 +1135,13 @@ inline void splitRepeatLeftRunTick(SplitRepeatRun &r, unsigned long nowMs, Env &
 struct SplitHidSink {
   virtual void leftKeyPress(uint8_t code) = 0;
   virtual void leftKeyRelease(uint8_t code) = 0;
-  virtual void leftMediaPress(uint16_t bits) = 0;
-  virtual void leftMediaRelease(uint16_t bits) = 0;
+  virtual void leftMediaPress(uint32_t bits) = 0;
+  virtual void leftMediaRelease(uint32_t bits) = 0;
   virtual void leftMousePress(uint8_t buttons) = 0;
   virtual void leftMouseRelease(uint8_t buttons) = 0;
   virtual void leftMouseClick(uint8_t buttons) = 0;
   virtual void leftMouseScroll(int8_t steps) = 0;
+  virtual void leftMousePan(int8_t steps) = 0;
   virtual void leftMouseMove(int8_t x, int8_t y) = 0;
   // arm = false: Loslassen durch RELEASE_ALL oder Link-Ausfall merkt nichts vor
   virtual void leftOneShotPress(uint8_t mask) = 0;
@@ -1144,8 +1157,8 @@ inline void splitReleaseHeld(SplitLeftHeld &h, SplitHidSink &sink) {
   for (int code = 1; code < 256; code++) {
     if (splitSetHasKey(held, (uint8_t)code)) sink.leftKeyRelease((uint8_t)code);
   }
-  for (int bit = 0; bit < 16; bit++) {
-    if (held.media & (1u << bit)) sink.leftMediaRelease((uint16_t)(1u << bit));
+  for (int bit = 0; bit < 20; bit++) {
+    if (held.media & (1u << bit)) sink.leftMediaRelease(1u << bit);
   }
   if (held.mouse) sink.leftMouseRelease(held.mouse);
   if (held.oneShot) sink.leftOneShotRelease(held.oneShot, false);
@@ -1226,23 +1239,23 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
       splitReleaseHeld(h, sink);
       return true;
     case SPLIT_OP_MEDIA_PRESS: {
-      uint16_t add = ev.code & (uint16_t)~s.media;
+      uint32_t add = splitMediaEventBits(ev) & ~s.media;
       if (!add) return false;
       s.media |= add;
       sink.leftMediaPress(add);
       return true;
     }
     case SPLIT_OP_MEDIA_RELEASE: {
-      uint16_t rel = ev.code & s.media;
+      uint32_t rel = splitMediaEventBits(ev) & s.media;
       if (!rel) return false;
-      s.media &= (uint16_t)~rel;
+      s.media &= ~rel;
       sink.leftMediaRelease(rel);
       return true;
     }
     case SPLIT_OP_MEDIA_WRITE:
-      if (ev.code & s.media) return false;
-      sink.leftMediaPress(ev.code);
-      sink.leftMediaRelease(ev.code);
+      if (splitMediaEventBits(ev) & s.media) return false;
+      sink.leftMediaPress(splitMediaEventBits(ev));
+      sink.leftMediaRelease(splitMediaEventBits(ev));
       return true;
     case SPLIT_OP_MOUSE_PRESS: {
       uint8_t add = (uint8_t)(code8 & ~s.mouse);
@@ -1263,7 +1276,8 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
       sink.leftMouseClick(code8);
       return true;
     case SPLIT_OP_MOUSE_SCROLL:
-      sink.leftMouseScroll(ev.arg);
+      if (ev.code == 1) sink.leftMousePan(ev.arg);
+      else sink.leftMouseScroll(ev.arg);
       return true;
     case SPLIT_OP_MOUSE_MOVE:
       sink.leftMouseMove(ev.arg, (int8_t)code8);
@@ -1624,7 +1638,7 @@ inline bool splitLinkReportDue(SplitLinkReporter &r, const SplitLeftHeld &h, uns
 // mehr hält; releaseAll() der rechten Seite lässt linke Eingaben gedrückt (ein Report, kein kurzes Loslassen).
 //
 // Hid ist die BLE-HID-Klasse (DactylBleComposite) oder ein Test-Double. Benötigt: press/release/write für
-// uint8_t und const uint8_t[2], mousePress, mouseRelease, mouseClick, mouseScroll, releaseAll,
+// uint8_t und const uint8_t[3], mousePress, mouseRelease, mouseClick, mouseScroll, mousePan, releaseAll,
 // beginReportBatch und endReportBatch (Reports sammeln und einmal senden).
 // Rechte Seite: DactylLogic.h ruft press/release/write/releaseAll/mouse* auf. Linke Seite: SplitHidSink.
 template <class Hid>
@@ -1672,20 +1686,20 @@ public:
     release(k);
     return p;
   }
-  size_t press(const uint8_t k[2]) {
+  size_t press(const uint8_t k[3]) {
     right.media |= splitMediaBits(k);
     return Hid::press(k);
   }
-  size_t release(const uint8_t k[2]) {
-    uint16_t bits = splitMediaBits(k);
-    right.media &= (uint16_t)~bits;
-    uint16_t rel = bits & (uint16_t)~splitLeft.set.media;
+  size_t release(const uint8_t k[3]) {
+    uint32_t bits = splitMediaBits(k);
+    right.media &= ~bits;
+    uint32_t rel = bits & ~splitLeft.set.media;
     if (!rel) return 1;
-    uint8_t r[2];
+    uint8_t r[3];
     splitMediaReport(rel, r);
     return Hid::release(r);
   }
-  size_t write(const uint8_t k[2]) {
+  size_t write(const uint8_t k[3]) {
     size_t p = press(k);
     release(k);
     return p;
@@ -1775,15 +1789,15 @@ public:
     if (overrideRelease(ovrLeft, code)) return;
     if (!splitSetHasKey(right, code) && !overrideReplacementActive(code)) releaseKeepingShift(code, right);
   }
-  void leftMediaPress(uint16_t bits) override {
-    uint8_t r[2];
+  void leftMediaPress(uint32_t bits) override {
+    uint8_t r[3];
     splitMediaReport(bits, r);
     Hid::press(r);
   }
-  void leftMediaRelease(uint16_t bits) override {
-    uint16_t rel = bits & (uint16_t)~right.media;
+  void leftMediaRelease(uint32_t bits) override {
+    uint32_t rel = bits & ~right.media;
     if (!rel) return;
-    uint8_t r[2];
+    uint8_t r[3];
     splitMediaReport(rel, r);
     Hid::release(r);
   }
@@ -1803,6 +1817,7 @@ public:
     endMods(added);
   }
   void leftMouseScroll(int8_t steps) override { Hid::mouseScroll(steps); }
+  void leftMousePan(int8_t steps) override { Hid::mousePan(steps); }
   void leftMouseMove(int8_t x, int8_t y) override { Hid::mouseMove(x, y); }
   void leftOneShotPress(uint8_t mask) override { oneShotKeyDown(oneShot, mask); }
   void leftOneShotRelease(uint8_t mask, bool arm) override { oneShotKeyUp(oneShot, mask, arm); }
@@ -1996,7 +2011,7 @@ private:
       }
     }
     if (s.media) {
-      uint8_t r[2];
+      uint8_t r[3];
       splitMediaReport(s.media, r);
       Hid::press(r);
     }

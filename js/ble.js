@@ -382,6 +382,7 @@ async function disconnectBle() {
 
 function onBleDisconnected() {
   lastBleDisconnectTime = Date.now();
+  stopKeyCapture();
   // Idempotent: manuelles Trennen und das gattserverdisconnected-Event rufen diese Funktion beide auf
   if (!bleDevice && !bleConfigChar && !bleServer) return;
   if (bleDevice) bleDevice.removeEventListener("gattserverdisconnected", onBleDisconnected);

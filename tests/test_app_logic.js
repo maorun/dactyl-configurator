@@ -51,6 +51,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_ALT_REPEATS, isValidAltRepeat, hasDuplicateAltRepeat, normalizeAltRepeat, altRepeatsFromSameFingerPairs, localAltRepeatTuples, describeAltRepeatTuple,
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
+             createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
              macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
@@ -1503,7 +1504,7 @@ test("Layout-Diff: nicht vorhandene Tasten zählen nicht, unvollständige Snapsh
 // handleSerialLine aus js/serial.js in einem eigenen Kontext mit Stubs für DOM, Anzeige und Verbindungen.
 // conn: Verbindungszustand (bleUp, bleSide, serialUp, serialSide), wie connectionState() in js/ble.js.
 function serialLineHarness(conn = {}) {
-  const calls = { press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [], practice: [], layers: [], tri: [], warns: [] };
+  const calls = { capture: [], press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [], practice: [], layers: [], tri: [], warns: [] };
   const s = {
     calls, console: { log() {}, warn(...a) { calls.warns.push(a.map(String).join(' ')); } },
     document: { getElementById: () => null },
@@ -1545,6 +1546,7 @@ function saveConfigToServer() {}
 function clearPendingSync() {}
 function onTypingStatsChanged(side) { calls.stats.push(side); }
 function practiceHandleKeyPress(side, r, c, layer) { calls.practice.push([side, r, c, layer]); }
+function feedKeyCapture(side, r, c, pressed) { calls.capture.push(side + r + c + (pressed ? "+" : "-")); }
 function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + c); }
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
 ${section("js/serial.js", "// LED-Zustand des Hosts:", "function switchLayerUI")}
@@ -1815,6 +1817,25 @@ test("serial.js: SPLIT_KEY drückt und löst die Taste der linken Hälfte", () =
   // Von der linken Hälfte selbst: verworfen
   s.handle('SPLIT_KEY:{"r":1,"c":2,"pressed":1,"layer":0}', "L", "usb");
   assert.deepStrictEqual(s.calls.press, ["L12"]);
+});
+
+test("serial.js: MATRIX, KEY_PRESS, KEY_RELEASE und SPLIT_KEY speisen die Tastenaufnahme", () => {
+  const s = serialLineHarness();
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":1}', "R", "usb");
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":0}', "R", "usb");
+  s.handle('KEY_PRESS:{"r":3,"c":2,"layer":0,"key":"x"}', "R", "ble");
+  s.handle('KEY_RELEASE:{"r":3,"c":2}', "R", "ble");
+  // SPLIT_KEY trägt die Hälfte der Sender-Seite (links), nicht die der Zeile
+  s.handle('SPLIT_KEY:{"r":1,"c":2,"pressed":1,"layer":0}', "R", "usb");
+  assert.deepStrictEqual(s.calls.capture, ["R21+", "R21-", "R32+", "R32-", "L12+"]);
+});
+
+test("serial.js: ein geprellter MATRIX-Druck füllt keinen Platz der Tastenaufnahme", () => {
+  const s = serialLineHarness();
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":1,"t":1000}', "R", "usb");
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":0,"t":1100}', "R", "usb");
+  s.handle('MATRIX:{"r":2,"c":1,"pressed":1,"t":1103}', "R", "usb");   // Prellen: 3 ms nach dem Loslassen
+  assert.deepStrictEqual(s.calls.capture, ["R21+", "R21-"]);
 });
 
 test("serial.js: SPLIT_KEY zählt nicht doppelt, wenn die linke Hälfte selbst verbunden ist", () => {
@@ -4030,6 +4051,7 @@ function uiHarness(extra = "") {
     console: { log() {}, warn() {}, error() {} }, document: dom.document, log,
     setTimeout: fn => { Promise.resolve().then(fn); return 0; }, clearTimeout() {}
   };
+  w.addEventListener = () => {};
   w.confirm = () => log.confirm;
   w.alert = msg => log.alerts.push(msg);
   vm.createContext(w);
@@ -7217,6 +7239,193 @@ test("Beide Hälften: ungültige Hälfte bricht den ganzen Import ab, ohne Einga
   assert.throws(() => api.parseConfigImport({ bundleVersion: 1, sides: { R: good } }, profiles, "R"), /L fehlt/);
   assert.throws(() => api.parseConfigImport({ bundleVersion: 2, sides: {} }, profiles, "R"), /Version/);
   assert.throws(() => api.parseConfigImport({ bundleVersion: 1, sides: { R: good, L: good, X: good } }, profiles, "R"), /Unbekannte/);
+});
+
+// ---- Tastenaufnahme (Combo- und Leader-Editor) ----
+function captureFor(side, opts) {
+  return api.keyCaptureStart(api.createKeyCapture(), { side, max: 3, ...opts });
+}
+const press = (side, r, c) => ({ side, r, c, pressed: true });
+const release = (side, r, c) => ({ side, r, c, pressed: false });
+
+test("Tastenaufnahme: Druck füllt die Plätze der Reihe nach", () => {
+  const cap = captureFor("R");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.keyCaptureFeed(cap, press("R", 2, 1)))), { accepted: true, index: 0, value: "2,1" });
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 2, 2)).index, 1);
+  assert.deepStrictEqual([...cap.slots.map(s => s.value)], ["2,1", "2,2"]);
+});
+
+test("Tastenaufnahme: inaktiv und andere Hälfte ändern nichts", () => {
+  const idle = api.createKeyCapture();
+  assert.strictEqual(api.keyCaptureFeed(idle, press("R", 2, 1)).reason, "inactive");
+  const cap = captureFor("R");
+  assert.strictEqual(api.keyCaptureFeed(cap, press("L", 2, 1)).reason, "wrong-side");
+  assert.strictEqual(cap.slots.length, 0);
+  // der Druck der anderen Hälfte merkt sich keine gehaltene Taste: derselbe Platz gilt danach auf der eigenen Hälfte
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 2, 1)).accepted, true);
+});
+
+test("Tastenaufnahme: MATRIX, KEY_PRESS und SPLIT_KEY derselben Taste zählen einmal", () => {
+  const cap = captureFor("R");
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 2, 1)).accepted, true);
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 2, 1)).reason, "held");
+  // Ein verlorenes Loslassen sperrt die Taste nicht dauerhaft
+  const lost = captureFor("R", { allowRepeat: true });
+  api.keyCaptureFeed(lost, { ...press("R", 2, 1), at: 0 });
+  assert.strictEqual(api.keyCaptureFeed(lost, { ...press("R", 2, 1), at: 500 }).reason, "held");
+  assert.strictEqual(api.keyCaptureFeed(lost, { ...press("R", 2, 1), at: 1000 }).accepted, true);
+  assert.strictEqual(cap.slots.length, 1);
+});
+
+test("Tastenaufnahme: doppelte Koordinate wird nach dem Loslassen abgelehnt", () => {
+  const cap = captureFor("R");
+  api.keyCaptureFeed(cap, press("R", 2, 1));
+  api.keyCaptureFeed(cap, release("R", 2, 1));
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 2, 1)).reason, "duplicate");
+  assert.strictEqual(cap.slots.length, 1);
+});
+
+test("Tastenaufnahme: Leader-Folge erlaubt dieselbe Taste nach dem Loslassen", () => {
+  const cap = captureFor("R", { allowRepeat: true, max: 4, resolve: () => "KEY_A" });
+  api.keyCaptureFeed(cap, press("R", 2, 1));
+  api.keyCaptureFeed(cap, release("R", 2, 1));
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 2, 1)).accepted, true);
+  assert.deepStrictEqual([...cap.slots.map(s => s.value)], ["KEY_A", "KEY_A"]);
+});
+
+test("Tastenaufnahme: fehlende Taste, unbrauchbare Taste und volle Plätze", () => {
+  const cap = captureFor("R", { max: 1, resolve: (r, c) => (r === 0 ? null : `${r},${c}`) });
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 4, 0)).reason, "not-physical"); // R4C0 gibt es rechts nicht
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 0, 0)).reason, "unusable");
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 1, 0)).accepted, true);
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 1, 1)).reason, "full");
+  api.keyCaptureStop(cap);
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 1, 2)).reason, "inactive");
+});
+
+test("Tastenaufnahme: linke Hälfte kennt R4C5 und R5C0 nicht", () => {
+  const cap = captureFor("L");
+  assert.strictEqual(api.keyCaptureFeed(cap, press("L", 4, 5)).reason, "not-physical");
+  assert.strictEqual(api.keyCaptureFeed(cap, press("R", 1, 1)).reason, "wrong-side");
+});
+
+// Klebecode aus js/editor-events.js (feedKeyCapture, startKeyCapture, stopKeyCapture) mit Stubs für DOM und Hälfte
+function captureGlueHarness() {
+  const listeners = {};
+  const toasts = [];
+  const timers = [];
+  const s = { console: { warn() {} }, document: { activeElement: null }, listeners, toasts, timers, setTimeout: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimeout: id => { if (id) timers[id - 1] = null; } };
+  vm.createContext(s);
+  vm.runInContext(`${code}
+${read("js/side-routing.js")}
+var editSide = "R";
+function isEditableTarget(t) { return !!(t && t.editable); }
+function showToast(msg) { toasts.push(msg); }
+${section("js/editor-events.js", "// Tastenaufnahme (Combo-Dialog", "function setCaptureButton")}
+this.api2 = { startKeyCapture, stopKeyCapture, feedKeyCapture, setSide: v => { editSide = v; }, block: blockKeysDuringCapture, active: () => keyCapture.active };`, s);
+  return s;
+}
+
+test("Tastenaufnahme: Klebecode füllt Plätze, stoppt bei voller Aufnahme und meldet onStop", () => {
+  const s = captureGlueHarness(), g = s.api2, filled = [];
+  let stops = 0;
+  g.startKeyCapture({ max: 2 }, (i, v) => filled.push([i, v]), () => { stops++; });
+  g.feedKeyCapture("R", 2, 1, true);
+  g.feedKeyCapture("L", 2, 2, true);   // andere Hälfte
+  g.feedKeyCapture("R", 2, 2, true);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(filled)), [[0, "2,1"], [1, "2,2"]]);
+  assert.strictEqual(g.active(), false);
+  assert.strictEqual(stops, 1);
+});
+
+test("Tastenaufnahme: Wechsel der bearbeiteten Hälfte beendet die Aufnahme", () => {
+  const s = captureGlueHarness(), g = s.api2, filled = [];
+  let stops = 0;
+  g.startKeyCapture({ max: 3 }, (i, v) => filled.push(v), () => { stops++; });
+  g.setSide("L");
+  g.feedKeyCapture("L", 1, 1, true);
+  assert.deepStrictEqual(filled, []);
+  assert.strictEqual(g.active(), false);
+  assert.strictEqual(stops, 1);
+  assert.ok(section("js/editor.js", "function switchEditSide", "editSide = side;").includes("stopKeyCapture();"));
+});
+
+test("Tastenaufnahme: Browser-Tasten bleiben während der Aufnahme wirkungslos", () => {
+  const s = captureGlueHarness(), g = s.api2;
+  const evt = () => { const e = { prevented: false, stopped: false, preventDefault() { e.prevented = true; }, stopImmediatePropagation() { e.stopped = true; } }; return e; };
+  const idle = evt();
+  g.block(idle);
+  assert.strictEqual(idle.prevented, false);
+  g.startKeyCapture({ max: 1 }, () => {}, () => {});
+  const down = evt(), up = evt();
+  g.block(down);
+  g.block(up);
+  assert.deepStrictEqual([down.prevented, down.stopped, up.prevented, up.stopped], [true, true, true, true]);
+  // Beide Ereignisse hängen in der Aufnahmephase am Fenster
+  const setup = section("js/editor-events.js", "function setupEventListeners", "// Diagnose (GET_DIAG)");
+  assert.ok(setup.includes('window.addEventListener("keydown", blockKeysDuringCapture, true)'));
+  assert.ok(setup.includes('window.addEventListener("keyup", blockKeysDuringCapture, true)'));
+});
+
+test("Tastenaufnahme: Fehler im Füll-Rückruf beendet die Aufnahme ohne Ausnahme", () => {
+  const s = captureGlueHarness(), g = s.api2;
+  g.startKeyCapture({ max: 2 }, () => { throw new Error("kaputt"); }, () => {});
+  assert.doesNotThrow(() => g.feedKeyCapture("R", 2, 1, true));
+  assert.strictEqual(g.active(), false);
+});
+
+test("Tastenaufnahme: Tab und Eingabefelder bleiben frei, Esc beendet die Aufnahme, abgelehnte Taste zeigt einen Hinweis", () => {
+  const s = captureGlueHarness(), g = s.api2;
+  const evt = (extra) => { const e = { type: "keydown", key: "a", target: {}, prevented: false, preventDefault() { e.prevented = true; }, stopImmediatePropagation() {}, ...extra }; return e; };
+  g.startKeyCapture({ max: 2, resolve: () => null }, () => {}, () => {});
+  const tab = evt({ key: "Tab" }), field = evt({ target: { editable: true } });
+  g.block(tab);
+  g.block(field);
+  assert.deepStrictEqual([tab.prevented, field.prevented], [false, false]);
+  g.feedKeyCapture("R", 2, 1, true);
+  assert.strictEqual(s.toasts.length, 1);
+  const esc = evt({ key: "Escape" });
+  g.block(esc);
+  assert.strictEqual(esc.prevented, true);
+  assert.strictEqual(g.active(), false);
+});
+
+test("Tastenaufnahme: Leerlauf beendet die Aufnahme, ein Druck setzt die Frist zurück", () => {
+  const s = captureGlueHarness(), g = s.api2;
+  g.startKeyCapture({ max: 3 }, () => {}, () => {});
+  g.feedKeyCapture("R", 2, 1, true);
+  const live = s.timers.filter(Boolean);
+  assert.strictEqual(live.length, 1);
+  assert.strictEqual(live[0].ms, 30000);
+  live[0].fn();
+  assert.strictEqual(g.active(), false);
+});
+
+test("Tastenaufnahme: Verbindungsabbruch beendet die Aufnahme", () => {
+  assert.ok(section("js/ble.js", "function onBleDisconnected", "if (!bleDevice").includes("stopKeyCapture();"));
+  assert.ok(section("js/serial.js", "async function disconnectSerialNow", "keepReading = false").includes("stopKeyCapture();"));
+});
+
+test("Tastenaufnahme: Leader-Knopf leert alle Plätze, Combo-Knopf leert Taste 3", () => {
+  const values = {};
+  const buttons = { btnCaptureLeader: { attrs: {}, getAttribute(k) { return this.attrs[k]; }, setAttribute(k, v) { this.attrs[k] = v; }, classList: { toggle() {} } } };
+  const s = { LEADER_MAX_KEYS: 4, buttons, values, started: null };
+  vm.createContext(s);
+  vm.runInContext(`
+    const document = { getElementById: id => buttons[id] || (values[id] || (values[id] = { value: "KEY_A" })) };
+    function startKeyCapture(o) { started = o; }
+    function stopKeyCapture() {}
+    function setCaptureButton() {}
+    var currentConfig = { layers: [[[{ tap: "KEY_B" }]]] };
+    function isLeaderKey(c) { return c === "KEY_B"; }
+    ${section("js/leader-ui.js", "function leaderCaptureKeyCode", "function initLeaderUI")}
+    toggleLeaderCapture();
+    this.keyOf = leaderCaptureKeyCode;`, s);
+  for (let i = 0; i < 4; i++) assert.strictEqual(values[`leaderKeySelect${i}`].value, "");
+  assert.strictEqual(s.started.allowRepeat, true);
+  assert.strictEqual(s.keyOf(0, 0), "KEY_B");
+  assert.strictEqual(s.keyOf(1, 1), null);
+  assert.ok(section("js/editor-events.js", 'btnCaptureCombo.addEventListener("click"', "startKeyCapture(").includes('comboKey3Select").value = ""'));
 });
 
 (async () => {

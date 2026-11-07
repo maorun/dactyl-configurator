@@ -92,6 +92,7 @@ async function connectSerialNow(options = {}) {
 
 async function disconnectSerialNow() {
   if (!serialPort && !serialReadPromise) return;
+  stopKeyCapture();
   keepReading = false;
   if (serialReader) {
     try {
@@ -551,6 +552,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
       if (isValidIndex(evt.target_layer, NUM_LAYERS) && evt.target_layer !== activeLayerIndex) {
         switchLayerUI(evt.target_layer);
       }
+      feedKeyCapture(lineSide, evt.r, evt.c, true);
       triggerVisualKeyPress(evt.r, evt.c, typeof evt.key === "string" ? evt.key : "", lineSide, pressedLayer);
       if (recordKeyPress(typingStatsFor(lineSide), evt.r, evt.c, Date.now(), pressedLayer)) onTypingStatsChanged(lineSide);
       if (markMatrixKeyTested(matrixTestFor(lineSide), evt.r, evt.c) && isEditSide) renderMatrixTest();
@@ -567,6 +569,8 @@ function handleSerialLine(line, side = null, transport = "ble") {
       const matrixTest = matrixTestFor(lineSide);
       // Prellen braucht die Scan-Zeit der Firmware (t); ohne sie bleibt es bei der Tastenerkennung
       const bounced = evt.t !== undefined && recordMatrixBounce(matrixTest, evt.r, evt.c, evt.pressed, evt.t);
+      // Ein geprellter Druck ist kein neuer Tastendruck: die Tastenaufnahme übergeht ihn
+      if (!bounced) feedKeyCapture(lineSide, evt.r, evt.c, evt.pressed);
       const marked = evt.pressed && markMatrixKeyTested(matrixTest, evt.r, evt.c);
       if ((marked || bounced) && isEditSide) renderMatrixTest();
     }
@@ -612,6 +616,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
     // Ist die Sender-Hälfte selbst verbunden, meldet sie ihre Tasten direkt (KEY_PRESS): nicht doppelt zählen
     if (Dactyl.routeCommand(evt.side, connectionState())) return;
     const id = `${evt.side}_${evt.r}_${evt.c}`;
+    feedKeyCapture(evt.side, evt.r, evt.c, evt.pressed);
     if (!evt.pressed) {
       splitKeyTracker.release(id);
       triggerVisualKeyRelease(evt.r, evt.c, evt.side);
@@ -629,6 +634,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
     try {
       const evt = JSON.parse(line.substring(12));
       if (!isValidIndex(evt.r, NUM_ROWS) || !isValidIndex(evt.c, NUM_COLS)) return;
+      feedKeyCapture(lineSide, evt.r, evt.c, false);
       triggerVisualKeyRelease(evt.r, evt.c, lineSide);
     } catch (e) {
       console.warn("Failed to parse KEY_RELEASE:", e, line);

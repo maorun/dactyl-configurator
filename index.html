@@ -448,6 +448,7 @@
               <select id="leaderKeySelect3" class="form-control" title="4. Taste (optional)"></select>
               <strong>→</strong>
               <select id="leaderActionSelect" class="form-control" title="Aktion der Sequenz"></select>
+              <button id="btnCaptureLeader" class="btn btn-secondary btn-sm" type="button" aria-pressed="false">Auf Tastatur drücken</button>
               <button id="btnAddLeader" class="btn btn-primary btn-sm" type="button">+ Sequenz hinzufügen</button>
             </div>
             <table class="combos-table">
@@ -950,6 +951,11 @@
           </div>
 
           <div class="form-group">
+            <button type="button" class="btn btn-secondary btn-sm" id="btnCaptureComboKeys" aria-pressed="false">Auf Tastatur drücken</button>
+            <small class="form-hint" id="comboCaptureHint">Die Tasten nacheinander auf der Tastatur drücken (USB-Verbindung oder Bluetooth). Sie füllen Taste 1, 2 und 3. Über Bluetooth meldet die Tastatur Tasten nur im Konfig-Modus. Die Aufnahme endet nach 30 s ohne Druck.</small>
+          </div>
+
+          <div class="form-group">
             <label for="comboWindowInput">Eigenes Zeitfenster (Millisekunden, leer = globales Combo-Zeitfenster):</label>
             <input type="number" id="comboWindowInput" class="form-control" min="10" max="500" placeholder="Global">
             <small class="form-hint">Kurz für Combos auf Buchstaben, länger für Daumentasten. Gilt nur für diese Combo.</small>
@@ -1088,18 +1094,18 @@
   <script src="js/side-routing.js?v=6"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=3"></script>
-  <script src="js/config-model.js?v=9"></script>
-  <script src="js/editor.js?v=6"></script>
+  <script src="js/config-model.js?v=10"></script>
+  <script src="js/editor.js?v=7"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/key-overrides-ui.js?v=1"></script>
-  <script src="js/leader-ui.js?v=1"></script>
+  <script src="js/leader-ui.js?v=2"></script>
   <script src="js/alt-repeats-ui.js?v=1"></script>
   <script src="js/macros-ui.js?v=2"></script>
   <script src="js/layout-profiles-ui.js?v=2"></script>
   <script src="js/flash-log.js?v=1"></script>
-  <script src="js/editor-events.js?v=7"></script>
-  <script src="js/ble.js?v=1"></script>
-  <script src="js/serial.js?v=8"></script>
+  <script src="js/editor-events.js?v=8"></script>
+  <script src="js/ble.js?v=2"></script>
+  <script src="js/serial.js?v=9"></script>
   <script src="js/live-monitor.js?v=2"></script>
   <script src="js/heatmap.js?v=3"></script>
   <script src="js/matrix-test.js?v=1"></script>

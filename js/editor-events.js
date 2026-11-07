@@ -26,7 +26,88 @@ window.deleteCombo = function(id) {
   }
 };
 
+// Tastenaufnahme (Combo-Dialog, Leader-Editor): ein Zustandsautomat für beide; nur einer kann aktiv sein.
+// Die Zeilen MATRIX:, KEY_PRESS:, KEY_RELEASE: und SPLIT_KEY: in js/serial.js rufen feedKeyCapture auf.
+// Die Browser-Tastatur (keydown) ist daran nicht beteiligt: der Druck löst keine Editor-Kürzel aus.
+const keyCapture = createKeyCapture();
+let keyCaptureOnFill = null;
+let keyCaptureOnStop = null;
+
+// Hinweis bei einer Taste, die die Aufnahme nicht übernimmt (sonst wirkt sie wie eine fehlende Verbindung)
+const CAPTURE_REJECT_HINTS = {
+  unusable: "Diese Taste ist hier nicht verwendbar (keine normale Taste ohne Modifier auf Ebene 0).",
+  duplicate: "Diese Taste ist schon eingetragen.",
+  "not-physical": "Diese Taste gibt es auf der Hälfte nicht."
+};
+
+// Ohne Druck beendet sich die Aufnahme selbst: sonst sperrt sie die Tasten des Browsers, wenn der Nutzer weggeht
+const KEY_CAPTURE_IDLE_MS = 30000;
+let keyCaptureIdleTimer = null;
+
+function armKeyCaptureIdle() {
+  clearTimeout(keyCaptureIdleTimer);
+  keyCaptureIdleTimer = setTimeout(stopKeyCapture, KEY_CAPTURE_IDLE_MS);
+}
+
+function stopKeyCapture() {
+  clearTimeout(keyCaptureIdleTimer);
+  keyCaptureIdleTimer = null;
+  if (!keyCapture.active) return;
+  keyCaptureStop(keyCapture);
+  const onStop = keyCaptureOnStop;
+  keyCaptureOnFill = null;
+  keyCaptureOnStop = null;
+  if (onStop) onStop();
+}
+
+function startKeyCapture(options, onFill, onStop) {
+  stopKeyCapture();
+  keyCaptureStart(keyCapture, { side: editSide, ...options });
+  keyCaptureOnFill = onFill;
+  keyCaptureOnStop = onStop;
+  armKeyCaptureIdle();
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+}
+
+function feedKeyCapture(side, r, c, pressed) {
+  if (!keyCapture.active) return;
+  // Wechselt die bearbeitete Hälfte, gelten die Plätze nicht mehr
+  if (keyCapture.side !== editSide) { stopKeyCapture(); return; }
+  // Ein Fehler hier darf die Anzeige und die Statistik der Zeile in js/serial.js nicht überspringen
+  try {
+    const result = keyCaptureFeed(keyCapture, { side, r, c, pressed });
+    if (CAPTURE_REJECT_HINTS[result.reason]) showToast(CAPTURE_REJECT_HINTS[result.reason]);
+    if (result.accepted) armKeyCaptureIdle();
+    if (result.accepted && keyCaptureOnFill) keyCaptureOnFill(result.index, result.value);
+    if (result.accepted && keyCapture.slots.length >= keyCapture.max) stopKeyCapture();
+  } catch (e) {
+    console.warn("Key capture failed:", e);
+    stopKeyCapture();
+  }
+}
+
+// Eine Bluetooth-Tastatur ist zugleich Browser-Tastatur: Leertaste oder Enter würden den fokussierten Knopf auslösen,
+// Esc die Auswahl löschen. Während der Aufnahme bleiben keydown und keyup beim Editor ohne Wirkung.
+// Tab (Fokuswechsel) und Eingabefelder bleiben frei; Esc beendet die Aufnahme.
+function blockKeysDuringCapture(e) {
+  if (!keyCapture.active) return;
+  if (e.key === "Tab" || isEditableTarget(e.target)) return;
+  if (e.key === "Escape" && e.type === "keydown") stopKeyCapture();
+  e.preventDefault();
+  e.stopImmediatePropagation();
+}
+
+function setCaptureButton(button, active) {
+  if (!button) return;
+  button.setAttribute("aria-pressed", active ? "true" : "false");
+  button.textContent = active ? "Aufnahme läuft … (Stopp)" : "Auf Tastatur drücken";
+  button.classList.toggle("btn-primary", active);
+  button.classList.toggle("btn-secondary", !active);
+}
+
 function setupEventListeners() {
+  window.addEventListener("keydown", blockKeysDuringCapture, true);
+  window.addEventListener("keyup", blockKeysDuringCapture, true);
   // Diagnose (GET_DIAG): Antwort kommt als DIAG-Zeile in handleSerialLine
   const btnDiagRefresh = document.getElementById("btnDiagRefresh");
   if (btnDiagRefresh) btnDiagRefresh.addEventListener("click", () => requestDiag());
@@ -158,12 +239,26 @@ function setupEventListeners() {
     clearSelectFilter("comboActionSelect");
     comboModal.style.display = "flex";
   });
-  document.getElementById("btnCloseComboModal").addEventListener("click", () => {
-    comboModal.style.display = "none";
+  // Tastenaufnahme: Druck auf Taste 1, 2, 3 der bearbeiteten Hälfte füllt die Auswahlfelder
+  const btnCaptureCombo = document.getElementById("btnCaptureComboKeys");
+  const comboKeySelectIds = ["comboKey1Select", "comboKey2Select", "comboKey3Select"];
+  btnCaptureCombo.addEventListener("click", () => {
+    if (btnCaptureCombo.getAttribute("aria-pressed") === "true") { stopKeyCapture(); return; }
+    // Taste 3 ist optional: eine Aufnahme mit zwei Tasten darf keine alte dritte Taste behalten
+    document.getElementById("comboKey3Select").value = "";
+    startKeyCapture(
+      { max: comboKeySelectIds.length },
+      (index, value) => { document.getElementById(comboKeySelectIds[index]).value = value; },
+      () => setCaptureButton(btnCaptureCombo, false)
+    );
+    setCaptureButton(btnCaptureCombo, true);
   });
-  document.getElementById("btnCancelCombo").addEventListener("click", () => {
+  const closeComboModal = () => {
+    stopKeyCapture();
     comboModal.style.display = "none";
-  });
+  };
+  document.getElementById("btnCloseComboModal").addEventListener("click", closeComboModal);
+  document.getElementById("btnCancelCombo").addEventListener("click", closeComboModal);
 
   document.getElementById("btnSaveCombo").addEventListener("click", () => {
     const k1Val = document.getElementById("comboKey1Select").value.split(",");
@@ -263,6 +358,7 @@ function setupEventListeners() {
     if (windowMs) newCombo.windowMs = windowMs;
 
     currentConfig.combos.push(newCombo);
+    stopKeyCapture();
     comboModal.style.display = "none";
     renderCombosTable();
     renderMatrix();

@@ -856,8 +856,9 @@ function switchEditSide(side) {
   if (!sideStore.has(side)) return;
   if (side !== editSide) {
     sideStore.save(editSide, { config: currentConfig, pendingChanges });
-    // Ein offener Makro-Entwurf gehört zur bisherigen Hälfte
+    // Ein offener Makro-Entwurf und eine laufende Tastenaufnahme gehören zur bisherigen Hälfte
     closeMacroEditor();
+    stopKeyCapture();
     editSide = side;
     const state = sideStore.get(side);
     currentConfig = state.config;

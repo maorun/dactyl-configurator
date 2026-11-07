@@ -179,6 +179,57 @@ function parseMatrixLine(line) {
   return parsed;
 }
 
+// Tastenaufnahme: ein Druck auf der Tastatur füllt den nächsten freien Platz eines Editors (Combo, Leader).
+// Zustandsautomat ohne DOM. Dieselbe Taste meldet MATRIX:, KEY_PRESS und SPLIT_KEY; eine gehaltene Taste zählt darum
+// nur einmal, bis ihr Loslassen kommt. Ein Druck der anderen Hälfte ändert nichts.
+// Ein verlorenes Loslassen (Verbindungsabbruch) sperrt die Taste höchstens KEY_CAPTURE_HELD_MS.
+const KEY_CAPTURE_HELD_MS = 1000;
+
+function createKeyCapture() {
+  return { active: false, side: null, max: 0, allowRepeat: false, resolve: null, slots: [], held: new Map() };
+}
+
+// side: bearbeitete Hälfte; max: Zahl der Plätze; allowRepeat: dieselbe Taste darf nach dem Loslassen nochmal
+// (Leader-Folge); resolve(r, c): Wert für den Platz oder null, wenn die Taste hier nicht verwendbar ist
+function keyCaptureStart(cap, { side, max, allowRepeat = false, resolve }) {
+  cap.active = true;
+  cap.side = side;
+  cap.max = max;
+  cap.allowRepeat = allowRepeat;
+  cap.resolve = resolve;
+  cap.slots = [];
+  cap.held = new Map();
+  return cap;
+}
+
+function keyCaptureStop(cap) {
+  cap.active = false;
+  cap.held = new Map();
+  return cap;
+}
+
+// evt: { side, r, c, pressed, at }; at (ms) ist optional. Rückgabe { accepted, reason, index, value }; reason nennt den Grund einer Ablehnung.
+function keyCaptureFeed(cap, evt) {
+  if (!cap.active) return { accepted: false, reason: "inactive" };
+  if (evt.side !== cap.side) return { accepted: false, reason: "wrong-side" };
+  if (!isValidIndex(evt.r, NUM_ROWS) || !isValidIndex(evt.c, NUM_COLS)) return { accepted: false, reason: "invalid" };
+  const id = `${evt.r},${evt.c}`;
+  if (!evt.pressed) {
+    cap.held.delete(id);
+    return { accepted: false, reason: "release" };
+  }
+  const now = Number.isFinite(evt.at) ? evt.at : Date.now();
+  if (cap.held.has(id) && now - cap.held.get(id) < KEY_CAPTURE_HELD_MS) return { accepted: false, reason: "held" };
+  cap.held.set(id, now);
+  if (!isPhysicalKey(evt.r, evt.c, SIDE_PROFILES[cap.side])) return { accepted: false, reason: "not-physical" };
+  if (cap.slots.length >= cap.max) return { accepted: false, reason: "full" };
+  if (!cap.allowRepeat && cap.slots.some(slot => slot.id === id)) return { accepted: false, reason: "duplicate" };
+  const value = cap.resolve ? cap.resolve(evt.r, evt.c) : id;
+  if (value === null || value === undefined) return { accepted: false, reason: "unusable" };
+  cap.slots.push({ id, value });
+  return { accepted: true, index: cap.slots.length - 1, value };
+}
+
 // Prellen einer Taste: ein Druck höchstens MATRIX_BOUNCE_MS nach dem Loslassen derselben Taste (Scan-Zeit "t").
 // Der Abstand wird modulo 2^32 gebildet, weil millis() nach etwa 49 Tagen überläuft. Ohne "t" (ältere Firmware,
 // SPLIT_KEY vom Master) gibt es kein Ergebnis. Rückgabe true, wenn dieses Ereignis ein Prellen war.

@@ -147,6 +147,26 @@ function deleteLeaderSequence(idx) {
   });
 }
 
+// Tastenaufnahme: Die Taste auf der Ebene 0 der bearbeiteten Hälfte füllt den nächsten Platz der Sequenz.
+// Dieselbe Taste darf mehrmals folgen (nach dem Loslassen); eine Taste ohne Leader-Code zählt nicht.
+function leaderCaptureKeyCode(r, c) {
+  const cell = currentConfig.layers[0] && currentConfig.layers[0][r] && currentConfig.layers[0][r][c];
+  return cell && isLeaderKey(cell.tap) ? cell.tap : null;
+}
+
+function toggleLeaderCapture() {
+  const button = document.getElementById("btnCaptureLeader");
+  if (button.getAttribute("aria-pressed") === "true") { stopKeyCapture(); return; }
+  // Ein neuer Aufnahmelauf ersetzt die Folge: alle Plätze leeren
+  for (let i = 0; i < LEADER_MAX_KEYS; i++) document.getElementById(`leaderKeySelect${i}`).value = "";
+  startKeyCapture(
+    { max: LEADER_MAX_KEYS, allowRepeat: true, resolve: leaderCaptureKeyCode },
+    (index, value) => { document.getElementById(`leaderKeySelect${index}`).value = value; },
+    () => setCaptureButton(button, false)
+  );
+  setCaptureButton(button, true);
+}
+
 function initLeaderUI() {
   for (let i = 0; i < LEADER_MAX_KEYS; i++) {
     const select = document.getElementById(`leaderKeySelect${i}`);
@@ -154,6 +174,10 @@ function initLeaderUI() {
     fillLeaderKeyOptions(select, i > 0);
   }
   document.getElementById("leaderKeySelect0").value = "KEY_A";
-  document.getElementById("btnAddLeader").addEventListener("click", addLeaderSequenceFromUI);
+  document.getElementById("btnAddLeader").addEventListener("click", () => {
+    stopKeyCapture();
+    addLeaderSequenceFromUI();
+  });
+  document.getElementById("btnCaptureLeader").addEventListener("click", toggleLeaderCapture);
   renderLeaderSequences();
 }

@@ -576,7 +576,7 @@ test("Diagnose: Panel in index.html, Parser in serial.js ohne Hälften-Literale"
   const ui = serial.slice(serial.indexOf("const diagByRole"), serial.indexOf("// Funkverbindung zur Sender-Hälfte"));
   assert.ok(ui.includes("SIDE_PROFILES[id].label") && !/["'][RL]["']/.test(ui));
   assert.ok(read("js/editor-events.js").includes('getElementById("btnDiagRefresh")'));
-  assert.ok(html.includes("js/editor-events.js?v=7"));
+  assert.ok(html.includes("js/editor-events.js?v=8"));
 });
 
 test("Diagnose: Kopfzeile markiert nur unerwartete Resets", () => {

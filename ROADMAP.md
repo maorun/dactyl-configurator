@@ -23,15 +23,6 @@ Rules for this file:
 
 ## Priority 4
 
-### Physical key capture in the combo and leader editors
-
-- **Rank:** Feature model. Total 20/40 (typing 1, configuration 7, harmony 5, safety 7). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js`, `js/editor-events.js`, `js/leader-ui.js`, `js/serial.js`, `index.html`.
-- **Problem:** Picking matrix coordinates (`R2C1`, `R2C2`) in the combo dialog or key sequences in the leader editor from dropdown lists is slow and error-prone.
-- **Goal:** Add a capture toggle "Auf Tastatur drücken" in the combo dialog and the leader editor. While capture is active, physical presses from `MATRIX:`, `KEY_PRESS` and `SPLIT_KEY` of the edited half fill the next key slot automatically without triggering editor shortcuts.
-- **Acceptance test:** Unit tests in `tests/test_app_logic.js` feed simulated matrix and serial events into the capture state machine and verify that duplicate coordinates and wrong-side presses are ignored.
-
 ### Interactive timing assistant (`Tapping-Term-Assistent`)
 
 - **Rank:** Feature model. Total 19/40 (typing 3, configuration 7, harmony 4, safety 5). Effort M. Estimate.

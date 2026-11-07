@@ -2,6 +2,16 @@
 // Live Keystroke Visualizer & Combo Detection
 // =============================================================================
 
+// Rolle der gedrückten Taste (keyPressRole) nach der Ebene beim Drücken; SPLIT_KEY meldet keinen Aktionscode.
+// Eine Taste ohne Belegung auf einer höheren Ebene fällt wie in der Firmware auf Ebene 0 zurück.
+function pressedKeyRole(side, r, c, pressedLayer) {
+  const layers = configFor(side).layers;
+  const tapOf = l => { const cell = layers[l] && layers[l][r] && layers[l][r][c]; return cell ? cell.tap : "NONE"; };
+  let tap = tapOf(pressedLayer === undefined ? activeLayerIndex : pressedLayer);
+  if (!tap || tap === "NONE") tap = tapOf(0);
+  return keyPressRole(tap);
+}
+
 function triggerVisualKeyPress(r, c, keyLabel, side = editSide, pressedLayer = undefined) {
   const sideConfig = configFor(side);
   const keyId = `${side}_${r}_${c}`;

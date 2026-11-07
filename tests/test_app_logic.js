@@ -32,7 +32,7 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTriLayers, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
-             createTypingStats, recordKeyPress, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
+             createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
              COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
@@ -1581,7 +1581,10 @@ function feedKeyCapture(side, r, c, pressed) { calls.capture.push(side + r + c +
 function feedTimingAssistant(side, evt) { calls.timing = (calls.timing || 0) + 1; }
 function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + c); }
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
+${section("js/live-monitor.js", "// Rolle der gedrückten Taste", "function triggerVisualKeyPress")}
 ${section("js/serial.js", "// LED-Zustand des Hosts:", "function switchLayerUI")}
+this.setTap = (side, l, r, c, tap) => { configs[side].layers[l][r][c].tap = tap; };
+this.corrections = side => ({ ...stats[side].corrections });
 this.hostCaps = () => hostLedsState && hostLedsState.caps;
 this.dmRec = () => dmRecording; this.parse = Dactyl.parseDmRecLine;
 this.handle = handleSerialLine; this.settingOf = (side, k) => configs[side].settings[k]; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
@@ -1591,7 +1594,7 @@ this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
   const plain = v => JSON.parse(JSON.stringify(v));
   return {
     warns: calls.warns, handle: (...a) => s.handle(...a), settingOf: (side, k) => s.settingOf(side, k), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
-    layerCounts: (side, l) => plain(s.layerCounts(side, l)), hostCaps: () => s.hostCaps(), dmRec: () => s.dmRec(), parse: (...a) => s.parse(...a),
+    setTap: (...a) => s.setTap(...a), layerCounts: (side, l) => plain(s.layerCounts(side, l)), corrections: side => plain(s.corrections(side)), hostCaps: () => s.hostCaps(), dmRec: () => s.dmRec(), parse: (...a) => s.parse(...a),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
     set snapshotActive(v) { s.snapshotActive = v; },
     setLoadSide(v) { vm.runInContext("deviceLoadSide = " + JSON.stringify(v), s); },
@@ -1900,6 +1903,87 @@ test("serial.js: KEY_PRESS und SPLIT_KEY zählen die Heatmap nach ihrer Ebene", 
   assert.deepStrictEqual(s.layerCounts("R", 0), { "1_2": 1 });
   assert.deepStrictEqual(s.layerCounts("R", 3), { "1_2": 1 });
   assert.deepStrictEqual(s.layerCounts("L", 3), { "2_2": 1 });
+});
+
+test("Korrekturen: Backspace korrigiert die Taste davor, nicht die davor davor", () => {
+  const s = api.createTypingStats(null, R);
+  api.recordKeyPress(s, 2, 1, 0); // a
+  api.recordKeyPress(s, 2, 2, 100); // s
+  api.recordKeyPress(s, 0, 5, 200, undefined, "backspace"); // Backspace
+  assert.deepStrictEqual({ ...s.corrections }, { "2_2": 1 });
+  assert.strictEqual(s.corrections["2_1"], undefined);
+  api.recordKeyPress(s, 0, 5, 300, undefined, "backspace"); // zweiter Backspace: keine Taste mehr davor
+  assert.deepStrictEqual({ ...s.corrections }, { "2_2": 1 });
+});
+
+test("Korrekturen: ein Backspace nach dem Fenster von 1500 ms zählt nicht", () => {
+  const s = api.createTypingStats(null, R);
+  api.recordKeyPress(s, 2, 2, 0);
+  api.recordKeyPress(s, 0, 5, api.CORRECTION_WINDOW_MS + 1, undefined, "backspace");
+  assert.deepStrictEqual({ ...s.corrections }, {});
+  api.recordKeyPress(s, 2, 2, 5000);
+  api.recordKeyPress(s, 0, 5, 5000 + api.CORRECTION_WINDOW_MS, undefined, "backspace"); // genau am Rand: zählt
+  assert.deepStrictEqual({ ...s.corrections }, { "2_2": 1 });
+});
+
+test("Korrekturen: Anteil, Rangliste, Speicherform und ungültige Daten", () => {
+  const s = api.createTypingStats(null, R);
+  for (let i = 0; i < 10; i++) { // s: 10 Anschläge, 4 Korrekturen
+    api.recordKeyPress(s, 2, 2, i * 10000);
+    if (i < 4) api.recordKeyPress(s, 0, 5, i * 10000 + 10, undefined, "backspace");
+  }
+  api.recordKeyPress(s, 2, 1, 200000); // a: 1 Anschlag, 1 Korrektur, unter der Mindestzahl
+  api.recordKeyPress(s, 0, 5, 200010, undefined, "backspace");
+  const top = api.topCorrectedKeys(s);
+  assert.strictEqual(top.length, 1);
+  assert.strictEqual(top[0].id, "2_2");
+  assert.strictEqual(top[0].corrections, 4);
+  assert.strictEqual(top[0].presses, 10);
+  assert.ok(Math.abs(top[0].share - 0.4) < 1e-9);
+  const stored = JSON.parse(JSON.stringify(api.serializeTypingStats(s)));
+  assert.deepStrictEqual(stored.corrections, { "2_2": 4, "2_1": 1 });
+  assert.deepStrictEqual({ ...api.createTypingStats(stored, R).corrections }, { "2_2": 4, "2_1": 1 });
+  const bad = api.createTypingStats({ corrections: { "2_2": 3, "9_9": 2, "4_0": 1, "2_1": -1 } }, R);
+  assert.deepStrictEqual({ ...bad.corrections }, { "2_2": 3 });
+  assert.deepStrictEqual({ ...api.createTypingStats({ "2_2": 3 }, R).corrections }, {});
+  assert.strictEqual("corrections" in api.serializeTypingStats(api.createTypingStats(null, R)), false);
+});
+
+test("Korrekturen: Modifier dazwischen ändern die Taste davor nicht, Rollen der Aktionen", () => {
+  const s = api.createTypingStats(null, R);
+  api.recordKeyPress(s, 2, 2, 0, undefined, api.keyPressRole("KEY_S"));
+  api.recordKeyPress(s, 4, 5, 10, undefined, api.keyPressRole("KEY_LEFT_SHIFT"));
+  api.recordKeyPress(s, 0, 5, 20, undefined, api.keyPressRole("KEY_BACKSPACE"));
+  assert.deepStrictEqual({ ...s.corrections }, { "2_2": 1 });
+  assert.strictEqual(api.keyPressRole("KEY_BACKSPACE"), "backspace");
+  for (const t of ["NONE", "KEY_LEFT_GUI", "MO_1", "TG_2", "LAYER_UP", "OSL_1", "OSM_LSHIFT", "HOST_1"]) {
+    assert.strictEqual(api.keyPressRole(t), "silent", t);
+  }
+  for (const t of ["KEY_A", "KEY_SPACE", "KEY_RETURN", "PAIR_0", "MACRO_0"]) assert.strictEqual(api.keyPressRole(t), "typed", t);
+});
+
+test("Korrekturen: gespeicherter Wert über der Anschlagzahl wird auf 100 % begrenzt", () => {
+  const s = api.createTypingStats({ "2_2": 5, corrections: { "2_2": 9 } }, R);
+  assert.strictEqual(api.correctionShares(s).shares["2_2"], 1);
+});
+
+test("serial.js: Backspace nach KEY_PRESS und SPLIT_KEY zählt als Korrektur der Taste davor", () => {
+  const s = serialLineHarness();
+  s.setTap("R", 0, 0, 5, "KEY_BACKSPACE");
+  s.setTap("L", 0, 0, 5, "KEY_BACKSPACE");
+  s.handle('KEY_PRESS:{"r":2,"c":1,"key":"a","layer":0}', "R", "usb");
+  s.handle('KEY_PRESS:{"r":2,"c":2,"key":"s","layer":0}', "R", "usb");
+  s.handle('KEY_PRESS:{"r":0,"c":5,"key":"Backspace","layer":0}', "R", "usb");
+  assert.deepStrictEqual({ ...s.corrections("R") }, { "2_2": 1 });
+  // Ebene 3 ohne Belegung an R0C5 fällt auf Backspace der Ebene 0 zurück
+  s.setTap("R", 3, 0, 5, "NONE");
+  s.handle('KEY_PRESS:{"r":2,"c":3,"key":"d","layer":0}', "R", "usb");
+  s.handle('KEY_PRESS:{"r":0,"c":5,"key":"","layer":3}', "R", "usb");
+  assert.deepStrictEqual({ ...s.corrections("R") }, { "2_2": 1, "2_3": 1 });
+  s.handle('SPLIT_KEY:{"r":2,"c":1,"pressed":1,"layer":0}', "R", "usb");
+  s.handle('SPLIT_KEY:{"r":0,"c":5,"pressed":1,"layer":0}', "R", "usb");
+  assert.deepStrictEqual({ ...s.corrections("L") }, { "2_1": 1 });
+  assert.deepStrictEqual({ ...s.corrections("R") }, { "2_2": 1, "2_3": 1 });
 });
 
 test("heatmap.js: heatmapLayer folgt der angezeigten Ebene nur im Modus pro Ebene", () => {

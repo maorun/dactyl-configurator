@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Detect a stale layout on connect (`js/config-sync.js`)
-
-- **Rank:** Feature model. Total 27/40 (typing 3, configuration 7, harmony 8, safety 9). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/config-sync.js` (`readConfigFromESP32`), `js/config-model.js`, `app.js`.
-- **Problem:** The user can edit the layout on the device in another session. The app then shows an old layout, and the next sync overwrites the newer device layout without a warning.
-- **Goal:** After each BLE or serial connect, read the configuration and compare it with the app state through the existing layout diff. When they differ and the app has no pending change, show a banner "Gerät weicht ab" with the buttons "Vom Gerät laden" and "Ignorieren". Do not start a sync on its own.
-- **Acceptance test:** A unit test gives a device layout with one changed key and expects the banner state with one difference; equal layouts and a state with pending changes give no banner.
-
 ### Layer auto-return timeout (`layerTimeoutMs`)
 
 - **Rank:** Feature model. Total 26/40 (typing 7, configuration 3, harmony 8, safety 8). Effort S. Estimate.

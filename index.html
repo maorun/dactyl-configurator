@@ -35,6 +35,14 @@
           <span class="fw-mismatch-icon">⚠️</span>
           <strong>Beide Hälften flashen</strong>
         </div>
+        <!-- Gerätebelegung weicht von der App ab (js/config-sync.js, checkStaleLayout) -->
+        <div class="fw-mismatch-pill stale-layout-banner" id="staleLayoutBanner" hidden>
+          <span class="fw-mismatch-icon">⚠️</span>
+          <strong>Gerät weicht ab</strong>
+          <span id="staleLayoutText"></span>
+          <button id="btnStaleLayoutLoad" class="btn btn-outline btn-xs">Vom Gerät laden</button>
+          <button id="btnStaleLayoutIgnore" class="btn btn-outline btn-xs">Ignorieren</button>
+        </div>
         <!-- Funkverbindung zur Sender-Hälfte, vom Master gemeldet (SPLIT_LINK / DEVICE_INFO.left_link, js/side-routing.js) -->
         <div class="split-link-pill" id="splitLinkPill" hidden>
           <span class="split-link-dot"></span>

@@ -103,6 +103,7 @@ document.addEventListener("DOMContentLoaded", () => {
   renderMatrix();
   renderCombosTable();
   setupEventListeners();
+  setupStaleLayoutBanner();
   setupBrowserKeyboardHooks();
   loadSavedConfigFromServer();
   initModernBleAutoSync();
@@ -344,6 +345,7 @@ function discardAllPendingChanges() {
 // side: Hälfte, zu der die Änderung gehört. Asynchrone Aufrufer übergeben die beim Start erfasste Hälfte,
 // damit ein Wechsel der Hälfte während des Wartens die Änderung nicht der falschen Hälfte zuordnet.
 function markPendingSync(changeOrSummary = "", side = editSide) {
+  if (typeof hideStaleLayoutBanner === "function") hideStaleLayoutBanner(side);
   if (side !== editSide) {
     if (changeOrSummary && typeof changeOrSummary === "object") {
       pendingFor(side).push({

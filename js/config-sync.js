@@ -6,6 +6,7 @@
 let syncProgressHideTimer = null;
 
 async function writeConfigToESP32(options = {}) {
+  hideStaleLayoutBanner();
   const autoDisconnectAfter = !!(options && options.autoDisconnectAfter);
 
   if (!bleConfigChar && (!serialPort || !serialPort.writable)) {
@@ -415,6 +416,8 @@ function requestLiveSync(side, force = false) {
 }
 
 async function runQueuedLiveSync(side) {
+  // Erst die stille Banner-Abfrage abwarten, dann auf Sync und Verbindungsaufbau prüfen
+  await waitForStaleLayoutRead();
   // Laufender Sync oder Verbindungsaufbau: danach erneut prüfen
   if (isAutoSyncing || isConnectingBle) {
     setTimeout(() => runQueuedLiveSync(side), LIVE_SYNC_RETRY_MS);
@@ -440,6 +443,7 @@ async function runQueuedLiveSync(side) {
 // die GET_CONFIG-Zeilen fließen noch in den Snapshot, und der Benutzer entscheidet im Dialog selbst.
 // Bei autoDisconnectAfter kehrt die Tastatur trotzdem sofort in den Tastaturmodus zurück (EXIT_CONFIG).
 async function runAutoSync(options) {
+  await waitForStaleLayoutRead();
   if (deviceSnapshotRead || diffFlowActive) {
     showToast("Der Vergleich vor dem Speichern läuft noch. Automatische Übertragung übersprungen.");
     if (options && options.autoDisconnectAfter && bleConfigChar) await disconnectBle();
@@ -508,7 +512,7 @@ function captureDeviceSnapshotLine(line, side) {
 
 // Liest die Belegung der verbundenen Hälfte. Rückgabe: Snapshot oder null (Timeout, Sendefehler, unvollständig).
 // withInfo: fragt vorher GET_INFO ab und legt DEVICE_INFO in snapshot.info ab (für das komplette Laden).
-async function readDeviceSnapshot(side, withInfo = false) {
+async function readDeviceSnapshot(side, withInfo = false, silent = false) {
   if (deviceSnapshotRead) return null;
   let timer = null;
   let read = null;
@@ -516,6 +520,8 @@ async function readDeviceSnapshot(side, withInfo = false) {
     read = {
       side,
       withInfo,
+      // silent: stille Abfrage des Banners; Speichern und Laden warten auf sie (waitForStaleLayoutRead)
+      silent,
       // Weg der Abfrage ("ble" oder "usb"): fällt genau dieser Weg weg, endet die Abfrage
       route: Dactyl.routeCommand(side, connectionState()),
       snapshot: createDeviceSnapshot(),
@@ -630,6 +636,7 @@ function showSyncDiffDialog(profile, diff, options = {}) {
 
 // "Auf ESP32 speichern": zuerst Diff zeigen, dann übertragen
 async function writeConfigWithDiff() {
+  await waitForStaleLayoutRead();
   if (isAutoSyncing || diffFlowActive) return;
   if (deviceSnapshotRead) {
     showToast("Die Tastatur sendet noch die Antwort einer früheren Abfrage. Bitte gleich erneut versuchen.");
@@ -664,6 +671,7 @@ async function writeConfigWithDiff() {
 // Diff gegen die lokale Config und ersetzt sie nach der Bestätigung (Snapshot-Änderung wie ein Import).
 // Ein Snapshot mit einer ungültigen oder fehlenden Zeile ändert nichts.
 async function readConfigFromESP32() {
+  await waitForStaleLayoutRead();
   // Während des Diffs würden die GET_CONFIG-Zeilen den Snapshot verfälschen oder den Vergleich veralten lassen
   if (diffFlowActive || deviceSnapshotRead) {
     showToast("Der Vergleich vor dem Speichern läuft noch. Bitte danach erneut laden.");
@@ -718,6 +726,61 @@ async function readConfigFromESP32() {
     return;
   }
   applyDeviceConfig(built.config, profile);
+}
+
+// Nach dem Verbinden: liest die Belegung und zeigt das Banner "Gerät weicht ab", wenn sie von der App abweicht.
+// Nur ohne vorgemerkte Änderung; es startet keinen Sync und lädt nichts ohne Klick auf "Vom Gerät laden".
+// Token und Ignorieren gelten je Hälfte, damit das Trennen eines Wegs den Stand der anderen Hälfte nicht berührt.
+const staleLayoutCheckTokens = new Map();
+const staleLayoutIgnored = new Set();
+
+// side: Hälfte, deren Verbindung endet oder deren Stand sich ändert (null = alle). forget: "Ignorieren" vergessen.
+function hideStaleLayoutBanner(side = null, forget = false) {
+  for (const s of side ? [side] : Object.keys(SIDE_PROFILES)) {
+    staleLayoutCheckTokens.set(s, (staleLayoutCheckTokens.get(s) || 0) + 1);
+    if (forget) staleLayoutIgnored.delete(s);
+  }
+  const banner = document.getElementById("staleLayoutBanner");
+  if (banner && (!side || banner.dataset.side === side)) banner.hidden = true;
+}
+
+// Die stille Abfrage des Banners blockiert Speichern und Laden nicht: diese Wege warten, bis sie endet.
+async function waitForStaleLayoutRead() {
+  const deadline = Date.now() + DEVICE_SNAPSHOT_TIMEOUT_MS + 500;
+  while (deviceSnapshotRead && deviceSnapshotRead.silent && !deviceSnapshotRead.stale && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 50));
+  }
+}
+
+async function checkStaleLayout(side) {
+  if (!side || staleLayoutIgnored.has(side)) return;
+  if (isAutoSyncing || isConnectingBle || diffFlowActive || deviceSnapshotRead) return;
+  if (connectedSide() !== side || pendingFor(side).length > 0) return;
+  const token = (staleLayoutCheckTokens.get(side) || 0) + 1;
+  staleLayoutCheckTokens.set(side, token);
+  const snapshot = await readDeviceSnapshot(side, false, true);
+  // Verbindung, Hälfte oder Vorgemerktes hat sich während des Lesens geändert: Ergebnis verwerfen
+  if (token !== staleLayoutCheckTokens.get(side) || connectedSide() !== side || !snapshot) return;
+  const state = staleLayoutState(configFor(side), snapshot, SIDE_PROFILES[side], pendingFor(side).length);
+  const banner = document.getElementById("staleLayoutBanner");
+  if (!banner) return;
+  banner.dataset.side = side;
+  const text = document.getElementById("staleLayoutText");
+  if (text) text.textContent = `${state.count} Unterschied(e) auf der ${SIDE_PROFILES[side].label}`;
+  banner.hidden = !state.show;
+}
+
+function setupStaleLayoutBanner() {
+  const load = document.getElementById("btnStaleLayoutLoad");
+  const ignore = document.getElementById("btnStaleLayoutIgnore");
+  // Das Banner bleibt bis zum geladenen Stand (markPendingSync) oder bis "Ignorieren" stehen: ein Abbruch im Dialog ändert nichts
+  if (load) load.addEventListener("click", () => readConfigFromESP32());
+  if (ignore) ignore.addEventListener("click", () => {
+    const banner = document.getElementById("staleLayoutBanner");
+    const side = banner && banner.dataset.side;
+    if (side) staleLayoutIgnored.add(side);
+    hideStaleLayoutBanner(side || null);
+  });
 }
 
 // Ersetzt die Config der bearbeiteten Hälfte durch die vom Gerät gelesene (Snapshot-Änderung mit Rückgängig)

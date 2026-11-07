@@ -37,7 +37,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
              COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
              SIDE_PROFILES,
-             applyLayerOperation, transparentLayer, isUndoBlocked,
+             applyLayerOperation, transparentLayer, isUndoBlocked, swapLayerKeys, mirrorLayerAcrossSides, swappedSelectionPosition, parseKeyDragPayload,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell, keyTapTerm,
              createDeviceSnapshot, captureListLine, buildConfigFromSnapshot, settingsFromDeviceInfo, deviceNameFromInfo, diffSettings, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, describeKeyActions,
@@ -742,6 +742,201 @@ test("Ebenen-Werkzeug: Tauschen und Leeren", () => {
   assert.ok(cleared[2].every(row => row.length === 7 && row.every(k => k.tap === "NONE" && k.hold === "NONE")));
   assert.strictEqual(cleared[1][0][0].tap, "KEY_1");
   assert.strictEqual(layers[2][0][0].tap, "KEY_2");
+});
+
+test("Tasten tauschen: tauscht zwei Zellen, Eingabe bleibt unverändert, Undo-Snapshot stellt wieder her", () => {
+  const layer = api.transparentLayer();
+  layer[1][2] = { label: "A", tap: "KEY_A", hold: "NONE", dtap: "NONE" };
+  layer[3][4] = { label: "B", tap: "KEY_B", hold: "KEY_LEFT_SHIFT", dtap: "NONE" };
+  const swapped = api.swapLayerKeys(layer, 1, 2, 3, 4);
+  assert.strictEqual(swapped[1][2].tap, "KEY_B");
+  assert.strictEqual(swapped[1][2].hold, "KEY_LEFT_SHIFT");
+  assert.strictEqual(swapped[3][4].tap, "KEY_A");
+  assert.strictEqual(layer[1][2].tap, "KEY_A");
+  // Undo: der gespeicherte alte Stand ist unabhängig vom neuen und tauscht man erneut, kommt das Original zurück
+  const oldLayer = layer;
+  assert.strictEqual(JSON.stringify(api.swapLayerKeys(swapped, 1, 2, 3, 4)), JSON.stringify(oldLayer));
+  swapped[1][2].tap = "KEY_X";
+  assert.strictEqual(oldLayer[1][2].tap, "KEY_A");
+  assert.strictEqual(api.swapLayerKeys(layer, 1, 2, 1, 2), null);
+  assert.strictEqual(api.swapLayerKeys(layer, 6, 0, 0, 0), null);
+  assert.strictEqual(api.swapLayerKeys(layer, 0, 0, 0, 7), null);
+  assert.strictEqual(api.swapLayerKeys(null, 0, 0, 0, 1), null);
+});
+
+test("Ebene spiegeln: Modifier und Pfeile wechseln die Seite, Positionen werden gespiegelt", () => {
+  const R = api.SIDE_PROFILES.R, L = api.SIDE_PROFILES.L;
+  const layer = api.transparentLayer();
+  layer[2][0] = { label: "Shift", tap: "KEY_LEFT_SHIFT", hold: "NONE", dtap: "NONE" };
+  layer[2][5] = { label: "←", tap: "KEY_LEFT_ARROW", hold: "KEY_RIGHT_ALT", dtap: "NONE" };
+  layer[1][1] = { label: "Q", tap: "KEY_Q", hold: "NONE", dtap: "NONE" };
+  const out = api.mirrorLayerAcrossSides(layer, R, L);
+  assert.strictEqual(out[2][5].tap, "KEY_RIGHT_SHIFT");
+  assert.strictEqual(out[2][0].tap, "KEY_RIGHT_ARROW");
+  assert.strictEqual(out[2][0].hold, "KEY_LEFT_ALT");
+  assert.strictEqual(out[1][4].tap, "KEY_Q");
+  assert.strictEqual(layer[2][0].tap, "KEY_LEFT_SHIFT");
+  // Daumen: rechts Space (R5C3, 2U Mitte) ↔ links Del (R5C2, 2U Mitte); Enter (R5C2) ↔ Ctrl (R5C3)
+  layer[5][3] = { label: "Sp", tap: "KEY_SPACE", hold: "NONE", dtap: "NONE" };
+  layer[5][2] = { label: "En", tap: "KEY_RETURN", hold: "NONE", dtap: "NONE" };
+  const thumbs = api.mirrorLayerAcrossSides(layer, R, L);
+  assert.strictEqual(thumbs[5][2].tap, "KEY_SPACE");
+  assert.strictEqual(thumbs[5][3].tap, "KEY_RETURN");
+  // Rück-Spiegelung ergibt wieder die Ausgangstasten
+  const back = api.mirrorLayerAcrossSides(thumbs, L, R);
+  assert.strictEqual(back[2][0].tap, "KEY_LEFT_SHIFT");
+  assert.strictEqual(back[5][3].tap, "KEY_SPACE");
+  assert.strictEqual(api.mirrorLayerAcrossSides(layer, R, R), null);
+  assert.strictEqual(api.mirrorLayerAcrossSides(null, R, L), null);
+});
+
+test("Tasten tauschen: nur die beiden getauschten Zellen verschieben die Auswahl", () => {
+  const sel = { r: 3, c: 4, side: "R", isThumb: false };
+  assert.strictEqual(api.swappedSelectionPosition(sel, 1, 2, 3, 4).r, 1);
+  assert.strictEqual(api.swappedSelectionPosition(sel, 1, 2, 3, 4).c, 2);
+  const src = { r: 1, c: 2, side: "R", isThumb: false };
+  assert.strictEqual(api.swappedSelectionPosition(src, 1, 2, 3, 4).r, 3);
+  const other = { r: 0, c: 0, side: "R", isThumb: false };
+  assert.strictEqual(api.swappedSelectionPosition(other, 1, 2, 3, 4), other);
+  assert.strictEqual(api.swappedSelectionPosition(null, 1, 2, 3, 4), null);
+});
+
+test("Tasten tauschen: erneutes Tauschen auf der aktuellen Ebene erhält spätere Änderungen", () => {
+  const layer = api.transparentLayer();
+  layer[0][0] = { label: "A", tap: "KEY_A", hold: "NONE", dtap: "NONE" };
+  layer[0][1] = { label: "B", tap: "KEY_B", hold: "NONE", dtap: "NONE" };
+  const swapped = api.swapLayerKeys(layer, 0, 0, 0, 1);
+  swapped[2][2] = { label: "Z", tap: "KEY_Z", hold: "NONE", dtap: "NONE" };
+  const reverted = api.swapLayerKeys(swapped, 0, 0, 0, 1);
+  assert.strictEqual(reverted[0][0].tap, "KEY_A");
+  assert.strictEqual(reverted[0][1].tap, "KEY_B");
+  assert.strictEqual(reverted[2][2].tap, "KEY_Z");
+});
+
+test("Ebene spiegeln: eigenes Label und Tapping-Term bleiben, solange der Tap gleich bleibt", () => {
+  const R = api.SIDE_PROFILES.R, L = api.SIDE_PROFILES.L;
+  const layer = api.transparentLayer();
+  layer[1][1] = { label: "Mein Q", tap: "KEY_Q", hold: "KEY_LEFT_ALT", dtap: "NONE", tapTerm: 200 };
+  const out = api.mirrorLayerAcrossSides(layer, R, L);
+  assert.strictEqual(out[1][4].label, "Mein Q");
+  assert.strictEqual(out[1][4].hold, "KEY_RIGHT_ALT");
+  assert.strictEqual(out[1][4].tapTerm, 200);
+});
+
+test("Ebene spiegeln: Master-Aktionen entfallen auf der Hälfte ohne Master", () => {
+  const R = api.SIDE_PROFILES.R, L = api.SIDE_PROFILES.L;
+  const layer = api.transparentLayer();
+  layer[1][1] = { label: "H", tap: "HOST_1", hold: "DM_REC", dtap: "DM_PLAY" };
+  layer[1][2] = { label: "Q", tap: "KEY_Q", hold: "NONE", dtap: "NONE" };
+  const toLeft = api.mirrorLayerAcrossSides(layer, R, L);
+  assert.strictEqual(toLeft[1][4].tap, "NONE");
+  assert.strictEqual(toLeft[1][4].hold, "NONE");
+  assert.strictEqual(toLeft[1][4].dtap, "NONE");
+  assert.strictEqual(toLeft[1][3].tap, "KEY_Q");
+  // Zum Master bleiben sie erhalten
+  const left = api.transparentLayer();
+  left[1][4] = { label: "H", tap: "HOST_2", hold: "NONE", dtap: "NONE" };
+  assert.strictEqual(api.mirrorLayerAcrossSides(left, L, R)[1][1].tap, "HOST_2");
+});
+
+test("markPendingSync: nur ein Revert mit sideRevert bleibt für die nicht bearbeitete Hälfte erhalten", () => {
+  const src = read("app.js");
+  const start = src.indexOf("function markPendingSync(");
+  const end = src.indexOf("  let changeObj;", start);
+  assert.ok(start >= 0 && end > start);
+  const sandbox = { editSide: "R", store: [], synced: [], Date, Math };
+  vm.createContext(sandbox);
+  vm.runInContext(`${src.slice(start, end)}}
+    function pendingFor() { return store; }
+    function requestLiveSync(side) { synced.push(side); }`, sandbox);
+  const closure = () => {};
+  vm.runInContext("markPendingSync", sandbox)({ type: "layer_mirror", snapshot: true, sideRevert: true, revert: closure }, "L");
+  vm.runInContext("markPendingSync", sandbox)({ type: "key", revert: closure }, "L");
+  assert.strictEqual(sandbox.store.length, 2);
+  assert.strictEqual(sandbox.store[0].revert, closure);
+  assert.strictEqual(sandbox.store[1].revert, null);
+  assert.deepStrictEqual(Array.from(sandbox.synced), ["L", "L"]);
+});
+
+test("Ebene spiegeln: PAIR_n und MACRO_n entfallen, weil die Listen je Hälfte gelten", () => {
+  const R = api.SIDE_PROFILES.R, L = api.SIDE_PROFILES.L;
+  const layer = api.transparentLayer();
+  layer[1][1] = { label: "P", tap: "PAIR_0", hold: "MACRO_1", dtap: "NONE" };
+  const out = api.mirrorLayerAcrossSides(layer, R, L);
+  assert.strictEqual(out[1][4].tap, "NONE");
+  assert.strictEqual(out[1][4].hold, "NONE");
+});
+
+test("Tasten ziehen: nur eine gültige Nutzlast löst einen Tausch aus", () => {
+  assert.strictEqual(api.parseKeyDragPayload("R:2:3").side, "R");
+  assert.strictEqual(api.parseKeyDragPayload("R:2:3").c, 3);
+  assert.strictEqual(api.parseKeyDragPayload("R::"), null);
+  assert.strictEqual(api.parseKeyDragPayload("hallo"), null);
+  assert.strictEqual(api.parseKeyDragPayload(""), null);
+  assert.strictEqual(api.parseKeyDragPayload(null), null);
+});
+
+test("Editor: Revert von Tausch und Spiegeln stellt den alten Stand wieder her", () => {
+  const src = read("js/editor.js");
+  const body = src.slice(src.indexOf("function mirrorActiveLayerToOtherSide"), src.indexOf("function updateLayerNameInput"));
+  assert.ok(body.includes("swapKeysByDrag"));
+  const R = api.SIDE_PROFILES.R, L = api.SIDE_PROFILES.L;
+  const mk = tap => {
+    const layers = Array.from({ length: 8 }, () => api.transparentLayer());
+    layers[0][1][1] = { label: "Q", tap, hold: "NONE", dtap: "NONE" };
+    return layers;
+  };
+  const configs = { R: { layers: mk("KEY_LEFT_SHIFT"), layerNames: [] }, L: { layers: mk("KEY_A"), layerNames: [] } };
+  const changes = [];
+  const box = {
+    Dactyl: { SIDE_IDS: ["L", "R"] }, SIDE_PROFILES: { R, L }, editSide: "R", activeLayerIndex: 0, selectedKey: null,
+    DEFAULT_LAYER_NAMES: [], currentConfig: configs.R,
+    configFor: s => configs[s], setConfigFor: (s, c) => { configs[s] = c; if (s === "R") box.currentConfig = c; },
+    mirrorLayerAcrossSides: api.mirrorLayerAcrossSides, swapLayerKeys: api.swapLayerKeys, transparentLayer: api.transparentLayer,
+    swappedSelectionPosition: api.swappedSelectionPosition,
+    confirm: () => true, showToast() {}, saveConfigToServer() {}, renderMatrix() {}, updateInspector() {},
+    markPendingSync: change => changes.push(change), JSON
+  };
+  vm.createContext(box);
+  vm.runInContext(body, box);
+  // Spiegeln R -> L ersetzt die Ebene links; der Revert bringt die alte linke Ebene zurück
+  const oldLeft = configs.L.layers;
+  vm.runInContext("mirrorActiveLayerToOtherSide()", box);
+  assert.strictEqual(configs.L.layers[0][1][4].tap, "KEY_RIGHT_SHIFT");
+  assert.strictEqual(changes[0].type, "layer_mirror");
+  changes[0].revert();
+  assert.strictEqual(configs.L.layers, oldLeft);
+  // Tauschen: Revert tauscht erneut und erhält spätere Änderungen
+  configs.R.layers[0][2][2] = { label: "A", tap: "KEY_A", hold: "NONE", dtap: "NONE" };
+  vm.runInContext("swapKeysByDrag(1, 1, 2, 2)", box);
+  assert.strictEqual(box.currentConfig.layers[0][2][2].tap, "KEY_LEFT_SHIFT");
+  box.currentConfig.layers[0][3][3] = { label: "Z", tap: "KEY_Z", hold: "NONE", dtap: "NONE" };
+  changes[1].revert();
+  assert.strictEqual(box.currentConfig.layers[0][1][1].tap, "KEY_LEFT_SHIFT");
+  assert.strictEqual(box.currentConfig.layers[0][2][2].tap, "KEY_A");
+  assert.strictEqual(box.currentConfig.layers[0][3][3].tap, "KEY_Z");
+});
+
+test("Ebene spiegeln: fehlende Tasten werden übersprungen", () => {
+  const R = api.SIDE_PROFILES.R, L = api.SIDE_PROFILES.L;
+  const layer = api.transparentLayer();
+  // Rechts fehlt R4C0; gespiegelt wäre das links R4C5 (fehlt dort ebenfalls)
+  layer[4][0] = { label: "X", tap: "KEY_X", hold: "NONE", dtap: "NONE" };
+  // Links fehlt R5C0: Rückrichtung darf dort nichts eintragen
+  const toLeft = api.mirrorLayerAcrossSides(layer, R, L);
+  assert.ok(toLeft.every((row, r) => row.every((k, c) => !L.absentKeys.includes(`${r}_${c}`) || k.tap === "NONE")));
+  const full = api.transparentLayer();
+  for (let r = 0; r < 6; r++) for (let c = 0; c < 7; c++) full[r][c] = { label: "K", tap: "KEY_K", hold: "NONE", dtap: "NONE" };
+  const mirroredLeft = api.mirrorLayerAcrossSides(full, R, L);
+  for (const key of L.absentKeys) {
+    const [r, c] = key.split("_").map(Number);
+    assert.strictEqual(mirroredLeft[r][c].tap, "NONE", `fehlende Taste ${key} bleibt leer`);
+  }
+  const mirroredRight = api.mirrorLayerAcrossSides(full, L, R);
+  for (const key of R.absentKeys) {
+    const [r, c] = key.split("_").map(Number);
+    assert.strictEqual(mirroredRight[r][c].tap, "NONE", `fehlende Taste ${key} bleibt leer`);
+  }
 });
 
 test("Ebenen-Werkzeug: ungültige Aufrufe ändern nichts", () => {

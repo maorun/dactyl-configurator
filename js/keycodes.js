@@ -73,6 +73,7 @@ const KEYCODES = [
     { code: "OSM_RALT", label: "One-Shot Alt/Option rechts (nächste Taste)", char: "" },
     { code: "OSM_RGUI", label: "One-Shot Cmd/Win rechts (nächste Taste)", char: "" },
     { code: "CAPS_WORD", label: "Caps Word (ein Wort in Großbuchstaben)", char: "" },
+    { code: "SENTENCE_CASE", label: "Satzanfang groß (an/aus)", char: "" },
     { code: "REPEAT", label: "Repeat (letzte Aktion wiederholen)", char: "" },
     { code: "ALT_REPEAT", label: "Alt Repeat (Gegenteil der letzten Aktion)", char: "" },
     { code: "DM_REC", label: "Makro aufnehmen (Start/Stopp, nur Master)", char: "" },
@@ -294,6 +295,7 @@ const ACTION_TO_NUMERIC = {
   "HOST_2": 0x189,
   "HOST_3": 0x18A,
   "SWAP_HANDS": 0x18B,
+  "SENTENCE_CASE": 0x18C,
 
   // Mouse Actions (0x130..0x13A)
   "MOUSE_LEFT": 0x130,
@@ -329,7 +331,7 @@ const UMLAUT_LABELS = {
 const ONE_SHOT_LABELS = {
   OSM_LCTRL: "OS Ctrl", OSM_LSHIFT: "OS Shift", OSM_LALT: "OS Alt", OSM_LGUI: "OS Cmd",
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
-  CAPS_WORD: "CapsWd", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
+  CAPS_WORD: "CapsWd", SENTENCE_CASE: "Sentence", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
   DM_REC: "DM Rec", DM_PLAY: "DM Play", LEADER: "Leader", KEY_LOCK: "KeyLock",
   HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3", SWAP_HANDS: "Swap"
 };

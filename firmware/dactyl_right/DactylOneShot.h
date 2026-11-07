@@ -17,6 +17,10 @@
  * - Ein Druck, während Alt im Report ist (Tottaste eines Umlauts, Tastenpaar mit Alt), verbraucht nichts und
  *   ändert Caps Word nicht. So wird bei vorgemerktem Shift aus der Umlaut-Folge Alt + u, 'a' ein Ä.
  *
+ * - Satzanfang groß (SENTENCE_CASE): nach '.', '!' oder '?' und mindestens einer Leertaste bekommt der nächste
+ *   Kleinbuchstabe Umschalt. Jede andere Taste (Ziffer, Navigation, Backspace, Großbuchstabe) bricht die Vormerkung ab.
+ *   Modifier ändern nichts. Mit Umschalt zählen '/' und '1' als '?' und '!', '.' dagegen nicht ('>'). Mit Strg oder Cmd (Kürzel) bekommt keine Taste Umschalt und die Vormerkung fällt weg. Die Taste SENTENCE_CASE schaltet um.
+ *
  * Keine Arduino-Abhängigkeit (Host-Tests: firmware/tests/test_split_hid.cpp).
  */
 #include <stdint.h>
@@ -30,11 +34,15 @@ struct OneShotState {
   uint8_t used;    // gehaltene Bits, während deren Halten eine andere Taste kam (kein Vormerken beim Loslassen)
   uint8_t cancel;  // beim Drücken war das Bit vorgemerkt: Loslassen merkt es nicht erneut vor
   bool capsWord;
+  bool sentenceCase;
+  uint8_t sentenceStage;  // 0 = nichts, 1 = Satzzeichen gesehen, 2 = danach Leertaste(n) gesehen
 };
 
 inline void oneShotReset(OneShotState &s) {
   s.armed = s.used = s.cancel = 0;
   s.capsWord = false;
+  s.sentenceCase = false;
+  s.sentenceStage = 0;
 }
 
 inline void oneShotKeyDown(OneShotState &s, uint8_t mask) {
@@ -73,12 +81,40 @@ inline uint8_t oneShotModsForInput(OneShotState &s, uint8_t held, bool altInRepo
   return mods;
 }
 
-inline uint8_t oneShotModsForKey(OneShotState &s, uint8_t held, uint8_t code, bool altInReport) {
+inline void sentenceCaseToggle(OneShotState &s) {
+  s.sentenceCase = !s.sentenceCase;
+  s.sentenceStage = 0;
+}
+
+// Liefert true, wenn der Buchstabe nach einem Satzende Umschalt bekommt. shifted: Umschalt ist für diesen Druck
+// aktiv (physische oder One-Shot-Taste); dann zählen '/' und '1' als '?' und '!' (Tastenbelegung "U.S.").
+inline bool sentenceCaseStep(OneShotState &s, uint8_t code, bool shifted, bool shortcut) {
+  if (!s.sentenceCase) return false;
+  bool shift = false;
+  if (shortcut) s.sentenceStage = 0;  // Strg oder Cmd: ein Kürzel, kein Text
+  else if ((code == '.' && !shifted) || code == '!' || code == '?' || (shifted && (code == '/' || code == '1'))) s.sentenceStage = 1;
+  else if (code == ' ') s.sentenceStage = s.sentenceStage ? 2 : 0;
+  else {
+    shift = s.sentenceStage == 2 && code >= 'a' && code <= 'z';
+    s.sentenceStage = 0;
+  }
+  return shift;
+}
+
+// Medien- und Maustasten gehören nicht zum Satz: sie nehmen die Vormerkung zurück
+inline void sentenceCaseCancel(OneShotState &s) { s.sentenceStage = 0; }
+
+inline uint8_t oneShotModsForKey(OneShotState &s, uint8_t held, uint8_t code, bool altInReport, bool shiftInReport = false,
+                                  bool ctrlGuiInReport = false) {
   if (isModifierCode(code) || altInReport) return 0;
   uint8_t mods = oneShotModsForInput(s, held, false);
   if (s.capsWord) {
     if (capsWordShifts(code)) mods |= ONE_SHOT_SHIFT_BIT;
     else if (!capsWordContinues(code)) s.capsWord = false;
   }
+  const uint8_t ctrlGui = (uint8_t)((1u << (KEY_LEFT_CTRL - KEY_LEFT_CTRL)) | (1u << (KEY_LEFT_GUI - KEY_LEFT_CTRL)) |
+                                    (1u << (KEY_RIGHT_CTRL - KEY_LEFT_CTRL)) | (1u << (KEY_RIGHT_GUI - KEY_LEFT_CTRL)));
+  bool shortcut = ctrlGuiInReport || (mods & ctrlGui) != 0;
+  if (sentenceCaseStep(s, code, shiftInReport || (mods & ONE_SHOT_SHIFT_BIT), shortcut)) mods |= ONE_SHOT_SHIFT_BIT;
   return mods;
 }

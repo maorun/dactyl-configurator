@@ -218,7 +218,7 @@ TEST(test_scroll_is_not_retried) {
   // Alle anderen Ops bleiben wiederholbar (idempotent auf dem Master)
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
     bool expected = op != SPLIT_OP_MOUSE_SCROLL && op != SPLIT_OP_MOUSE_MOVE && op != SPLIT_OP_KEY_EVENT &&
-                    op != SPLIT_OP_CAPS_WORD_TOGGLE;
+                    op != SPLIT_OP_CAPS_WORD_TOGGLE && op != SPLIT_OP_SENTENCE_CASE_TOGGLE;
     assert(splitEventRetryable(makeSplitHidEvent(op, 1)) == expected);
   }
 }

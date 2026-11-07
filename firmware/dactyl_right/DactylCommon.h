@@ -118,6 +118,9 @@
 // Swap hands: Halten spiegelt die Tastensuche dieser Hälfte (Fingerspalte c -> FINGER_COLS - 1 - c, Daumentasten gespiegelt),
 // Tippen merkt den Wechsel für den nächsten Tastendruck vor, Doppel-Tippen rastet ihn bis zum nächsten Tippen ein
 #define ACT_SWAP_HANDS           0x18B
+// Satzanfang groß: schaltet um; solange aktiv, bekommt der erste Kleinbuchstabe nach '.', '!' oder '?' und Leertaste(n)
+// Umschalt (DactylOneShot.h, Zustand auf dem Master für beide Hälften)
+#define ACT_SENTENCE_CASE        0x18C
 
 #define NUM_LAYERS 8
 

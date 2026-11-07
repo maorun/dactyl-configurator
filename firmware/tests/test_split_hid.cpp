@@ -31,6 +31,7 @@ struct RecordingSink : SplitHidSink {
   void leftOneShotPress(uint8_t m) override { log.push_back("op" + std::to_string(m)); }
   void leftOneShotRelease(uint8_t m, bool arm) override { log.push_back((arm ? "or" : "ox") + std::to_string(m)); }
   void leftCapsWordToggle() override { log.push_back("cw"); }
+  void leftSentenceCaseToggle() override { log.push_back("sc"); }
 };
 
 static SplitLeftHeld held;
@@ -89,6 +90,7 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_ONE_SHOT_PRESS, 0x02),
     makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 0xFF),
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE),
+    makeSplitHidEvent(SPLIT_OP_SENTENCE_CASE_TOGGLE),
     makeSplitLayerEvent(0x02, 0x08, false),
     makeSplitLayerEvent(0x02, 0x08, true, 1), // links setzt nach eigener Toggle-Änderung
     makeSplitHidEvent(SPLIT_OP_FW_VERSION, 0xFFFF),
@@ -144,6 +146,8 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 2, 1),
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE, 1),
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE, 0, 1),
+    makeSplitHidEvent(SPLIT_OP_SENTENCE_CASE_TOGGLE, 1),
+    makeSplitHidEvent(SPLIT_OP_SENTENCE_CASE_TOGGLE, 0, 1),
     makeSplitHidEvent(SPLIT_OP_KEY_LOCK, 1),
     makeSplitHidEvent(SPLIT_OP_KEY_LOCK, 0, 1),
     makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a', 2),       // arg nur 0 oder 1
@@ -446,7 +450,7 @@ TEST(test_left_release_keeps_key_held_by_right) {
 
 TEST(test_media_and_mouse_arbitration) {
   Kbd k;
-  const uint8_t vol[2] = {0x20, 0};
+  const uint8_t vol[3] = {0x20, 0, 0};
   left(k, SPLIT_OP_MEDIA_PRESS, 0x0020);
   k.press(vol);
   k.release(vol);                     // links hält die Media-Taste
@@ -1614,8 +1618,155 @@ TEST(test_caps_word_toggle_off_and_modifier_keeps_it) {
   assert((k.log == Log{"P97", "R97"}));
 }
 
+TEST(test_sentence_case_shifts_letter_after_sentence_end) {
+  Kbd k;
+  left(k, SPLIT_OP_SENTENCE_CASE_TOGGLE);
+  assert(k.oneShot.sentenceCase);
+  k.write((uint8_t)'a');
+  left(k, SPLIT_OP_KEY_WRITE, '.'); // linke Hälfte
+  k.write((uint8_t)' ');
+  k.log.clear();
+  left(k, SPLIT_OP_KEY_WRITE, 'b');
+  assert((k.log == Log{"BEGIN", "P129", "P98", "END", "BEGIN", "R129", "END", "R98"}));
+  k.log.clear();
+  k.write((uint8_t)'c'); // nur ein Buchstabe
+  assert((k.log == Log{"P99", "R99"}));
+}
+
+TEST(test_sentence_case_accepts_all_enders_and_several_spaces) {
+  for (char e : {'.', '!', '?'}) {
+    Kbd k;
+    k.sentenceCaseToggle();
+    k.write((uint8_t)e);
+    k.write((uint8_t)' ');
+    k.write((uint8_t)' ');
+    k.log.clear();
+    k.write((uint8_t)'x');
+    assert((k.log == Log{"BEGIN", "P129", "P120", "END", "BEGIN", "R129", "END", "R120"}));
+  }
+}
+
+TEST(test_sentence_case_needs_space_and_toggles_off) {
+  Kbd k;
+  k.sentenceCaseToggle();
+  k.write((uint8_t)'.');
+  k.log.clear();
+  k.write((uint8_t)'b'); // ohne Leertaste
+  assert((k.log == Log{"P98", "R98"}));
+  k.write((uint8_t)' ');  // Leertaste ohne Satzende
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"P98", "R98"}));
+  k.write((uint8_t)'.');
+  k.write((uint8_t)' ');
+  k.sentenceCaseToggle(); // aus
+  assert(!k.oneShot.sentenceCase);
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"P98", "R98"}));
+}
+
+TEST(test_sentence_case_is_cancelled_by_digit_arrow_backspace) {
+  const uint8_t cancel[] = {(uint8_t)'1', (uint8_t)KEY_LEFT_ARROW, (uint8_t)KEY_BACKSPACE, (uint8_t)KEY_RETURN, (uint8_t)'A'};
+  for (uint8_t c : cancel) {
+    Kbd k;
+    k.sentenceCaseToggle();
+    k.write((uint8_t)'?');
+    k.write((uint8_t)' ');
+    k.write(c);
+    k.log.clear();
+    k.write((uint8_t)'b');
+    assert((k.log == Log{"P98", "R98"}));
+  }
+}
+
+TEST(test_sentence_case_ignores_modifiers_and_host_loss_keeps_the_mode) {
+  Kbd k;
+  k.sentenceCaseToggle();
+  k.write((uint8_t)'.');
+  k.write((uint8_t)' ');
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.release((uint8_t)KEY_LEFT_SHIFT);
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"BEGIN", "P129", "P98", "END", "BEGIN", "R129", "END", "R98"}));
+  k.write((uint8_t)'.');
+  k.write((uint8_t)' ');
+  k.splitResetForHostLoss(); // der Modus bleibt, die Vormerkung fällt weg
+  assert(k.oneShot.sentenceCase && k.oneShot.sentenceStage == 0);
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"P98", "R98"}));
+}
+
+TEST(test_sentence_case_skips_shortcuts_and_shifted_period) {
+  Kbd k;
+  k.sentenceCaseToggle();
+  k.write((uint8_t)'.');
+  k.write((uint8_t)' ');
+  k.press((uint8_t)KEY_LEFT_GUI);
+  k.log.clear();
+  k.write((uint8_t)'a'); // Cmd+A bleibt Cmd+A
+  assert((k.log == Log{"P97", "R97"}));
+  k.release((uint8_t)KEY_LEFT_GUI);
+  k.log.clear();
+  k.write((uint8_t)'b'); // die Vormerkung ist weg
+  assert((k.log == Log{"P98", "R98"}));
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.write((uint8_t)'.'); // '>' ist kein Satzende
+  k.release((uint8_t)KEY_LEFT_SHIFT);
+  k.write((uint8_t)' ');
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"P98", "R98"}));
+}
+
+TEST(test_sentence_case_is_cancelled_by_media_and_mouse) {
+  Kbd k;
+  k.sentenceCaseToggle();
+  k.write((uint8_t)'.');
+  k.write((uint8_t)' ');
+  k.mouseClick(1);
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"P98", "R98"}));
+  k.write((uint8_t)'.');
+  k.write((uint8_t)' ');
+  MediaKeyReport vol = {0x04, 0};
+  k.write(vol);
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"P98", "R98"}));
+}
+
+TEST(test_sentence_case_counts_shifted_slash_and_one_as_sentence_end) {
+  Kbd k;
+  k.sentenceCaseToggle();
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.write((uint8_t)'/'); // Umschalt + '/' = '?'
+  k.release((uint8_t)KEY_LEFT_SHIFT);
+  k.write((uint8_t)' ');
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"BEGIN", "P129", "P98", "END", "BEGIN", "R129", "END", "R98"}));
+  k.write((uint8_t)' ');
+  k.write((uint8_t)'/'); // ohne Umschalt kein Satzende
+  k.write((uint8_t)' ');
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"P98", "R98"}));
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.write((uint8_t)'1'); // Umschalt + '1' = '!'
+  k.release((uint8_t)KEY_LEFT_SHIFT);
+  k.write((uint8_t)' ');
+  k.log.clear();
+  k.write((uint8_t)'b');
+  assert((k.log == Log{"BEGIN", "P129", "P98", "END", "BEGIN", "R129", "END", "R98"}));
+}
+
 TEST(test_caps_word_toggle_is_not_retried) {
   assert(!splitEventRetryable(makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE)));
+  assert(!splitEventRetryable(makeSplitHidEvent(SPLIT_OP_SENTENCE_CASE_TOGGLE)));
   assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_ONE_SHOT_PRESS, 2)));
   assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 2)));
 }
@@ -1890,7 +2041,7 @@ TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
   assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25);
-  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_COUNT == 30);
+  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_SENTENCE_CASE_TOGGLE == 30 && SPLIT_OP_COUNT == 31);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -1936,7 +2087,7 @@ TEST(test_process_rx_skips_before_left_press_without_host) {
 TEST(test_press_ops_for_before_left_press) {
   const uint8_t press[] = {SPLIT_OP_KEY_PRESS, SPLIT_OP_KEY_WRITE, SPLIT_OP_MEDIA_PRESS, SPLIT_OP_MEDIA_WRITE,
                            SPLIT_OP_MOUSE_PRESS, SPLIT_OP_MOUSE_CLICK, SPLIT_OP_MOUSE_SCROLL,
-                           SPLIT_OP_ONE_SHOT_PRESS, SPLIT_OP_CAPS_WORD_TOGGLE};
+                           SPLIT_OP_ONE_SHOT_PRESS, SPLIT_OP_CAPS_WORD_TOGGLE, SPLIT_OP_SENTENCE_CASE_TOGGLE};
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
     bool expected = false;
     for (uint8_t p : press) if (p == op) expected = true;

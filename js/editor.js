@@ -447,6 +447,7 @@ const ON_SCREEN_KEYBOARD_TABS = {
       ],
       [
         { code: "CAPS_WORD", label: "Caps Word", width: 2 },
+        { code: "SENTENCE_CASE", label: "Satzanfang", width: 2 },
         { code: "REPEAT", label: "Repeat", width: 2 },
         { code: "ALT_REPEAT", label: "Alt Repeat", width: 2 },
         { code: "DM_REC", label: "Makro REC", width: 2 },

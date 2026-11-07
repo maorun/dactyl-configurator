@@ -157,6 +157,13 @@ Rules for this file:
 - Every slot, slot 1 included, now uses a static random address. The bond of the old controller address does not match it: pair the keyboard once again on each host after the update ("Dieses Gerät ignorieren..." in macOS first).
 - `DACTYL_FW_VERSION` is 30. Flash both halves.
 
+### Sentence case (`ACT_SENTENCE_CASE`, `DactylOneShot.h`)
+
+- The key `SENTENCE_CASE` (`0x18C`) toggles the mode. While it is on, a `.`, `!` or `?` followed by one or more `Space` presses arms a Shift for the next lowercase letter (`a`..`z`). The letter gets Shift in the same report, then the arming ends. The state (`OneShotState.sentenceCase`, `sentenceStage`) lives on the master and counts the keys of both halves (`sentenceCaseStep`).
+- Any other key before the letter ends the arming: digits, navigation keys, Backspace, Enter and capital letters. A `Space` without a sentence end does nothing. Modifiers do not change the state (a sentence end typed with Shift is `Shift` + `/` or `1`). A press while Alt is in the report (umlaut dead key) is ignored like for Caps Word.
+- The left half sends `SPLIT_OP_SENTENCE_CASE_TOGGLE` (30, no values); it is never retried (a duplicate would undo it). Media keys and mouse buttons cancel the armed Shift too. An Alt chord (for example Option+Left) leaves it unchanged, because the umlaut dead key uses Alt. The mode lives in RAM only: a reboot or deep sleep switches it off. A host loss keeps the mode and drops only the armed Shift (no indicator shows the mode; press the key again to check). With Shift held, `/` and `1` count as `?` and `!`. The key is a combo candidate like `CAPS_WORD` (buffered), works with `KEY_PRESS` combos and not with `MODIFIER_HOLD`, and `REPEAT` repeats it.
+- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 33; flash both halves.
+
 ### Key lock (`ACT_KEY_LOCK`, `DactylKeyLock.h`)
 
 - `ACT_KEY_LOCK` (`0x16F`, app name `KEY_LOCK`, keycap label `KeyLock`) arms the lock. The next key press or mouse button press of either half stays held after the physical release of the key. A second press of the same input releases it. Use it for a long drag with a mouse button, a held `Shift` for a selection or a held game key.

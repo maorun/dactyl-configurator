@@ -40,6 +40,7 @@
 
     // Löst mit true (OK), false (ERR oder verworfen) oder null (Timeout) auf.
     // unknownOk: "ERR UNKNOWN <cmd>" (Firmware kennt den Befehl nicht) löst mit "unknown" statt false auf.
+    // unknownOk "args": auch "ERR ARGS <cmd>" (Firmware kennt den Wert nicht, z. B. einen neuen Auto-Shift-Modus) löst so auf.
     function wait(okPrefix, timeoutMs = 2500, side = null, unknownOk = false) {
       return new Promise((resolve) => {
         const entry = { okPrefix, resolve, timer: null, side, unknownOk };
@@ -65,7 +66,8 @@
         if (matches) {
           t.clear(entry.timer);
           pending.splice(i, 1);
-          entry.resolve(isOk ? true : (entry.unknownOk && line.startsWith("ERR UNKNOWN ") ? "unknown" : false));
+          const unknownLine = line.startsWith("ERR UNKNOWN ") || (entry.unknownOk === "args" && line.startsWith("ERR ARGS "));
+          entry.resolve(isOk ? true : (entry.unknownOk && unknownLine ? "unknown" : false));
           return;
         }
       }

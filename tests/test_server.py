@@ -156,7 +156,9 @@ class TestServerAndCodegen(unittest.TestCase):
         self.assertIn("uint16_t autoShiftMs = 220;", out)
         self.assertIn("uint16_t autoShiftMs = 50;", server.generate_settings_cpp({"autoShiftMs": 50}))
         self.assertIn("uint16_t autoShiftMs = 500;", server.generate_settings_cpp({"autoShiftMs": 500}))
-        for bad in ({"autoShift": 2}, {"autoShift": -1}, {"autoShiftMs": 49}, {"autoShiftMs": 501}):
+        for mode in (2, 3, 4):
+            self.assertIn(f"uint8_t autoShift = {mode};", server.generate_settings_cpp({"autoShift": mode}))
+        for bad in ({"autoShift": 5}, {"autoShift": -1}, {"autoShiftMs": 49}, {"autoShiftMs": 501}):
             with self.assertRaises(ValueError):
                 server.generate_settings_cpp(bad)
         self.assertIn("uint8_t holdTapMode = 1;", server.generate_settings_cpp({"holdTapMode": 1}))

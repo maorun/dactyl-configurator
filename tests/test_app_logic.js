@@ -207,7 +207,8 @@ test("Config-Normalisierung: Namen, Einstellungen und Zellen werden bereinigt", 
   assert.strictEqual(n.settings.autoShiftMs, 175);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: 1, autoShiftMs: 220 } }, R).settings.autoShift, 1);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: 1, autoShiftMs: 220 } }, R).settings.autoShiftMs, 220);
-  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: 5 } }, R).settings.autoShift, 1);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: 5 } }, R).settings.autoShift, 4);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: 3 } }, R).settings.autoShift, 3);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShift: "x", autoShiftMs: "x" } }, R).settings.autoShift, 0);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShiftMs: 10 } }, R).settings.autoShiftMs, 50);
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { autoShiftMs: 9999 } }, R).settings.autoShiftMs, 500);
@@ -2776,10 +2777,10 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.build({ capsLed: 1 }, R)[11].cmd, "SET_CAPS_LED 1");
   // Die linke Hälfte hat keinen Host: kein Befehl
   assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 16);
-  // Auto Shift: Schalter 0/1, Zeitlimit 50..500 (Standard 175); beide Befehle sind optional (ältere Firmware)
+  // Auto Shift: Modus 0..4, Zeitlimit 50..500 (Standard 175); beide Befehle sind optional (ältere Firmware)
   const asCmd = (c, a) => c.find(x => x.ack === a);
   assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 0");
-  assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").optional, true);
+  assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").optional, "args");
   assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT_TERM").cmd, "SET_AUTO_SHIFT_TERM 175");
   assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT_TERM").optional, true);
   assert.strictEqual(asCmd(cmds, "SET_RETRO_TAP").cmd, "SET_RETRO_TAP 0");
@@ -2787,7 +2788,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(asCmd(ctx.build({ retroTap: 9 }, R), "SET_RETRO_TAP").cmd, "SET_RETRO_TAP 1");
   assert.strictEqual(asCmd(cmds, "SET_RETRO_TAP").optional, true);
   assert.strictEqual(asCmd(ctx.build({ autoShift: 1 }, R), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 1");
-  assert.strictEqual(asCmd(ctx.build({ autoShift: 7 }, L), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 1");
+  assert.strictEqual(asCmd(ctx.build({ autoShift: 7 }, L), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 4");
+  assert.strictEqual(asCmd(ctx.build({ autoShift: 3 }, R), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 3");
   assert.strictEqual(asCmd(ctx.build({ autoShift: -2 }, R), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 0");
   assert.strictEqual(asCmd(ctx.build({ autoShiftMs: 220 }, R), "SET_AUTO_SHIFT_TERM").cmd, "SET_AUTO_SHIFT_TERM 220");
   assert.strictEqual(asCmd(ctx.build({ autoShiftMs: 5 }, R), "SET_AUTO_SHIFT_TERM").cmd, "SET_AUTO_SHIFT_TERM 50");
@@ -2866,6 +2868,24 @@ asyncTests.push(["Sync: Firmware ohne SET_TAPPING_TERM bricht den Sync nicht ab"
   await strict.w.write();
   assert.ok(!strict.sent.some(c => c.startsWith("SET_K ")));
   assert.ok(strict.toasts.some(t => t.includes("Fehler beim Übertragen")));
+}]);
+
+asyncTests.push(["Sync: Firmware vor Version 36 lehnt einen neuen Auto-Shift-Modus mit ERR ARGS ab, der Sync läuft weiter", async () => {
+  const { w, toasts, sent } = fullSyncHarness(cmd =>
+    cmd.startsWith("SET_AUTO_SHIFT ") ? `ERR ARGS ${cmd}` : okReply(cmd));
+  await w.write();
+  assert.ok(sent.some(c => c.startsWith("SET_AUTO_SHIFT ")));
+  assert.ok(sent.some(c => c.startsWith("SET_K ")));
+  assert.ok(toasts.some(t => t.includes("SET_AUTO_SHIFT") && t.includes("flashen")));
+  assert.ok(toasts.some(t => t.includes("Vollständige Konfiguration")));
+}]);
+
+asyncTests.push(["Sync: ERR ARGS bricht den Sync bei einem Befehl ohne args-Toleranz weiter ab", async () => {
+  const { w, toasts, sent } = fullSyncHarness(cmd =>
+    cmd.startsWith("SET_AUTO_SHIFT_TERM") ? `ERR ARGS ${cmd}` : okReply(cmd));
+  await w.write();
+  assert.ok(!sent.some(c => c.startsWith("SET_K ")));
+  assert.ok(toasts.some(t => t.includes("Fehler beim Übertragen")));
 }]);
 
 asyncTests.push(["Sync: Firmware ohne SET_TRI_LAYER bricht den Sync nicht ab", async () => {

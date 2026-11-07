@@ -414,7 +414,7 @@ SETTINGS_RANGES = {
     "requirePriorIdleMs": (0, 500, 0),
     "chordalHold": (0, 1, 0),
     "retroTap": (0, 1, 0),
-    "autoShift": (0, 1, 0),
+    "autoShift": (0, 4, 0),
     "autoShiftMs": (50, 500, 175),
     "capsLed": (0, 1, 0),
     "standbyTimeoutMinutes": (0, 120, 5),

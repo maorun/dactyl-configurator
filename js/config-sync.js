@@ -83,6 +83,7 @@ async function writeConfigToESP32(options = {}) {
 
     // Sendet einen Befehl und wartet auf "OK <prefix>" der Firmware (ERR oder Timeout = Fehler).
     // optional: ältere Firmware kennt den Befehl nicht ("ERR UNKNOWN"); der Sync läuft dann ohne ihn weiter.
+    // optional "args": auch "ERR ARGS" (ältere Firmware kennt den Wert nicht) lässt den Sync weiterlaufen.
     const sendConfirmed = async (cmd, okPrefix, timeoutMs = 3000, optional = false, quietUnknown = false) => {
       const ack = waitForAck(okPrefix, timeoutMs, side, optional);
       try {
@@ -94,7 +95,8 @@ async function writeConfigToESP32(options = {}) {
       const result = await ack;
       if (result === "unknown") {
         if (quietUnknown) return "unknown";
-        showToast(`⚠️ Die Firmware der ${profile.label} kennt ${okPrefix} nicht. Bitte neu flashen, um die Einstellung zu übernehmen.`, 7000);
+        const what = okPrefix === "SET_AUTO_SHIFT" ? "den gewählten Auto-Shift-Modus bei SET_AUTO_SHIFT" : okPrefix;
+        showToast(`⚠️ Die Firmware der ${profile.label} kennt ${what} nicht. Bitte neu flashen, um die Einstellung zu übernehmen.`, 7000);
         return "unknown";
       }
       if (result !== true) throw new Error(`Tastatur hat ${okPrefix} nicht bestätigt`);
@@ -337,6 +339,7 @@ async function backupConfigOnServer(side, cfg) {
 
 // Einstellungs-Befehle des vollen Syncs, in Sende-Reihenfolge. optional: ältere Firmware ohne diesen Befehl
 // antwortet "ERR UNKNOWN"; der Sync läuft dann weiter (SET_TAPPING_TERM kam nach den anderen Einstellungen).
+// optional "args": auch "ERR ARGS" einer älteren Firmware (kennt den Wert nicht, z. B. Auto-Shift-Modus 2..4) wird so behandelt.
 function buildSettingCommands(s, profile) {
   return [
     { cmd: `SET_STANDBY ${clampSetting("standbyTimeoutMinutes", s.standbyTimeoutMinutes ?? 5)}`, ack: "SET_STANDBY" },
@@ -353,7 +356,7 @@ function buildSettingCommands(s, profile) {
     // Caps-Lock-LED: nur die Hälfte mit dem Host-Dienst (Master) kennt den Befehl
     ...(profile.master ? [{ cmd: `SET_CAPS_LED ${clampSetting("capsLed", s.capsLed ?? 0)}`, ack: "SET_CAPS_LED", optional: true }] : []),
     { cmd: `SET_LEADER_TIMEOUT ${clampSetting("leaderTimeoutMs", s.leaderTimeoutMs ?? 1000)}`, ack: "SET_LEADER_TIMEOUT", optional: true },
-    { cmd: `SET_AUTO_SHIFT ${clampSetting("autoShift", s.autoShift ?? 0)}`, ack: "SET_AUTO_SHIFT", optional: true },
+    { cmd: `SET_AUTO_SHIFT ${clampSetting("autoShift", s.autoShift ?? 0)}`, ack: "SET_AUTO_SHIFT", optional: "args" },
     { cmd: `SET_AUTO_SHIFT_TERM ${clampSetting("autoShiftMs", s.autoShiftMs ?? 175)}`, ack: "SET_AUTO_SHIFT_TERM", optional: true },
     { cmd: `SET_RETRO_TAP ${clampSetting("retroTap", s.retroTap ?? 0)}`, ack: "SET_RETRO_TAP", optional: true },
     { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true }

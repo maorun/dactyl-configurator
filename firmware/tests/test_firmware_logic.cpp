@@ -8515,6 +8515,56 @@ TEST(test_auto_shift_short_tap_sends_plain_character) {
   assert(bleKeyboard.pressedKeys.empty());
 }
 
+// Auto Shift Zeichenklassen: Rückgabe = erstes gesendetes Zeichen nach langem Halten (0 = nichts)
+static uint16_t autoShiftHeldChar(uint8_t mode, uint16_t key) {
+  resetState();
+  autoShift = mode;
+  KEYMAP[0][2][1] = key;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1200); processDeferredKeys(1200);
+  uint16_t sent = bleKeyboard.pressHistory.empty() ? 0 : bleKeyboard.pressHistory[0];
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1300);
+  return sent;
+}
+
+TEST(test_auto_shift_mode_1_shifts_all_classes) {
+  assert(autoShiftHeldChar(1, 'a') == 'A');
+  assert(autoShiftHeldChar(1, '1') == '!');
+  assert(autoShiftHeldChar(1, ';') == ':');
+}
+
+TEST(test_auto_shift_mode_2_digits_and_symbols_only) {
+  assert(autoShiftHeldChar(2, 'a') == 'a');
+  assert(autoShiftHeldChar(2, '1') == '!');
+  assert(autoShiftHeldChar(2, '-') == '_');
+}
+
+TEST(test_auto_shift_mode_3_letters_only) {
+  assert(autoShiftHeldChar(3, 'a') == 'A');
+  assert(autoShiftHeldChar(3, '1') == '1');
+  assert(autoShiftHeldChar(3, ';') == ';');
+}
+
+TEST(test_auto_shift_mode_4_symbols_only) {
+  assert(autoShiftHeldChar(4, 'a') == 'a');
+  assert(autoShiftHeldChar(4, '1') == '1');
+  assert(autoShiftHeldChar(4, '0') == '0');
+  assert(autoShiftHeldChar(4, ';') == ':');
+  assert(autoShiftHeldChar(4, '/') == '?');
+}
+
+TEST(test_auto_shift_mode_class_filter_waits_not_at_all) {
+  // Gefilterte Taste sendet sofort beim Drücken, ohne Wartezeit
+  resetState();
+  autoShift = 2;
+  KEYMAP[0][2][1] = 'a';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  assert(bleKeyboard.pressHistory.size() == 1 && bleKeyboard.pressHistory[0] == 'a');
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false, 1050);
+}
+
 TEST(test_auto_shift_long_hold_sends_shifted_character) {
   resetState();
   autoShift = 1;
@@ -8772,8 +8822,12 @@ TEST(test_auto_shift_is_off_during_leader_capture) {
 
 TEST(test_auto_shift_command_nvs_and_info) {
   resetState();
-  handleConfigCommand("SET_AUTO_SHIFT 2", false);
-  assert(mockChar.value == "ERR ARGS SET_AUTO_SHIFT 2");
+  handleConfigCommand("SET_AUTO_SHIFT 5", false);
+  assert(mockChar.value == "ERR ARGS SET_AUTO_SHIFT 5");
+  handleConfigCommand("SET_AUTO_SHIFT 12", false);
+  assert(mockChar.value == "ERR ARGS SET_AUTO_SHIFT 12");
+  handleConfigCommand("SET_AUTO_SHIFT 4", false);
+  assert(mockChar.value == "OK SET_AUTO_SHIFT 4" && autoShift == 4);
   handleConfigCommand("SET_AUTO_SHIFT 1", false);
   assert(mockChar.value == "OK SET_AUTO_SHIFT 1");
   assert(autoShift == 1);
@@ -8793,6 +8847,10 @@ TEST(test_auto_shift_command_nvs_and_info) {
   autoShift = 0; autoShiftMs = 175;
   loadKeymapFromNVS();
   assert(autoShift == 1 && autoShiftMs == 220);
+  Preferences::uintStore["auto_shift"] = 5;           // außerhalb des Bereichs
+  autoShift = 0;
+  loadKeymapFromNVS();
+  assert(autoShift == 0);
   Preferences::uintStore["auto_shift_ms"] = 9999;     // außerhalb des Bereichs
   autoShiftMs = 175;
   loadKeymapFromNVS();

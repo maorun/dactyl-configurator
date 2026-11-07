@@ -330,6 +330,10 @@ KEY_TO_CPP = {
     "ACT_MOUSE_DOWN": "ACT_MOUSE_DOWN",
     "ACT_MOUSE_LEFT_MOVE": "ACT_MOUSE_LEFT_MOVE",
     "ACT_MOUSE_RIGHT_MOVE": "ACT_MOUSE_RIGHT_MOVE",
+    "MOUSE_SLOW": "ACT_MOUSE_SLOW",
+    "MOUSE_FAST": "ACT_MOUSE_FAST",
+    "ACT_MOUSE_SLOW": "ACT_MOUSE_SLOW",
+    "ACT_MOUSE_FAST": "ACT_MOUSE_FAST",
     "NONE": "0",
     "": "0",
     "0": "0"
@@ -564,7 +568,7 @@ def validate_combo_window(value):
 ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCTRL", "RSHIFT", "RALT", "RGUI")} | {"ACT_CAPS_WORD", "ACT_SENTENCE_CASE", "ACT_REPEAT", "ACT_ALT_REPEAT", "ACT_LAYER_LOCK"} | {f"(ACT_OSL_BASE + {n})" for n in range(8)}
 
 # Mausbewegung braucht eine gehaltene Taste mit Beschleunigung; eine Combo führt sie nicht aus
-MOUSE_MOVE_CPP = {"ACT_MOUSE_UP", "ACT_MOUSE_DOWN", "ACT_MOUSE_LEFT_MOVE", "ACT_MOUSE_RIGHT_MOVE"}
+MOUSE_MOVE_CPP = {"ACT_MOUSE_UP", "ACT_MOUSE_DOWN", "ACT_MOUSE_LEFT_MOVE", "ACT_MOUSE_RIGHT_MOVE", "ACT_MOUSE_SLOW", "ACT_MOUSE_FAST"}
 
 # Dynamisches Makro (Aufnahme im RAM des Masters): braucht eine Taste, keine Combo; links ohne Wirkung
 DYNAMIC_MACRO_CPP = {"ACT_DM_REC", "ACT_DM_PLAY"}

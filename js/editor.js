@@ -507,6 +507,9 @@ const ON_SCREEN_KEYBOARD_TABS = {
       [
         { code: "MOUSE_LEFT_MOVE", label: "Maus ←" }, { code: "MOUSE_UP", label: "Maus ↑" },
         { code: "MOUSE_DOWN", label: "Maus ↓" }, { code: "MOUSE_RIGHT_MOVE", label: "Maus →" }
+      ],
+      [
+        { code: "MOUSE_SLOW", label: "Maus langsam" }, { code: "MOUSE_FAST", label: "Maus schnell" }
       ]
     ]
   }

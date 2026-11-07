@@ -41,6 +41,15 @@ Rules for this file:
 - Not a combo action (`ADD_COMBO` movement is not executed; `server.py` and the app reject it), and not repeatable (`isRepeatableAction`).
 - The left half sends the movement as `SPLIT_OP_MOUSE_MOVE` (op 25, `arg` = X step, `code` low byte = Y step as int8; `(0, 0)` and `-128` are invalid). The master calls `mouseMove` on its BLE HID connection without any held state. The op is never retried (`splitEventRetryable`): a duplicate would jump twice, a lost step goes unnoticed. `DACTYL_FW_VERSION` 6 added it: flash both halves.
 
+### Mouse precision and turbo keys (`ACT_MOUSE_SLOW`, `ACT_MOUSE_FAST`)
+
+- Codes `0x13B` (`MOUSE_SLOW`) and `0x13C` (`MOUSE_FAST`) in `DactylCommon.h`; same names in `js/keycodes.js` and `server.py`. The picker group "Maus-Aktionen" lists them. Tests compare the codes.
+- While `MOUSE_SLOW` is held, `mouseMoveTick()` and `wheelHoldTick()` cap the step at 1 without acceleration. While `MOUSE_FAST` is held, `mouseMoveTick()` uses `MOUSE_MOVE_MAX_STEP` from the first tick. If both or neither are held, the standard acceleration applies (`effectiveMouseSpeed()`). `MOUSE_FAST` does not change the wheel step.
+- The keys run through the same path as the movement keys (`isMouseMoveAction()`, `mouseMoveStart()` and `mouseMoveStop()`), but move nothing themselves. They work as tap, hold and double-tap action and as a buffered combo candidate. They are not a combo action and not repeatable; `ADD_COMBO`, `server.py` and the app import reject them like a movement key.
+- Across the split link: each half reports its held keys with `SPLIT_OP_MOUSE_SPEED` (op 31, both directions, `code` bit 0 = `MOUSE_SLOW`, bit 1 = `MOUSE_FAST`, `arg` 0, `code` > 3 is invalid). The packet carries the whole state, so the newest one wins. The sender sends it at each change and each `SPLIT_LAYER_REFRESH_MS` while it holds a key. The receiver keeps the mirror (`remoteMouseSpeed`) and lets it expire after `MOUSE_SPEED_REMOTE_TIMEOUT_MS` (3 s) without a packet, at `RELEASE_ALL` of the left half, at link loss and at host loss. No HID effect, no activity, retried like `SPLIT_OP_OSL`.
+- After a change the sender sends one more copy after `SPLIT_LAYER_REPEAT_MS`, so a lost release packet does not hold the speed until the timeout. A `RELEASE_ALL` of the left half clears the mirror on the master; if the left half still holds `MOUSE_SLOW` (link recovery), the next refresh restores it within `SPLIT_LAYER_REFRESH_MS` (1 s).
+- `DACTYL_FW_VERSION` is 35. Flash both halves: an old half ignores the op, so a key on the other half has no effect on the pointer speed.
+
 ### Horizontal scroll and held wheel keys (`ACT_MOUSE_WHEEL_LEFT`, `ACT_MOUSE_WHEEL_RIGHT`)
 
 - Codes `0x139` (left) and `0x13A` (right) in `DactylCommon.h`; names `MOUSE_WHEEL_LEFT`, `MOUSE_WHEEL_RIGHT` in `js/keycodes.js` and `server.py`. The pickers list them next to the wheel keys.

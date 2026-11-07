@@ -9697,6 +9697,113 @@ TEST(test_swap_hands_mirrored_swap_key_still_consumes_armed_swap) {
   releaseKey(2, 1);
 }
 
+// -----------------------------------------------------------------------------
+// Mauspräzision: MOUSE_SLOW (Schritt 1) und MOUSE_FAST (Höchstschritt ab dem ersten Takt)
+// -----------------------------------------------------------------------------
+TEST(test_mouse_slow_caps_step_at_one_for_one_second) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_RIGHT_MOVE;
+  KEYMAP[0][2][2] = ACT_MOUSE_SLOW;
+  assert(ACT_MOUSE_SLOW == 0x13B && ACT_MOUSE_FAST == 0x13C);
+  setMillis(1000);
+  applyMatrixKeyChange(2, 2, true, 1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  for (unsigned long t = 1010; t <= 2000; t += 10) processDeferredKeys(t);
+  assert(bleKeyboard.mouseMoves.size() > 50);
+  for (auto &m : bleKeyboard.mouseMoves) assert(m.first == 1 && m.second == 0);
+  // Die Taste selbst bewegt nichts und sendet nichts an den Host
+  assert(bleKeyboard.mouseScrolls.empty());
+}
+
+TEST(test_mouse_fast_uses_max_step_from_first_tick) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_RIGHT_MOVE;
+  KEYMAP[0][2][2] = ACT_MOUSE_FAST;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 2, true, 1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  processDeferredKeys(1010);
+  assert(bleKeyboard.mouseMoves.size() == 1 && bleKeyboard.mouseMoves[0].first == MOUSE_MOVE_MAX_STEP);
+}
+
+TEST(test_mouse_slow_and_fast_together_or_released_use_normal_acceleration) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_RIGHT_MOVE;
+  KEYMAP[0][2][2] = ACT_MOUSE_SLOW;
+  KEYMAP[0][2][3] = ACT_MOUSE_FAST;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  applyMatrixKeyChange(2, 2, true, 1000);
+  applyMatrixKeyChange(2, 3, true, 1000);
+  processDeferredKeys(1010);
+  assert(bleKeyboard.mouseMoves.back().first == 1);          // beide: normal, die Haltezeit ist noch kurz
+  processDeferredKeys(1500);
+  assert(bleKeyboard.mouseMoves.back().first > 1);           // beide: die Beschleunigung wirkt
+  applyMatrixKeyChange(2, 3, false, 1510);                   // nur MOUSE_SLOW bleibt
+  processDeferredKeys(1520);
+  assert(bleKeyboard.mouseMoves.back().first == 1);
+  applyMatrixKeyChange(2, 2, false, 1530);                   // keine mehr: die Haltezeit der Bewegung zählt weiter
+  processDeferredKeys(1540);
+  assert(bleKeyboard.mouseMoves.back().first > 1);
+}
+
+TEST(test_mouse_slow_caps_held_wheel_step) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_WHEEL_UP;
+  KEYMAP[0][2][2] = ACT_MOUSE_SLOW;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  processDeferredKeys(1000 + WHEEL_REPEAT_DELAY_MS + 3 * WHEEL_ACCEL_MS);
+  assert(bleKeyboard.mouseScrolls.back() > 1);               // ohne MOUSE_SLOW wächst der Schritt
+  applyMatrixKeyChange(2, 2, true, 3000);
+  size_t n = bleKeyboard.mouseScrolls.size();
+  processDeferredKeys(3000 + WHEEL_REPEAT_INTERVAL_MS);
+  assert(bleKeyboard.mouseScrolls.size() > n && bleKeyboard.mouseScrolls.back() == 1);
+}
+
+TEST(test_mouse_speed_of_other_half_applies_and_expires) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_RIGHT_MOVE;
+  setMillis(1000);
+  applyRemoteMouseSpeed(2, 1000);                            // die andere Hälfte hält MOUSE_FAST
+  applyMatrixKeyChange(2, 1, true, 1000);
+  processDeferredKeys(1010);
+  assert(bleKeyboard.mouseMoves.back().first == MOUSE_MOVE_MAX_STEP);
+  applyRemoteMouseSpeed(1, 1020);                            // jetzt MOUSE_SLOW
+  processDeferredKeys(1030);
+  assert(bleKeyboard.mouseMoves.back().first == 1);
+  // Ohne Paket verfällt das Tempo der anderen Hälfte
+  processDeferredKeys(1020 + MOUSE_SPEED_REMOTE_TIMEOUT_MS - 10);
+  assert(bleKeyboard.mouseMoves.back().first == 1);
+  processDeferredKeys(1020 + MOUSE_SPEED_REMOTE_TIMEOUT_MS + 10);
+  assert(remoteMouseSpeed == 0 && bleKeyboard.mouseMoves.back().first > 1);
+}
+
+TEST(test_reset_mouse_move_clears_remote_mouse_speed) {
+  resetState();
+  applyRemoteMouseSpeed(1, 1000);
+  assert(remoteMouseSpeed == 1);
+  resetMouseMove();
+  assert(remoteMouseSpeed == 0);
+}
+
+TEST(test_mouse_speed_keys_are_not_combo_targets_and_report_local_mask) {
+  resetState();
+  assert(isMouseMoveAction(ACT_MOUSE_SLOW) && isMouseMoveAction(ACT_MOUSE_FAST));
+  assert(!isRepeatableAction(ACT_MOUSE_SLOW) && !isRepeatableAction(ACT_MOUSE_FAST));
+  KEYMAP[0][2][1] = ACT_MOUSE_SLOW;
+  KEYMAP[0][2][2] = ACT_MOUSE_FAST;
+  setMillis(1000);
+  assert(localMouseSpeedMask() == 0);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  assert(localMouseSpeedMask() == 1);
+  applyMatrixKeyChange(2, 2, true, 1000);
+  assert(localMouseSpeedMask() == 3 && effectiveMouseSpeed(1000) == 0);
+  applyMatrixKeyChange(2, 1, false, 1100);
+  applyMatrixKeyChange(2, 2, false, 1100);
+  assert(localMouseSpeedMask() == 0);
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

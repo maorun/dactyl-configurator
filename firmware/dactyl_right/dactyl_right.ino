@@ -567,6 +567,8 @@ static SplitLayerSync splitLayerSync;
 static SplitRemoteLayers splitRemoteLayers;
 // One-Shot-Ebenen beider Hälften (SPLIT_OP_OSL, DactylSplitHid.h)
 static SplitOslSync splitOslSync;
+// Mauspräzision beider Hälften (SPLIT_OP_MOUSE_SPEED, DactylSplitHid.h)
+static SplitMouseSpeedSync splitMouseSpeedSync;
 // REPEAT_RUN an die linke Hälfte, mit zweitem Versand nach SPLIT_REPEAT_COPY_MS (kein Retry wie links)
 static SplitRepeatSender splitRepeatSender;
 // Ein Loslassen oder RELEASE_ALL darf nicht verloren gehen, wenn GET_INFO den Mutex hält: es bleibt vorgemerkt
@@ -639,6 +641,10 @@ static void sendSplitLayerAndHoldIfDue(unsigned long refreshIntervalMs = SPLIT_L
                     [](const SplitHidEvent &ev) {
                       return esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK;
                     }, refreshIntervalMs);
+  splitMouseSpeedSendIfDue(splitMouseSpeedSync, localMouseSpeedMask(), millis(), bleKeyboard.splitLeft.linkUp,
+                           [](const SplitHidEvent &ev) {
+                             return esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev)) == ESP_OK;
+                           }, refreshIntervalMs);
   splitSendLayerThenHold(splitLayerSync, splitHoldReporter, bleKeyboard.splitLeft.linkUp, anyTapHoldPending(),
                          localMomentaryLayerMask(), toggleLayerMask(), [refreshIntervalMs] { sendSplitLayerStateIfDue(refreshIntervalMs); },
                          [](const SplitHidEvent &ev) {
@@ -692,6 +698,7 @@ void setupSplitReceiver() {
   splitHoldReporter.reported = false; // nach (Neu-)Start gilt nichts als gemeldet
   splitLayerReset(splitLayerSync);
   splitOslReset(splitOslSync);
+  splitMouseSpeedReset(splitMouseSpeedSync);
   splitRemoteLayersReset(splitRemoteLayers);
   splitActivityPeerReady = (esp_now_add_peer(&peer) == ESP_OK);
   if (!splitActivityPeerReady) {
@@ -814,6 +821,11 @@ static void onSplitOsl(const SplitHidEvent &ev) {
   if (configMutex) xSemaphoreGive(configMutex);
 }
 
+// Mauspräzision der linken Hälfte (gehaltene MOUSE_SLOW / MOUSE_FAST); ohne Paket verfällt sie in effectiveMouseSpeed
+static void onSplitMouseSpeed(const SplitHidEvent &ev) {
+  applyRemoteMouseSpeed((uint8_t)ev.code, millis());
+}
+
 // Ereignisse der linken Hälfte aus loop() ausführen (Logik: splitProcessRx in DactylSplitHid.h)
 void processSplitEvents(unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
   if (!splitRxReady) return;
@@ -823,7 +835,7 @@ void processSplitEvents(unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
                                      hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer,
                                      onSplitBeforeLeftPress, onSplitRepeat, onSplitHoldResolve,
-                                     linkTimeoutMs, onSplitOsl);
+                                     linkTimeoutMs, onSplitOsl, onSplitMouseSpeed);
   // Mac getrennt oder Config Mode: nichts bleibt vorgemerkt (auch die eigene Vormerkung)
   if (rep.hostLost) oslClearAll();
   // Linke Hälfte gerade erreichbar (Start, Aufwachen): sofort den Layer-Zustand des Masters senden

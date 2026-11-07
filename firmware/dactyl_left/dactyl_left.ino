@@ -446,6 +446,9 @@ static SplitRemoteLayers splitRemoteLayers;
 // Ein 32-Bit-Wort (Bit 16 = Paket wartet, Bits 0..15 = code): der Wi-Fi-Task schreibt, loop() holt es atomar
 static uint32_t masterOslWord = 0;
 static SplitOslSync splitOslSync;
+// Mauspräzision (SPLIT_OP_MOUSE_SPEED): Briefkasten wie bei OSL (Bit 16 = Paket wartet, Bits 0..15 = code)
+static uint32_t masterMouseSpeedWord = 0;
+static SplitMouseSpeedSync splitMouseSpeedSync;
 
 static void onEspNowSent(const esp_now_send_info_t *info, esp_now_send_status_t status) {
   (void)info;
@@ -470,6 +473,7 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
   else if (ev.op == SPLIT_OP_HOLD_RESOLVE) masterHoldResolveRequested = true;
   else if (ev.op == SPLIT_OP_REPEAT_RUN) splitRxPush(masterRepeatRing, ev);
   else if (ev.op == SPLIT_OP_OSL) __atomic_store_n(&masterOslWord, 0x10000u | ev.code, __ATOMIC_RELEASE);
+  else if (ev.op == SPLIT_OP_MOUSE_SPEED) __atomic_store_n(&masterMouseSpeedWord, 0x10000u | ev.code, __ATOMIC_RELEASE);
   else splitLayerMailboxPut(masterLayerMailbox, ev);
 }
 
@@ -533,6 +537,9 @@ static void processMasterLayerState(unsigned long timeoutMs = SPLIT_LAYER_REMOTE
     applyRemoteOslState(splitOslArmed(oslEv), now);
   }
   oslExpireRemote(now);
+  // Mauspräzision des Masters: das neueste Paket gilt, ohne Paket verfällt es in effectiveMouseSpeed
+  uint32_t speedWord = __atomic_exchange_n(&masterMouseSpeedWord, 0u, __ATOMIC_ACQUIRE);
+  if (speedWord & 0x10000u) applyRemoteMouseSpeed((uint8_t)(speedWord & 3u), now);
 }
 
 // Eigenen Layer-Zustand an den Master: Änderungen sofort, das Auffrischen nur bis zur halben Warteschlange
@@ -547,6 +554,9 @@ static void queueSplitLayerStateIfDue(unsigned long refreshIntervalMs = SPLIT_LA
   // Eigene vorgemerkte One-Shot-Ebenen und die verbrauchten des Masters
   splitOslSendIfDue(splitOslSync, oslArmed, oslUsedToSend, millis(), bleKeyboard.isConnected(),
                     [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); }, refreshIntervalMs);
+  // Eigene gehaltene MOUSE_SLOW / MOUSE_FAST
+  splitMouseSpeedSendIfDue(splitMouseSpeedSync, localMouseSpeedMask(), millis(), bleKeyboard.isConnected(),
+                           [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); }, refreshIntervalMs);
 }
 
 // Vor Config Mode und Deep Sleep: eigene MO-Ebenen am Master lösen (sonst erst nach dem Verfall). Eine
@@ -593,8 +603,10 @@ static bool setupEspNow() {
   splitLayerLeftRestart(splitLayerSync, splitRemoteLayers, masterLayerMailbox, masterLayerSeen, millis());
   // Nach einem Neustart des Funks gelten keine Vormerkungen mehr (die RELEASE_ALL-Bestätigung löscht sie am Master)
   __atomic_store_n(&masterOslWord, 0u, __ATOMIC_RELEASE);
+  __atomic_store_n(&masterMouseSpeedWord, 0u, __ATOMIC_RELEASE);
   oslClearAll();
   splitOslReset(splitOslSync);
+  splitMouseSpeedReset(splitMouseSpeedSync);
   // Über applyRemoteLayerState, damit ein Ebenenwechsel als LAYER-Zeile die App erreicht
   applyRemoteLayerState(0, false, 0);
   // Ohne Empfang schläft links weiter nach eigener Inaktivität ein (Verhalten vor ACTIVITY).
@@ -768,6 +780,7 @@ void setup() {
   restartGuardReset(restartGuard);
   splitLayerReset(splitLayerSync, esp_random());
   splitOslReset(splitOslSync);
+  splitMouseSpeedReset(splitMouseSpeedSync);
   resetLeftKeys();
 
   Serial.println("\n=============================================");

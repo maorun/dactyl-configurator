@@ -1062,7 +1062,9 @@ bool macroRunStep(const MacroStep &st) {
 #define MOUSE_MOVE_ACCEL_MS    80
 #define MOUSE_MOVE_MAX_STEP    16
 
-bool isMouseMoveAction(uint16_t a) { return a >= ACT_MOUSE_UP && a <= ACT_MOUSE_RIGHT_MOVE; }
+bool isMouseSpeedAction(uint16_t a) { return a == ACT_MOUSE_SLOW || a == ACT_MOUSE_FAST; }
+// MOUSE_SLOW und MOUSE_FAST laufen wie die Bewegungstasten (gehalten, kein Combo-Ziel, nicht wiederholbar), bewegen aber nichts
+bool isMouseMoveAction(uint16_t a) { return (a >= ACT_MOUSE_UP && a <= ACT_MOUSE_RIGHT_MOVE) || isMouseSpeedAction(a); }
 
 bool mouseMoveActive[NUM_ROWS][NUM_COLS] = {};
 uint16_t mouseMoveAction[NUM_ROWS][NUM_COLS] = {};
@@ -1078,6 +1080,37 @@ void mouseMoveStart(uint8_t r, uint8_t c, uint16_t action, unsigned long now) {
 }
 
 void mouseMoveStop(uint8_t r, uint8_t c) { mouseMoveActive[r][c] = false; }
+
+// Mauspräzision: Bit 0 = MOUSE_SLOW gehalten, Bit 1 = MOUSE_FAST gehalten. Die eigene Maske folgt den gehaltenen Tasten,
+// die der anderen Hälfte kommt mit SPLIT_OP_MOUSE_SPEED und verfällt ohne Paket nach MOUSE_SPEED_REMOTE_TIMEOUT_MS.
+#ifndef MOUSE_SPEED_REMOTE_TIMEOUT_MS
+#define MOUSE_SPEED_REMOTE_TIMEOUT_MS 3000
+#endif
+uint8_t remoteMouseSpeed = 0;
+unsigned long remoteMouseSpeedRxMs = 0;
+
+uint8_t localMouseSpeedMask() {
+  uint8_t mask = 0;
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++)
+      if (mouseMoveActive[r][c]) {
+        if (mouseMoveAction[r][c] == ACT_MOUSE_SLOW) mask |= 1;
+        else if (mouseMoveAction[r][c] == ACT_MOUSE_FAST) mask |= 2;
+      }
+  return mask;
+}
+
+void applyRemoteMouseSpeed(uint8_t mask, unsigned long now) {
+  remoteMouseSpeed = (uint8_t)(mask & 3);
+  remoteMouseSpeedRxMs = now;
+}
+
+// Wirksame Maske beider Hälften; 1 = nur langsam, 2 = nur schnell, sonst (0 oder 3) normale Beschleunigung
+uint8_t effectiveMouseSpeed(unsigned long now) {
+  if (remoteMouseSpeed && (unsigned long)(now - remoteMouseSpeedRxMs) >= MOUSE_SPEED_REMOTE_TIMEOUT_MS) remoteMouseSpeed = 0;
+  uint8_t mask = (uint8_t)(localMouseSpeedMask() | remoteMouseSpeed);
+  return mask == 3 ? 0 : mask;
+}
 
 // Gehaltene Rad-Taste (Hoch, Runter, Links, Rechts): der erste Schritt geht beim Drücken, nach WHEEL_REPEAT_DELAY_MS
 // folgt alle WHEEL_REPEAT_INTERVAL_MS ein Schritt. Der Schritt wächst mit der Haltezeit von 1 bis WHEEL_MAX_STEP.
@@ -1108,6 +1141,7 @@ int8_t wheelStepFor(unsigned long heldMs) {
 }
 
 void wheelHoldTick(unsigned long now) {
+  bool slow = false, evaluated = false;
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
       if (!wheelActive[r][c]) continue;
@@ -1120,13 +1154,15 @@ void wheelHoldTick(unsigned long now) {
       unsigned long held = (unsigned long)(now - wheelStartMs[r][c]);
       if (held < WHEEL_REPEAT_DELAY_MS || (unsigned long)(now - wheelLastMs[r][c]) < WHEEL_REPEAT_INTERVAL_MS) continue;
       wheelLastMs[r][c] = now;
-      wheelSend(wheelAction[r][c], wheelStepFor(held));
+      if (!evaluated) { slow = effectiveMouseSpeed(now) == 1; evaluated = true; }
+      wheelSend(wheelAction[r][c], slow ? 1 : wheelStepFor(held));
     }
   }
 }
 
 void resetMouseMove() {
   for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) { mouseMoveActive[r][c] = false; wheelActive[r][c] = false; }
+  remoteMouseSpeed = 0;
 }
 
 int8_t mouseMoveStepFor(unsigned long heldMs) {
@@ -1151,11 +1187,12 @@ void mouseMoveTick(unsigned long now) {
   }
   if ((unsigned long)(now - mouseMoveLastMs) < MOUSE_MOVE_INTERVAL_MS) return;
   mouseMoveLastMs = now;
+  uint8_t speed = effectiveMouseSpeed(now);
   int x = 0, y = 0;
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
       if (!mouseMoveActive[r][c]) continue;
-      int step = mouseMoveStepFor((unsigned long)(now - mouseMoveStartMs[r][c]));
+      int step = speed == 1 ? 1 : speed == 2 ? MOUSE_MOVE_MAX_STEP : mouseMoveStepFor((unsigned long)(now - mouseMoveStartMs[r][c]));
       switch (mouseMoveAction[r][c]) {
         case ACT_MOUSE_UP: y -= step; break;
         case ACT_MOUSE_DOWN: y += step; break;
@@ -1504,7 +1541,7 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     }
   } else if (isMouseMoveAction(action)) {
     static const char* const moveNames[4] = {"Maus Hoch", "Maus Runter", "Maus Links", "Maus Rechts"};
-    const char* moveName = moveNames[action - ACT_MOUSE_UP];
+    const char* moveName = action == ACT_MOUSE_SLOW ? "Maus langsam" : action == ACT_MOUSE_FAST ? "Maus schnell" : moveNames[action - ACT_MOUSE_UP];
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, moveName, action, currentLayer);
     sendConfigNotification(String(buf));

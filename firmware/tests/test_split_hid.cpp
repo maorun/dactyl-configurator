@@ -106,6 +106,7 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_KEY_LOCK),
     makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a', 1),     // sperrbarer Tastendruck
     makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 1, 1),     // sperrbarer Mausdruck
+    makeSplitMouseSpeedEvent(2),                       // MOUSE_FAST gehalten
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
   // ACTIVITY, TAP_FLUSH, REPEAT_RUN, SLEEP und MASTER_PRESS sind die einzigen Ops nur der Rückrichtung. Jede dieser fünf
@@ -2041,7 +2042,7 @@ TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
   assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25);
-  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_SENTENCE_CASE_TOGGLE == 30 && SPLIT_OP_COUNT == 31);
+  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_SENTENCE_CASE_TOGGLE == 30 && SPLIT_OP_COUNT == 32 && SPLIT_OP_MOUSE_SPEED == 31);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -3633,6 +3634,97 @@ TEST(test_osl_packet_round_trip_and_validation) {
   uint8_t other[6] = {1, 2, 3, 4, 5, 6};
   assert(!parseSplitMasterPacket(other, reinterpret_cast<const uint8_t *>(&ev), 4, out));
   assert(!parse(other, ev, out));
+}
+
+// -----------------------------------------------------------------------------
+// Mauspräzision (SPLIT_OP_MOUSE_SPEED)
+// -----------------------------------------------------------------------------
+TEST(test_mouse_speed_packet_round_trip_and_validation) {
+  SplitHidEvent out;
+  for (uint8_t mask = 0; mask <= 3; mask++) {
+    SplitHidEvent ev = makeSplitMouseSpeedEvent(mask);
+    assert(ev.op == SPLIT_OP_MOUSE_SPEED && ev.arg == 0 && ev.code == mask);
+    assert(parse(SPLIT_LEFT_MAC, ev, out) && out.code == mask);
+    assert(parseSplitMasterPacket(SPLIT_MASTER_MAC, reinterpret_cast<const uint8_t *>(&ev), 4, out) && out.op == SPLIT_OP_MOUSE_SPEED);
+  }
+  // Bits über 1, ein Wert in arg und fremde Absender sind ungültig
+  SplitHidEvent bad = makeSplitHidEvent(SPLIT_OP_MOUSE_SPEED, 4, 0);
+  assert(!parse(SPLIT_LEFT_MAC, bad, out));
+  assert(!parseSplitMasterPacket(SPLIT_MASTER_MAC, reinterpret_cast<const uint8_t *>(&bad), 4, out));
+  assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_MOUSE_SPEED, 1, 1), out));
+  SplitHidEvent ok = makeSplitMouseSpeedEvent(1);
+  uint8_t other[6] = {1, 2, 3, 4, 5, 6};
+  assert(!parseSplitMasterPacket(other, reinterpret_cast<const uint8_t *>(&ok), 4, out));
+  assert(!splitIsPressOp(SPLIT_OP_MOUSE_SPEED) && splitEventRetryable(ok));
+}
+
+TEST(test_mouse_speed_sync_sends_on_change_and_refreshes_while_held) {
+  SplitMouseSpeedSync s;
+  splitMouseSpeedReset(s);
+  int sent = 0;
+  SplitHidEvent last = {};
+  auto send = [&](const SplitHidEvent &ev) { sent++; last = ev; return true; };
+  assert(!splitMouseSpeedSendIfDue(s, 0, 1000, true, send) && sent == 0);
+  assert(splitMouseSpeedSendIfDue(s, 1, 1000, true, send) && sent == 1 && last.code == 1);
+  // Zweite Kopie nach SPLIT_LAYER_REPEAT_MS, danach nur das Auffrischen
+  assert(!splitMouseSpeedSendIfDue(s, 1, 1000 + SPLIT_LAYER_REPEAT_MS - 1, true, send));
+  assert(splitMouseSpeedSendIfDue(s, 1, 1000 + SPLIT_LAYER_REPEAT_MS, true, send) && sent == 2);
+  sent = 1;
+  assert(!splitMouseSpeedSendIfDue(s, 1, 1500, true, send));
+  assert(splitMouseSpeedSendIfDue(s, 1, 1000 + SPLIT_LAYER_REPEAT_MS + SPLIT_LAYER_REFRESH_MS, true, send) && sent == 2);
+  assert(!splitMouseSpeedSendIfDue(s, 1, 5000, false, send) && sent == 2);   // Link weg: kein Auffrischen
+  assert(splitMouseSpeedSendIfDue(s, 0, 5001, true, send) && sent == 3 && last.code == 0);
+  // Auch das Loslassen bekommt eine zweite Kopie
+  assert(splitMouseSpeedSendIfDue(s, 0, 5001 + SPLIT_LAYER_REPEAT_MS, true, send) && sent == 4 && last.code == 0);
+  assert(!splitMouseSpeedSendIfDue(s, 0, 9000, true, send));
+  sent = 3;
+  // Fehlschlag: der nächste Aufruf sendet neu
+  assert(!splitMouseSpeedSendIfDue(s, 2, 9001, true, [](const SplitHidEvent &) { return false; }));
+  assert(splitMouseSpeedSendIfDue(s, 2, 9002, true, send) && sent == 4 && last.code == 2);
+}
+
+static int speedCalls = 0;
+static SplitHidEvent speedLast = {};
+static void recordSpeed(const SplitHidEvent &ev) { speedCalls++; speedLast = ev; }
+
+TEST(test_process_rx_hands_over_mouse_speed_without_hid_effect_and_clears_on_link_loss) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  speedCalls = 0;
+  splitRxPush(rxq, makeSplitMouseSpeedEvent(1));
+  splitRxPush(rxq, makeSplitMouseSpeedEvent(2));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 100, nullptr, nullptr, nullptr, nullptr,
+                                     nullptr, nullptr, SPLIT_LINK_TIMEOUT_MS, nullptr, recordSpeed);
+  assert(speedCalls == 1 && speedLast.code == 2);
+  assert(rep.applied == 0 && rep.keyEvents == 0 && k.log.empty());
+  // Ausfall des Links: das Tempo der linken Hälfte wird gelöscht
+  speedCalls = 0;
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 100 + SPLIT_LINK_TIMEOUT_MS + 1, nullptr, nullptr, nullptr,
+                       nullptr, nullptr, nullptr, SPLIT_LINK_TIMEOUT_MS, nullptr, recordSpeed);
+  assert(rep.linkLost && speedCalls == 1 && speedLast.code == 0);
+  // RELEASE_ALL der linken Hälfte löscht das Spiegelbild; ein älteres Paket derselben Runde hebt das Löschen nicht auf
+  speedCalls = 0;
+  speedLast = makeSplitMouseSpeedEvent(3);
+  splitRxPush(rxq, makeSplitMouseSpeedEvent(1));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 20000, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 SPLIT_LINK_TIMEOUT_MS, nullptr, recordSpeed);
+  assert(speedCalls == 1 && speedLast.code == 0);
+  // Host-Verlust
+  speedCalls = 0;
+  speedLast = makeSplitMouseSpeedEvent(3);
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 20100, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                       SPLIT_LINK_TIMEOUT_MS, nullptr, recordSpeed);
+  assert(rep.hostLost && speedCalls >= 1 && speedLast.code == 0);
+  // Überlauf des Empfangsrings
+  hostWas = true;
+  speedCalls = 0;
+  speedLast = makeSplitMouseSpeedEvent(3);
+  for (int i = 0; i < SPLIT_RX_QUEUE_SIZE + 2; i++) splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_HEARTBEAT));
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 20200, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                       SPLIT_LINK_TIMEOUT_MS, nullptr, recordSpeed);
+  assert(rep.overflow && speedCalls >= 1 && speedLast.code == 0);
 }
 
 TEST(test_osl_is_no_hid_press_op_and_is_retried) {

@@ -874,6 +874,11 @@
           </div>
         </div>
 
+        <div class="form-group">
+          <button id="btnOpenTimingAssistant" type="button" class="btn btn-outline btn-sm">Tapping-Term-Assistent ...</button>
+          <small class="form-hint">Misst über USB deine Haltezeiten und Abstände beim Tippen und schlägt Tapping-Term, Combo-Zeitfenster, Quick-Tap und Tipp-Pause vor.</small>
+        </div>
+
         <div class="settings-actions" style="margin-top: 1.5rem;">
           <button id="btnSaveSettings" class="btn btn-success">Einstellungen in Config übernehmen</button>
         </div>
@@ -1037,6 +1042,26 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" id="btnCancelSyncDiff">Abbrechen</button>
           <button class="btn btn-primary" id="btnConfirmSyncDiff">Übertragen</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Tapping-Term-Assistent -->
+    <div class="modal-backdrop" id="timingAssistantModal" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h4>Tapping-Term-Assistent</h4>
+          <button class="modal-close" id="btnCloseTimingAssistant">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="sync-diff-hint">Verbinde die bearbeitete Hälfte über USB, starte die Aufnahme und tippe etwa eine Minute normal Text. Die App liest die <code>MATRIX:</code>-Zeilen (Druck und Loslassen) und wertet Haltezeiten und Abstände aus.</p>
+          <p id="timingAssistantStatus"></p>
+          <ul id="timingAssistantResult" class="layout-lint-list"></ul>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnTimingAssistantReset">Zurücksetzen</button>
+          <button class="btn btn-secondary" id="btnTimingAssistantToggle">Aufnahme starten</button>
+          <button class="btn btn-primary" id="btnTimingAssistantApply" disabled>Werte übernehmen</button>
         </div>
       </div>
     </div>

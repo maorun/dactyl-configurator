@@ -571,6 +571,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
       const bounced = evt.t !== undefined && recordMatrixBounce(matrixTest, evt.r, evt.c, evt.pressed, evt.t);
       // Ein geprellter Druck ist kein neuer Tastendruck: die Tastenaufnahme übergeht ihn
       if (!bounced) feedKeyCapture(lineSide, evt.r, evt.c, evt.pressed);
+      feedTimingAssistant(lineSide, evt);
       const marked = evt.pressed && markMatrixKeyTested(matrixTest, evt.r, evt.c);
       if ((marked || bounced) && isEditSide) renderMatrixTest();
     }

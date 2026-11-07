@@ -105,7 +105,98 @@ function setCaptureButton(button, active) {
   button.classList.toggle("btn-secondary", !active);
 }
 
+// Tapping-Term-Assistent: sammelt MATRIX:-Ereignisse der bearbeiteten Hälfte (USB) und rechnet mit
+// computeTimingRecommendations. "Werte übernehmen" schreibt nur in die Felder der Einstellungskarte;
+// gespeichert wird erst mit "Einstellungen in Config übernehmen".
+const TIMING_MAX_SAMPLES = 20000;
+const timingAssistant = { recording: false, side: null, samples: [], result: null, resultSide: null };
+const TIMING_LABELS = {
+  tappingTermMs: ["Tapping-Term", "tappingTermInput"],
+  comboTimeoutMs: ["Combo-Zeitfenster", "comboTimeoutInput"],
+  quickTapMs: ["Quick-Tap", "quickTapInput"],
+  requirePriorIdleMs: ["Hold nur nach Tipp-Pause", "priorIdleInput"]
+};
+
+function feedTimingAssistant(side, evt) {
+  if (!timingAssistant.recording || side !== timingAssistant.side || evt.t === undefined) return;
+  if (side !== editSide) { timingAssistant.recording = false; timingAssistant.samples = []; renderTimingAssistant(); return; }
+  timingAssistant.samples.push({ r: evt.r, c: evt.c, pressed: evt.pressed, t: evt.t });
+  if (timingAssistant.samples.length >= TIMING_MAX_SAMPLES) {
+    timingAssistant.recording = false;
+    showToast("Die Aufnahme ist voll und wurde beendet.");
+  }
+  // Während der Aufnahme nur die Zahl zeigen; die Auswertung läuft beim Beenden (sonst Sortieren bei jeder Zeile)
+  if (timingAssistant.recording) renderTimingAssistantCount(); else renderTimingAssistant();
+}
+
+function renderTimingAssistantCount() {
+  const status = document.getElementById("timingAssistantStatus");
+  if (status) status.textContent = `Aufnahme läuft. ${timingAssistant.samples.length} Ereignis(se).`;
+}
+
+function renderTimingAssistant() {
+  const status = document.getElementById("timingAssistantStatus");
+  const list = document.getElementById("timingAssistantResult");
+  const toggle = document.getElementById("btnTimingAssistantToggle");
+  const apply = document.getElementById("btnTimingAssistantApply");
+  if (!status || !list || !toggle || !apply) return;
+  const rec = computeTimingRecommendations(timingAssistant.samples);
+  timingAssistant.result = rec;
+  timingAssistant.resultSide = timingAssistant.side;
+  toggle.textContent = timingAssistant.recording ? "Aufnahme beenden" : "Aufnahme starten";
+  status.textContent = `${timingAssistant.recording ? "Aufnahme läuft. " : ""}${rec.stats.holds} Tipp(s), ${rec.stats.rolls} Überlappung(en), ${rec.stats.incomplete} unvollständig verworfen.` +
+    (rec.enough ? "" : ` Für einen Vorschlag braucht der Assistent mindestens ${TIMING_MIN_HOLDS} vollständige Tipps (Druck und Loslassen). Ohne die Scan-Zeit der Firmware (ältere Version) kommt keine Messung an.`);
+  list.replaceChildren();
+  for (const [field, value] of Object.entries(rec.settings)) {
+    const li = document.createElement("li");
+    li.textContent = `${TIMING_LABELS[field][0]}: ${value} ms`;
+    list.appendChild(li);
+  }
+  apply.disabled = !rec.enough;
+}
+
+function setupTimingAssistant() {
+  const modal = document.getElementById("timingAssistantModal");
+  if (!modal) return;
+  const close = () => { timingAssistant.recording = false; modal.style.display = "none"; };
+  document.getElementById("btnOpenTimingAssistant")?.addEventListener("click", () => {
+    timingAssistant.side = editSide;
+    timingAssistant.samples = [];
+    timingAssistant.recording = false;
+    renderTimingAssistant();
+    modal.style.display = "flex";
+  });
+  document.getElementById("btnCloseTimingAssistant")?.addEventListener("click", close);
+  document.getElementById("btnTimingAssistantReset")?.addEventListener("click", () => {
+    timingAssistant.samples = [];
+    renderTimingAssistant();
+  });
+  document.getElementById("btnTimingAssistantToggle")?.addEventListener("click", () => {
+    timingAssistant.recording = !timingAssistant.recording;
+    // Jede neue Aufnahme beginnt leer: nach einem Neustart oder Verbindungswechsel passen die Scan-Zeiten nicht zusammen
+    if (timingAssistant.recording) timingAssistant.samples = [];
+    timingAssistant.side = editSide;
+    renderTimingAssistant();
+    if (timingAssistant.recording) renderTimingAssistantCount();
+  });
+  document.getElementById("btnTimingAssistantApply")?.addEventListener("click", () => {
+    const rec = timingAssistant.result;
+    if (!rec || !rec.enough) return;
+    if (timingAssistant.resultSide !== editSide) {
+      showToast("Die Messung gehört zur anderen Hälfte. Starte sie neu.");
+      return;
+    }
+    for (const [field, value] of Object.entries(rec.settings)) {
+      const el = document.getElementById(TIMING_LABELS[field][1]);
+      if (el) el.value = String(clampSetting(field, value));
+    }
+    showToast("Werte eingetragen. Mit \"Einstellungen in Config übernehmen\" speichern.");
+    close();
+  });
+}
+
 function setupEventListeners() {
+  setupTimingAssistant();
   window.addEventListener("keydown", blockKeysDuringCapture, true);
   window.addEventListener("keyup", blockKeysDuringCapture, true);
   // Diagnose (GET_DIAG): Antwort kommt als DIAG-Zeile in handleSerialLine

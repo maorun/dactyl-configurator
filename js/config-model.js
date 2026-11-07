@@ -179,6 +179,97 @@ function parseMatrixLine(line) {
   return parsed;
 }
 
+// Tapping-Term-Assistent: wertet MATRIX:-Ereignisse { r, c, pressed, t } einer Hälfte aus (Scan-Zeit t in ms, 32 Bit).
+// Gültig ist nur ein vollständiges Paar Druck + Loslassen derselben Taste; ein Loslassen ohne Druck und ein Druck,
+// auf den ohne Loslassen ein zweiter Druck folgt, zählen als unvollständig (incomplete) und fließen nirgends ein.
+// Ein Druck ohne Loslassen am Ende der Aufnahme zählt ebenfalls als unvollständig. Überlappungen, Wiederholungen und
+// Anschlagabstände brauchen je TIMING_MIN_PAIRS Werte, sonst fehlt die Einstellung.
+const TIMING_MIN_HOLDS = 20;
+const TIMING_MARGIN_MS = 30;
+const TIMING_MIN_PAIRS = 10;          // Mindestzahl je Messgröße außer den Haltezeiten (sonst fehlt der Wert)
+const TIMING_MAX_ROLL_MS = 300;       // eine länger gehaltene Taste (Shift) ist keine Überlappung beim Tippen
+const TIMING_MAX_HOLD_MS = 500;    // längere Haltezeiten (Shift, Daumentasten, Pause) sind kein Tipp und werden verworfen
+const TIMING_MAX_REPEAT_MS = 300;  // größere Abstände derselben Taste sind keine Doppelanschläge
+
+// Perzentil mit linearer Interpolation; p in 0..1, leere Liste ergibt null
+function percentile(values, p) {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const pos = Math.min(1, Math.max(0, p)) * (sorted.length - 1);
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+function computeTimingRecommendations(samples) {
+  const holds = [];
+  const rolls = [];
+  const presses = [];
+  const sameKeyGaps = [];
+  let incomplete = 0;
+  const open = new Map();
+  const lastRelease = new Map();
+  const lastHold = new Map();   // id -> { press, index } der zuletzt gezählten Haltezeit, für das Zusammenfassen von Prellen
+  let prevT = null;
+  let base = 0;
+  let lastPress = null;
+  for (const e of Array.isArray(samples) ? samples : []) {
+    if (!e || !isValidIndex(e.r, NUM_ROWS) || !isValidIndex(e.c, NUM_COLS) || !Number.isInteger(e.t) || e.t < 0 || e.t > 0xFFFFFFFF) {
+      incomplete++;
+      continue;
+    }
+    // Zeit aufrollen (Überlauf von millis() nach 2^32 ms); ein Rücksprung (Neustart) trennt die Aufnahme
+    if (prevT !== null) {
+      const step = (e.t - prevT) >>> 0;
+      if (step > 0x80000000) { incomplete += open.size; open.clear(); lastRelease.clear(); lastHold.clear(); lastPress = null; base = 0; prevT = null; }
+      else base += step;
+    }
+    if (prevT === null) base = e.t;
+    prevT = e.t;
+    const t = base;
+    const id = `${e.r}_${e.c}`;
+    if (e.pressed === true || e.pressed === 1) {
+      // Prellen: ein Druck höchstens MATRIX_BOUNCE_MS nach dem Loslassen setzt dieselbe Haltezeit fort
+      const held = lastHold.get(id);
+      if (held && lastRelease.get(id) !== undefined && t - lastRelease.get(id) <= MATRIX_BOUNCE_MS && holds.length === held.index + 1) {
+        holds.pop();
+        open.set(id, held.press);
+        lastHold.delete(id);
+        lastRelease.delete(id);
+        continue;
+      }
+      if (open.has(id)) { incomplete++; open.delete(id); }
+      if (lastPress !== null) presses.push(t - lastPress.t);
+      for (const [oid, ot] of open) if (oid !== id && t - ot <= TIMING_MAX_ROLL_MS) rolls.push(t - ot);
+      if (lastRelease.has(id) && t - lastRelease.get(id) <= TIMING_MAX_REPEAT_MS) sameKeyGaps.push(t - lastRelease.get(id));
+      open.set(id, t);
+      lastPress = { t };
+    } else if (e.pressed === false || e.pressed === 0) {
+      if (!open.has(id)) { incomplete++; continue; }
+      const hold = t - open.get(id);
+      open.delete(id);
+      lastRelease.set(id, t);
+      if (hold >= 0 && hold <= TIMING_MAX_HOLD_MS) { lastHold.set(id, { press: t - hold, index: holds.length }); holds.push(hold); } else incomplete++;
+    } else {
+      incomplete++;
+    }
+  }
+  incomplete += open.size;
+  const stats = {
+    holds: holds.length, rolls: rolls.length, incomplete,
+    holdP95: percentile(holds, 0.95),
+    rollP5: rolls.length >= TIMING_MIN_PAIRS ? percentile(rolls, 0.05) : null,
+    sameKeyP5: sameKeyGaps.length >= TIMING_MIN_PAIRS ? percentile(sameKeyGaps, 0.05) : null,
+    pressGapP10: presses.length >= TIMING_MIN_PAIRS ? percentile(presses, 0.1) : null
+  };
+  if (holds.length < TIMING_MIN_HOLDS) return { enough: false, stats, settings: {} };
+  const settings = { tappingTermMs: clampSetting("tappingTermMs", Math.round(stats.holdP95 + TIMING_MARGIN_MS)) };
+  if (stats.rollP5 !== null) settings.comboTimeoutMs = clampSetting("comboTimeoutMs", Math.round(stats.rollP5 / 2));
+  if (stats.sameKeyP5 !== null) settings.quickTapMs = clampSetting("quickTapMs", Math.round(stats.sameKeyP5));
+  if (stats.pressGapP10 !== null) settings.requirePriorIdleMs = clampSetting("requirePriorIdleMs", Math.round(stats.pressGapP10));
+  return { enough: true, stats, settings };
+}
+
 // Tastenaufnahme: ein Druck auf der Tastatur füllt den nächsten freien Platz eines Editors (Combo, Leader).
 // Zustandsautomat ohne DOM. Dieselbe Taste meldet MATRIX:, KEY_PRESS und SPLIT_KEY; eine gehaltene Taste zählt darum
 // nur einmal, bis ihr Loslassen kommt. Ein Druck der anderen Hälfte ändert nichts.

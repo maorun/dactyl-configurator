@@ -1964,6 +1964,58 @@ function lintResolvedCell(cfg, layer, r, c) {
   return a;
 }
 
+// Sendet die Aktion den Tastencode key? Direkt, über ein Tastenpaar PAIR_n oder über einen Makro-Schritt
+// Umlaut-Aktionen senden die tote Taste Alt + u (ß: Alt + s) und danach den Vokal
+const LINT_UMLAUT_KEYS = {
+  UMLAUT_AE: ["KEY_U", "KEY_A"], UMLAUT_OE: ["KEY_U", "KEY_O"], UMLAUT_UE: ["KEY_U", "KEY_U"],
+  UMLAUT_AE_UPPER: ["KEY_U", "KEY_A"], UMLAUT_OE_UPPER: ["KEY_U", "KEY_O"], UMLAUT_UE_UPPER: ["KEY_U", "KEY_U"],
+  UMLAUT_SZ: ["KEY_S"]
+};
+
+// Zwei Schreibweisen derselben Taste ("a" und KEY_A) gelten als gleich
+function lintSameKey(a, b) {
+  return typeof a === "string" && typeof b === "string" && (a === b || (actionCodeToNumeric(a) !== 0 && actionCodeToNumeric(a) === actionCodeToNumeric(b)));
+}
+
+function lintActionSends(cfg, action, key) {
+  if (lintSameKey(action, key)) return true;
+  if (LINT_UMLAUT_KEYS[action]) return LINT_UMLAUT_KEYS[action].some(k => lintSameKey(k, key));
+  const pairIdx = pairIndexFromCode(action);
+  if (pairIdx >= 0) {
+    const pair = Array.isArray(cfg.keyPairs) ? cfg.keyPairs[pairIdx] : null;
+    return !!pair && (lintSameKey(pair.first, key) || lintSameKey(pair.second, key));
+  }
+  const macroIdx = macroIndexFromCode(action);
+  if (macroIdx >= 0) {
+    const macro = Array.isArray(cfg.macros) ? cfg.macros[macroIdx] : null;
+    return !!macro && Array.isArray(macro.steps) && macro.steps.some(st => st && st.type !== "pause" && lintSameKey(st.code, key));
+  }
+  return false;
+}
+
+// Eine Überschreibung (Liste des Masters, gilt für beide Hälften) kann nur auslösen, wenn auf einer Ebene ihrer
+// Maske eine Taste einer Hälfte oder eine Combo den Code sendet: als Tap, Halten, Doppel-Tipp, Tastenpaar oder Makro
+function lintOverrideKeyMapped(configs, sides, profiles, o) {
+  const mask = keyOverrideLayerMask(o);
+  for (const side of sides) {
+    const cfg = configs[side];
+    for (let l = 0; l < NUM_LAYERS; l++) {
+      if (!((mask >> l) & 1)) continue;
+      for (let r = 0; r < NUM_ROWS; r++) {
+        for (let c = 0; c < NUM_COLS; c++) {
+          if (isWiredSwitch(r, c, profiles[side]) && lintEffectiveActions(cfg, l, r, c).some(a => lintActionSends(cfg, a, o.key))) return true;
+        }
+      }
+    }
+    const combos = Array.isArray(cfg.combos) ? cfg.combos : [];
+    if (combos.some(cb => lintComboCanFire(cb, profiles[side]) && (comboLayerMask(cb) & mask) !== 0 &&
+      typeof cb.action === "string" && lintActionSends(cfg, cb.action, o.key))) return true;
+    const seqs = Array.isArray(cfg.leaderSequences) ? cfg.leaderSequences : [];
+    if (seqs.some(q => q && typeof q.action === "string" && lintActionSends(cfg, q.action, o.key))) return true;
+  }
+  return false;
+}
+
 // Alle Aktionen, die diese aufgelöste Taste auslösen kann
 function lintEffectiveActions(cfg, layer, r, c) {
   const a = lintResolvedCell(cfg, layer, r, c);
@@ -2247,7 +2299,8 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
       const ids = comboKeys(cb).map(k => `${k.r}_${k.c}`).sort().join("|");
       const earlier = (seen.get(ids) || []).find(e => (e.mask & comboLayerMask(cb)) !== 0);
       if (earlier) {
-        add("warn", side, "combo-duplicate", `Combo ${earlier.index + 1} und Combo ${i + 1} nutzen dieselben ${comboKeys(cb).length === 3 ? "drei" : "zwei"} Tasten. Beide lösen gleichzeitig aus.`);
+        add("warn", side, "combo-duplicate", `Combo ${earlier.index + 1} und Combo ${i + 1} nutzen dieselben ${comboKeys(cb).length === 3 ? "drei" : "zwei"} Tasten. Beide lösen gleichzeitig aus.`,
+          { combo: i });
       } else {
         if (!seen.has(ids)) seen.set(ids, []);
         seen.get(ids).push({ index: i, mask: comboLayerMask(cb) });
@@ -2262,7 +2315,8 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
         if ((comboLayerMask(two) & comboLayerMask(three)) === 0) return;
         if (!comboKeys(two).every(k => ids3.includes(`${k.r}_${k.c}`))) return;
         add("warn", side, "combo-subset",
-          `Combo ${i + 1} nutzt zwei Tasten von Combo ${j + 1}. Beide lösen aus, wenn alle drei Tasten im Fenster gedrückt werden.`);
+          `Combo ${i + 1} nutzt zwei Tasten von Combo ${j + 1}. Beide lösen aus, wenn alle drei Tasten im Fenster gedrückt werden.`,
+          { combo: i });
       });
     });
     combos.forEach((cb, i) => {
@@ -2270,19 +2324,29 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
       if (!lintComboCanFire(cb, profiles[side])) return;
       for (const key of comboKeys(cb)) {
         const layers = [];
+        const holdLayers = [];
         for (let l = 0; l < NUM_LAYERS; l++) {
           // Nur auf Ebenen der Maske hält die Combo die Taste zurück
           if (!comboAppliesOnLayer(cb, l)) continue;
           // Mit dem Rückfall auf Ebene 0 wie die Firmware: eine transparente Taste erbt dort Halten und Doppel-Tipp
           const a = lintResolvedCell(cfg, l, key.r, key.c);
           if (a.tap !== "NONE" && (a.hold !== "NONE" || a.dtap !== "NONE")) layers.push(l);
+          if (a.tap !== "NONE" && a.hold !== "NONE") holdLayers.push(l);
         }
         if (layers.length) {
-          add("info", side, "combo-hold-cancelled",
+          // Eine Halte-Aktion (Mod-Tap) in einer Combo ist ein Fehler im Layout; nur ein Doppel-Tipp bleibt ein Hinweis
+          add(holdLayers.length ? "warn" : "info", side, "combo-hold-cancelled",
             `Taste R${key.r}C${key.c} ist Teil von Combo ${i + 1} und hat ${lintOnLayers(layers)} eine Halte- oder Doppel-Tipp-Aktion. ` +
-            "Löst die Combo aus, bricht sie diese Aktion ab.");
+            "Löst die Combo aus, bricht sie diese Aktion ab.", { combo: i });
         }
       }
+    });
+    // Eine Überschreibung, deren Taste auf keiner Ebene der Maske von einer Hälfte gesendet wird, löst nie aus
+    (Array.isArray(cfg.keyOverrides) ? cfg.keyOverrides : []).forEach((o, i) => {
+      if (!o || typeof o.key !== "string" || lintOverrideKeyMapped(configs, sides, profiles, o)) return;
+      add("warn", side, "override-key-unmapped",
+        `Überschreibung ${i} (${keyOverrideLabel(o, labelFor)}): Keine Taste, kein Tastenpaar und kein Makro sendet ${labelFor(o.key)}${keyOverrideLayerSuffix(keyOverrideLayerMask(o)) || " auf einer Ebene"}. Die Überschreibung löst nie aus.`,
+        { override: i });
     });
   }
 

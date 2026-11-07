@@ -31,6 +31,7 @@ function renderKeyOverrides() {
   empty.style.display = list.length ? "none" : "block";
   list.forEach((o, i) => {
     const tr = document.createElement("tr");
+    tr.dataset.overrideIndex = String(i);
     [String(i), keyOverrideLabel(o, keycodeLabel)].forEach(text => {
       const td = document.createElement("td");
       td.textContent = text;
@@ -72,6 +73,8 @@ function addKeyOverrideFromUI() {
   currentConfig.keyOverrides.push(entry);
   const idx = currentConfig.keyOverrides.length - 1;
   renderKeyOverrides();
+  // Die Layout-Prüfung (override-key-unmapped) hängt von der Liste ab und zeichnet sich mit der Matrix neu
+  renderMatrix();
   saveConfigToServer();
   markPendingSync({
     type: "key_override",
@@ -80,6 +83,7 @@ function addKeyOverrideFromUI() {
     revert: () => {
       if (currentConfig.keyOverrides.length === idx + 1) currentConfig.keyOverrides.pop();
       renderKeyOverrides();
+      renderMatrix();
       saveConfigToServer();
     }
   });
@@ -91,6 +95,8 @@ function deleteKeyOverride(idx) {
   const removed = list[idx];
   currentConfig.keyOverrides = list.filter((_, i) => i !== idx);
   renderKeyOverrides();
+  // Die Layout-Prüfung (override-key-unmapped) hängt von der Liste ab und zeichnet sich mit der Matrix neu
+  renderMatrix();
   saveConfigToServer();
   markPendingSync({
     type: "key_override",
@@ -99,6 +105,7 @@ function deleteKeyOverride(idx) {
     revert: () => {
       currentConfig.keyOverrides.splice(Math.min(idx, currentConfig.keyOverrides.length), 0, removed);
       renderKeyOverrides();
+      renderMatrix();
       saveConfigToServer();
     }
   });

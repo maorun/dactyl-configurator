@@ -42,8 +42,37 @@ function fillLayoutLintList(list, findings, withActions = false) {
       btn.addEventListener("click", () => removeAbsentKeyActions(f));
       li.appendChild(btn);
     }
+    if (withActions && (f.combo !== undefined || f.override !== undefined)) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "btn btn-outline btn-sm layout-lint-fix";
+      btn.textContent = "Zum Eintrag";
+      btn.title = f.override !== undefined ? `Springt zu Überschreibung ${f.override}.` : `Springt zu Combo ${f.combo + 1}.`;
+      btn.addEventListener("click", () => jumpToLintEntry(f));
+      li.appendChild(btn);
+    }
     list.appendChild(li);
   }
+}
+
+// Knopf "Zum Eintrag": wechselt auf die Hälfte des Befunds, öffnet den Tab "Combos" und hebt die Zeile hervor
+function jumpToLintEntry(finding) {
+  if (!finding.side || !SIDE_PROFILES[finding.side]) return;
+  if (finding.side !== editSide) switchEditSide(finding.side);
+  const tabBtn = document.querySelector('.tab-btn[data-tab="combos-tab"]');
+  if (tabBtn) tabBtn.click();
+  const row = finding.override !== undefined
+    ? document.querySelector(`#keyOverridesTableBody tr[data-override-index="${finding.override}"]`)
+    : document.querySelector(`#combosTableBody tr[data-combo-index="${finding.combo}"]`);
+  if (!row) {
+    showToast("Der Eintrag ist nicht mehr vorhanden.");
+    return;
+  }
+  row.scrollIntoView({ block: "center" });
+  row.classList.add("lint-jump-highlight");
+  // Ein zweiter Klick setzt die Zeit zurück, statt vom ersten Timer gekürzt zu werden
+  clearTimeout(row.lintJumpTimer);
+  row.lintJumpTimer = setTimeout(() => row.classList.remove("lint-jump-highlight"), 2500);
 }
 
 // Knopf "Entfernen" am Befund "Taste gibt es nicht": löscht die toten Aktionen als vorgemerkte, rückgängig

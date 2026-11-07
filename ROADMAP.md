@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Layout check rules for combos and overrides (`lintLayouts`)
-
-- **Rank:** Feature model. Total 28/40 (typing 3, configuration 8, harmony 8, safety 9). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js` (`lintLayouts`), `js/layout-lint-ui.js`.
-- **Problem:** The layout check does not find combos that use a Mod-Tap key, combos with the same key set, or key overrides that no key can trigger. The user finds these faults only while typing.
-- **Goal:** Add three rules to `lintLayouts`: a combo key with a hold action (warning), two combos with equal keys and overlapping layer masks (error), and a key override whose trigger key has no mapping on its layer mask (warning). Show the rules in the existing list with a jump to the entry.
-- **Acceptance test:** A unit test builds one layout for each rule and expects exactly one finding with the rule name; a clean layout returns no finding.
-
 ### Combo suggestions from frequent bigrams (`suggestCombos`)
 
 - **Rank:** Feature model. Total 28/40 (typing 6, configuration 6, harmony 8, safety 8). Effort M. Estimate.

@@ -1946,6 +1946,11 @@ body {
   color: var(--text-muted);
 }
 
+.lint-jump-highlight {
+  outline: 2px solid var(--accent, #38bdf8);
+  background: rgba(56, 189, 248, 0.15);
+}
+
 .layout-lint-fix {
   margin-left: 0.4rem;
 }

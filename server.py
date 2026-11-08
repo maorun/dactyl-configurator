@@ -303,6 +303,8 @@ KEY_TO_CPP = {
     "MO_5": "ACT_MO_5", "MO_6": "ACT_MO_6", "MO_7": "ACT_MO_7",
     "TG_0": "ACT_TG_0", "TG_1": "ACT_TG_1", "TG_2": "ACT_TG_2", "TG_3": "ACT_TG_3", "TG_4": "ACT_TG_4",
     "TG_5": "ACT_TG_5", "TG_6": "ACT_TG_6", "TG_7": "ACT_TG_7",
+    "TT_0": "(ACT_TT_BASE + 0)", "TT_1": "(ACT_TT_BASE + 1)", "TT_2": "(ACT_TT_BASE + 2)", "TT_3": "(ACT_TT_BASE + 3)",
+    "TT_4": "(ACT_TT_BASE + 4)", "TT_5": "(ACT_TT_BASE + 5)", "TT_6": "(ACT_TT_BASE + 6)", "TT_7": "(ACT_TT_BASE + 7)",
     "LAYER_UP": "ACT_LAYER_UP",
     "LAYER_DOWN": "ACT_LAYER_DOWN",
     "LAYER_LOCK": "ACT_LAYER_LOCK",
@@ -674,6 +676,8 @@ def generate_combos_cpp(combos):
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts
         if beh != 0 and act == "ACT_LAYER_LOCK":
             raise ValueError("Layer Lock funktioniert nur mit dem Verhalten \"Einzeltaste senden\".")
+        if act.startswith("(ACT_TT_BASE"):
+            raise ValueError("Combos unterstützen keine Tap-Toggle-Ebene.")
         if act.startswith("(ACT_OSL_BASE"):
             raise ValueError("Combos unterstützen keine One-Shot-Ebene.")
         if beh == 1 and act in ONE_SHOT_CPP:

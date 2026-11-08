@@ -82,6 +82,14 @@ function getHeldKeyboardLayer(side = editSide) {
           const l = parseInt(k.tap.replace("MO_", ""), 10);
           if (!isNaN(l) && l > 0 && l < 8) return l;
         }
+        if (k && k.tap && /^TT_[0-7]$/.test(k.tap)) {
+          const l = Number(k.tap.slice(3));
+          if (l > 0) return l;
+        }
+        if (k && k.hold && /^TT_[0-7]$/.test(k.hold)) {
+          const l = Number(k.hold.slice(3));
+          if (l > 0) return l;
+        }
         if (k && k.hold && k.hold.startsWith("MO_")) {
           const l = parseInt(k.hold.replace("MO_", ""), 10);
           if (!isNaN(l) && l > 0 && l < 8) return l;
@@ -148,10 +156,11 @@ function findLayerTriggerKey(targetLayer, side = editSide) {
   if (!base) return null;
   const moCode = `MO_${targetLayer}`;
   const tgCode = `TG_${targetLayer}`;
+  const ttCode = `TT_${targetLayer}`;
   for (let r = 0; r < 6; r++) {
     for (let c = 0; c < 7; c++) {
       const k = base[r] && base[r][c];
-      if (k && [k.tap, k.hold, k.dtap].some(a => a === moCode || a === tgCode)) {
+      if (k && [k.tap, k.hold, k.dtap].some(a => a === moCode || a === tgCode || a === ttCode)) {
         return { r, c, label: k.label || moCode };
       }
     }

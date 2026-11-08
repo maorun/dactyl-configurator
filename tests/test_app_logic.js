@@ -53,7 +53,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              computeTimingRecommendations, computePerKeyTimingSuggestions, applyPerKeyTimingSuggestions, revertPerKeyTimingSuggestions, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, COMBO_PRESETS, LEADER_PRESETS, applyComboPreset, applyLeaderPreset, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isKeepAwakeCode, isDeepSleepCode, isClearStateCode, isBleHostCode,
+             macroSaveIndex, COMBO_PRESETS, LEADER_PRESETS, applyComboPreset, applyLeaderPreset, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isTapToggleCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isKeepAwakeCode, isDeepSleepCode, isClearStateCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -6476,6 +6476,34 @@ test("Num Word: Code passt zur Firmware, Tastenpalette, Label und Rundlauf; Comb
   assert.throws(() => api.validateConfigShape(cfg, R), /Num Word/);
 });
 
+test("Tap-Toggle-Ebenen: Codes passen zur Firmware, Palette, Label, Tausch und Combo-Ablehnung", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(common, /#define ACT_TT_BASE\s+0x193/);
+  assert.match(common, /#define NUM_TT_ACTIONS\s+8/);
+  assert.ok(Number(/DACTYL_FW_VERSION (\d+)/.exec(read("firmware/dactyl_right/DactylVersion.h"))[1]) >= 50);
+  for (let n = 0; n < 8; n++) {
+    const name = `TT_${n}`;
+    assert.strictEqual(api.actionCodeToNumeric(name), 0x193 + n);
+    assert.strictEqual(api.keyToNumericActions({ tap: name }).tapCode, 0x193 + n);
+    assert.ok(api.isTapToggleCode(name) && api.isTapToggleCode("ACT_" + name));
+    assert.ok(api.KEYCODES.some(g => g.group === "Layer Umschalter" && g.keys.some(k => k.code === name)));
+    assert.strictEqual(api.keyPressRole(name), "silent");
+  }
+  assert.ok(!api.isTapToggleCode("TT_8") && !api.isTapToggleCode("TT_UP") && !api.isTapToggleCode(""));
+  assert.ok(api.isTtCode("TT_UP") && !api.isTtCode("TT_1"));
+  const cfg = JSON.parse(JSON.stringify(R.defaultConfig));
+  cfg.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "TT_1" }];
+  assert.throws(() => api.validateConfigShape(cfg, R), /Tap-Toggle/);
+  // Eine TT_n auf der eigenen Ebene rastet aus: kein Layer-Trap
+  assert.strictEqual(api.holdSublabel("TT_3"), "T3");
+  // Ebenen tauschen: TT_n folgt wie MO_n und TG_n
+  const sw = JSON.parse(JSON.stringify(R.defaultConfig));
+  sw.layers[0][2][1] = { tap: "TT_1", hold: "ACT_TT_2" };
+  const out = JSON.parse(JSON.stringify(api.swapLayersWithRefs(sw, 1, 2)));
+  assert.strictEqual(out.layers[0][2][1].tap, "TT_2");
+  assert.strictEqual(out.layers[0][2][1].hold, "ACT_TT_1");
+});
+
 test("Tapping-Term-Tasten: Codes passen zur Firmware, Palette, Label und Rundlauf; Combos lehnen sie ab", () => {
   const common = read("firmware/dactyl_right/DactylCommon.h");
   assert.match(common, /#define ACT_TT_UP\s+0x18E/);
@@ -6552,7 +6580,7 @@ test("Deep Sleep: Code passt zur Firmware, Palette, Label und Rundlauf; Combos l
 
 test("Clear State: Code passt zur Firmware, Palette, Label und Rundlauf; Combos lehnen ihn ab, beide Hälften erlauben ihn", () => {
   assert.match(read("firmware/dactyl_right/DactylCommon.h"), /#define ACT_CLEAR_STATE\s+0x192/);
-  assert.match(read("firmware/dactyl_right/DactylVersion.h"), /#define DACTYL_FW_VERSION 49\b/);
+  assert.match(read("firmware/dactyl_right/DactylVersion.h"), /#define DACTYL_FW_VERSION 50\b/);
   assert.strictEqual(api.actionCodeToNumeric("CLEAR_STATE"), 0x192);
   assert.strictEqual(api.keyToNumericActions({ tap: "CLEAR_STATE" }).tapCode, 0x192);
   assert.ok(api.isClearStateCode("CLEAR_STATE") && api.isClearStateCode("ACT_CLEAR_STATE"));

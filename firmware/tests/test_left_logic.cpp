@@ -20,6 +20,18 @@ static int testsPassed = 0;
   } } instance_##name; \
   void name()
 
+TEST(test_tap_toggle_action_codes) {
+  assert(ACT_TT_BASE == 0x193 && NUM_TT_ACTIONS == 8);
+  assert(ACT_TT_BASE == ACT_CLEAR_STATE + 1);
+  for (uint16_t l = 0; l < NUM_TT_ACTIONS; l++) {
+    assert(isTapToggleAction(ACT_TT_BASE + l));
+    assert(tapToggleLayer(ACT_TT_BASE + l) == l);
+  }
+  assert(!isTapToggleAction(ACT_CLEAR_STATE));
+  assert(!isTapToggleAction(ACT_TT_BASE + NUM_TT_ACTIONS));
+  assert(!isTapToggleAction(ACT_MO_1) && !isTapToggleAction(ACT_TG_1));
+}
+
 TEST(test_split_event_layout) {
   SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 0x81, 0);
   const uint8_t *b = reinterpret_cast<const uint8_t *>(&ev);

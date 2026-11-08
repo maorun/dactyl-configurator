@@ -716,6 +716,22 @@ class TestServerAndCodegen(unittest.TestCase):
             with self.assertRaises(ValueError):
                 server.generate_combos_cpp([combo])
 
+    def test_tap_toggle_layers_match_firmware_and_are_no_combo_action(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_TT_BASE\s+0x193")
+        self.assertRegex(common, r"#define NUM_TT_ACTIONS\s+8")
+        with open(server.DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        for n in range(8):
+            self.assertEqual(server.code_to_cpp(f"TT_{n}"), f"(ACT_TT_BASE + {n})")
+            cfg["layers"][0][2][1] = {"tap": f"TT_{n}"}
+            server.validate_config(cfg, "R")
+            self.assertIn(f"(ACT_TT_BASE + {n})", server.generate_keymap_cpp(cfg["layers"]))
+        combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": 0, "action": "TT_1"}
+        with self.assertRaises(ValueError):
+            server.generate_combos_cpp([combo])
+
     def test_tt_keys_match_firmware_and_are_no_combo_action(self):
         with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
             common = f.read()

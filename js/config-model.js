@@ -1065,6 +1065,7 @@ function validateConfigShape(cfg, profile) {
   if ((cfg.combos || []).some(cb => cb && macroIndexFromCode(cb.action) >= 0)) throw new Error("Combos unterstützen keine Makros.");
   if ((cfg.combos || []).some(cb => cb && isMouseMoveCode(cb.action))) throw new Error("Combos unterstützen keine Mausbewegung.");
   if ((cfg.combos || []).some(cb => cb && isOslCode(cb.action))) throw new Error("Combos unterstützen keine One-Shot-Ebene.");
+  if ((cfg.combos || []).some(cb => cb && isTapToggleCode(cb.action))) throw new Error("Combos unterstützen keine Tap-Toggle-Ebene.");
   if ((cfg.combos || []).some(cb => cb && isDynamicMacroCode(cb.action))) throw new Error("Combos unterstützen keine dynamischen Makros.");
   if ((cfg.combos || []).some(cb => cb && isLeaderCode(cb.action))) throw new Error("Combos unterstützen kein Leader.");
   if ((cfg.combos || []).some(cb => cb && isKeyLockCode(cb.action))) throw new Error("Combos unterstützen kein Key Lock.");
@@ -1146,7 +1147,7 @@ function swapLayersWithRefs(config, layerA, layerB) {
   const mapLayer = n => (n === layerA ? layerB : n === layerB ? layerA : n);
   const mapAction = code => {
     if (typeof code !== "string") return code;
-    const m = /^(ACT_)?(MO|TG|OSL)_([0-7])$/.exec(code);
+    const m = /^(ACT_)?(MO|TG|OSL|TT)_([0-7])$/.exec(code);
     return m ? `${m[1] || ""}${m[2]}_${mapLayer(Number(m[3]))}` : code;
   };
   const out = JSON.parse(JSON.stringify(config));
@@ -1847,7 +1848,7 @@ function keyPressRole(tap) {
   if (tap === "KEY_BACKSPACE") return "backspace";
   const n = actionCodeToNumeric(tap);
   const silent = n === 0 || (n >= 0x80 && n <= 0x87) || (n >= 0x100 && n <= 0x119) || (n >= 0x160 && n <= 0x167)
-    || (n >= 0x180 && n <= 0x192);
+    || (n >= 0x180 && n <= 0x19A);
   return silent ? "silent" : "typed";
 }
 
@@ -2439,10 +2440,10 @@ function lintEffectiveActions(cfg, layer, r, c) {
   return [a.tap, a.hold, a.dtap].filter(x => x !== "NONE");
 }
 
-// MO_n / TG_n / OSL_n / LAYER_UP / LAYER_DOWN / LAYER_LOCK (auch als Firmware-Name ACT_...); sonst null
+// MO_n / TG_n / OSL_n / TT_n / LAYER_UP / LAYER_DOWN / LAYER_LOCK (auch als Firmware-Name ACT_...); sonst null
 function lintLayerAction(code) {
   const name = String(code || "").replace(/^ACT_/, "");
-  const m = /^(MO|TG|OSL)_([0-7])$/.exec(name);
+  const m = /^(MO|TG|OSL|TT)_([0-7])$/.exec(name);
   if (m) return { kind: m[1], layer: Number(m[2]) };
   if (name === "LAYER_UP" || name === "LAYER_DOWN" || name === "LAYER_LOCK") return { kind: name };
   return null;
@@ -2634,7 +2635,7 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
           let locks = false;
           // OSL wirkt wie MO_n, nur für den nächsten Tastendruck: die Ebene ist erreichbar, rastet aber nicht ein
           if (a.kind === "MO" || a.kind === "OSL") target = a.layer;
-          else if (a.kind === "TG") { target = a.layer; locks = true; }
+          else if (a.kind === "TG" || a.kind === "TT") { target = a.layer; locks = true; }
           else if (a.kind === "LAYER_UP") { target = (l + 1) % NUM_LAYERS; locks = true; }
           else if (a.kind === "LAYER_DOWN") { target = (l + NUM_LAYERS - 1) % NUM_LAYERS; locks = true; }
           // LAYER_LOCK auf Ebene l rastet die gehaltene MO-Ebene ein (Ebene l, wenn sie per MO aktiv ist)
@@ -2680,7 +2681,7 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
   const trapped = [...lockable].sort((a, b) => a - b).filter(n =>
     // Rückweg per Combo: eine Combo auf Ebene n, die n oder alle Ebenen (0) umschaltet
     !comboToggles.some(t => (t.target === n || t.target === 0) && ((t.mask >> n) & 1)) &&
-    !onLayer[n].some(a => (a.kind === "TG" && (a.layer === n || a.layer === 0)) || a.kind === "LAYER_UP" || a.kind === "LAYER_DOWN" || a.kind === "LAYER_LOCK"));
+    !onLayer[n].some(a => ((a.kind === "TG" || a.kind === "TT") && (a.layer === n || a.layer === 0)) || a.kind === "LAYER_UP" || a.kind === "LAYER_DOWN" || a.kind === "LAYER_LOCK"));
   if (trapped.length) {
     add("warn", null, "layer-trap",
       `${lintLayerName(trapped)} ${trapped.length === 1 ? "lässt" : "lassen"} sich einrasten, aber dort gibt es keine Taste zurück ` +
@@ -2789,7 +2790,7 @@ function buildLayerOverview(cfg, profile) {
       const c0 = lintCellAt(cfg, 0, r, c);
       for (const act of [c0.tap, c0.hold]) {
         const la = lintLayerAction(act);
-        if (la && la.kind === "MO" && isValidIndex(la.layer, NUM_LAYERS) && la.layer > 0) {
+        if (la && (la.kind === "MO" || la.kind === "TT") && isValidIndex(la.layer, NUM_LAYERS) && la.layer > 0) {
           layer0Triggers.set(`${r}_${c}`, la.layer);
         }
       }
@@ -3049,7 +3050,7 @@ function findCharPosition(ch, configs, profiles, sideOrder) {
       let layerKey = null;
       if (l > 0) {
         layerKey = practiceFindKey(configs, profiles, sides, [0, ...Array.from({ length: NUM_LAYERS }, (_, i) => i).filter(i => i > 0 && i !== l)],
-          cell => cell.tap === `MO_${l}` || cell.hold === `MO_${l}`);
+          cell => cell.tap === `MO_${l}` || cell.hold === `MO_${l}` || cell.hold === `TT_${l}` || cell.tap === `TT_${l}`);
         if (!layerKey) continue;
       }
       let shiftKey = null;

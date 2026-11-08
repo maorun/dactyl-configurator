@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Tap-Toggle layer keys (`ACT_TT_BASE`)
-
-- **Rank:** Feature model. Total 32/40 (typing 8, configuration 7, harmony 8, safety 9). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `firmware/dactyl_left/dactyl_left.ino`, `js/keycodes.js`, `server.py`.
-- **Problem:** The user must assign two separate keys (`MO_n` and `TG_n`) to use a layer momentarily for single keys and persistently for longer typing.
-- **Goal:** Add Tap-Toggle layer actions `TT_0` to `TT_7` (`0x193` .. `0x19A`). Holding the key activates the layer momentarily (`MO_n`). Tapping the key two times quickly toggles the layer on or off like `TG_n`. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test holds `TT_1`, verifies that layer 1 is active, releases it and expects layer 0; then taps `TT_1` twice quickly and expects layer 1 toggled on until another tap turns it off.
-
 ### Auto-mouse layer (`autoMouseLayer`, `mouseTimeoutMs`)
 
 - **Rank:** Feature model. Total 30/40 (typing 7, configuration 7, harmony 8, safety 8). Effort M. Estimate.

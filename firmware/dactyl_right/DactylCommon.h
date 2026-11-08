@@ -145,6 +145,12 @@
 // Clear-state key: ein Druck beendet Makros, Mausbewegung, Ebenen-Einrastungen und alle Modi (Caps Word, Num Word, Swap hands ...)
 #define ACT_CLEAR_STATE          0x192
 
+// Tap-Toggle-Ebene: halten = MO_n, zweimal schnell tippen = TG_n (0x193 .. 0x19A für Ebene 0..7)
+#define ACT_TT_BASE              0x193
+#define NUM_TT_ACTIONS           8
+inline bool isTapToggleAction(uint16_t a) { return a >= ACT_TT_BASE && a < ACT_TT_BASE + NUM_TT_ACTIONS; }
+inline uint8_t tapToggleLayer(uint16_t a) { return (uint8_t)(a - ACT_TT_BASE); }
+
 #define NUM_LAYERS 8
 
 #define MAX_COMBOS 16

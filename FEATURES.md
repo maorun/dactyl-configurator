@@ -207,6 +207,20 @@ Rules for this file:
 - `ACT_NUM_WORD` is no combo action: `ADD_COMBO`, `server.py` (`NUM_WORD_CPP`) and the app reject it. `REPEAT` does not repeat it. The state lives in RAM only. `DEVICE_INFO` grows by `"nwl":N,` (7 bytes); the line stays under the BLE limit of 512 bytes (a test checks it).
 - Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 43; flash both halves.
 
+### Tap-Toggle layer keys (`ACT_TT_BASE`)
+
+- `ACT_TT_BASE` (`0x193`) and `NUM_TT_ACTIONS` (8) define the actions `TT_0` .. `TT_7` (`0x193` .. `0x19A`, one for each layer `0..7`). The helpers `isTapToggleAction(a)` and `tapToggleLayer(a)` are in `DactylCommon.h`.
+- One key does the work of `MO_n` and `TG_n`. Hold the key: the target layer is active like `MO_n` (`momentaryLayers[]`). Release the key: the momentary layer ends.
+- Tap the key two times quickly: the second press comes less than `tappingTermMs` after the first release. The second press toggles the target layer on or off like `TG_n` (`toggleLayers[]`). `TT_0` clears all toggled layers like `TG_0`.
+- A single tap ends the momentary layer at the release. A press held for `tappingTermMs` or longer does not arm a double tap. A second press that comes too late acts as a new first press.
+- The window is `tappingTermMs` of the half. A per-key tapping term does not apply. The state is per layer, not per key: do not assign the same `TT_n` to two keys.
+- The state (`tapToggleArmed[]` and the time stamps in `DactylLogic.h`) lives in RAM only. `RELEASE_ALL`, a link loss and the loss of the host clear it (`tapToggleReset`).
+- The layer sync (`SPLIT_OP_LAYER_STATE`) carries the momentary and toggled layers to the other half like for `MO_n` and `TG_n`. Num Word keeps its layer on this key like on `MO_n`.
+- `TT_n` is no combo action: `ADD_COMBO`, `server.py` and the app reject it. The app palette shows the keys in the group "Layer Umschalter" and in the layer palette. The keycap label is `TTn`.
+- "Ebenen tauschen" (`swapLayersWithRefs`) swaps `TT_n` references like `MO_n`, `TG_n` and `OSL_n`. The layer graph check counts `TT_n` as a reachable and lockable layer.
+- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 50; flash both halves.
+- Tests: `firmware/tests/test_firmware_logic.cpp` ("test_tap_toggle_hold_release_and_double_tap_latch"), `firmware/tests/test_left_logic.cpp`, `tests/test_app_logic.js`, `tests/test_server.py`.
+
 ### Tapping term tune keys (`ACT_TT_UP`, `ACT_TT_DOWN`)
 
 - `ACT_TT_UP` (`0x18E`, app name `TT_UP`, keycap label `TT+`) and `ACT_TT_DOWN` (`0x18F`, app name `TT_DOWN`, keycap label `TT-`) change `tappingTermMs` of the half during real typing. The user does not open the app to find a good value.

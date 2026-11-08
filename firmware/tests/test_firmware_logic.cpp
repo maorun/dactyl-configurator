@@ -155,6 +155,7 @@ static int testsPassed = 0;
 // Reset mock state before tests
 void resetState() {
   swapClearAll();
+  tapToggleReset();
   remoteMomentaryLayers = 0;
   oslArmed = remoteOslArmed = oslHeld = oslUsed = oslUsedToSend = remoteOslIgnore = 0;
   for (int l = 0; l < NUM_LAYERS; l++) { oslTerm[l] = 0; oslPressTime[l] = 0; }
@@ -11071,6 +11072,107 @@ TEST(test_mode_state_get_info_resends_on_usb_but_never_over_ble) {
   for (const auto &n : mockChar.notifications) assert(n.find("MODE_STATE") == std::string::npos);
   assert(mockChar.value.find("MODE_STATE") == std::string::npos);
   bleKeyboard.oneShot.capsWord = bleKeyboard.oneShot.sentenceCase = false;
+}
+
+TEST(test_tap_toggle_hold_release_and_double_tap_latch) {
+  assert(ACT_TT_BASE == 0x193 && NUM_TT_ACTIONS == 8 && DACTYL_FW_VERSION >= 50);
+  assert(isTapToggleAction(0x193) && isTapToggleAction(0x19A) && !isTapToggleAction(0x192) && !isTapToggleAction(0x19B));
+  assert(tapToggleLayer(0x194) == 1);
+  resetState();
+  KEYMAP[0][5][0] = ACT_TT_BASE + 1;
+  tappingTermMs = 200;
+  // Halten: Ebene 1 aktiv, Loslassen nach dem Tapping-Term: zurück auf Ebene 0, kein Umschalten
+  setMillis(1000); pressKey(5, 0, true);
+  assert(getActiveLayer() == 1);
+  setMillis(1500); pressKey(5, 0, false);
+  assert(getActiveLayer() == 0);
+  setMillis(1600); pressKey(5, 0, true);       // kein vorgemerkter Tipp: kein Umschalten
+  assert(!toggleLayers[1]);
+  setMillis(1900); pressKey(5, 0, false);
+  assert(getActiveLayer() == 0);
+  // Einzeltipp: Ebene nach dem Loslassen wieder aus
+  setMillis(3000); pressKey(5, 0, true); setMillis(3050); pressKey(5, 0, false);
+  assert(getActiveLayer() == 0 && !toggleLayers[1]);
+  // Zweiter Tipp innerhalb des Tapping-Terms: Ebene 1 rastet ein
+  setMillis(3100); pressKey(5, 0, true);
+  assert(toggleLayers[1] && getActiveLayer() == 1);
+  setMillis(3150); pressKey(5, 0, false);
+  assert(toggleLayers[1] && getActiveLayer() == 1);
+  // Erneutes Doppeltippen schaltet wieder aus
+  setMillis(4000); pressKey(5, 0, true); setMillis(4050); pressKey(5, 0, false);
+  setMillis(4100); pressKey(5, 0, true); setMillis(4150); pressKey(5, 0, false);
+  assert(!toggleLayers[1] && getActiveLayer() == 0);
+}
+
+TEST(test_tap_toggle_second_tap_too_late_does_not_latch) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_TT_BASE + 2;
+  tappingTermMs = 200;
+  setMillis(1000); pressKey(5, 0, true); setMillis(1050); pressKey(5, 0, false);
+  setMillis(1400); pressKey(5, 0, true);       // 350 ms nach dem Loslassen
+  assert(!toggleLayers[2] && getActiveLayer() == 2);   // nur MO
+  setMillis(1450); pressKey(5, 0, false);
+  assert(getActiveLayer() == 0);
+}
+
+TEST(test_tap_toggle_reset_state_and_combo_rejection) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_TT_BASE + 1;
+  tappingTermMs = 200;
+  setMillis(1000); pressKey(5, 0, true); setMillis(1050); pressKey(5, 0, false);
+  assert(tapToggleArmed[1]);
+  resetState();
+  assert(!tapToggleArmed[1] && !tapToggleHeld[1] && !tapToggleSecond[1]);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 403", false);   // ACT_TT_BASE + 0
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 410", false);   // ACT_TT_BASE + 7
+  assert(numCombos == 0);
+  assert(isNumWordKeepAction(ACT_TT_BASE + 3));
+}
+
+TEST(test_tap_toggle_hold_at_term_does_not_arm_and_replayed_release) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_TT_BASE + 1;
+  tappingTermMs = 200;
+  // Halten genau tappingTermMs ist kein Tipp
+  setMillis(1000); pressKey(5, 0, true); setMillis(1200); pressKey(5, 0, false);
+  assert(!tapToggleArmed[1]);
+  // Ein Loslassen vor dem Druck-Zeitstempel (nachgespielt) zählt als Abstand 0: Tipp
+  tapTogglePress(1, 5000);
+  tapToggleRelease(1, 4990);
+  assert(tapToggleArmed[1]);
+  assert(localMomentaryLayerMask() == 0);
+  tapTogglePress(1, 5100);
+  assert(localMomentaryLayerMask() == (1u << 1) && toggleLayers[1]);
+  tapToggleRelease(1, 5120);
+  resetState();
+}
+
+TEST(test_tap_toggle_boundary_reset_and_tt0) {
+  resetState();
+  KEYMAP[0][5][0] = ACT_TT_BASE + 1;
+  KEYMAP[0][5][1] = ACT_TT_BASE;
+  tappingTermMs = 200;
+  // Abstand genau tappingTermMs rastet nicht ein
+  setMillis(1000); pressKey(5, 0, true); setMillis(1050); pressKey(5, 0, false);
+  setMillis(1250); pressKey(5, 0, true);
+  assert(!toggleLayers[1]);
+  setMillis(1300); pressKey(5, 0, false);
+  // RELEASE_ALL zwischen den Tipps löscht die Vormerkung; das späte Loslassen ändert nichts
+  setMillis(2000); pressKey(5, 0, true); setMillis(2050); pressKey(5, 0, false);
+  oslClearAll();
+  setMillis(2100); pressKey(5, 0, true);
+  assert(!toggleLayers[1]);
+  oslClearAll();
+  setMillis(2120); pressKey(5, 0, false);
+  assert(!momentaryLayers[1] && getActiveLayer() == 0);
+  setMillis(2130); pressKey(5, 0, true);
+  assert(!toggleLayers[1]);
+  setMillis(2140); pressKey(5, 0, false);
+  // TT_0 räumt alle eingerasteten Ebenen
+  toggleLayers[1] = true;
+  setMillis(3000); pressKey(5, 1, true); setMillis(3040); pressKey(5, 1, false);
+  setMillis(3080); pressKey(5, 1, true); setMillis(3120); pressKey(5, 1, false);
+  assert(!toggleLayers[1] && getActiveLayer() == 0);
 }
 
 int main() {

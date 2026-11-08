@@ -121,6 +121,7 @@ test("Einstellung numWordLayer: beide Sketche deklarieren sie, DactylLogic.h mel
   for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
     assert.ok(/^uint8_t numWordLayer = 1;$/m.test(src), `${name}: numWordLayer fehlt im Sketch`);
     assert.ok(src.includes("numWordExpire(millis());"), `${name}: numWordExpire fehlt in loop()`);
+    assert.ok(src.includes("ttExpire(millis());"), `${name}: ttExpire fehlt in loop()`);
   }
   const logic = read("firmware/dactyl_right/DactylLogic.h");
   assert.ok(logic.includes('\\"nwl\\":%u'), "GET_INFO meldet nwl nicht");

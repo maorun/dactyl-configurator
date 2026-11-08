@@ -285,7 +285,7 @@ KEY_TO_CPP = {
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
     "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "SENTENCE_CASE": "ACT_SENTENCE_CASE", "REPEAT": "ACT_REPEAT", "ALT_REPEAT": "ACT_ALT_REPEAT",
     "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY", "LEADER": "ACT_LEADER", "KEY_LOCK": "ACT_KEY_LOCK",
-    "HOST_1": "(ACT_HOST_BASE + 0)", "HOST_2": "(ACT_HOST_BASE + 1)", "HOST_3": "(ACT_HOST_BASE + 2)", "SWAP_HANDS": "ACT_SWAP_HANDS", "NUM_WORD": "ACT_NUM_WORD",
+    "HOST_1": "(ACT_HOST_BASE + 0)", "HOST_2": "(ACT_HOST_BASE + 1)", "HOST_3": "(ACT_HOST_BASE + 2)", "SWAP_HANDS": "ACT_SWAP_HANDS", "NUM_WORD": "ACT_NUM_WORD", "TT_UP": "ACT_TT_UP", "TT_DOWN": "ACT_TT_DOWN",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -588,6 +588,9 @@ SWAP_HANDS_CPP = {"ACT_SWAP_HANDS"}
 # Num Word schaltet eine Ebene um; als Combo-Aktion ergibt es nichts
 NUM_WORD_CPP = {"ACT_NUM_WORD"}
 
+# Die Tapping-Term-Tasten ändern tappingTermMs; als Combo-Aktion ergeben sie nichts
+TT_CPP = {"ACT_TT_UP", "ACT_TT_DOWN"}
+
 # BLE-Host-Slots wechseln die Verbindung des Masters; als Combo-Aktion und auf der linken Hälfte ergeben sie nichts
 BLE_HOST_CPP = {f"(ACT_HOST_BASE + {n})" for n in range(3)}
 
@@ -629,6 +632,8 @@ def generate_combos_cpp(combos):
             raise ValueError("Combos unterstützen kein Swap Hands.")
         if act in NUM_WORD_CPP:
             raise ValueError("Combos unterstützen kein Num Word.")
+        if act in TT_CPP:
+            raise ValueError("Combos unterstützen keine Tapping-Term-Tasten.")
         if act in BLE_HOST_CPP:
             raise ValueError("Combos unterstützen keine BLE-Host-Slots.")
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts

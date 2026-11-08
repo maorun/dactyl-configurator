@@ -222,6 +222,7 @@ void resetState() {
   retroTap = 0;
   numWordLayer = 1;
   numWordActive = false;
+  ttReset();
   autoShift = 0;
   autoShiftMs = 175;
   tapTermsCompiledIn = false;
@@ -10449,6 +10450,115 @@ TEST(test_num_word_is_no_combo_action) {
   resetState();
   handleConfigCommand("ADD_COMBO 2 1 2 2 0 397", false);          // ACT_NUM_WORD = 0x18D
   assert(numCombos == 0);
+}
+
+// Tapping-Term-Tasten (ACT_TT_UP, ACT_TT_DOWN): Tipp ändert tappingTermMs im RAM, beide lange gehalten speichern im NVS
+static void ttSetup() {
+  resetState();
+  KEYMAP[0][5][0] = ACT_TT_UP;
+  KEYMAP[0][5][1] = ACT_TT_DOWN;
+  tappingTermMs = 200;
+}
+
+TEST(test_tt_keys_tap_changes_ram_and_reboot_restores_nvs) {
+  assert(ACT_TT_UP == 0x18E && ACT_TT_DOWN == 0x18F && ACT_TT_UP > ACT_NUM_WORD);
+  ttSetup();
+  assert(saveTappingTermToNVS(200));
+  setMillis(1000); pressKey(5, 0, true); setMillis(1050); pressKey(5, 0, false);
+  setMillis(1100); pressKey(5, 0, true); setMillis(1150); pressKey(5, 0, false);
+  assert(tappingTermMs == 220);
+  setMillis(1200); pressKey(5, 1, true); setMillis(1250); pressKey(5, 1, false);
+  assert(tappingTermMs == 210);
+  assert(bleKeyboard.pressedKeys.empty());
+  loadKeymapFromNVS();                              // Neustart ohne Speichern
+  assert(tappingTermMs == 200);
+}
+
+TEST(test_tt_keys_clamp_to_range) {
+  ttSetup();
+  tappingTermMs = 495;
+  for (int i = 0; i < 3; i++) { setMillis(1000 + i * 100); pressKey(5, 0, true); pressKey(5, 0, false); }
+  assert(tappingTermMs == 500);
+  tappingTermMs = 105;
+  for (int i = 0; i < 3; i++) { setMillis(2000 + i * 100); pressKey(5, 1, true); pressKey(5, 1, false); }
+  assert(tappingTermMs == 100);
+}
+
+TEST(test_tt_keys_long_press_of_both_saves_to_nvs) {
+  ttSetup();
+  assert(saveTappingTermToNVS(200));
+  setMillis(1000); pressKey(5, 0, true); pressKey(5, 0, false);
+  setMillis(1100); pressKey(5, 0, true); pressKey(5, 0, false);
+  assert(tappingTermMs == 220);
+  setMillis(2000); pressKey(5, 0, true); pressKey(5, 1, true);
+  setMillis(2900); ttExpire(2900);                  // noch nicht lange genug
+  loadKeymapFromNVS();
+  assert(tappingTermMs == 200);
+  tappingTermMs = 220;
+  setMillis(3050); ttExpire(3050);                  // 1050 ms: speichert
+  tappingTermMs = 300;
+  loadKeymapFromNVS();
+  assert(tappingTermMs == 220);
+  pressKey(5, 0, false); pressKey(5, 1, false);
+  assert(tappingTermMs == 220);                     // Loslassen nach dem Doppeldruck ist kein Tipp
+  setMillis(4000); pressKey(5, 1, true); pressKey(5, 1, false);
+  assert(tappingTermMs == 210);
+}
+
+TEST(test_tt_keys_are_no_combo_action) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 398", false);          // ACT_TT_UP = 0x18E
+  assert(numCombos == 0);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 399", false);          // ACT_TT_DOWN = 0x18F
+  assert(numCombos == 0);
+}
+
+TEST(test_tt_keys_reset_on_release_all_and_abort_leader) {
+  ttSetup();
+  setMillis(1000); pressKey(5, 0, true); pressKey(5, 1, true);
+  assert(ttChord && ttUpHeld && ttDownHeld);
+  oslClearAll();                                    // RELEASE_ALL, Link- oder Host-Verlust
+  assert(!ttChord && !ttUpHeld && !ttDownHeld);
+  setMillis(1100); pressKey(5, 0, false); pressKey(5, 1, false);
+  assert(tappingTermMs == 200);                     // spätes Loslassen ändert nichts
+  setMillis(3000); ttExpire(3000);
+  // Leader-Erfassung endet an einer TT-Taste
+  leaderMapKeys();
+  KEYMAP[0][2][3] = ACT_TT_UP;
+  setMillis(4000); dmTap(0, 0);
+  assert(leaderState.active);
+  setMillis(4100); dmTap(2, 3);
+  assert(!leaderState.active && leaderNoOtherKeys());
+}
+
+TEST(test_tt_keys_repeated_chord_saves_again_while_one_key_stays_held) {
+  ttSetup();
+  assert(saveTappingTermToNVS(200));
+  setMillis(1000); pressKey(5, 0, true); pressKey(5, 1, true);
+  setMillis(2100); ttExpire(2100);                  // erster Speichervorgang: 200
+  setMillis(2200); pressKey(5, 1, false);           // Chord bleibt, solange eine Taste gehalten wird
+  assert(tappingTermMs == 200);
+  tappingTermMs = 240;
+  setMillis(2300); pressKey(5, 1, true);            // zweiter Druck: neuer Chord
+  setMillis(2400); ttExpire(2400);
+  tappingTermMs = 300;
+  loadKeymapFromNVS();
+  assert(tappingTermMs == 200);                     // noch keine 1000 ms
+  tappingTermMs = 240;
+  setMillis(3400); ttExpire(3400);
+  tappingTermMs = 300;
+  loadKeymapFromNVS();
+  assert(tappingTermMs == 240);
+}
+
+TEST(test_tt_keys_keep_num_word_open) {
+  ttSetup();
+  KEYMAP[0][2][3] = ACT_NUM_WORD;
+  setMillis(1000); pressKey(2, 3, true); pressKey(2, 3, false);
+  assert(numWordActive);
+  KEYMAP[1][5][0] = ACT_TT_UP;
+  setMillis(1100); pressKey(5, 0, true); pressKey(5, 0, false);
+  assert(numWordActive && tappingTermMs == 210);
 }
 
 int main() {

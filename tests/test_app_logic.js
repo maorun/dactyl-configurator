@@ -53,7 +53,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              computeTimingRecommendations, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isBleHostCode,
+             macroSaveIndex, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -6301,6 +6301,31 @@ test("Num Word: Code passt zur Firmware, Tastenpalette, Label und Rundlauf; Comb
   const cfg = copy(R.defaultConfig);
   cfg.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "NUM_WORD" }];
   assert.throws(() => api.validateConfigShape(cfg, R), /Num Word/);
+});
+
+test("Tapping-Term-Tasten: Codes passen zur Firmware, Palette, Label und Rundlauf; Combos lehnen sie ab", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(common, /#define ACT_TT_UP\s+0x18E/);
+  assert.match(common, /#define ACT_TT_DOWN\s+0x18F/);
+  assert.match(read("firmware/dactyl_right/DactylVersion.h"), /DACTYL_FW_VERSION 44/);
+  for (const [name, n] of [["TT_UP", 0x18E], ["TT_DOWN", 0x18F]]) {
+    assert.strictEqual(api.actionCodeToNumeric(name), n);
+    assert.strictEqual(api.keyToNumericActions({ tap: name }).tapCode, n);
+    assert.ok(api.isTtCode(name) && api.isTtCode("ACT_" + name));
+    assert.ok(api.KEYCODES.some(g => g.keys.some(k => k.code === name)));
+    assert.strictEqual(api.keyPressRole(name), "silent");
+    const cfg = JSON.parse(JSON.stringify(R.defaultConfig));
+    cfg.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: name }];
+    assert.throws(() => api.validateConfigShape(cfg, R), /Tapping-Term/);
+  }
+  assert.ok(!api.isTtCode("NUM_WORD") && !api.isTtCode(""));
+  assert.strictEqual(api.ONE_SHOT_LABELS.TT_UP, "TT+");
+  assert.strictEqual(api.ONE_SHOT_LABELS.TT_DOWN, "TT-");
+  const cfg = JSON.parse(JSON.stringify(R.defaultConfig));
+  cfg.layers[0][2][1] = { tap: "TT_UP" };
+  const norm = api.normalizeConfig(cfg, R);
+  assert.strictEqual(norm.layers[0][2][1].tap, "TT_UP");
+  api.validateConfigShape(norm, R);
 });
 
 test("Einstellung numWordLayer: Standard 1, Bereich 0..7, Sync-Befehl optional, nwl aus DEVICE_INFO", () => {

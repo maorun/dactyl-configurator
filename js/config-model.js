@@ -1001,6 +1001,7 @@ function validateConfigShape(cfg, profile) {
   if ((cfg.combos || []).some(cb => cb && isKeyLockCode(cb.action))) throw new Error("Combos unterstützen kein Key Lock.");
   if ((cfg.combos || []).some(cb => cb && isSwapHandsCode(cb.action))) throw new Error("Combos unterstützen kein Swap Hands.");
   if ((cfg.combos || []).some(cb => cb && isNumWordCode(cb.action))) throw new Error("Combos unterstützen kein Num Word.");
+  if ((cfg.combos || []).some(cb => cb && isTtCode(cb.action))) throw new Error("Combos unterstützen keine Tapping-Term-Tasten.");
   if ((cfg.combos || []).some(cb => cb && isBleHostCode(cb.action))) throw new Error("Combos unterstützen keine BLE-Host-Slots.");
   // Den Slot hat nur der Master: auf der anderen Hälfte tun DM_REC und DM_PLAY nichts (wie validate_config in server.py)
   if (profile && !profile.master && Array.isArray(cfg.layers) &&
@@ -1580,7 +1581,7 @@ function keyPressRole(tap) {
   if (tap === "KEY_BACKSPACE") return "backspace";
   const n = actionCodeToNumeric(tap);
   const silent = n === 0 || (n >= 0x80 && n <= 0x87) || (n >= 0x100 && n <= 0x119) || (n >= 0x160 && n <= 0x167)
-    || (n >= 0x180 && n <= 0x18D);
+    || (n >= 0x180 && n <= 0x18F);
   return silent ? "silent" : "typed";
 }
 

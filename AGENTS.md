@@ -215,6 +215,7 @@ Keys in the matrix use `uint16_t` action codes:
 | `0x18B` | Swap hands (`SWAP_HANDS`) | Held: mirrors the key lookup of the own half; a tap arms one press; a double-tap locks until the next tap; see `FEATURES.md`, section "Swap hands" |
 | `0x18C` | Sentence case (`SENTENCE_CASE`) | Toggles the mode on the master across both halves: the first lowercase letter after `.`, `!` or `?` and `Space` gets Shift; see `FEATURES.md`, section "Sentence case" |
 | `0x18D` | Num Word (`NUM_WORD`) | Tap turns on the layer `numWordLayer` (`SET_NUM_WORD_LAYER`, NVS `nw_layer`, `DEVICE_INFO` `nwl`); digits, number symbols, modifiers and layer keys keep it on; the first other key or 5000 ms idle ends it; see `FEATURES.md`, section "Num Word"; no combo action |
+| `0x18E` .. `0x18F` | Tapping term tune (`TT_UP`, `TT_DOWN`) | A tap changes `tappingTermMs` of the half by 10 ms (`100..500`, RAM only); both keys held for 1000 ms save it to the NVS; see `FEATURES.md`, section "Tapping term tune keys"; no combo action |
 | `0x170` .. `0x17F` | Macro (`MACRO_0`..`MACRO_15`) | Plays a sequence of tap, down, up and pause steps; index into `userMacros[]`; see "Macros" |
 
 ### Key Pairs (`userKeyPairs`)

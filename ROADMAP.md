@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Tapping term tune keys (`TT_UP`, `TT_DOWN`)
-
-- **Rank:** Feature model. Total 24/40 (typing 5, configuration 4, harmony 8, safety 7). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** The user must open the app to change `tappingTermMs`. A good value shows only during real typing.
-- **Goal:** Add the actions `TT_UP` and `TT_DOWN`. Each tap changes `tappingTermMs` of its half by 10 ms inside `100..500` and keeps it in RAM. A long press of both keys saves the value to the NVS. A reboot without saving restores the stored value. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test taps `TT_UP` twice and expects `tappingTermMs` + 20; a reboot without the save restores the old value.
-
 ### Boot layer setting (`bootLayer`)
 
 - **Rank:** Feature model. Total 23/40 (typing 5, configuration 3, harmony 7, safety 8). Effort S. Estimate.

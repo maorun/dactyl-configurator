@@ -199,6 +199,17 @@ Rules for this file:
 - `ACT_NUM_WORD` is no combo action: `ADD_COMBO`, `server.py` (`NUM_WORD_CPP`) and the app reject it. `REPEAT` does not repeat it. The state lives in RAM only. `DEVICE_INFO` grows by `"nwl":N,` (7 bytes); the line stays under the BLE limit of 512 bytes (a test checks it).
 - Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 43; flash both halves.
 
+### Tapping term tune keys (`ACT_TT_UP`, `ACT_TT_DOWN`)
+
+- `ACT_TT_UP` (`0x18E`, app name `TT_UP`, keycap label `TT+`) and `ACT_TT_DOWN` (`0x18F`, app name `TT_DOWN`, keycap label `TT-`) change `tappingTermMs` of the half during real typing. The user does not open the app to find a good value.
+- A tap acts on the release: `TT_UP` adds and `TT_DOWN` subtracts `TT_STEP_MS` (10 ms), clamped to `TAPPING_TERM_MIN_MS..TAPPING_TERM_MAX_MS` (`100..500`). The change lives in RAM only (`ttRelease` in `DactylLogic.h`). A reboot without a save restores the NVS value (`tap_term`).
+- Hold both keys of the same half for `TT_SAVE_HOLD_MS` (1000 ms): `ttExpire` in `loop()` saves the value once with `saveTappingTermToNVS`. While both keys are held, and until both are released, neither key counts as a tap. A single key held for a long time is still a tap on release.
+- Put `TT_UP` and `TT_DOWN` on plain keys (a tap action without hold or double-tap action). A key with a hold or double-tap action decides at the release, so it cannot take part in the save chord. A second press of one key while the other stays held starts a new chord and saves again after `TT_SAVE_HOLD_MS`.
+- The keys keep Num Word on (`isNumWordKeepAction`), so the user can tune the term during a number run.
+- Each half has its own value and its own keys. The keys send nothing to the host. `oslClearAll` (`RELEASE_ALL`, link loss, host loss, config mode) resets the key state; a late release then changes nothing. The Leader capture ends on these keys.
+- The keys are no combo action: `ADD_COMBO`, `server.py` (`TT_CPP`) and the app reject them. `REPEAT` does not repeat them. A later full sync from the app writes the app value with `SET_TAPPING_TERM` and replaces a tuned value.
+- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 44; flash both halves.
+
 ### Key lock (`ACT_KEY_LOCK`, `DactylKeyLock.h`)
 
 - `ACT_KEY_LOCK` (`0x16F`, app name `KEY_LOCK`, keycap label `KeyLock`) arms the lock. The next key press or mouse button press of either half stays held after the physical release of the key. A second press of the same input releases it. Use it for a long drag with a mouse button, a held `Shift` for a selection or a held game key.

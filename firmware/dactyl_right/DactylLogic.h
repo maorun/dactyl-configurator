@@ -368,7 +368,7 @@ bool isNumWordKeepAction(uint16_t a) {
     return a >= KEY_NUM_SLASH && a <= KEY_NUM_PERIOD;
   }
   if (a >= 0x100 && a <= 0x119) return true;                       // MO_n, TG_n, LAYER_UP, LAYER_DOWN
-  return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD;
+  return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD || a == ACT_TT_UP || a == ACT_TT_DOWN;
 }
 
 void numWordStop() {
@@ -417,6 +417,56 @@ void numWordExpire(unsigned long now) {
   if (!numWordActive) return;
   if (!toggleLayers[numWordOn]) { numWordActive = false; return; }
   if ((unsigned long)(now - numWordLastMs) >= NUM_WORD_IDLE_MS) numWordStop();
+}
+
+// -----------------------------------------------------------------------------
+// Tapping-Term-Tasten (ACT_TT_UP, ACT_TT_DOWN)
+// -----------------------------------------------------------------------------
+// Ein Tipp auf TT_UP / TT_DOWN ändert tappingTermMs dieser Hälfte um TT_STEP_MS innerhalb TAPPING_TERM_MIN_MS..MAX_MS, nur im RAM.
+// Der Tipp wirkt beim Loslassen. Werden beide Tasten zugleich gehalten, wirkt keine als Tipp; nach TT_SAVE_HOLD_MS speichert
+// ttExpire den Wert im NVS. Ohne Speichern gilt nach einem Neustart wieder der NVS-Wert.
+bool saveTappingTermToNVS(uint16_t ms);
+bool ttUpHeld = false;
+bool ttDownHeld = false;
+bool ttChord = false;             // beide Tasten waren zugleich gehalten (kein Tipp, bis beide losgelassen sind)
+bool ttSaved = false;
+unsigned long ttChordMs = 0;
+
+bool isTtAction(uint16_t a) { return a == ACT_TT_UP || a == ACT_TT_DOWN; }
+
+void ttReset() {
+  ttUpHeld = ttDownHeld = ttChord = ttSaved = false;
+}
+
+void ttPress(uint16_t a, unsigned long now) {
+  if (a == ACT_TT_UP) ttUpHeld = true; else ttDownHeld = true;
+  if (ttUpHeld && ttDownHeld) {
+    ttChord = true;
+    ttSaved = false;
+    ttChordMs = now;
+  }
+}
+
+void ttRelease(uint16_t a) {
+  if (!(a == ACT_TT_UP ? ttUpHeld : ttDownHeld)) return;   // nach ttReset (RELEASE_ALL) ändert das späte Loslassen nichts
+  bool wasChord = ttChord;
+  if (a == ACT_TT_UP) ttUpHeld = false; else ttDownHeld = false;
+  if (!wasChord) {
+    int next = (int)tappingTermMs + (a == ACT_TT_UP ? TT_STEP_MS : -TT_STEP_MS);
+    if (next < TAPPING_TERM_MIN_MS) next = TAPPING_TERM_MIN_MS;
+    if (next > TAPPING_TERM_MAX_MS) next = TAPPING_TERM_MAX_MS;
+    tappingTermMs = (uint16_t)next;
+    Serial.printf("TAPPING_TERM: %u ms (RAM)\n", (unsigned)tappingTermMs);
+  }
+  if (!ttUpHeld && !ttDownHeld) { ttChord = false; ttSaved = false; }
+}
+
+// Aufruf in loop(): beide Tasten TT_SAVE_HOLD_MS gehalten speichern den Wert einmal
+void ttExpire(unsigned long now) {
+  if (!ttChord || ttSaved || !ttUpHeld || !ttDownHeld) return;
+  if ((unsigned long)(now - ttChordMs) < TT_SAVE_HOLD_MS) return;
+  ttSaved = true;
+  saveTappingTermToNVS(tappingTermMs);
 }
 
 // -----------------------------------------------------------------------------
@@ -602,6 +652,7 @@ void swapClearAll() {
 void oslClearAll() {
   swapClearAll();
   numWordStop();
+  ttReset();
   // Die Leader-Erfassung endet an denselben Stellen
   leaderReset();
   uint8_t before = getActiveLayer();
@@ -1500,7 +1551,7 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
     // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
     if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
         isDynamicMacroAction(action) || isOneShotAction(action) || isTextToggleAction(action) || action == ACT_LEADER ||
-        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || action == ACT_NUM_WORD || isBleHostAction(action)) {
+        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || action == ACT_NUM_WORD || isTtAction(action) || isBleHostAction(action)) {
       leaderState.reset();
     }
     return false;
@@ -1618,6 +1669,12 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     uint8_t newL = getActiveLayer();
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"NUM_WORD\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, action, currentLayer, newL);
+    sendConfigNotification(String(buf));
+  } else if (isTtAction(action)) {
+    // Kein Combo-Kandidat (ADD_COMBO lehnt die Aktion ab): der Druck wird sofort vermerkt, der Tipp wirkt beim Loslassen
+    ttPress(action, keyPressTime[r][c] ? keyPressTime[r][c] : millis());
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, action == ACT_TT_UP ? "TT_UP" : "TT_DOWN", action, currentLayer);
     sendConfigNotification(String(buf));
   } else if (action == ACT_LAYER_LOCK) {
     uint8_t newL = applyLayerLock();
@@ -1851,6 +1908,8 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
     Serial.printf("LAYER: MO(%d) gelöst -> Layer %d\n", l, getActiveLayer());
   } else if (isOslAction(action)) {
     oslRelease(action);
+  } else if (isTtAction(action)) {
+    ttRelease(action);
   } else if (isMediaAction(action)) {
     if (!isConfigMode && action == ACT_MAC_GLOBE && bleKeyboard.isConnected()) {
       bleKeyboard.release(KEY_MEDIA_GLOBE);
@@ -4266,7 +4325,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isBleHostAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isTtAction((uint16_t)act) && !isBleHostAction((uint16_t)act) &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;

@@ -245,6 +245,7 @@ function updateFirmwareVersionUI() {
 
 // Diagnose (GET_DIAG): letzter Stand je Hälfte, Panel "Diagnose" in index.html
 const diagByRole = {};
+const deviceInfoByRole = {}; // letzte DEVICE_INFO je Hälfte mit Empfangszeit, nur für den Diagnosebericht
 function updateDiagUI() {
   const panel = document.getElementById("diagPanel");
   const list = document.getElementById("diagList");
@@ -270,6 +271,27 @@ function updateDiagUI() {
   const sum = Dactyl.summarizeDiag(sides.map(id => diagByRole[id]));
   panel.classList.toggle("diag-abnormal", sum.abnormal);
   summary.textContent = sum.summary;
+}
+// Diagnosebericht als JSON-Datei (buildSupportReport, js/config-model.js): ohne Keymap, Makros und Tastendaten
+function saveSupportReport() {
+  const devices = {};
+  for (const id of Dactyl.SIDE_IDS) {
+    if (deviceInfoByRole[id] || diagByRole[id]) devices[id] = {
+      info: deviceInfoByRole[id] && deviceInfoByRole[id].info, infoAt: deviceInfoByRole[id] && deviceInfoByRole[id].at,
+      diag: diagByRole[id], diagAt: diagByRole[id] && diagByRole[id].at
+    };
+  }
+  if (!Object.keys(devices).length) {
+    showToast("Noch keine Werte. Verbinde die Tastatur und frage die Diagnose ab.");
+    return;
+  }
+  const report = buildSupportReport({ devices });
+  const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dactyl_diagnose_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function requestDiag() {
   const side = Dactyl.connectedSide(connectionState());
@@ -439,6 +461,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
       const nameText = document.getElementById("btDeviceNameText");
       const statusText = document.getElementById("statusText");
 
+      deviceInfoByRole[lineSide] = { info, at: Date.now() };
       firmwareVersions.noteDeviceInfo(lineSide, info);
       updateFirmwareVersionUI();
       // Nur USB hält den Stand aktuell (SPLIT_LINK); eine BLE-Momentaufnahme veraltete ohne Nachschub

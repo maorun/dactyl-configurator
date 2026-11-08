@@ -2937,3 +2937,41 @@ function parseConfigImport(raw, profiles, activeSide) {
   }
   return { kind: "bundle", configs };
 }
+
+// Diagnosebericht (Button "Diagnosebericht speichern"). Nur eine feste Liste von Feldern gelangt in den Bericht
+// (Whitelist, kein Kopieren von DEVICE_INFO): kein Keymap, kein Makro, kein Key Pair, keine Combo- oder
+// Leader-Folge und keine Tastendaten. Neue DEVICE_INFO-Felder bleiben draußen, bis sie hier stehen.
+const APP_VERSION = "1.0.0"; // gleich package.json (Test)
+const SUPPORT_REPORT_VERSION = 1;
+const SUPPORT_INFO_NUMBERS = ["fw", "standby_timeout", "sleep_timeout", "debounce_ms", "combo_timeout_ms", "tapping_term_ms",
+  "hold_tap_mode", "quick_tap_ms", "pi", "chordal_hold", "rt", "as", "at", "ld", "ot", "lt"];
+const SUPPORT_LINK_NUMBERS = ["up", "ms", "ever", "losses", "rx_dropped", "key_dropped", "rssi", "rssi_min"];
+const SUPPORT_DIAG_NUMBERS = ["uptimeS", "heapFree", "heapMin", "loopMaxUs"];
+
+// devices: { <Hälfte>: { info, infoAt, diag, diagAt } } (DEVICE_INFO, bereinigtes GET_DIAG, Empfangszeit in ms); fehlende Angaben werden null
+function buildSupportReport({ appVersion = APP_VERSION, now = Date.now(), devices = {} } = {}) {
+  const num = v => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const pick = (src, keys) => {
+    const out = {};
+    for (const k of keys) out[k] = src && typeof src === "object" ? num(src[k]) : null;
+    return out;
+  };
+  const halves = {};
+  for (const side of Object.keys(devices)) {
+    const { info, diag, infoAt, diagAt } = devices[side] || {};
+    const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
+    const hasInfo = !!info && typeof info === "object";
+    halves[side] = {
+      side: hasInfo && (info.side === "R" || info.side === "L") ? info.side : null,
+      device_info: { ...pick(info, SUPPORT_INFO_NUMBERS), config_mode: hasInfo && typeof info.config_mode === "boolean" ? info.config_mode : null },
+      device_info_at: iso(infoAt),
+      diag_at: iso(diagAt),
+      left_fw: hasInfo ? num(info.left_fw) : null,
+      left_link: hasInfo && info.left_link && typeof info.left_link === "object" ? pick(info.left_link, SUPPORT_LINK_NUMBERS) : null,
+      diag: diag && typeof diag === "object"
+        ? { reset: typeof diag.reset === "string" && /^[a-z_]{1,24}$/.test(diag.reset) ? diag.reset : null, ...pick(diag, SUPPORT_DIAG_NUMBERS) }
+        : null
+    };
+  }
+  return { reportVersion: SUPPORT_REPORT_VERSION, appVersion: String(appVersion).slice(0, 32), createdAt: new Date(now).toISOString(), halves };
+}

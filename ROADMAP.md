@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Support report export (`buildSupportReport`)
-
-- **Rank:** Feature model. Total 26/40 (typing 2, configuration 8, harmony 7, safety 9). Effort S. Estimate.
-- **Area:** App, Server.
-- **Code:** `js/serial.js`, `js/config-sync.js`, `js/config-model.js`, `server.py`.
-- **Problem:** To report a fault, the user must copy `GET_INFO`, `GET_DIAG`, the split link state and the firmware versions by hand.
-- **Goal:** Add the button "Diagnosebericht speichern". It collects `DEVICE_INFO`, `GET_DIAG`, `left_link`, `left_fw` and the app version into one JSON file. The report holds no keymap, no macro, no key pair and no key press data.
-- **Acceptance test:** A unit test builds a report from sample data and expects all listed fields; a sample with a macro text and a keymap expects that the report contains neither.
-
 ### Macro library import and export (`buildMacroExport`, `js/macros-ui.js`)
 
 - **Rank:** Feature model. Total 26/40 (typing 3, configuration 6, harmony 8, safety 9). Effort S. Estimate.

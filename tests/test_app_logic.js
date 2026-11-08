@@ -60,7 +60,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              moveKeySelection, ARROW_KEY_DIRECTIONS,
              createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES,
              buildLayerOverview, buildLayerSheet, buildDualSideBundle, parseConfigImport,
-             findCharPosition, buildPracticeSteps, createPracticeSession, practiceKeyPress, practiceSpeed, practiceTextFromHeatmap, practiceCharForCode, practiceDrillText, PRACTICE_FIXED_TEXT,
+             findCharPosition, buildPracticeSteps, createPracticeSession, practiceKeyPress, practiceSpeed, practiceTextFromHeatmap, practiceCharForCode, practiceDrillText, PRACTICE_FIXED_TEXT, buildSupportReport, APP_VERSION,
              ON_SCREEN_KEYBOARD_ROWS: typeof ON_SCREEN_KEYBOARD_ROWS !== "undefined" ? ON_SCREEN_KEYBOARD_ROWS : undefined,
              KEYCODE_OPTIONS: typeof KEYCODE_OPTIONS !== "undefined" ? KEYCODE_OPTIONS : undefined,
              pickActionFromOnScreenKey: typeof pickActionFromOnScreenKey !== "undefined" ? pickActionFromOnScreenKey : undefined };`, ctx);
@@ -1670,6 +1670,7 @@ function renderMatrix() { calls.applied++; }
 function renderMatrixTest() { calls.rendered++; }
 function renderLayerButtons() {}
 const firmwareVersions = { noteDeviceInfo() {} };
+const deviceInfoByRole = {};
 const splitLinkStatus = { noteDeviceInfo() {} };
 function updateFirmwareVersionUI() {}
 function updateSplitLinkUI() {}
@@ -8200,3 +8201,65 @@ function openComboModal(pair) { openedPair = pair; }`);
   assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(openedPair)", w)), { a: { r: 1, c: 1 }, b: { r: 1, c: 2 } });
 });
 
+
+test("Diagnosebericht: enthält alle Felder aus den Beispieldaten", () => {
+  const info = { side: "R", fw: 12, name: "Dactyl", standby_timeout: 5, sleep_timeout: 30, debounce_ms: 5, combo_timeout_ms: 50,
+    tapping_term_ms: 200, hold_tap_mode: 1, quick_tap_ms: 120, pi: 100, chordal_hold: 1, rt: 1, as: 1, at: 175, ld: 2, ot: 3, lt: 4,
+    config_mode: false, left_fw: 11,
+    left_link: { up: 1, ms: 5000, ever: 1, losses: 2, rx_dropped: 0, key_dropped: 1, rssi: -60, rssi_min: -80 } };
+  const diag = { reset: "power_on", uptimeS: 90, heapFree: 1000, heapMin: 800, loopMaxUs: 400, abnormal: false, at: 5 };
+  const rep = JSON.parse(JSON.stringify(api.buildSupportReport({ now: 0, devices: { R: { info, diag } } })));
+  assert.strictEqual(rep.appVersion, api.APP_VERSION);
+  assert.strictEqual(rep.appVersion, JSON.parse(read("package.json")).version);
+  assert.strictEqual(rep.createdAt, "1970-01-01T00:00:00.000Z");
+  const h = rep.halves.R;
+  assert.strictEqual(h.side, "R");
+  const expected = { ...info };
+  for (const k of ["side", "name", "left_fw", "left_link", "config_mode"]) delete expected[k];
+  assert.deepStrictEqual({ ...h.device_info, config_mode: undefined }, { ...expected, config_mode: undefined });
+  assert.strictEqual(h.device_info.config_mode, false);
+  assert.strictEqual(h.left_fw, 11);
+  assert.deepStrictEqual(h.left_link, { up: 1, ms: 5000, ever: 1, losses: 2, rx_dropped: 0, key_dropped: 1, rssi: -60, rssi_min: -80 });
+  assert.deepStrictEqual(h.diag, { reset: "power_on", uptimeS: 90, heapFree: 1000, heapMin: 800, loopMaxUs: 400 });
+  // Fehlende Hälfte-Daten werden null
+  const empty = JSON.parse(JSON.stringify(api.buildSupportReport({ devices: { L: {} } }))).halves.L;
+  assert.strictEqual(empty.diag, null);
+  assert.strictEqual(empty.left_link, null);
+  assert.strictEqual(empty.device_info.fw, null);
+});
+
+test("Diagnosebericht: Keymap, Makros, Key Pairs, Combos und Tastendaten fehlen vollständig", () => {
+  const secret = "GEHEIM-PASSWORT-4711";
+  const info = { side: "R", fw: 12, name: secret + "-name", mac: "AA:BB", keymap: [[secret]], layers: [[secret]],
+    macros: [{ name: secret, steps: [[1, 65]] }], pairs: [[secret]], combos: [[secret]], leader: [[secret]],
+    tri_layer: [[1, 2, 3]], host_leds: { caps: 1 }, key_press: { r: 1, c: 2 }, typing_stats: { "1_1": 99 },
+    left_fw: 11, left_link: { up: 1, ms: 1, ever: 1, losses: 0, rx_dropped: 0, key_dropped: 0, keymap: secret } };
+  const diag = { reset: "software", uptimeS: 1, heapFree: 2, heapMin: 3, loopMaxUs: 4, abnormal: false, at: 9, keys: secret };
+  const text = JSON.stringify(api.buildSupportReport({ devices: { R: { info, diag } } }));
+  assert.ok(!text.includes(secret), "Geheimnis im Bericht");
+  for (const word of ["keymap", "layers", "macros", "pairs", "combos", "leader", "key_press", "typing_stats", "tri_layer", "host_leds", "mac", "name"]) {
+    assert.ok(!text.includes(`"${word}"`), `Feld ${word} im Bericht`);
+  }
+});
+
+test("Diagnosebericht: Button speichert die Datei, ohne Werte nur ein Hinweis", () => {
+  const { w } = uiHarness(`${section("js/serial.js", "// Diagnosebericht als JSON-Datei", "function requestDiag")}
+var Dactyl = { SIDE_IDS: ["R", "L"] };
+var diagByRole = {}, deviceInfoByRole = {};
+var saved = [];
+var Blob = function (parts) { this.text = parts.join(""); };
+var URL = { createObjectURL: b => { saved.push(b.text); return "blob:x"; }, revokeObjectURL() {} };
+document.createElement = () => ({ click() { saved.push("click"); } });`);
+  vm.runInContext("saveSupportReport()", w);
+  assert.strictEqual(vm.runInContext("saved.length", w), 0);
+  assert.strictEqual(vm.runInContext("log.toasts.length", w), 1);
+  vm.runInContext(`deviceInfoByRole.R = { info: { side: "R", fw: 7, keymap: "GEHEIM" }, at: 1000 };
+    diagByRole.R = { reset: "software", uptimeS: 1, heapFree: 2, heapMin: 3, loopMaxUs: 4, at: 2000 };
+    saveSupportReport();`, w);
+  const report = JSON.parse(vm.runInContext("saved[0]", w));
+  assert.strictEqual(report.halves.R.device_info.fw, 7);
+  assert.strictEqual(report.halves.R.device_info_at, "1970-01-01T00:00:01.000Z");
+  assert.strictEqual(report.halves.R.diag_at, "1970-01-01T00:00:02.000Z");
+  assert.ok(!vm.runInContext("saved[0]", w).includes("GEHEIM"));
+  assert.strictEqual(vm.runInContext("saved[1]", w), "click");
+});

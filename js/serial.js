@@ -496,9 +496,15 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("quickTapInput", info.quick_tap_ms);
         if (settingsTarget) settingsTarget.quickTapMs = info.quick_tap_ms;
       }
-      if (info.leader_timeout_ms !== undefined) {
-        setInput("leaderTimeoutInput", info.leader_timeout_ms);
-        if (settingsTarget) settingsTarget.leaderTimeoutMs = info.leader_timeout_ms;
+      // Firmware ab Version 41 meldet "ld", ältere "leader_timeout_ms"
+      const leaderTimeout = info.ld !== undefined ? info.ld : info.leader_timeout_ms;
+      if (leaderTimeout !== undefined) {
+        setInput("leaderTimeoutInput", leaderTimeout);
+        if (settingsTarget) settingsTarget.leaderTimeoutMs = leaderTimeout;
+      }
+      if (info.lt !== undefined) {
+        setInput("layerTimeoutInput", info.lt);
+        if (settingsTarget) settingsTarget.layerTimeoutMs = info.lt;
       }
       if (info.ot !== undefined) {
         setInput("oneShotTimeoutInput", info.ot);

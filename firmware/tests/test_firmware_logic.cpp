@@ -52,6 +52,7 @@ static uint8_t autoShift = 0;
 static uint16_t autoShiftMs = 175;
 static uint16_t leaderTimeoutMs = 1000;
 static uint16_t oneShotTimeoutMs = 0;
+static uint16_t layerTimeoutMs = 0;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t capsLedEnabled = 0;
@@ -184,6 +185,11 @@ void resetState() {
   for (int i = 0; i < MAX_LEADER_SEQS; i++) userLeaderSeqs[i] = { { 0, 0, 0, 0 }, 0 };
   leaderTimeoutMs = 1000;
   oneShotTimeoutMs = 0;
+  layerTimeoutMs = 0;
+  layerLockedMask = 0;
+  layerTimeoutSeenSeq = retroPressSeq;
+  layerTimeoutSeenMask = 0;
+  layerTimeoutStampMs = 0;
   oslSeenArmed = 0;
   oslArmedMs = 0;
   leaderReset();
@@ -8413,7 +8419,7 @@ TEST(test_leader_timeout_command_and_device_info) {
   }
   assert(leaderTimeoutMs == 1500);
   handleConfigCommand("GET_INFO", false);
-  assert(mockChar.value.find("\"leader_timeout_ms\":1500") != std::string::npos);
+  assert(mockChar.value.find("\"ld\":1500") != std::string::npos);
   leaderTimeoutMs = 1000;
   loadKeymapFromNVS();
   assert(leaderTimeoutMs == 1500);                // aus dem NVS geladen
@@ -8444,6 +8450,110 @@ TEST(test_one_shot_timeout_command_and_device_info) {
   oneShotTimeoutMs = 0;
   loadKeymapFromNVS();
   assert(oneShotTimeoutMs == 10000);              // aus dem NVS geladen
+}
+
+TEST(test_layer_timeout_clears_toggled_layer_after_idle_time) {
+  resetState();
+  layerTimeoutMs = 2000;
+  toggleLayers[2] = true;
+  layerTimeoutExpire(1000);                       // stempelt
+  layerTimeoutExpire(2999);
+  assert(getActiveLayer() == 2);
+  layerTimeoutExpire(3000);
+  assert(getActiveLayer() == 0 && toggleLayerMask() == 0);
+}
+
+TEST(test_layer_timeout_restarts_on_key_press_of_either_half) {
+  resetState();
+  layerTimeoutMs = 2000;
+  toggleLayers[2] = true;
+  layerTimeoutExpire(1000);
+  notePriorKeyPress(2500);                        // Druck einer Hälfte
+  layerTimeoutExpire(2500);                       // stempelt neu
+  layerTimeoutExpire(4499);
+  assert(getActiveLayer() == 2);
+  layerTimeoutExpire(4500);
+  assert(getActiveLayer() == 0);
+}
+
+TEST(test_layer_timeout_off_and_lock_and_mo_unaffected) {
+  resetState();
+  toggleLayers[2] = true;                         // layerTimeoutMs == 0: aus
+  layerTimeoutExpire(0);
+  layerTimeoutExpire(900000);
+  assert(getActiveLayer() == 2);
+  resetState();
+  layerTimeoutMs = 1000;
+  KEYMAP[0][5][0] = ACT_MO_3;
+  KEYMAP[3][5][1] = ACT_LAYER_LOCK;
+  pressKey(5, 0, true);
+  pressKey(5, 1, true);
+  pressKey(5, 1, false);
+  pressKey(5, 0, false);
+  assert(toggleLayers[3] && layerLockedMask == (1 << 3));
+  layerTimeoutExpire(10000);
+  layerTimeoutExpire(50000);
+  assert(getActiveLayer() == 3);                  // Layer lock bleibt
+  resetState();
+  layerTimeoutMs = 1000;
+  momentaryLayers[2] = true;                      // MO_n bleibt
+  layerTimeoutExpire(0);
+  layerTimeoutExpire(50000);
+  assert(getActiveLayer() == 2);
+}
+
+TEST(test_layer_timeout_waits_while_a_key_is_held) {
+  resetState();
+  layerTimeoutMs = 1000;
+  toggleLayers[2] = true;
+  layerTimeoutExpire(0);
+  keyState[0][0] = true;                          // gehaltene Taste
+  layerTimeoutExpire(5000);
+  layerTimeoutExpire(50000);
+  assert(getActiveLayer() == 2);
+  keyState[0][0] = false;
+  layerTimeoutExpire(50100);                      // Frist zählt vom letzten Tick mit gehaltener Taste (50000)
+  layerTimeoutExpire(50999);
+  assert(getActiveLayer() == 2);
+  layerTimeoutExpire(51000);
+  assert(getActiveLayer() == 0);
+}
+
+TEST(test_layer_timeout_enabling_counts_from_the_change) {
+  resetState();
+  toggleLayers[2] = true;
+  layerTimeoutExpire(1000);                       // Einstellung aus: stempelt nur
+  layerTimeoutExpire(900000);
+  handleConfigCommand("SET_LAYER_TIMEOUT 2000", false);
+  layerTimeoutExpire(900100);                     // stempelt neu
+  layerTimeoutExpire(901000);
+  assert(getActiveLayer() == 2);                  // lange Ruhe vor dem Einschalten löst nichts sofort
+  layerTimeoutExpire(902100);
+  assert(getActiveLayer() == 0);
+}
+
+TEST(test_layer_timeout_command_nvs_and_device_info) {
+  resetState();
+  handleConfigCommand("SET_LAYER_TIMEOUT 5000", false);
+  assert(mockChar.value == "OK SET_LAYER_TIMEOUT 5000" && layerTimeoutMs == 5000);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"lt\":5000") != std::string::npos);
+  layerTimeoutMs = 0;
+  loadKeymapFromNVS();
+  assert(layerTimeoutMs == 5000);
+  handleConfigCommand("SET_LAYER_TIMEOUT 0", false);
+  assert(mockChar.value == "OK SET_LAYER_TIMEOUT 0" && layerTimeoutMs == 0);
+  handleConfigCommand("SET_LAYER_TIMEOUT 60000", false);
+  assert(layerTimeoutMs == 60000);
+  const char *bad[] = { "SET_LAYER_TIMEOUT 1", "SET_LAYER_TIMEOUT 999", "SET_LAYER_TIMEOUT 60001", "SET_LAYER_TIMEOUT x", "SET_LAYER_TIMEOUT -5", "SET_LAYER_TIMEOUT 123456" };
+  for (const char *c : bad) {
+    handleConfigCommand(c, false);
+    assert(mockChar.value.rfind("ERR ARGS", 0) == 0 && layerTimeoutMs == 60000);
+  }
+  layerTimeoutMs = 7000;
+  Preferences::uintStore["layer_to"] = 500;       // ungültig im NVS
+  loadKeymapFromNVS();
+  assert(layerTimeoutMs == 7000);
 }
 
 TEST(test_one_shot_timeout_nvs_rejects_invalid_values) {

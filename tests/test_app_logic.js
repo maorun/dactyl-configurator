@@ -3140,7 +3140,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP) |CLEAR_TAP_TERMS$)/.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|LAYER_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP) |CLEAR_TAP_TERMS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -3228,8 +3228,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 18);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "CLEAR_TAP_TERMS"]);
+  assert.strictEqual(cmds.length, 19);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_LAYER_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "CLEAR_TAP_TERMS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
@@ -3247,7 +3247,7 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(cmds[11].cmd, "SET_CAPS_LED 0");
   assert.strictEqual(ctx.build({ capsLed: 1 }, R)[11].cmd, "SET_CAPS_LED 1");
   // Die linke Hälfte hat keinen Host: kein Befehl
-  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 17);
+  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 18);
   // Auto Shift: Modus 0..4, Zeitlimit 50..500 (Standard 175); beide Befehle sind optional (ältere Firmware)
   const asCmd = (c, a) => c.find(x => x.ack === a);
   assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 0");
@@ -3279,6 +3279,13 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(otCmd(ctx.build({ oneShotTimeoutMs: 1500 }, R)).cmd, "SET_ONESHOT_TIMEOUT 1500");
   assert.strictEqual(otCmd(ctx.build({ oneShotTimeoutMs: 9 }, R)).cmd, "SET_ONESHOT_TIMEOUT 500");
   assert.strictEqual(otCmd(ctx.build({ oneShotTimeoutMs: 99999 }, L)).cmd, "SET_ONESHOT_TIMEOUT 10000");
+  // Ebenen-Rückfall: 0 = aus, sonst 1000..60000, optional bei älterer Firmware
+  const ltCmd = c => c.find(x => x.ack === "SET_LAYER_TIMEOUT");
+  assert.strictEqual(ltCmd(cmds).cmd, "SET_LAYER_TIMEOUT 0");
+  assert.strictEqual(ltCmd(cmds).optional, "args");
+  assert.strictEqual(ltCmd(ctx.build({ layerTimeoutMs: 5000 }, R)).cmd, "SET_LAYER_TIMEOUT 5000");
+  assert.strictEqual(ltCmd(ctx.build({ layerTimeoutMs: 9 }, R)).cmd, "SET_LAYER_TIMEOUT 1000");
+  assert.strictEqual(ltCmd(ctx.build({ layerTimeoutMs: 99999 }, L)).cmd, "SET_LAYER_TIMEOUT 60000");
   // Leader-Phase: je Sequenz ein Schritt plus die Phase (CLEAR/SAVE), auf beiden Hälften
   assert.strictEqual(ctx.count(6, 8, 0, 0, -1, 3) - ctx.count(6, 8, 0, 0, -1, 0), 3);
   // Auch ohne Sequenzen läuft die Phase (CLEAR_LEADER und SAVE_LEADER): 2 Schritte minus 1 für die Zählung je Sequenz
@@ -7538,6 +7545,16 @@ test("Leader: Combos lehnen die Leader-Taste ab, die Wartezeit wird begrenzt", (
   assert.strictEqual(api.clampSetting("leaderTimeoutMs", "x"), 1000);
   assert.strictEqual(api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R).settings.leaderTimeoutMs, 1000);
   assert.strictEqual(api.settingsFromDeviceInfo({ leader_timeout_ms: 750 }, {}).leaderTimeoutMs, 750);
+  assert.strictEqual(api.settingsFromDeviceInfo({ ld: 800 }, {}).leaderTimeoutMs, 800);
+});
+
+test("Einstellung layerTimeoutMs: Bereich, Normalisierung und DEVICE_INFO-Feld lt", () => {
+  assert.strictEqual(api.clampSetting("layerTimeoutMs", 0), 0);
+  assert.strictEqual(api.clampSetting("layerTimeoutMs", 5), 1000);
+  assert.strictEqual(api.clampSetting("layerTimeoutMs", 999999), 60000);
+  assert.strictEqual(api.clampSetting("layerTimeoutMs", "x"), 0);
+  assert.strictEqual(api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R).settings.layerTimeoutMs, 0);
+  assert.strictEqual(api.settingsFromDeviceInfo({ lt: 4000 }, {}).layerTimeoutMs, 4000);
 });
 
 test("Leader: Gerätedaten (GET_CONFIG) ergeben dieselbe Config, kaputte Zeilen machen den Snapshot unvollständig", () => {

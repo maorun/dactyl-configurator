@@ -75,6 +75,7 @@ static uint8_t numLeaderSeqs = 0;
 static LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS];
 static uint16_t leaderTimeoutMs = 1000;
 static uint16_t oneShotTimeoutMs = 0;
+static uint16_t layerTimeoutMs = 0;
 static uint8_t numMacros = 0;
 static uint8_t macroLengths[MAX_MACROS] = {0};
 static bool userMacroRepeat[MAX_MACROS] = {false};
@@ -739,6 +740,22 @@ static void queueLayerState() {
   if (!init) { splitLayerReset(sync, 1); init = true; }
   splitLayerSendIfDue(sync, localMomentaryLayerMask(), toggleLayerMask(), false, millis(), true,
                       [](const SplitHidEvent &ev) { return queuePush(sendQueue, ev); });
+}
+
+TEST(test_layer_timeout_clear_reaches_the_layer_sync_of_the_master) {
+  layerTimeoutMs = 1000;
+  toggleLayers[2] = true;
+  SplitLayerSync sync;
+  splitLayerReset(sync);
+  std::vector<SplitHidEvent> sent;
+  auto send = [&](const SplitHidEvent &ev) { sent.push_back(ev); return true; };
+  splitLayerSendIfDue(sync, localMomentaryLayerMask(), toggleLayerMask(), true, 0, true, send);
+  layerTimeoutExpire(0);
+  layerTimeoutExpire(1000);
+  assert(toggleLayerMask() == 0);
+  sent.clear();
+  assert(splitLayerSendIfDue(sync, localMomentaryLayerMask(), toggleLayerMask(), true, 1001, false, send));
+  assert(sent.size() == 1 && sent[0].op == SPLIT_OP_LAYER_STATE && splitLayerToggles(sent[0]) == 0);
 }
 
 TEST(test_left_layer_lock_reaches_master_through_layer_state) {

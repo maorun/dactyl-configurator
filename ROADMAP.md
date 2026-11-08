@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Layer auto-return timeout (`layerTimeoutMs`)
-
-- **Rank:** Feature model. Total 26/40 (typing 7, configuration 3, harmony 8, safety 8). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/config-model.js`, `js/editor-events.js`, `server.py`.
-- **Problem:** A toggled layer (`TG_n`) stays on when the user forgets it. The next keys then send wrong characters.
-- **Goal:** Add the setting `layerTimeoutMs` per half (`0` = off, `1000..60000`, default `0`; `SET_LAYER_TIMEOUT`, NVS key `layer_to`, `DEVICE_INFO` field `lt`). When no key of either half is pressed for this time, clear all toggled layers. Layer lock and `MO_n` are not affected. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test toggles layer 2, waits `layerTimeoutMs` without a key press and expects layer 0; a key press inside the time restarts the timer.
-
 ### Support report export (`buildSupportReport`)
 
 - **Rank:** Feature model. Total 26/40 (typing 2, configuration 8, harmony 7, safety 9). Effort S. Estimate.

@@ -456,6 +456,7 @@ function applySettingsToInputs(settings) {
   setVal("quickTapInput", settings.quickTapMs ?? 0);
   setVal("leaderTimeoutInput", settings.leaderTimeoutMs ?? 1000);
   setVal("oneShotTimeoutInput", settings.oneShotTimeoutMs ?? 0);
+  setVal("layerTimeoutInput", settings.layerTimeoutMs ?? 0);
   setVal("priorIdleInput", settings.requirePriorIdleMs ?? 0);
   setVal("chordalHoldSelect", settings.chordalHold ?? 0);
   setVal("retroTapSelect", settings.retroTap ?? 0);

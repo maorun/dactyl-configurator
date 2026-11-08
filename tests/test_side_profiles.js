@@ -83,6 +83,20 @@ test("Einstellung autoShift: beide Sketche deklarieren sie, DactylLogic.h kennt 
   assert.ok(server.includes('uint8_t autoShift = {values["autoShift"]};') && server.includes('uint16_t autoShiftMs = {values["autoShiftMs"]};'), "server.py rendert Auto Shift nicht");
 });
 
+test("Einstellung layerTimeoutMs: beide Sketche deklarieren sie und rufen den Ablauf in loop() auf", () => {
+  for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
+    assert.ok(/^uint16_t layerTimeoutMs = 0;$/m.test(src), `${name}: layerTimeoutMs fehlt im Sketch`);
+  }
+  // Nur der Master läuft den Ablauf: die Layer-Lock-Ebenen (layerLockedMask) kennt nur er
+  assert.ok(read("firmware/dactyl_right/dactyl_right.ino").includes("layerTimeoutExpire(millis());"), "layerTimeoutExpire fehlt in loop()");
+  assert.ok(!read("firmware/dactyl_left/dactyl_left.ino").includes("layerTimeoutExpire(millis());"), "die linke Hälfte darf layerTimeoutExpire nicht aufrufen");
+  const masterLoop = read("firmware/dactyl_right/dactyl_right.ino").split("void loop() {")[1];
+  const firstReturn = masterLoop.indexOf("return;");
+  assert.ok(masterLoop.indexOf("layerTimeoutExpire(millis());") < (firstReturn < 0 ? Infinity : firstReturn), "layerTimeoutExpire muss in loop() vor dem ersten return stehen");
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  assert.ok(logic.includes('\\"lt\\":%u') && logic.includes('cmd.startsWith("SET_LAYER_TIMEOUT ")') && logic.includes('"layer_to"'), "GET_INFO, Befehl oder NVS-Schlüssel fehlt");
+});
+
 test("Einstellung oneShotTimeoutMs: beide Sketche deklarieren sie und rufen den Ablauf in loop() auf", () => {
   for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
     assert.ok(/^uint16_t oneShotTimeoutMs = 0;$/m.test(src), `${name}: oneShotTimeoutMs fehlt im Sketch`);

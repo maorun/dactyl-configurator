@@ -21,6 +21,15 @@ Rules for this file:
 
 ## Priority 3
 
+### Layout preset templates (`layoutPresets`)
+
+- **Rank:** Feature model. Total 25/40 (typing 6, configuration 6, harmony 6, safety 7). Effort M. Estimate.
+- **Area:** App.
+- **Code:** `js/editor.js`, `js/config-model.js`.
+- **Problem:** New users start with a blank layout or default QWERTY. Setting up Colemak-DH or specialized layers requires manual key assignment.
+- **Goal:** Add a "Belegungsvorlagen" dialog in the layout editor. It provides ergonomic base layouts (QWERTZ, Colemak-DH, Dvorak) and specialized layer templates (Numpad, Navigation, Symbols). Applying a preset updates layer 0 or a target layer as a pending change.
+- **Acceptance test:** A unit test applies each layout preset to a clean configuration and expects valid keycodes for all positions; applying a layer preset changes only the target layer.
+
 ### Num Word (`ACT_NUM_WORD`)
 
 - **Rank:** Feature model. Total 25/40 (typing 7, configuration 2, harmony 8, safety 8). Effort M. Estimate.
@@ -29,6 +38,15 @@ Rules for this file:
 - **Problem:** Typing a number needs a held layer key or a toggle that the user must switch off again.
 - **Goal:** Add the action `NUM_WORD` with a layer setting (`numWordLayer`, `0..7`). A tap turns the layer on. The layer turns off at the first key that is not a digit, a number symbol (`.`, `,`, `-`, `+`, `*`, `/`, `=`), a modifier or a layer key, or after 5000 ms without a key press. Increase `DACTYL_FW_VERSION`.
 - **Acceptance test:** A firmware test taps `NUM_WORD`, types `1`, `2`, `Space` and expects that `1` and `2` come from the layer and `Space` comes from layer 0.
+
+### Macro presets (`macroPresets`)
+
+- **Rank:** Feature model. Total 24/40 (typing 4, configuration 7, harmony 6, safety 7). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/macros-ui.js`, `js/config-model.js`.
+- **Problem:** Users must manually record or assemble common macros from individual steps.
+- **Goal:** Add a "Makro-Vorlage" dropdown in the macro editor. Choosing a template (Git shortcuts, markdown syntax, code patterns) loads the predefined steps into the active macro slot. All templates obey the 32-step limit.
+- **Acceptance test:** A unit test loads each preset into an empty macro and expects valid step payloads and a step count under 33.
 
 ### Tapping term tune keys (`TT_UP`, `TT_DOWN`)
 

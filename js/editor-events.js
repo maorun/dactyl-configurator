@@ -139,7 +139,7 @@ function setCaptureButton(button, active) {
 // computeTimingRecommendations. "Werte übernehmen" schreibt nur in die Felder der Einstellungskarte;
 // gespeichert wird erst mit "Einstellungen in Config übernehmen".
 const TIMING_MAX_SAMPLES = 20000;
-const timingAssistant = { recording: false, side: null, samples: [], result: null, resultSide: null };
+const timingAssistant = { recording: false, side: null, samples: [], result: null, resultSide: null, perKey: [] };
 const TIMING_LABELS = {
   tappingTermMs: ["Tapping-Term", "tappingTermInput"],
   comboTimeoutMs: ["Combo-Zeitfenster", "comboTimeoutInput"],
@@ -183,6 +183,47 @@ function renderTimingAssistant() {
     list.appendChild(li);
   }
   apply.disabled = !rec.enough;
+  renderTimingPerKey();
+}
+
+function renderTimingPerKey() {
+  const list = document.getElementById("timingAssistantPerKey");
+  const button = document.getElementById("btnTimingAssistantApplyPerKey");
+  if (!list || !button) return;
+  timingAssistant.perKey = computePerKeyTimingSuggestions(timingAssistant.samples, currentConfig, activeProfile());
+  list.replaceChildren();
+  for (const sug of timingAssistant.perKey) {
+    const li = document.createElement("li");
+    li.textContent = `R${sug.r}C${sug.c}: ${sug.recommended} ms (Tapping-Term ${sug.current} ms, ${sug.holds} Tipps, p95 ${Math.round(sug.p95)} ms, Ebene ${sug.layers.join(", ")})`;
+    list.appendChild(li);
+  }
+  button.disabled = timingAssistant.perKey.length === 0;
+}
+
+// Trägt die Vorschläge je Taste als Snapshot-Änderung mit Rückgängig-Funktion in die Config ein
+function applyPerKeyTimingFromUI() {
+  const suggestions = timingAssistant.perKey;
+  if (!suggestions || suggestions.length === 0) return false;
+  if (timingAssistant.resultSide !== editSide) {
+    showToast("Die Messung gehört zur anderen Hälfte. Starte sie neu.");
+    return false;
+  }
+  const changed = applyPerKeyTimingSuggestions(currentConfig, suggestions);
+  if (changed.length === 0) return false;
+  renderMatrix();
+  saveConfigToServer();
+  markPendingSync({
+    type: "key_term",
+    snapshot: true,
+    title: "Tapping-Term je Taste",
+    description: suggestions.map(s => `R${s.r}C${s.c}: ${s.recommended} ms (Ebene ${s.layers.join(", ")})`).join(", "),
+    revert: () => {
+      revertPerKeyTimingSuggestions(currentConfig, changed);
+      renderMatrix();
+      saveConfigToServer();
+    }
+  });
+  return true;
 }
 
 function setupTimingAssistant() {
@@ -208,6 +249,12 @@ function setupTimingAssistant() {
     timingAssistant.side = editSide;
     renderTimingAssistant();
     if (timingAssistant.recording) renderTimingAssistantCount();
+  });
+  document.getElementById("btnTimingAssistantApplyPerKey")?.addEventListener("click", () => {
+    if (applyPerKeyTimingFromUI()) {
+      showToast("Tapping-Term je Taste vorgemerkt.");
+      close();
+    }
   });
   document.getElementById("btnTimingAssistantApply")?.addEventListener("click", () => {
     const rec = timingAssistant.result;

@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Per-key tapping term suggestions in the timing assistant (`computePerKeyTimingSuggestions`)
-
-- **Rank:** Feature model. Total 26/40 (typing 5, configuration 6, harmony 7, safety 8). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js`, `js/editor-events.js`.
-- **Problem:** A global `tappingTermMs` is too short for slow fingers and too long for fast home-row keys.
-- **Goal:** Extend the timing assistant with `computePerKeyTimingSuggestions(samples, config, profile)`. List Mod-Tap and Layer-Tap keys whose p95 hold time differs by at least 25 ms from `tappingTermMs` and add a button to apply the recommended per-key `tappingTerm` values as a pending change.
-- **Acceptance test:** A unit test feeds hold samples for two Mod-Tap keys and expects a per-key recommendation only for the outlier key.
-
 ### Layer swap and move with reference updates (`swapLayersWithRefs`)
 
 - **Rank:** Feature model. Total 26/40 (typing 3, configuration 7, harmony 8, safety 8). Effort M. Estimate.

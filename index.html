@@ -1163,10 +1163,14 @@
           <p class="sync-diff-hint">Verbinde die bearbeitete Hälfte über USB, starte die Aufnahme und tippe etwa eine Minute normal Text. Die App liest die <code>MATRIX:</code>-Zeilen (Druck und Loslassen) und wertet Haltezeiten und Abstände aus.</p>
           <p id="timingAssistantStatus"></p>
           <ul id="timingAssistantResult" class="layout-lint-list"></ul>
+          <h5>Tapping-Term je Taste</h5>
+          <p class="sync-diff-hint">Mod-Tap- und Layer-Tap-Tasten, deren Haltezeit mindestens 25 ms vom Tapping-Term der Hälfte abweicht.</p>
+          <ul id="timingAssistantPerKey" class="layout-lint-list"></ul>
         </div>
         <div class="modal-footer">
           <button class="btn btn-secondary" id="btnTimingAssistantReset">Zurücksetzen</button>
           <button class="btn btn-secondary" id="btnTimingAssistantToggle">Aufnahme starten</button>
+          <button class="btn btn-secondary" id="btnTimingAssistantApplyPerKey" disabled>Werte je Taste übernehmen</button>
           <button class="btn btn-primary" id="btnTimingAssistantApply" disabled>Werte übernehmen</button>
         </div>
       </div>

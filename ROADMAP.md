@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Macro presets (`macroPresets`)
-
-- **Rank:** Feature model. Total 24/40 (typing 4, configuration 7, harmony 6, safety 7). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/macros-ui.js`, `js/config-model.js`.
-- **Problem:** Users must manually record or assemble common macros from individual steps.
-- **Goal:** Add a "Makro-Vorlage" dropdown in the macro editor. Choosing a template (Git shortcuts, markdown syntax, code patterns) loads the predefined steps into the active macro slot. All templates obey the 32-step limit.
-- **Acceptance test:** A unit test loads each preset into an empty macro and expects valid step payloads and a step count under 33.
-
 ### Tapping term tune keys (`TT_UP`, `TT_DOWN`)
 
 - **Rank:** Feature model. Total 24/40 (typing 5, configuration 4, harmony 8, safety 7). Effort M. Estimate.

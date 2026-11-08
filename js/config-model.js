@@ -784,6 +784,36 @@ function parseMacroImport(jsonStr, existingMacros) {
   return { ok: true, index, macro };
 }
 
+// Makro-Vorlagen: fertige Schrittfolgen für das macOS-Layout "U.S." (Text über textToMacroSteps, danach Cursor-Tasten).
+// build() liefert frische Schritte (höchstens MAX_MACRO_STEPS), damit keine Vorlage geteilt oder verändert wird.
+function macroPresetSteps(text, cursorKeys = []) {
+  return [...textToMacroSteps(text).steps, ...cursorKeys.map(code => ({ type: "tap", code }))];
+}
+
+const MACRO_PRESETS = {
+  git_status: { name: "git status", build: () => macroPresetSteps("git status") },
+  git_commit: { name: "git commit", build: () => macroPresetSteps("git commit -m \"\"", ["KEY_LEFT_ARROW"]) },
+  git_push: { name: "git push", build: () => macroPresetSteps("git push") },
+  arrow_function: { name: "Arrow function", build: () => macroPresetSteps("() => {}", ["KEY_LEFT_ARROW"]) },
+  markdown_link: { name: "Markdown-Link", build: () => macroPresetSteps("[]()", ["KEY_LEFT_ARROW", "KEY_LEFT_ARROW", "KEY_LEFT_ARROW"]) },
+  code_block: { name: "Codeblock", build: () => macroPresetSteps("```\n\n```", ["KEY_UP_ARROW"]) },
+  console_log: { name: "console.log", build: () => macroPresetSteps("console.log()", ["KEY_LEFT_ARROW"]) }
+};
+
+// Setzt die Vorlage in Slot slotIndex (0..macros.length; macros.length hängt ein neues Makro an, höchstens MAX_MACROS).
+// Ändert nichts in-place; liefert die neue Makro-Liste oder null bei ungültiger Vorlage, ungültigem Slot oder ungültiger Liste.
+// Ein vorhandenes Makro behält Name und Wiederholen-Flag nicht: die Vorlage ersetzt es ganz.
+function applyMacroPreset(presetKey, slotIndex, macros) {
+  if (typeof presetKey !== "string" || !Object.prototype.hasOwnProperty.call(MACRO_PRESETS, presetKey)) return null;
+  if (!Array.isArray(macros) || !Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex > macros.length || slotIndex >= MAX_MACROS) return null;
+  const preset = MACRO_PRESETS[presetKey];
+  const macro = { name: sanitizeCommandText(preset.name, `Makro ${slotIndex}`), steps: preset.build() };
+  if (!isValidMacro(macro) || !macro.steps.length) return null;
+  const next = JSON.parse(JSON.stringify(macros));
+  next[slotIndex] = macro;
+  return next;
+}
+
 // Firmware-Befehle eines Makros: ADD_MACRO [1], dann je Schritt ADD_MACRO_STEP <typ> <code> <ms>.
 // Das Argument 1 (Wiederholen, solange die Taste gehalten wird) steht nur bei gesetztem Flag: ältere Firmware kennt es nicht.
 function macroCommands(macro) {

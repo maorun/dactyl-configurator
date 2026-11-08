@@ -53,7 +53,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              computeTimingRecommendations, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isBleHostCode,
+             macroSaveIndex, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -8470,6 +8470,69 @@ document.createElement = () => ({ click() { saved.push("click"); } });`);
   assert.strictEqual(report.halves.R.diag_at, "1970-01-01T00:00:02.000Z");
   assert.ok(!vm.runInContext("saved[0]", w).includes("GEHEIM"));
   assert.strictEqual(vm.runInContext("saved[1]", w), "click");
+});
+
+// Makro-Vorlagen
+test("Makro-Vorlagen: jede Vorlage hat 1..32 gültige Schritte", () => {
+  const keys = Object.keys(api.MACRO_PRESETS);
+  assert.ok(keys.length >= 6);
+  for (const key of keys) {
+    const r = api.applyMacroPreset(key, 0, []);
+    assert.ok(r, key);
+    assert.ok(r[0].steps.length >= 1 && r[0].steps.length <= api.MAX_MACRO_STEPS, key);
+    assert.ok(r[0].steps.every(api.isValidMacroStep), key);
+    assert.ok(api.isValidMacro(r[0]), key);
+  }
+});
+
+test("Makro-Vorlagen: Anwenden setzt Schritte, ersetzt einen Slot und ändert die Eingabe nicht", () => {
+  const old = [{ name: "a", steps: [{ type: "tap", code: "KEY_A" }] }];
+  const before = JSON.stringify(old);
+  const r = api.applyMacroPreset("console_log", 0, old);
+  assert.strictEqual(JSON.stringify(old), before);
+  assert.strictEqual(r.length, 1);
+  assert.strictEqual(r[0].name, "console.log");
+  assert.strictEqual(api.applyMacroPreset("git_status", 1, old).length, 2);
+  const rep = api.applyMacroPreset("git_status", 0, [{ name: "r", repeat: true, steps: [{ type: "tap", code: "KEY_A" }] }]);
+  assert.strictEqual(rep[0].repeat, undefined);
+  assert.strictEqual(JSON.stringify(r[0].steps.at(-1)), JSON.stringify({ type: "tap", code: "KEY_LEFT_ARROW" }));
+});
+
+test("Makro-Vorlagen: ungültige Vorlage oder ungültiger Slot werden abgelehnt", () => {
+  const m = [{ name: "a", steps: [{ type: "tap", code: "KEY_A" }] }];
+  for (const key of ["", "nope", "__proto__", "constructor", null, 3]) assert.strictEqual(api.applyMacroPreset(key, 0, m), null, String(key));
+  for (const slot of [-1, 2, 1.5, NaN, "0", null]) assert.strictEqual(api.applyMacroPreset("git_status", slot, m), null, String(slot));
+  const full = Array.from({ length: api.MAX_MACROS }, () => m[0]);
+  assert.strictEqual(api.applyMacroPreset("git_status", api.MAX_MACROS, full), null);
+  assert.ok(api.applyMacroPreset("git_status", api.MAX_MACROS - 1, full));
+  assert.strictEqual(api.applyMacroPreset("git_status", 0, null), null);
+});
+
+test("Makro-UI: Vorlage ist eine Snapshot-Änderung, Rückgängig stellt die Schritte wieder her", () => {
+  const { w, log } = uiHarness();
+  vm.runInContext(`currentConfig.macros = [{ name: "a", steps: [{ type: "tap", code: "KEY_A" }] }];`, w);
+  w.openMacroEditor(0);
+  assert.strictEqual(w.applyMacroPresetFromUI("git_status"), true);
+  assert.strictEqual(vm.runInContext("currentConfig.macros.length", w), 1);
+  assert.strictEqual(vm.runInContext("currentConfig.macros[0].name", w), "git status");
+  const change = log.pending.at(-1);
+  assert.ok(change.snapshot && change.macros);
+  change.revert();
+  assert.strictEqual(vm.runInContext("currentConfig.macros[0].name", w), "a");
+  assert.strictEqual(vm.runInContext("currentConfig.macros[0].steps.length", w), 1);
+  // ohne offenen Editor: erster freier Platz
+  assert.strictEqual(w.applyMacroPresetFromUI("code_block"), true);
+  assert.strictEqual(vm.runInContext("currentConfig.macros.length", w), 2);
+  assert.ok(log.toasts.at(-1).startsWith("Der offene Entwurf"));
+  assert.strictEqual(w.applyMacroPresetFromUI("nope"), false);
+  vm.runInContext(`currentConfig.macros = Array.from({ length: MAX_MACROS }, () => ({ name: "x", steps: [{ type: "tap", code: "KEY_A" }] }));`, w);
+  const pendingBefore = log.pending.length;
+  assert.strictEqual(w.applyMacroPresetFromUI("git_status"), false);
+  assert.strictEqual(log.pending.length, pendingBefore);
+  assert.ok(log.toasts.at(-1).startsWith("Alle"));
+  w.openMacroEditor(0);
+  assert.strictEqual(w.applyMacroPresetFromUI("git_push"), true);
+  assert.ok(log.toasts.at(-1).startsWith("Der offene Entwurf"));
 });
 
 // Makro-Bibliothek: Export und Import eines einzelnen Makros

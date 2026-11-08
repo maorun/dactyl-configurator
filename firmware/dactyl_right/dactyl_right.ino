@@ -1064,6 +1064,7 @@ void loop() {
   // layerTimeoutMs: eingerastete TG-Ebenen fallen ohne Tastendruck beider Hälften zurück
   layerTimeoutExpire(millis());
   dynamicMacroService();
+  modeStateService();
   // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende
   const uint32_t diagLoopStartUs = micros();
   static unsigned long lastHeartbeat = 0;

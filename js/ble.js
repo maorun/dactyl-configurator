@@ -401,6 +401,7 @@ function onBleDisconnected() {
   forgetSplitLink();
   forgetHostLeds();
   forgetDmRec();
+  forgetModeState();
   abortDeviceSnapshotReadIfDisconnected();
   updateBleUI(false);
   updateConfigModeUI(false, false);

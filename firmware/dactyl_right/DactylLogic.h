@@ -3758,6 +3758,41 @@ bool saveQuickTapToNVS(uint16_t ms) {
   return ok;
 }
 
+#ifdef DEVICE_INFO_HOST_LEDS_BITS  // nur der Master
+// Aktive Modi (MODE_STATE): Bits cw, nw, sc, sh, ka (Caps Word, Num Word, Sentence Case, Swap Hands, Keep Awake).
+// Nur der Master meldet sie, nur auf USB-Serial (nie über BLE). modeStateReported -1 = beim nächsten Durchlauf melden.
+#define MODE_STATE_CW 0x01
+#define MODE_STATE_NW 0x02
+#define MODE_STATE_SC 0x04
+#define MODE_STATE_SH 0x08
+#define MODE_STATE_KA 0x10
+int16_t modeStateReported = 0;
+
+inline uint8_t modeStateBits() {
+  uint8_t b = 0;
+  if (bleKeyboard.oneShot.capsWord) b |= MODE_STATE_CW;
+  if (numWordActive) b |= MODE_STATE_NW;
+  if (bleKeyboard.oneShot.sentenceCase) b |= MODE_STATE_SC;
+  if (swapActive()) b |= MODE_STATE_SH;
+  if (keepAwakeActive) b |= MODE_STATE_KA;
+  return b;
+}
+
+// Zeile "MODE_STATE:{...}", wenn sich der Stand seit der letzten Meldung geändert hat
+inline bool modeStateTakeLine(uint8_t bits, char *buf, size_t size) {
+  if (modeStateReported == (int16_t)bits) return false;
+  modeStateReported = (int16_t)bits;
+  snprintf(buf, size, "MODE_STATE:{\"cw\":%d,\"nw\":%d,\"sc\":%d,\"sh\":%d,\"ka\":%d}", (bits & MODE_STATE_CW) ? 1 : 0,
+           (bits & MODE_STATE_NW) ? 1 : 0, (bits & MODE_STATE_SC) ? 1 : 0, (bits & MODE_STATE_SH) ? 1 : 0, (bits & MODE_STATE_KA) ? 1 : 0);
+  return true;
+}
+
+inline void modeStateService() {
+  char line[72];
+  if (modeStateTakeLine(modeStateBits(), line, sizeof(line))) Serial.println(line);
+}
+#endif
+
 // Host-LEDs im Hauptdurchlauf: neue Zeile "HOST_LEDS:{...}" auf USB-Serial (nie über BLE) und Onboard-LED
 // (GPIO 22) nach Setting. Ohne Setting bleibt der Pin unberührt.
 inline void hostLedsService(HostLedsState &st) {
@@ -4760,6 +4795,9 @@ void handleConfigCommand(String cmd, bool fromBle) {
     }
   } else if (cmd == "GET_INFO") {
     dynamicMacroResend();
+#ifdef DEVICE_INFO_HOST_LEDS_BITS
+    if (!fromBle) modeStateReported = -1;  // Master über USB: Modi beim nächsten Durchlauf erneut melden
+#endif
     uint8_t m[6];
     esp_read_mac(m, ESP_MAC_BT);
     // Tri-Layer-Regeln als Liste [[a,b,target],...]

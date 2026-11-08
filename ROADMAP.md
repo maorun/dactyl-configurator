@@ -21,14 +21,7 @@ Rules for this file:
 
 ## Priority 3
 
-### Live status pills for active keyboard modes (`MODE_STATE`)
-
-- **Rank:** Feature model. Total 25/40 (typing 4, configuration 6, harmony 7, safety 8). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `js/side-routing.js`, `js/serial.js`, `index.html`.
-- **Problem:** The user cannot see in the app whether `Caps Word`, `Num Word`, `Sentence Case`, `Swap Hands` or `Keep Awake` is currently active on the keyboard.
-- **Goal:** Print `MODE_STATE:{"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1}` on USB serial of the master when a mode changes and on `GET_INFO` (never over BLE). Show active modes as pills in the app header and clear them on disconnect.
-- **Acceptance test:** A firmware test toggles `Caps Word` and `Keep Awake` and expects the matching `MODE_STATE:` line; a JS test parses the line and updates the state.
+No open entry.
 
 ## Priority 4
 

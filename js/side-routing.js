@@ -306,6 +306,36 @@
     return m[1] === "1";
   }
 
+  const MODE_STATE_KEYS = ["cw", "nw", "sc", "sh", "ka"];
+  const MODE_STATE_LABELS = { cw: "Caps Word", nw: "Num Word", sc: "Satzanfang", sh: "Swap Hands", ka: "Keep Awake" };
+
+  // MODE_STATE-Zeile {"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1}: aktive Modi des Masters.
+  // Rückgabe: Flags je Modus oder undefined bei einer fremden oder ungültigen Zeile.
+  function parseModeStateLine(line, lineSide) {
+    const D = root.Dactyl;
+    if (typeof line !== "string" || !line.startsWith("MODE_STATE:")) return undefined;
+    if (lineSide !== D.getMasterSide()) return undefined;
+    let raw;
+    try {
+      raw = JSON.parse(line.substring(11));
+    } catch (_) {
+      return undefined;
+    }
+    if (!raw || typeof raw !== "object") return undefined;
+    const out = {};
+    for (const k of MODE_STATE_KEYS) {
+      if (!isFlag(raw[k])) return undefined;
+      out[k] = raw[k] === 1;
+    }
+    return out;
+  }
+
+  // Aktive Modi als Liste {key, label}; null = keine Pill
+  function describeModeState(modes) {
+    if (!modes) return [];
+    return MODE_STATE_KEYS.filter(k => modes[k] === true).map(k => ({ key: k, label: MODE_STATE_LABELS[k] }));
+  }
+
   // Anzeige: Pill nur bei aktivem Caps Lock
   function describeHostLeds(leds) {
     if (!leds) return { capsOn: false, title: "" };
@@ -381,7 +411,7 @@
 
   root.Dactyl = Object.assign(root.Dactyl || {}, {
     parseDiagLine, describeDiag, summarizeDiag, NORMAL_RESET_REASONS,
-    parseSplitFwLine, createFirmwareVersions, parseHostLeds, parseHostLedsLine, parseDmRecLine, describeHostLeds, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
+    parseSplitFwLine, createFirmwareVersions, parseHostLeds, parseHostLedsLine, parseDmRecLine, parseModeStateLine, describeModeState, describeHostLeds, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
     parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil
   });

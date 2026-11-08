@@ -123,6 +123,31 @@ function addLeaderSequenceFromUI() {
   });
 }
 
+// Legt eine Vorlage als neue Sequenz an (Snapshot-Änderung mit Undo)
+function applyLeaderPresetFromUI(presetKey) {
+  const result = applyLeaderPreset(presetKey, currentConfig.leaderSequences || []);
+  if (result.error) {
+    showToast(result.error);
+    return false;
+  }
+  const old = JSON.parse(JSON.stringify(currentConfig.leaderSequences || []));
+  currentConfig.leaderSequences = result.sequences;
+  renderLeaderSequences();
+  saveConfigToServer();
+  markPendingSync({
+    type: "leader",
+    snapshot: true,
+    title: `Leader-Sequenz ${result.sequences.length - 1} aus Vorlage`,
+    description: leaderSequenceLabel(result.sequence, leaderCodeLabel),
+    revert: () => {
+      currentConfig.leaderSequences = old;
+      renderLeaderSequences();
+      saveConfigToServer();
+    }
+  });
+  return true;
+}
+
 function deleteLeaderSequence(idx) {
   const list = currentConfig.leaderSequences || [];
   if (idx < 0 || idx >= list.length) return;
@@ -179,5 +204,16 @@ function initLeaderUI() {
     addLeaderSequenceFromUI();
   });
   document.getElementById("btnCaptureLeader").addEventListener("click", toggleLeaderCapture);
+  const presetSel = document.getElementById("leaderPresetSelect");
+  Object.keys(LEADER_PRESETS).forEach(key => {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = LEADER_PRESETS[key].name;
+    presetSel.appendChild(opt);
+  });
+  presetSel.addEventListener("change", () => {
+    if (presetSel.value) applyLeaderPresetFromUI(presetSel.value);
+    presetSel.value = "";
+  });
   renderLeaderSequences();
 }

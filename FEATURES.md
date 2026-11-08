@@ -172,6 +172,14 @@ Rules for this file:
 - Tests: `test_firmware_logic.cpp` (`test_leader_*`: match, no sequence key at the host, release of all keys after the sequence, timeout, timeout setting, no match, key pair and macro action, prefix sequence, four-key limit, no host, release-all, layer keys and modifiers, combos, commands, NVS, `GET_CONFIG`, `DEVICE_INFO`), `tests/test_app_logic.js` (validation, tuples, snapshot round trip, diff, sync steps, pair and macro deletion), `tests/test_server.py` (constants, rendering for both halves, setting range, combo rejection).
 
 
+### Combo and leader presets (`COMBO_PRESETS`, `LEADER_PRESETS`)
+
+- `COMBO_PRESETS` and `LEADER_PRESETS` in `js/config-model.js` are ready-made templates. A combo preset names two keyboard codes and one action (for example `J + K` -> `Escape`). A leader preset names one or two keyboard codes and one action (for example `G, U` -> `Page Up`).
+- `applyComboPreset(presetKey, config)` finds each key on layer 0 of the edited half: the first cell with exactly this tap action and no hold or double-tap action. It returns `{ combos, combo }` (new list, the config stays unchanged) or `{ error }` for an unknown key, a full list (`MAX_COMBOS`), a missing key, or an existing combo on the same cells (any action, any order).
+- `applyLeaderPreset(presetKey, sequences)` returns `{ sequences, sequence }` or `{ error }` for an unknown key, a full list (`MAX_LEADER_SEQS`), or an existing sequence with the same keys (`hasDuplicateLeaderSequence`).
+- App: the dropdown "Combo-Vorlage" (`js/editor-events.js`, `applyComboPresetFromUI`) and "Leader-Vorlage" (`js/leader-ui.js`, `applyLeaderPresetFromUI`). Each choice adds one entry as a snapshot pending change; undo restores the old list. An error shows a toast.
+- Combos use `KEY_PRESS` and all layers. Tests: `tests/test_app_logic.js` ("Combo-Vorlagen", "Leader-Vorlagen").
+
 ### BLE host slots (`ACT_HOST_BASE`, `DactylBleHost.h`)
 
 - Actions `HOST_1` .. `HOST_3` (`0x188` .. `0x18A`; `0x170` .. `0x17F` belong to the macros) switch the BLE host of the master. Master only: the left half has no BLE host, so `server.py` and `js/config-model.js` reject the actions on the left half. Combos reject them.

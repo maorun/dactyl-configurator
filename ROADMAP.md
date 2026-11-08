@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Combo and leader preset templates (`COMBO_PRESETS`, `LEADER_PRESETS`)
-
-- **Rank:** Feature model. Total 27/40 (typing 5, configuration 7, harmony 8, safety 7). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js`, `js/editor-events.js`, `js/leader-ui.js`.
-- **Problem:** Users must configure common combos and leader sequences manually key by key.
-- **Goal:** Add preset selectors in the combo and leader editors (`COMBO_PRESETS`, `LEADER_PRESETS`, `applyComboPreset`, `applyLeaderPreset`). Selecting a template inserts the combo or leader sequence as a pending change when a slot is free and the keys do not duplicate an existing entry.
-- **Acceptance test:** A unit test applies each combo and leader preset to an empty configuration and expects valid entries; a duplicate preset is rejected.
-
 ### Per-key tapping term suggestions in the timing assistant (`computePerKeyTimingSuggestions`)
 
 - **Rank:** Feature model. Total 26/40 (typing 5, configuration 6, harmony 7, safety 8). Effort S. Estimate.

@@ -100,6 +100,7 @@ def _load_matrix_constants():
 MATRIX_CONSTANTS = _load_matrix_constants()
 NUM_LAYERS = int(MATRIX_CONSTANTS.get("NUM_LAYERS", 8))
 NUM_ROWS = int(MATRIX_CONSTANTS.get("NUM_ROWS", 6))
+HOLD_FLAVOR_MAX = 3  # eigene Hold-Tap-Variante: 0 = holdTapMode der Hälfte, 1..3 = Modus + 1 (HOLD_FLAVOR_MAX in DactylLogic.h)
 NUM_COLS = int(MATRIX_CONSTANTS.get("NUM_COLS", 7))
 
 
@@ -460,6 +461,20 @@ def cell_actions(cell):
     return "NONE", "NONE", "NONE"
 
 
+def cell_hold_flavor(cell, where="Taste"):
+    """Eigene Hold-Tap-Variante einer Taste: 0 (holdTapMode der Hälfte) oder 1..3 (Modus + 1). Fehlt das Feld, gilt 0."""
+    if not isinstance(cell, dict) or "holdFlavor" not in cell:
+        return 0
+    value = cell["holdFlavor"]
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Ungültige Hold-Tap-Variante für {where}: Ganzzahl erwartet.")
+    if not (0 <= value <= HOLD_FLAVOR_MAX):
+        raise ValueError(f"Hold-Tap-Variante für {where} außerhalb von 0..{HOLD_FLAVOR_MAX}: {value}")
+    return value
+
+
 def cell_tap_term(cell, where="Taste"):
     """Eigener Tapping-Term einer Taste in ms: 0 (Wert der Hälfte) oder 100..500. Fehlt das Feld, gilt 0."""
     if not isinstance(cell, dict) or "tapTerm" not in cell:
@@ -517,6 +532,10 @@ def generate_holdmap_cpp(layers):
 
 def generate_dtapmap_cpp(layers):
     return generate_matrix_cpp(layers, "DTAPMAP", "DTAPMAP", lambda cell: code_to_cpp(cell_actions(cell)[2]))
+
+
+def generate_holdflavor_cpp(layers):
+    return generate_matrix_cpp(layers, "HOLDFLAVORMAP", "HOLDFLAVORMAP", lambda cell: str(cell_hold_flavor(cell) if any(x != "NONE" for x in cell_actions(cell)[1:]) else 0))
 
 
 def generate_tapterm_cpp(layers):
@@ -1063,6 +1082,7 @@ def render_ino_content(content, config, defaults_id=None, side="R"):
     content = replace_marked_block(content, "DTAPMAP", generate_dtapmap_cpp(layers), required=True)
     # Ältere Vorlagen ohne Block bleiben gültig (kein eigener Term)
     content = replace_marked_block(content, "TAPTERMMAP", generate_tapterm_cpp(layers))
+    content = replace_marked_block(content, "HOLDFLAVORMAP", generate_holdflavor_cpp(layers))
     if defaults_id is not None:
         content = replace_marked_block(content, "DEFAULTS_ID", generate_defaults_id_cpp(defaults_id), required=True)
     if config.get("layerNames"):
@@ -1167,6 +1187,7 @@ def validate_config(config, side="R"):
                     raise ValueError(f"Ungültige Taste R{r_idx}C{c_idx} in Ebene {l_idx}: Objekt oder Code erwartet.")
                 # Linke Hälfte: fehlende Tasten tragen keine Aktion (die rechte Vorlage hat dort historisch Werte)
                 cell_tap_term(cell, f"R{r_idx}C{c_idx} in Ebene {l_idx}")
+                cell_hold_flavor(cell, f"R{r_idx}C{c_idx} in Ebene {l_idx}")
                 if side == "L" and (r_idx, c_idx) in ABSENT_KEYS["L"] and any(a not in ("", "NONE", "0") for a in cell_actions(cell)):
                     raise ValueError(f"Taste R{r_idx}C{c_idx} existiert auf der linken Hälfte nicht (Ebene {l_idx}).")
                 if side == "L" and any(code_to_cpp(a) in DYNAMIC_MACRO_CPP for a in cell_actions(cell)):

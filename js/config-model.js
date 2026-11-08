@@ -10,6 +10,8 @@ const NUM_COLS = 7;
 const MAX_COMBOS = 16;
 const MAX_NAME_LENGTH = 31;
 const DEFAULT_HOLD_TAP_MODE = 0;
+// Namen der eigenen Hold-Tap-Varianten je Taste (Index = Wert von holdFlavor, 0 = Wert der Hälfte)
+const HOLD_FLAVOR_LABELS = ["Wert der Hälfte", "Sofort bei zweiter Taste", "Permissive Hold", "Tap Preferred"];
 const SETTINGS_RANGES = {
   debounceMs: [1, 50, 5],
   comboTimeoutMs: [10, 200, 40],
@@ -425,7 +427,9 @@ function normalizeKeyCell(cell) {
     hold: typeof cell.hold === "string" ? cell.hold : "NONE",
     dtap: typeof cell.dtap === "string" ? cell.dtap : "NONE",
     // Eigener Tapping-Term in ms (100..500); ohne gültigen Wert fehlt das Feld (= Wert der Hälfte)
-    ...(Number.isInteger(cell.tapTerm) && cell.tapTerm >= 100 && cell.tapTerm <= 500 ? { tapTerm: cell.tapTerm } : {})
+    ...(Number.isInteger(cell.tapTerm) && cell.tapTerm >= 100 && cell.tapTerm <= 500 ? { tapTerm: cell.tapTerm } : {}),
+    // Eigene Hold-Tap-Variante (1..3 = Modus + 1); ohne gültigen Wert fehlt das Feld (= holdTapMode der Hälfte)
+    ...(Number.isInteger(cell.holdFlavor) && cell.holdFlavor >= 1 && cell.holdFlavor <= HOLD_FLAVOR_MAX ? { holdFlavor: cell.holdFlavor } : {})
   };
 }
 
@@ -1619,7 +1623,7 @@ function topCorrectedKeys(stats, limit = CORRECTION_TOP) {
 
 function createDeviceSnapshot() {
   return {
-    names: null, tap: [], hold: [], dtap: [], term: [],
+    names: null, tap: [], hold: [], dtap: [], term: [], flavor: [],
     counts: { combos: null, pairs: null, macros: null, overrides: null, leader: null, altrep: null }, combos: [], pairs: [], macros: [], overrides: [], leader: [], altrep: [], macroLens: [], macroRep: [], listsBroken: false,
     // DEVICE_INFO der Hälfte (nur beim Laden der kompletten Config gelesen), sonst null
     info: null
@@ -1794,7 +1798,7 @@ function describeMacroSteps(steps) {
 
 // Speichert eine Matrix aus GET_CONFIG als Zahlencodes. Gibt true zurück, wenn übernommen.
 function captureMatrixData(snapshot, field, data) {
-  if (!snapshot || !["tap", "hold", "dtap", "term"].includes(field)) return false;
+  if (!snapshot || !["tap", "hold", "dtap", "term", "flavor"].includes(field)) return false;
   if (!data || !isValidIndex(data.l, NUM_LAYERS) || !Array.isArray(data.k)) return false;
   const matrix = [];
   for (let r = 0; r < NUM_ROWS; r++) {
@@ -1839,8 +1843,13 @@ function diffKeymap(cfg, snapshot, profile) {
           local.tapTerm = keyTapTerm((layer[r] || [])[c]);
           device.tapTerm = device.holdCode || device.dtapCode ? (snapshot.term[l][r][c] || 0) : 0;
         }
+        // Eigene Hold-Tap-Variante: ebenso nur mit FLAVOR_DATA (Firmware davor kennt sie nicht)
+        if (snapshot.flavor && snapshot.flavor[l]) {
+          local.holdFlavor = keyHoldFlavor((layer[r] || [])[c]);
+          device.holdFlavor = device.holdCode || device.dtapCode ? (snapshot.flavor[l][r][c] || 0) : 0;
+        }
         if (local.tapCode !== device.tapCode || local.holdCode !== device.holdCode || local.dtapCode !== device.dtapCode ||
-            (local.tapTerm || 0) !== (device.tapTerm || 0)) {
+            (local.tapTerm || 0) !== (device.tapTerm || 0) || (local.holdFlavor || 0) !== (device.holdFlavor || 0)) {
           keys.push({ l, r, c, device, local });
         }
       }
@@ -1947,8 +1956,8 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
   const tapOf = code => findDefinitionByCode(code).tap;
   const layers = Array.from({ length: NUM_LAYERS }, () => transparentLayer());
   for (let l = 0; l < NUM_LAYERS; l++) {
-    for (const field of ["tap", "hold", "dtap", "term"]) {
-      if (field === "term" && !snapshot.term[l]) continue;
+    for (const field of ["tap", "hold", "dtap", "term", "flavor"]) {
+      if ((field === "term" || field === "flavor") && !snapshot[field][l]) continue;
       applyMatrixData(layers, field, { l, k: snapshot[field][l] });
     }
   }
@@ -2030,6 +2039,7 @@ function describeKeyActions(actions) {
   if (actions.holdCode) text += ` · Halten: ${findDefinitionByCode(actions.holdCode).label}`;
   if (actions.dtapCode) text += ` · 2×: ${findDefinitionByCode(actions.dtapCode).label}`;
   if (actions.tapTerm) text += ` · Term: ${actions.tapTerm} ms`;
+  if (actions.holdFlavor) text += ` · Variante: ${HOLD_FLAVOR_LABELS[actions.holdFlavor]}`;
   return text;
 }
 

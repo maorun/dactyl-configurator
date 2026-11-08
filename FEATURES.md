@@ -332,6 +332,20 @@ Rules for this file:
   - Both halves: the master sends `SPLIT_OP_MASTER_PRESS` (master -> left only, no values, no retry) to the left half for each press of its own matrix. The left half notes it with `masterPriorPressNote` and `notePriorKeyPress`, so a press on the master cancels an open Retro Tap on the left half. The master sees every left press (`onSplitBeforeLeftPress`). The retro tap itself calls `oslNoteKeyPress`, like every key press.
   - Mixed firmware: needs `DACTYL_FW_VERSION` 31 or newer on both halves; a left half without `MASTER_PRESS` ignores the packet and misses master presses.
 
+### Hold-tap flavor per key (`HOLDFLAVORMAP`)
+
+- Each key has an optional own hold-tap flavor (`HOLDFLAVORMAP`, `0` = `holdTapMode` of the half, `1..3` = fixed mode). The value is the mode plus one: `1` = hold on other key press, `2` = permissive hold, `3` = tap preferred. Example: permissive hold for home row mods and a quick hold for thumb keys.
+  - `resolveKeyHoldFlavor()` reads it with the same layer fallback as `resolveKeyActions`; `tapHoldOnPress` stores it in `TapHoldKey.flavor`. `effectiveHoldMode(r, c)` returns the mode of the open key (the key value minus one, else `holdTapMode`). Never compare against `holdTapMode` directly in the hold logic.
+  - A press of another key resolves only the open keys with mode `0` as hold at once (`resolvePendingTapHoldsAsHold(..., true)`). `pendingDeferMode()` gives the mode that buffers the next keys: the mode of the newest open key that is not mode `0`. A release uses the same mode.
+  - The value acts only with a hold or double-tap action (and a tap action). `server.py` renders `0` for other keys.
+  - NVS key `holdflv` (blob of `HOLDFLAVORMAP`, written by `saveKeymapToNVS` / `SAVE_NVS`). It exists when at least one key has a value, or when the compiled-in defaults carry values and the user cleared them (zero blob). A stored value above `3` counts as `0`.
+  - `keymapDefaultsFingerprint()` includes `HOLDFLAVORMAP` only when it has a value, so firmware from before this feature keeps the stored layout.
+  - Commands: `CLEAR_HOLD_FLAVORS` (RAM, `OK CLEAR_HOLD_FLAVORS`) and `SET_KF <l> <r> <c> <f>` (RAM like `SET_K`: no `OK`, only `ERR ARGS`). `SAVE_NVS` persists them. `GET_CONFIG` sends one `FLAVOR_DATA:{"l":<layer>,"k":[[...]]}` line per layer after `TERM_DATA:`.
+  - Config: `layers[l][r][c].holdFlavor` (integer 1..3, absent = `0`). `server.py` (`cell_hold_flavor`, `generate_holdflavor_cpp`, block `[[[START_HOLDFLAVORMAP]]]` in both sketches) rejects values outside 0..3 with HTTP 400; a template without the block stays valid.
+  - App: the inspector select `keyHoldFlavorSelect` (`js/editor.js`, `js/editor-events.js`). The full sync sends `CLEAR_HOLD_FLAVORS` as the last setting command (`optional: "args"`, quiet while no key has a value) and a `SET_KF` after each `SET_K` with a value. The layout diff compares the value when the device sends `FLAVOR_DATA`.
+  - Split: the left half runs the same logic. The cross-half decision stays with the half mode: `splitDeferTakeResolveRequest` and `HOLD_RESOLVE` ignore the key flavor, so a press of the other half resolves an open key by the mode of the half. The key flavor acts for presses of the same half. `DACTYL_FW_VERSION` 46 added the commands and the NVS key: flash both halves.
+  - Test: `test_hold_flavor_per_key_*` in `firmware/tests/test_firmware_logic.cpp` (half mode A, one key with mode B: only this key resolves with mode B), `test_holdflavor_codegen_and_range` in `tests/test_server.py`, "Hold-Tap-Variante je Taste" in `tests/test_app_logic.js`.
+
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 
 - Each key has an optional own tapping term (`TAPTERMMAP`, ms, `0` = the value of the half, otherwise 100..500). Examples: ring and little finger home row mods need a longer term than a thumb key.

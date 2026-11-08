@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Hold-tap flavor per key (`HOLDFLAVORMAP`)
-
-- **Rank:** Feature model. Total 23/40 (typing 6, configuration 3, harmony 8, safety 6). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/config-model.js`, `js/editor.js`, `server.py`.
-- **Problem:** `holdTapMode` applies to all Mod-Tap keys of a half. A home-row key and a thumb key need different decisions.
-- **Goal:** Add a per-key override of `holdTapMode` (`0` = value of the half, `1..n` = fixed mode; `SET_KF`, a new NVS blob). Show the choice in the key inspector. Use one helper, `effectiveHoldMode()`, like `effectiveTapTerm()`. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test sets mode A on the half and mode B on one key, and expects that only this key resolves with mode B.
-
 ### Heatmap CSV export (`buildHeatmapCsv`)
 
 - **Rank:** Feature model. Total 22/40 (typing 1, configuration 5, harmony 6, safety 10). Effort S. Estimate.

@@ -1463,6 +1463,8 @@ function updateInspector(r, c) {
   setOptionalActionSelect(document.getElementById("dtapActionSelect"), normalizeHoldCode(keyData.dtap));
   const termInput = document.getElementById("keyTapTermInput");
   if (termInput) termInput.value = Number.isInteger(keyData.tapTerm) && keyData.tapTerm > 0 ? keyData.tapTerm : "";
+  const flavorSelect = document.getElementById("keyHoldFlavorSelect");
+  if (flavorSelect) flavorSelect.value = String(Number.isInteger(keyData.holdFlavor) && keyData.holdFlavor >= 1 && keyData.holdFlavor <= HOLD_FLAVOR_MAX ? keyData.holdFlavor : 0);
 }
 
 // Setzt eine Halte- oder Doppel-Tipp-Auswahl. Ein unbekannter Code (z. B. aus einem Import) fällt nicht

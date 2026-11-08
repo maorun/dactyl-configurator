@@ -257,6 +257,43 @@ class TestServerAndCodegen(unittest.TestCase):
             with open(os.path.join(os.path.dirname(os.path.abspath(server.__file__)), ino), encoding="utf-8") as f:
                 self.assertIn("// [[[START_TAPTERMMAP]]]", f.read())
 
+    def test_holdflavor_codegen_and_range(self):
+        layers = [[[{"tap": "KEY_J", "hold": "MOD_LCTRL", "holdFlavor": 2},
+                    {"tap": "KEY_K", "dtap": "KEY_ESC", "holdFlavor": 3},
+                    {"tap": "KEY_L", "hold": "NONE", "holdFlavor": 1},   # ohne Halten/Doppel-Tipp ohne Wirkung
+                    {"tap": "KEY_M", "hold": "MOD_LSHIFT"},
+                    {"tap": "NONE", "hold": "MO_1", "holdFlavor": 1},    # Hold ohne Tap wird zur Taste
+                    "KEY_N"]]]
+        block = server.generate_holdflavor_cpp(layers)
+        self.assertIn("uint16_t HOLDFLAVORMAP[NUM_LAYERS][6][7]", block)
+        self.assertIn("// [[[START_HOLDFLAVORMAP]]]", block)
+        first_row = block.split("{ ", 2)[1].split(" }")[0]
+        values = [v.strip() for v in first_row.split(",")]
+        self.assertEqual(values[:6], ["2", "3", "0", "0", "0", "0"])
+        # Rendering in die Vorlage; eine Vorlage ohne Block bleibt gültig
+        content = ("// [[[START_KEYMAP]]]\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n"
+                   "// [[[START_DTAPMAP]]]\n// [[[END_DTAPMAP]]]\n// [[[START_HOLDFLAVORMAP]]]\nold\n// [[[END_HOLDFLAVORMAP]]]\n")
+        out = server.render_ino_content(content, {"layers": layers})
+        self.assertIn("2", out.split("START_HOLDFLAVORMAP")[1])
+        self.assertNotIn("old", out)
+        out = server.render_ino_content(content.split("// [[[START_HOLDFLAVORMAP]]]")[0], {"layers": layers})
+        self.assertNotIn("HOLDFLAVORMAP", out)
+        # Wertebereich: 0..3, nur ganze Zahlen
+        for bad in (4, -1, 100, "2", 1.5, True):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.validate_config({"layers": [[[{"tap": "KEY_J", "hold": "KEY_B", "holdFlavor": bad}]]]})
+        for good in (0, 1, 2, 3, None):
+            server.validate_config({"layers": [[[{"tap": "KEY_J", "hold": "KEY_B", "holdFlavor": good}]]]})
+        # Die Obergrenze folgt der Firmware (HOLD_FLAVOR_MAX in DactylLogic.h)
+        root = os.path.dirname(os.path.abspath(server.__file__))
+        with open(os.path.join(root, "firmware/dactyl_right/DactylLogic.h"), encoding="utf-8") as f:
+            self.assertIn(f"#define HOLD_FLAVOR_MAX (HOLD_MODE_TAP_PREFERRED + 1)", f.read())
+        self.assertEqual(server.HOLD_FLAVOR_MAX, 3)
+        # Dateien der Firmware tragen den Block (rechts und links)
+        for ino in ("firmware/dactyl_right/dactyl_right.ino", "firmware/dactyl_left/dactyl_left.ino"):
+            with open(os.path.join(root, ino), encoding="utf-8") as f:
+                self.assertIn("// [[[START_HOLDFLAVORMAP]]]", f.read())
+
     def test_dtapmap_codegen(self):
         layers = [[[{"tap": "KEY_J", "hold": "MOD_LCTRL", "dtap": "KEY_ESC"},
                     {"tap": "NONE", "hold": "NONE", "dtap": "KEY_TAB"},

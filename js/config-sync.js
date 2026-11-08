@@ -127,10 +127,14 @@ async function writeConfigToESP32(options = {}) {
 
     // Eigene Tapping-Terme je Taste: Firmware davor kennt CLEAR_TAP_TERMS nicht; der Hinweis erscheint nur,
     // wenn die App Werte senden müsste. Die Werte folgen nach den Tasten (SET_KT, wie SET_K ohne Bestätigung).
+    // Eigene Hold-Tap-Varianten ebenso (CLEAR_HOLD_FLAVORS, SET_KF).
     let tapTermsKnown = false;
+    let holdFlavorsKnown = false;
     for (const { cmd, ack, optional, quietUnknown } of settingCommands) {
-      const result = await sendConfirmed(cmd, ack, 3000, optional, !!quietUnknown && !hasKeyTapTerms(cfg.layers));
+      const hasOwn = ack === "CLEAR_HOLD_FLAVORS" ? hasKeyHoldFlavors(cfg.layers) : hasKeyTapTerms(cfg.layers);
+      const result = await sendConfirmed(cmd, ack, 3000, optional, !!quietUnknown && !hasOwn);
       if (ack === "CLEAR_TAP_TERMS") tapTermsKnown = result !== "unknown";
+      if (ack === "CLEAR_HOLD_FLAVORS") holdFlavorsKnown = result !== "unknown";
       updateProgress();
     }
 
@@ -152,6 +156,8 @@ async function writeConfigToESP32(options = {}) {
           updateProgress();
           const term = keyTapTerm(row[c]);
           if (term && tapTermsKnown) await sendCmd(`SET_KT ${l} ${r} ${c} ${term}`);
+          const flavor = keyHoldFlavor(row[c]);
+          if (flavor && holdFlavorsKnown) await sendCmd(`SET_KF ${l} ${r} ${c} ${flavor}`);
         }
       }
     }
@@ -364,13 +370,19 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_RETRO_TAP ${clampSetting("retroTap", s.retroTap ?? 0)}`, ack: "SET_RETRO_TAP", optional: true },
     { cmd: `SET_NUM_WORD_LAYER ${clampSetting("numWordLayer", s.numWordLayer ?? 1)}`, ack: "SET_NUM_WORD_LAYER", optional: "args" },
     { cmd: `SET_BOOT_LAYER ${clampSetting("bootLayer", s.bootLayer ?? 0)}`, ack: "SET_BOOT_LAYER", optional: "args" },
-    { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true }
+    { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true },
+    { cmd: "CLEAR_HOLD_FLAVORS", ack: "CLEAR_HOLD_FLAVORS", optional: "args", quietUnknown: true }
   ];
 }
 
 // true, wenn mindestens eine Taste einen eigenen Tapping-Term trägt
 function hasKeyTapTerms(layers) {
   return (layers || []).some(layer => (layer || []).some(row => (row || []).some(cell => keyTapTerm(cell) > 0)));
+}
+
+// true, wenn mindestens eine Taste eine eigene Hold-Tap-Variante trägt
+function hasKeyHoldFlavors(layers) {
+  return (layers || []).some(layer => (layer || []).some(row => (row || []).some(cell => keyHoldFlavor(cell) > 0)));
 }
 
 // Argument von SET_TRI_LAYER: "a b target" je Regel, "-" ohne Regel

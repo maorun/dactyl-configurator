@@ -277,6 +277,8 @@ function setupEventListeners() {
 
     const newKey = { label, tap, hold, dtap };
     if (termValue > 0) newKey.tapTerm = termValue;
+    const flavorValue = parseInt(document.getElementById("keyHoldFlavorSelect")?.value ?? "0", 10);
+    if (flavorValue >= 1 && flavorValue <= HOLD_FLAVOR_MAX) newKey.holdFlavor = flavorValue;
     layer[r][c] = newKey;
     renderMatrix();
 

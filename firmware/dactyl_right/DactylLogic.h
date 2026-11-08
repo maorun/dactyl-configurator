@@ -13,7 +13,7 @@
  * Die einbindende Übersetzungseinheit muss VOR dem #include deklarieren:
  *   NUM_LAYERS, NUM_ROWS, NUM_COLS, MAX_COMBOS, CONFIG_MODE_MAGIC,
  *   KeyCombo, ComboRuntime, comboRuntime[], userCombos[], numCombos,
- *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], TAPTERMMAP[][][], layerNames[],
+ *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], TAPTERMMAP[][][], HOLDFLAVORMAP[][][], layerNames[],
  *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
  *   nur Master (DACTYL_KEY_OVERRIDES): KeyOverride, userKeyOverrides[], numKeyOverrides (DactylKeyOverride.h),
  *   MAX_ALT_REPEATS, AltRepeatPair, userAltRepeats[], numAltRepeats (eigene Alternate-Repeat-Paare),
@@ -178,6 +178,9 @@ void processOtaTimeout() {
 #define AUTO_SHIFT_MIN_MS 50
 #define AUTO_SHIFT_MAX_MS 500
 #define AUTO_SHIFT_DEFAULT_MS 175
+// Eigene Hold-Tap-Variante je Taste (HOLDFLAVORMAP, je Ebene): 0 = holdTapMode der Hälfte, 1..3 = fester Modus
+// (1 = HOLD_MODE_OTHER_KEY_PRESS, 2 = HOLD_MODE_PERMISSIVE, 3 = HOLD_MODE_TAP_PREFERRED, also Modus + 1)
+#define HOLD_FLAVOR_MAX (HOLD_MODE_TAP_PREFERRED + 1)
 // Eigener Tapping-Term je Taste (TAPTERMMAP, je Ebene): 0 = Wert der Hälfte (tappingTermMs)
 
 // -----------------------------------------------------------------------------
@@ -699,6 +702,18 @@ uint16_t resolveKeyTapTerm(uint8_t layer, uint8_t r, uint8_t c) {
 // Gültiger Wert für TAPTERMMAP: 0 (Wert der Hälfte) oder TAPPING_TERM_MIN_MS..TAPPING_TERM_MAX_MS
 bool isValidKeyTapTerm(int ms) {
   return ms == 0 || (ms >= TAPPING_TERM_MIN_MS && ms <= TAPPING_TERM_MAX_MS);
+}
+
+// Eigene Hold-Tap-Variante der Taste auf der aktiven Ebene (0 = holdTapMode der Hälfte). Gleiche Auflösung wie
+// resolveKeyTapTerm: eine Taste ohne jede Aktion auf der Ebene erbt Aktionen und Variante von Ebene 0.
+uint8_t resolveKeyHoldFlavor(uint8_t layer, uint8_t r, uint8_t c) {
+  if (layer > 0 && KEYMAP[layer][r][c] == 0 && HOLDMAP[layer][r][c] == 0 && DTAPMAP[layer][r][c] == 0) layer = 0;
+  return (uint8_t)HOLDFLAVORMAP[layer][r][c];
+}
+
+// Gültiger Wert für HOLDFLAVORMAP: 0 (Wert der Hälfte) oder 1..HOLD_FLAVOR_MAX
+bool isValidKeyHoldFlavor(int f) {
+  return f >= 0 && f <= HOLD_FLAVOR_MAX;
 }
 
 // Eine der beiden Tasten der physischen Config-Combo (rechts R0C0/R4C5, links R0C5/R4C0)
@@ -2175,6 +2190,7 @@ struct TapHoldKey {
   unsigned long pressTime;
   uint16_t term;     // Eigener Tapping-Term dieser Taste (0 = tappingTermMs der Hälfte)
   uint32_t retroSeq; // retroPressSeq beim Druck: gleicher Wert beim Loslassen = kein Tastendruck dazwischen (retroTap)
+  uint8_t flavor;    // Eigene Hold-Tap-Variante dieser Taste beim Druck (0 = holdTapMode der Hälfte, sonst Modus + 1)
 };
 TapHoldKey tapHold[NUM_ROWS][NUM_COLS];
 // Quick-Tap: Zeitpunkt des letzten Tipps (Loslassen) je Mod-Tap-Taste; nur der Tipp der zuletzt gedrückten Taste zählt
@@ -2235,10 +2251,16 @@ static inline uint16_t effectiveTapTerm(uint16_t keyTerm) {
   return keyTerm != 0 ? keyTerm : tappingTermMs;
 }
 
+// Wirksamer Hold-Tap-Modus der Mod-Tap-Taste (r, c): die beim Druck gemerkte eigene Variante, sonst holdTapMode der Hälfte
+static inline uint8_t effectiveHoldMode(uint8_t r, uint8_t c) {
+  uint8_t f = tapHold[r][c].flavor;
+  return (f >= 1 && f <= HOLD_FLAVOR_MAX) ? (uint8_t)(f - 1) : holdTapMode;
+}
+
 void resetTapHold() {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
-      tapHold[r][c] = { false, false, 0, 0, 0, 0, 0, 0 };
+      tapHold[r][c] = { false, false, 0, 0, 0, 0, 0, 0, 0 };
       quickTapValid[r][c] = false;
       quickTapAt[r][c] = 0;
       quickTapHeld[r][c] = false;
@@ -2250,8 +2272,8 @@ void resetTapHold() {
   resetDeferredQueue();
 }
 
-void tapHoldOnPress(uint8_t r, uint8_t c, uint16_t tapAct, uint16_t holdAct, uint8_t layer, unsigned long now, uint16_t term = 0) {
-  tapHold[r][c] = { true, false, tapAct, holdAct, layer, now, term, retroPressSeq };
+void tapHoldOnPress(uint8_t r, uint8_t c, uint16_t tapAct, uint16_t holdAct, uint8_t layer, unsigned long now, uint16_t term = 0, uint8_t flavor = 0) {
+  tapHold[r][c] = { true, false, tapAct, holdAct, layer, now, term, retroPressSeq, flavor };
 }
 
 // -----------------------------------------------------------------------------
@@ -2501,13 +2523,37 @@ void cancelTapHoldForCombo(uint8_t r, uint8_t c) {
 
 // Eine andere Taste wurde gedrückt, während Mod-Tap-Tasten noch unentschieden sind:
 // Diese werden sofort zu Hold (z. B. Strg halten + C tippen innerhalb des Tapping-Terms).
-void resolvePendingTapHoldsAsHold(uint8_t exceptR, uint8_t exceptC) {
+// onlyOtherKeyMode: nur Tasten mit dem Modus HOLD_MODE_OTHER_KEY_PRESS (eigene Variante oder holdTapMode der Hälfte)
+void resolvePendingTapHoldsAsHold(uint8_t exceptR, uint8_t exceptC, bool onlyOtherKeyMode = false) {
   for (int r = 0; r < NUM_ROWS; r++) {
     for (int c = 0; c < NUM_COLS; c++) {
       if (r == exceptR && c == exceptC) continue;
-      if (tapHold[r][c].pending) activateTapHoldAsHold(r, c);
+      if (!tapHold[r][c].pending) continue;
+      if (onlyOtherKeyMode && effectiveHoldMode(r, c) != HOLD_MODE_OTHER_KEY_PRESS) continue;
+      activateTapHoldAsHold(r, c);
     }
   }
+}
+
+// Modus, der das Puffern weiterer Tasten bestimmt: der Modus der zuletzt gedrückten offenen Mod-Tap-Taste, die nicht
+// sofort bei der zweiten Taste entscheidet. Ohne eine solche Taste HOLD_MODE_OTHER_KEY_PRESS (nichts wird gepuffert).
+uint8_t pendingDeferMode() {
+  uint8_t mode = HOLD_MODE_OTHER_KEY_PRESS;
+  bool found = false;
+  unsigned long newest = 0;
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (!tapHold[r][c].pending) continue;
+      uint8_t m = effectiveHoldMode(r, c);
+      if (m == HOLD_MODE_OTHER_KEY_PRESS) continue;
+      if (!found || (long)(tapHold[r][c].pressTime - newest) > 0) {
+        found = true;
+        newest = tapHold[r][c].pressTime;
+        mode = m;
+      }
+    }
+  }
+  return mode;
 }
 
 // Opposite-Hand-Regel (chordalHold): Ein Druck (r, c) derselben Hälfte entscheidet offene Mod-Tap-Tasten sofort als Tipp.
@@ -2664,7 +2710,7 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
       if (!anyTapHoldPending() && deferredQueue.count > 0) replayDeferredQueue();
     }
     // In permissiveHold oder tapPreferred nachfolgende Tastendrücke puffern, solange eine Mod-Tap-Taste wartet
-    if (holdTapMode != HOLD_MODE_OTHER_KEY_PRESS && !isReplayingDeferredQueue && anyTapHoldPending()) {
+    if (!isReplayingDeferredQueue && anyTapHoldPending() && pendingDeferMode() != HOLD_MODE_OTHER_KEY_PRESS) {
       if (deferredQueuePush(r, c, true, now)) {
         return;
       }
@@ -2685,9 +2731,8 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
     bool priorRecent = priorKeyRecent(now);
     notePriorKeyPress(now);
     // Modus 0 (holdOnOtherKeyPress): Ein weiterer Tastendruck entscheidet offene Mod-Tap-Tasten sofort als Hold
-    if (holdTapMode == HOLD_MODE_OTHER_KEY_PRESS) {
-      resolvePendingTapHoldsAsHold(r, c);
-    }
+    // (Tasten mit einer eigenen Variante entscheiden nach ihrem Modus)
+    resolvePendingTapHoldsAsHold(r, c, true);
     uint8_t layer = getActiveLayer();
     comboPressLayer1[r][c] = (uint8_t)(layer + 1);
     if (isSecondTap) {
@@ -2740,7 +2785,7 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
       return;
     }
     if (holdAct != 0 || dtapAct != 0) {
-      tapHoldOnPress(r, c, tapAct, holdAct, layer, now, resolveKeyTapTerm(layer, r, c));
+      tapHoldOnPress(r, c, tapAct, holdAct, layer, now, resolveKeyTapTerm(layer, r, c), resolveKeyHoldFlavor(layer, r, c));
       tapHoldDtap[r][c] = dtapAct;
     } else if (autoShift && autoShiftedAscii(tapAct) != 0 && autoShiftModeAllows(autoShift, tapAct) && !leaderState.active && heldModifierMask() == 0) {
       // Auto Shift (nicht bei gehaltenem Modifikator dieser Hälfte, z. B. Cmd+Z, und nicht in einer Leader-Erfassung): erst nach dem Zeitlimit oder beim Loslassen entscheiden; Tasten mit Halte- oder Doppel-Tipp-Aktion,
@@ -2751,15 +2796,16 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
     }
   } else {
     // Wenn eine andere Taste losgelassen wird, während eine Mod-Tap-Taste wartet:
-    if (holdTapMode != HOLD_MODE_OTHER_KEY_PRESS && !isReplayingDeferredQueue && anyTapHoldPending() && !tapHold[r][c].pending) {
+    uint8_t deferMode = isReplayingDeferredQueue ? (uint8_t)HOLD_MODE_OTHER_KEY_PRESS : pendingDeferMode();
+    if (deferMode != HOLD_MODE_OTHER_KEY_PRESS && anyTapHoldPending() && !tapHold[r][c].pending) {
       if (deferredQueueHasPress(r, c)) {
-        if (holdTapMode == HOLD_MODE_PERMISSIVE) {
+        if (deferMode == HOLD_MODE_PERMISSIVE) {
           // Permissive Hold: verschachteltes Press-Release-Paar innerhalb des Fensters -> Mod-Tap sofort Hold
           resolveAllPendingTapHoldsAsHold();
           deferredQueuePush(r, c, false, now);
           replayDeferredQueue();
           return;
-        } else if (holdTapMode == HOLD_MODE_TAP_PREFERRED) {
+        } else if (deferMode == HOLD_MODE_TAP_PREFERRED) {
           // Tap Preferred: Loslassen vor Ablauf des Tapping-Terms löst keinen Hold aus -> Release puffern
           if (deferredQueuePush(r, c, false, now)) {
             return;
@@ -2936,12 +2982,36 @@ bool writeTapTermsToOpenNVS() {
   return preferences.putBytes("tapterms", TAPTERMMAP, sizeof(TAPTERMMAP)) == sizeof(TAPTERMMAP);
 }
 
+// true, wenn mindestens eine Taste eine eigene Hold-Tap-Variante hat
+bool anyKeyHoldFlavor() {
+  for (int l = 0; l < NUM_LAYERS; l++)
+    for (int r = 0; r < NUM_ROWS; r++)
+      for (int c = 0; c < NUM_COLS; c++)
+        if (HOLDFLAVORMAP[l][r][c] != 0) return true;
+  return false;
+}
+
+// true, wenn die einkompilierten Defaults eigene Varianten tragen (wie tapTermsCompiledIn)
+bool holdFlavorsCompiledIn = false;
+
+// Schreibt HOLDFLAVORMAP als Blob "holdflv" in den geöffneten Namespace "dactyl". Ohne eigene Werte entfällt der
+// Schlüssel (fehlend = einkompilierte Werte); tragen die einkompilierten Defaults selbst Varianten, speichert eine
+// leere HOLDFLAVORMAP einen Null-Blob, sonst kämen sie beim nächsten Start zurück.
+bool writeHoldFlavorsToOpenNVS() {
+  if (!anyKeyHoldFlavor() && !holdFlavorsCompiledIn) {
+    if (preferences.isKey("holdflv")) preferences.remove("holdflv");
+    return true;
+  }
+  return preferences.putBytes("holdflv", HOLDFLAVORMAP, sizeof(HOLDFLAVORMAP)) == sizeof(HOLDFLAVORMAP);
+}
+
 bool saveKeymapToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
   bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
   ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
   ok = (preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP)) && ok;
   ok = writeTapTermsToOpenNVS() && ok;
+  ok = writeHoldFlavorsToOpenNVS() && ok;
   preferences.end();
   Serial.println(ok ? "NVS: Keymap gespeichert." : "NVS: FEHLER beim Speichern der Keymap!");
   return ok;
@@ -2962,9 +3032,10 @@ uint32_t keymapDefaultsFingerprint() {
     if (dtapBytes[i] != 0) { hasDtap = true; break; }
   }
   // TAPTERMMAP zählt wie DTAPMAP nur mit, wenn sie belegt ist (Fingerprint älterer Firmware bleibt gleich)
-  const uint8_t* parts[5] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, dtapBytes, (const uint8_t*)&id, (const uint8_t*)TAPTERMMAP };
-  const size_t sizes[5] = { sizeof(KEYMAP), sizeof(HOLDMAP), hasDtap ? sizeof(DTAPMAP) : 0, sizeof(id), anyKeyTapTerm() ? sizeof(TAPTERMMAP) : 0 };
-  for (int p = 0; p < 5; p++) {
+  // HOLDFLAVORMAP ebenso
+  const uint8_t* parts[6] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, dtapBytes, (const uint8_t*)&id, (const uint8_t*)TAPTERMMAP, (const uint8_t*)HOLDFLAVORMAP };
+  const size_t sizes[6] = { sizeof(KEYMAP), sizeof(HOLDMAP), hasDtap ? sizeof(DTAPMAP) : 0, sizeof(id), anyKeyTapTerm() ? sizeof(TAPTERMMAP) : 0, anyKeyHoldFlavor() ? sizeof(HOLDFLAVORMAP) : 0 };
+  for (int p = 0; p < 6; p++) {
     for (size_t i = 0; i < sizes[p]; i++) {
       h ^= parts[p][i];
       h *= 16777619u;
@@ -2975,6 +3046,7 @@ uint32_t keymapDefaultsFingerprint() {
 
 void loadKeymapFromNVS() {
   tapTermsCompiledIn = anyKeyTapTerm();
+  holdFlavorsCompiledIn = anyKeyHoldFlavor();
   preferences.begin("dactyl", false);
   uint32_t defaultsHash = keymapDefaultsFingerprint();
   bool hasStoredHash = preferences.isKey("defaults_fp");
@@ -3002,6 +3074,7 @@ void loadKeymapFromNVS() {
     ok = (preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP)) && ok;
     // Eigene Tapping-Terme gehören zur Belegung: gespeicherte durch die einkompilierten ersetzen
     ok = writeTapTermsToOpenNVS() && ok;
+    ok = writeHoldFlavorsToOpenNVS() && ok;
     // Neue App-Belegung über einer gespeicherten Keymap: sie verweist auf die einkompilierten Tastenpaare (PAIR_n),
     // alte Paare aus dem NVS daher verwerfen. Ohne Keymap (erster Start) gibt es nichts zu ersetzen.
     if (hasKeymap) {
@@ -3069,6 +3142,14 @@ void loadKeymapFromNVS() {
         for (int r = 0; r < NUM_ROWS; r++)
           for (int c = 0; c < NUM_COLS; c++)
             if (!isValidKeyTapTerm(TAPTERMMAP[l][r][c])) TAPTERMMAP[l][r][c] = 0;
+    }
+    // Eigene Hold-Tap-Varianten: ebenso; ungültige Werte zählen als 0
+    if (preferences.isKey("holdflv") && preferences.getBytesLength("holdflv") == sizeof(HOLDFLAVORMAP)) {
+      preferences.getBytes("holdflv", HOLDFLAVORMAP, sizeof(HOLDFLAVORMAP));
+      for (int l = 0; l < NUM_LAYERS; l++)
+        for (int r = 0; r < NUM_ROWS; r++)
+          for (int c = 0; c < NUM_COLS; c++)
+            if (!isValidKeyHoldFlavor(HOLDFLAVORMAP[l][r][c])) HOLDFLAVORMAP[l][r][c] = 0;
     }
   }
   for (int i = 0; i < NUM_LAYERS; i++) {
@@ -4119,6 +4200,21 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd == "CLEAR_HOLD_FLAVORS") {
+    // RAM: alle eigenen Hold-Tap-Varianten löschen (der volle Sync sendet danach SET_KF je Taste, SAVE_NVS speichert)
+    memset(HOLDFLAVORMAP, 0, sizeof(HOLDFLAVORMAP));
+    sendConfigNotification("OK CLEAR_HOLD_FLAVORS");
+  } else if (cmd.startsWith("SET_KF ")) {
+    // "SET_KF <l> <r> <c> <f>": eigene Hold-Tap-Variante einer Taste (RAM, wie SET_K ohne OK; 0 = holdTapMode der
+    // Hälfte, 1..3 = fester Modus). SAVE_NVS schreibt sie.
+    int l, r, c, f;
+    char extra;
+    if (sscanf(cmd.c_str(), "SET_KF %d %d %d %d %c", &l, &r, &c, &f, &extra) == 4 &&
+        l >= 0 && l < NUM_LAYERS && r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS && isValidKeyHoldFlavor(f)) {
+      HOLDFLAVORMAP[l][r][c] = (uint16_t)f;
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd == "SAVE_NVS") {
     sendConfigNotification(saveKeymapToNVS() ? "OK SAVE_NVS" : "ERR NVS SAVE_NVS");
   } else if (cmd.startsWith("SET_NAME ")) {
@@ -4558,6 +4654,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
         sendMatrixData("DTAP_DATA:", DTAPMAP, l);
         // Eigene Tapping-Terme je Taste in ms (0 = Wert der Hälfte); Firmware davor sendet keine TERM_DATA-Zeile
         sendMatrixData("TERM_DATA:", TAPTERMMAP, l);
+        // Eigene Hold-Tap-Varianten je Taste (0 = holdTapMode der Hälfte); Firmware davor sendet keine FLAVOR_DATA-Zeile
+        sendMatrixData("FLAVOR_DATA:", HOLDFLAVORMAP, l);
       }
       sendCombosPairsMacros();
       sendConfigNotification("CONFIG_SYNC_DONE", true);

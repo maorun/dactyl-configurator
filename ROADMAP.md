@@ -46,6 +46,24 @@ Rules for this file:
 - **Goal:** Add a serial command `TEST_MATRIX 1|0`. In test mode, both halves stream switch changes as `MATRIX_RAW:<side>,<row>,<col>,<down>`. The app diagnostic panel highlights pressed switches on a physical switch grid for both halves.
 - **Acceptance test:** A firmware test enables test mode, simulates physical key press and release, and expects formatted `MATRIX_RAW:` lines; an app test parses the lines and updates switch highlight states.
 
+### Auto-Shift for number and symbol keys (`autoShiftSymbols`)
+
+- **Rank:** Feature model. Total 28/40 (typing 7, configuration 6, harmony 7, safety 8). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylAutoShift.h`, `firmware/dactyl_right/DactylCommon.h`, `js/settings-ui.js`, `js/config-sync.js`.
+- **Problem:** Auto-Shift only covers letters. Numbers and punctuation keys require holding a separate Shift key or navigating to a symbol layer.
+- **Goal:** Extend Auto-Shift with a setting `autoShiftSymbols` (boolean). When enabled, holding digits `0..9` or standard punctuation keys beyond `autoShiftMs` sends the shifted character (`!`, `@`, `#`, etc.).
+- **Acceptance test:** A firmware test holds `1` with `autoShiftSymbols` enabled and expects `!` to be sent to the host.
+
+### Chordal Hold per-key exclusion list (`chordalHoldExclusions`)
+
+- **Rank:** Feature model. Total 28/40 (typing 7, configuration 6, harmony 7, safety 8). Effort M. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylCommon.h`, `js/editor.js`, `js/config-sync.js`.
+- **Problem:** Global `chordalHold` prevents same-hand hold activation, which blocks intentional one-handed modifier combinations (e.g. thumb Control + index key).
+- **Goal:** Add a per-key exemption bitmask in NVS (`chordal_ex`). Keys on this list ignore opposite-hand checks and trigger their hold action on any overlapping key press.
+- **Acceptance test:** A firmware test presses an exempted thumb key and a same-hand finger key, expecting the hold modifier instead of two sequential taps.
+
 ### Layer Lock live status pill (`MODE_STATE`)
 
 - **Rank:** Feature model. Total 27/40 (typing 5, configuration 6, harmony 8, safety 8). Effort S. Estimate.
@@ -55,7 +73,88 @@ Rules for this file:
 - **Goal:** Add `ll` (layer lock active flag, 0 or 1) and `lli` (locked layer index, 0..7) to `MODE_STATE`. Show a status pill "Layer Lock (Ebene N)" in `#modeStatePills` while a layer is locked and remove it when layer lock is cleared.
 - **Acceptance test:** A firmware test locks layer 2 and expects `MODE_STATE` with `"ll":1,"lli":2`; an app test renders the status pill with the locked layer number.
 
+### Macro loop and repeat step (`MACRO_STEP_REPEAT`)
+
+- **Rank:** Feature model. Total 27/40 (typing 6, configuration 6, harmony 7, safety 8). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `js/macros-ui.js`, `server.py`.
+- **Problem:** Repeating identical step patterns rapidly exhausts the 32-step limit in NVS macro storage.
+- **Goal:** Add macro step type `MACRO_STEP_REPEAT` (`type: 4, count: 1..10, stepsBack: 1..31`). The engine re-executes the preceding slice of steps without consuming extra storage slots.
+- **Acceptance test:** A firmware test defines a 3-step sequence followed by `REPEAT(count=2, stepsBack=3)` and expects 9 total events sent to the host.
+
+### One-Shot Layer double-tap latching (`OSL_DOUBLE_TAP_LOCK`)
+
+- **Rank:** Feature model. Total 27/40 (typing 7, configuration 5, harmony 8, safety 7). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylOneShot.h`, `firmware/dactyl_right/DactylCommon.h`.
+- **Problem:** Tapping an OSL key primes the layer for exactly one key press. Typing numbers or formulas requires holding the key or switching via a separate toggle.
+- **Goal:** Tapping an OSL key twice within `tappingTermMs` locks the layer permanently until the next tap on that OSL key releases it.
+- **Acceptance test:** A firmware test double-taps `OSL_1`, types three keys from layer 1, and verifies that all three keys resolve to layer 1 until a fourth tap releases the layer.
+
+### Keypress counter reset and export (`resetKeyPressStats`, `exportKeyPressStatsJson`)
+
+- **Rank:** Feature model. Total 26/40 (typing 4, configuration 8, harmony 7, safety 7). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/diagnostics-ui.js`, `js/storage.js`, `index.html`.
+- **Problem:** Typing heatmap data accumulates indefinitely in `localStorage`. Users cannot reset counters between layout tests or export historical raw counts.
+- **Goal:** Add buttons "Zähler zurücksetzen" (with confirmation dialog) and "Statistik als JSON exportieren" in the diagnostics view.
+- **Acceptance test:** An app test simulates 50 key presses, exports valid JSON containing side/layer/row/col counts, resets the data and verifies all counts return to zero.
+
 ## Priority 3
+
+### Interactive typing speed monitor in App (`wpmCounter`)
+
+- **Rank:** Feature model. Total 25/40 (typing 6, configuration 5, harmony 6, safety 8). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/side-routing.js`, `js/editor.js`, `index.html`.
+- **Problem:** The app receives keypress events over USB serial for the heatmap, but provides no real-time typing speed feedback during practice.
+- **Goal:** Add a rolling 10-second WPM calculator based on received serial keypress timestamps. Render a live WPM indicator in the application header.
+- **Acceptance test:** An app unit test feeds 50 keystroke events across 6 seconds and expects a calculated WPM of 100 in the UI pill.
+
+### Keymap cheat-sheet export as SVG and printable HTML (`exportKeymapCheatSheet`)
+
+- **Rank:** Feature model. Total 25/40 (typing 5, configuration 8, harmony 6, safety 6). Effort M. Estimate.
+- **Area:** App.
+- **Code:** `js/editor.js`, `js/export-import.js`, `index.html`.
+- **Problem:** Users learning a new ergonomic layout must open the editor tabs to check key placements on upper layers.
+- **Goal:** Add an export button to generate a standalone printable HTML page and SVG vector file illustrating all 8 layers, active combos and leader sequences.
+- **Acceptance test:** A unit test generates SVG markup from a test configuration and validates valid SVG elements and layer key labels.
+
+### Dynamic macro persistent slot save (`ACT_DM_SAVE`)
+
+- **Rank:** Feature model. Total 25/40 (typing 6, configuration 5, harmony 7, safety 7). Effort M. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylDynamicMacro.h`, `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `server.py`.
+- **Problem:** Dynamic macros recorded via `ACT_DM_REC` are stored only in RAM and are lost on deep sleep or board reset.
+- **Goal:** Add action `ACT_DM_SAVE` (`0x19B`). Pressing it persists the dynamic macro buffer into macro slot 0 in NVS, surviving reboots.
+- **Acceptance test:** A firmware test records a sequence via `DM_REC`, executes `DM_SAVE`, reloads macros from NVS and expects the saved macro in slot 0.
+
+### Leader sequence timeout indicator in App (`MODE_STATE: "ld"`)
+
+- **Rank:** Feature model. Total 24/40 (typing 5, configuration 6, harmony 7, safety 6). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylLogic.h`, `js/serial.js`, `index.html`.
+- **Problem:** After pressing `LEADER`, the user has no visual feedback indicating whether the leader window is active or timed out.
+- **Goal:** Add `ld` (leader state: 0 = idle, 1..4 = number of keys gathered) to `MODE_STATE`. Show a temporary "Leader..." pill in the app header while awaiting sequence keys.
+- **Acceptance test:** A firmware test presses `LEADER` and expects `MODE_STATE` with `"ld":1`, followed by `"ld":0` on timeout expiration.
+
+### Text macro direct string import (`parseMacroString`)
+
+- **Rank:** Feature model. Total 24/40 (typing 5, configuration 7, harmony 6, safety 6). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/macros-ui.js`, `js/keycodes.js`.
+- **Problem:** Typing a text macro requires manually adding separate `down` and `up` steps for every character.
+- **Goal:** Add a "Text einfügen" input in the macro editor. Entering a text string parses characters into sequential tap steps up to the 32-step limit.
+- **Acceptance test:** An app test converts `"git log"` into 14 valid macro steps and rejects strings exceeding 32 steps with a clear validation message.
+
+### Quick-Tap Term per-key override (`QUICKTAPMAP`)
+
+- **Rank:** Feature model. Total 24/40 (typing 6, configuration 6, harmony 6, safety 6). Effort M. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylCommon.h`, `js/editor.js`, `js/config-sync.js`.
+- **Problem:** Fast typists want a 0 ms quick-tap term on Space and Enter to prevent unwanted hold triggers during rapid tapping, but standard quick-tap on letters.
+- **Goal:** Add per-key quick-tap term overrides in NVS (`quickflv`) and an option in the Key Inspector UI, matching `HOLDFLAVORMAP`.
+- **Acceptance test:** A firmware test configures quick-tap 0 ms on Space and 150 ms on A, verifying that double-tapping Space never triggers a hold action.
 
 ### Cross-half bilateral combos (`bilateralCombos`)
 
@@ -66,9 +165,106 @@ Rules for this file:
 - **Goal:** Allow combos that combine one key from the left half and one key from the right half (`side1`, `side2`). The master collects candidate key presses across the split link within `comboTimeoutMs` before resolving the combo action.
 - **Acceptance test:** A firmware test presses a key on the left half and a key on the right half within the combo window and expects the combined action.
 
+### Key click and beep audio frequency tuning on boot (`bootBeepMode`)
+
+- **Rank:** Feature model. Total 23/40 (typing 3, configuration 7, harmony 6, safety 7). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino`, `firmware/dactyl_left/dactyl_left.ino`, `firmware/dactyl_right/DactylLogic.h`, `js/settings-ui.js`.
+- **Problem:** The startup buzzer tone is loud and fixed in firmware. Users cannot silence or change the boot frequency.
+- **Goal:** Add setting `bootBeepMode` (0 = silent, 1 = single tone, 2 = two-tone chirp) in NVS and expose a dropdown in the settings panel.
+- **Acceptance test:** A firmware test sets `bootBeepMode = 0`, calls `playBootChirp()` and verifies that no PWM output is sent to the buzzer pin.
+
+### Tri-Layer configuration in App UI (`triLayersUi`)
+
+- **Rank:** Feature model. Total 23/40 (typing 5, configuration 7, harmony 6, safety 5). Effort M. Estimate.
+- **Area:** App, Firmware.
+- **Code:** `js/settings-ui.js`, `js/config-sync.js`, `firmware/dactyl_right/DactylLogic.h`.
+- **Problem:** Tri-Layer behavior (holding layer 1 and layer 2 activates layer 3) is hardcoded in firmware, without an interactive configuration card.
+- **Goal:** Add a Tri-Layer configuration card in the settings tab (`layerA`, `layerB`, `targetLayer`) and synchronize rules via `SET_TRI_LAYER` commands.
+- **Acceptance test:** A unit test configures Tri-Layer `(2, 3 -> 4)`, performs full sync, and expects valid `SET_TRI_LAYER 2 3 4` serial commands.
+
+### Debounce algorithm selection (`eagerDebounceMode`)
+
+- **Rank:** Feature model. Total 22/40 (typing 5, configuration 6, harmony 5, safety 6). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_left/DactylLeftLogic.h`, `js/settings-ui.js`, `js/config-sync.js`.
+- **Problem:** The keyboard uses eager debouncing (instant press, delayed release). Users with switch chattering experience double-presses.
+- **Goal:** Add a setting `debounceMode` (0 = eager, 1 = symmetric defer). Defer mode delays press detection by `debounceMs` to filter severe switch chatter.
+- **Acceptance test:** A firmware test injects chatter pulses in defer mode and verifies that only a single stabilized press event reaches the HID stack.
+
+### Layer Lock timeout (`layerLockTimeoutMinutes`)
+
+- **Rank:** Feature model. Total 22/40 (typing 5, configuration 5, harmony 6, safety 6). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylCommon.h`, `js/settings-ui.js`.
+- **Problem:** Leaving a layer locked via `ACT_LAYER_LOCK` prevents normal typing if the user forgets to unlock it before returning to the computer.
+- **Goal:** Add setting `layerLockTimeoutMinutes` (0 = disabled, 1..60 min). If no keys are pressed for the specified interval, layer lock releases automatically.
+- **Acceptance test:** A firmware test activates layer lock, advances time past `layerLockTimeoutMinutes` without key presses, and expects layer 0 restored.
+
+### Macro single-step execution and debugger in App (`debugMacroStep`)
+
+- **Rank:** Feature model. Total 21/40 (typing 3, configuration 7, harmony 5, safety 6). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/macros-ui.js`, `js/serial.js`, `index.html`.
+- **Problem:** Diagnosing modifier leaks or timing errors in complex macros requires full-speed execution against a host text editor.
+- **Goal:** Add a "Schrittweise testen" button in the macro editor to execute steps one at a time over USB serial while highlighting the active step in the UI.
+- **Acceptance test:** An app test runs single-step execution through a 5-step macro, verifying that each step sends its exact HID command and updates UI step pointers.
+
+### Strict modifier matching in Key Overrides (`overrideStrictMods`)
+
+- **Rank:** Feature model. Total 21/40 (typing 5, configuration 5, harmony 5, safety 6). Effort M. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylKeyOverride.h`, `js/key-overrides-ui.js`.
+- **Problem:** Key overrides match even when unlisted modifiers are held (e.g. `Ctrl + Shift + Backspace`), triggering unwanted overrides on complex shortcuts.
+- **Goal:** Add an optional `strict` boolean flag to key override definitions. When set, the override only fires if no extra modifiers outside `mods` are pressed.
+- **Acceptance test:** A firmware test configures a strict `Shift + Backspace` override and verifies that `Ctrl + Shift + Backspace` does not activate the override.
+
 ## Priority 4
 
-No open entry.
+### Firmware Git commit hash in GET_INFO (`fw_commit`)
+
+- **Rank:** Maintenance model. Total 20/40 (reach 6, safety 5, speed 5, unblocks 4). Effort S. Estimate.
+- **Area:** Firmware, App, Tooling.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino`, `firmware/dactyl_right/DactylVersion.h`, `server.py`, `js/serial.js`.
+- **Problem:** `DEVICE_INFO` outputs an integer firmware number (`fw: 49`). Maintainers cannot determine the exact Git commit of flashed boards.
+- **Goal:** Inject the Git short commit hash into `DactylVersion.h` during build and report `githash` in `DEVICE_INFO` and the diagnosis panel.
+- **Acceptance test:** Compiling firmware generates a valid commit macro; `GET_INFO` output contains `githash:"<hash>"`.
+
+### Automated NVS layout corruption recovery and checksum (`nvsChecksum`)
+
+- **Rank:** Maintenance model. Total 20/40 (reach 5, safety 7, speed 4, unblocks 4). Effort M. Estimate.
+- **Area:** Firmware.
+- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/dactyl_right.ino`.
+- **Problem:** Flash write interruptions can leave corrupted keymap blobs in NVS, causing erratic key behavior without diagnostic errors.
+- **Goal:** Store a CRC32 checksum alongside saved keymap data in NVS. If checksum validation fails on boot, safely fall back to compiled defaults and emit a diagnostic log.
+- **Acceptance test:** A firmware test writes corrupt bytes to the NVS keymap partition and verifies clean fallback to compiled defaults on startup.
+
+### Combo latency and stagger timing assistant (`comboStaggerAnalyzer`)
+
+- **Rank:** Feature model. Total 19/40 (typing 4, configuration 6, harmony 5, safety 4). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/diagnostics-ui.js`, `js/config-model.js`.
+- **Problem:** Setting `comboTimeoutMs` is guesswork without measuring the user's natural finger stagger between chorded keys.
+- **Goal:** Measure time intervals between consecutive keypresses during diagnostic test typing and suggest a personalized `comboTimeoutMs`.
+- **Acceptance test:** An app test feeds simulated chord keystroke timestamps and verifies a recommended timeout based on the 95th percentile delta.
+
+### Layer activation heatmap filter in Layout Editor (`layerUsageHeatmap`)
+
+- **Rank:** Feature model. Total 18/40 (typing 3, configuration 6, harmony 5, safety 4). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/editor.js`, `js/diagnostics-ui.js`.
+- **Problem:** Keystroke heatmaps show aggregate hits per layer, but do not show which layers remain completely unused.
+- **Goal:** Render a layer usage breakdown chart in the editor header, highlighting layers that receive fewer than 1% of total keystrokes.
+- **Acceptance test:** An app test provides sample layer press statistics and verifies visual warning badges on layers with under 1% utilization.
+
+### BLE connection RSSI signal strength monitoring (`bleRssiMonitor`)
+
+- **Rank:** Feature model. Total 17/40 (typing 2, configuration 6, harmony 4, safety 5). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/dactyl_right.ino`, `js/serial.js`, `js/diagnostics-ui.js`.
+- **Problem:** BLE signal degradation causes missed key packets without indicating radio interference or distance issues.
+- **Goal:** Query the active BLE connection RSSI on the master half and emit `BLE_RSSI:<dBm>` over USB serial to show signal bars in the app.
+- **Acceptance test:** A firmware test queries BLE RSSI when connected and emits formatted `BLE_RSSI:` output to the serial console.
 
 ## Priority 5
 

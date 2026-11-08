@@ -125,6 +125,10 @@
 // Satzanfang groß: schaltet um; solange aktiv, bekommt der erste Kleinbuchstabe nach '.', '!' oder '?' und Leertaste(n)
 // Umschalt (DactylOneShot.h, Zustand auf dem Master für beide Hälften)
 #define ACT_SENTENCE_CASE        0x18C
+// Num Word: Tippen schaltet die Ebene numWordLayer ein; sie bleibt, solange Ziffern, Zahlzeichen, Modifier und Ebenen-Tasten
+// folgen, und endet bei der ersten anderen Taste oder nach NUM_WORD_IDLE_MS ohne Tastendruck; ein zweites Tippen beendet sie
+#define ACT_NUM_WORD             0x18D
+#define NUM_WORD_IDLE_MS         5000
 
 #define NUM_LAYERS 8
 

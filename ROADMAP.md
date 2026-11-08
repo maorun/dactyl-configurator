@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Num Word (`ACT_NUM_WORD`)
-
-- **Rank:** Feature model. Total 25/40 (typing 7, configuration 2, harmony 8, safety 8). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** Typing a number needs a held layer key or a toggle that the user must switch off again.
-- **Goal:** Add the action `NUM_WORD` with a layer setting (`numWordLayer`, `0..7`). A tap turns the layer on. The layer turns off at the first key that is not a digit, a number symbol (`.`, `,`, `-`, `+`, `*`, `/`, `=`), a modifier or a layer key, or after 5000 ms without a key press. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test taps `NUM_WORD`, types `1`, `2`, `Space` and expects that `1` and `2` come from the layer and `Space` comes from layer 0.
-
 ### Macro presets (`macroPresets`)
 
 - **Rank:** Feature model. Total 24/40 (typing 4, configuration 7, harmony 6, safety 7). Effort S. Estimate.

@@ -611,6 +611,7 @@ const ON_SCREEN_KEYBOARD_TABS = {
         { code: "HOST_2", label: "Host 2", width: 2 },
         { code: "HOST_3", label: "Host 3", width: 2 },
         { code: "SWAP_HANDS", label: "Swap Hands", width: 2 },
+        { code: "NUM_WORD", label: "Num Word", width: 2 },
         { code: "MAC_GLOBE", label: "🌐 Globus / Fn", width: 2 }
       ]
     ]

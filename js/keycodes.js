@@ -83,7 +83,8 @@ const KEYCODES = [
     { code: "HOST_1", label: "BLE-Host 1 (nur Master)", char: "" },
     { code: "HOST_2", label: "BLE-Host 2 (nur Master)", char: "" },
     { code: "HOST_3", label: "BLE-Host 3 (nur Master)", char: "" },
-    { code: "SWAP_HANDS", label: "Swap Hands (Hälften spiegeln)", char: "" }
+    { code: "SWAP_HANDS", label: "Swap Hands (Hälften spiegeln)", char: "" },
+    { code: "NUM_WORD", label: "Num Word (Ebene bis zur ersten Nicht-Zahl-Taste)", char: "" }
   ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
@@ -298,6 +299,7 @@ const ACTION_TO_NUMERIC = {
   "HOST_3": 0x18A,
   "SWAP_HANDS": 0x18B,
   "SENTENCE_CASE": 0x18C,
+  "NUM_WORD": 0x18D,
 
   // Mouse Actions (0x130..0x13A)
   "MOUSE_LEFT": 0x130,
@@ -339,7 +341,7 @@ const ONE_SHOT_LABELS = {
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
   CAPS_WORD: "CapsWd", SENTENCE_CASE: "Sentence", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
   DM_REC: "DM Rec", DM_PLAY: "DM Play", LEADER: "Leader", KEY_LOCK: "KeyLock",
-  HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3", SWAP_HANDS: "Swap"
+  HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3", SWAP_HANDS: "Swap", NUM_WORD: "NumWd"
 };
 
 // true für die Leader-Taste (keine Combo-Aktion)
@@ -355,6 +357,11 @@ function isKeyLockCode(code) {
 // true für Swap Hands (keine Combo-Aktion)
 function isSwapHandsCode(code) {
   return /^(ACT_)?SWAP_HANDS$/.test(String(code || ""));
+}
+
+// true für Num Word (keine Combo-Aktion)
+function isNumWordCode(code) {
+  return /^(ACT_)?NUM_WORD$/.test(String(code || ""));
 }
 
 // true für BLE-Host-Slots HOST_1 .. HOST_3 (nur Master, keine Combo-Aktion)

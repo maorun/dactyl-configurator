@@ -117,6 +117,18 @@ test("Einstellung retroTap: beide Sketche deklarieren sie, DactylLogic.h meldet 
   assert.ok(read("server.py").includes('uint8_t retroTap = {values["retroTap"]};'), "server.py rendert retroTap nicht");
 });
 
+test("Einstellung numWordLayer: beide Sketche deklarieren sie, DactylLogic.h meldet und setzt sie, der Server rendert sie", () => {
+  for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
+    assert.ok(/^uint8_t numWordLayer = 1;$/m.test(src), `${name}: numWordLayer fehlt im Sketch`);
+    assert.ok(src.includes("numWordExpire(millis());"), `${name}: numWordExpire fehlt in loop()`);
+  }
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  assert.ok(logic.includes('\\"nwl\\":%u'), "GET_INFO meldet nwl nicht");
+  assert.ok(logic.includes('cmd.startsWith("SET_NUM_WORD_LAYER ")'), "SET_NUM_WORD_LAYER fehlt");
+  assert.ok(logic.includes('"nw_layer"'), "NVS-Schlüssel nw_layer fehlt");
+  assert.ok(read("server.py").includes('uint8_t numWordLayer = {values["numWordLayer"]};'), "server.py rendert numWordLayer nicht");
+});
+
 test("Einstellung chordalHold: beide Sketche deklarieren sie, DactylLogic.h meldet sie und der Server rendert sie", () => {
   for (const [name, src] of [["rechts", rightIno], ["links", leftIno]]) {
     assert.ok(/^uint8_t chordalHold = 0;$/m.test(src), `${name}: chordalHold fehlt im Sketch`);

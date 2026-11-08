@@ -26,7 +26,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, numWordLayer, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -348,6 +348,78 @@ bool applyRemoteLayerState(uint8_t momentary, bool setToggles, uint8_t toggles) 
 }
 
 // -----------------------------------------------------------------------------
+// Num Word (ACT_NUM_WORD)
+// -----------------------------------------------------------------------------
+// Tippen rastet die Ebene numWordLayer (1..7; 0 = Num Word ohne Wirkung) als TG-Ebene ein. Sie bleibt, solange die gedrückten
+// Tasten dieser Hälfte Ziffern, Zahlzeichen (. , - + * / =), Modifier, Ziffernblock- oder Ebenen-Tasten sind; jeder solche
+// Druck startet die Frist von NUM_WORD_IDLE_MS neu. Die erste andere Taste oder die Frist beendet Num Word. Die Ebene
+// gleicht der Layer-Abgleich wie jede TG-Ebene mit der anderen Hälfte ab.
+bool numWordActive = false;
+uint8_t numWordOn = 0;            // die von Num Word eingerastete Ebene (gilt nur bei numWordActive)
+unsigned long numWordLastMs = 0;
+
+// true für Aktionen, die Num Word offen lassen
+bool isNumWordKeepAction(uint16_t a) {
+  if (a == 0) return true;   // transparent und leer
+  if (a <= 0xFF) {
+    if (a >= '0' && a <= '9') return true;
+    if (a == '.' || a == ',' || a == '-' || a == '+' || a == '*' || a == '/' || a == '=') return true;
+    if (a >= KEY_LEFT_CTRL && a <= KEY_RIGHT_GUI) return true;
+    return a >= KEY_NUM_SLASH && a <= KEY_NUM_PERIOD;
+  }
+  if (a >= 0x100 && a <= 0x119) return true;                       // MO_n, TG_n, LAYER_UP, LAYER_DOWN
+  return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD;
+}
+
+void numWordStop() {
+  if (!numWordActive) return;
+  uint8_t before = getActiveLayer();
+  numWordActive = false;
+  if (numWordOn > 0 && numWordOn < NUM_LAYERS) toggleLayers[numWordOn] = false;
+  uint8_t after = getActiveLayer();
+  if (after != before) Serial.printf("LAYER: NUM_WORD aus -> Layer %d\n", after);
+}
+
+// Druck von ACT_NUM_WORD: ein ruhender Zustand schaltet ein, ein aktiver aus
+void numWordPress(unsigned long now) {
+  if (numWordActive) {
+    numWordStop();
+    return;
+  }
+  if (numWordLayer == 0 || numWordLayer >= NUM_LAYERS) return;
+  uint8_t before = getActiveLayer();
+  numWordOn = numWordLayer;
+  toggleLayers[numWordOn] = true;
+  numWordActive = true;
+  numWordLastMs = now;
+  uint8_t after = getActiveLayer();
+  if (after != before) Serial.printf("LAYER: NUM_WORD an -> Layer %d\n", after);
+}
+
+// Ein Tastendruck dieser Hälfte (a, b, c = aufgelöste Tipp-, Halte- und Doppel-Tipp-Aktion). Der Aufrufer hat die Ebene der
+// Taste schon aufgelöst; die Taste selbst läuft noch auf der Num-Word-Ebene.
+// Liefert true, wenn dieser Druck Num Word beendet hat: der Aufrufer löst die Taste dann auf der neuen Ebene neu auf
+bool numWordNoteKeyPress(uint16_t a, uint16_t b, uint16_t c, unsigned long now) {
+  if (!numWordActive) return false;
+  // Eine von Hand gelöste Ebene (TG, Layer Lock, layerTimeoutMs) beendet Num Word ohne weitere Wirkung
+  if (!toggleLayers[numWordOn]) { numWordActive = false; return false; }
+  if (a == ACT_NUM_WORD || b == ACT_NUM_WORD || c == ACT_NUM_WORD) return false;   // numWordPress entscheidet
+  if (isNumWordKeepAction(a) && isNumWordKeepAction(b) && isNumWordKeepAction(c)) {
+    numWordLastMs = now;
+    return false;
+  }
+  numWordStop();
+  return true;
+}
+
+// Aufruf in loop(): ohne Tastendruck für NUM_WORD_IDLE_MS endet Num Word
+void numWordExpire(unsigned long now) {
+  if (!numWordActive) return;
+  if (!toggleLayers[numWordOn]) { numWordActive = false; return; }
+  if ((unsigned long)(now - numWordLastMs) >= NUM_WORD_IDLE_MS) numWordStop();
+}
+
+// -----------------------------------------------------------------------------
 // One-Shot-Ebene (OSL_0 .. OSL_7)
 // -----------------------------------------------------------------------------
 // Tippen merkt die Ebene für den nächsten Tastendruck beider Hälften vor; danach ist sie gelöst. Ein zweites Tippen
@@ -529,6 +601,7 @@ void swapClearAll() {
 // Alle Vormerkungen löschen (RELEASE_ALL, Link-Ausfall, Verlust des Hosts, Config Mode)
 void oslClearAll() {
   swapClearAll();
+  numWordStop();
   // Die Leader-Erfassung endet an denselben Stellen
   leaderReset();
   uint8_t before = getActiveLayer();
@@ -1427,7 +1500,7 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
     // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
     if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
         isDynamicMacroAction(action) || isOneShotAction(action) || isTextToggleAction(action) || action == ACT_LEADER ||
-        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || isBleHostAction(action)) {
+        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || action == ACT_NUM_WORD || isBleHostAction(action)) {
       leaderState.reset();
     }
     return false;
@@ -1539,6 +1612,13 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"OSL_%d\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, action - ACT_OSL_BASE, action, currentLayer, newL);
     sendConfigNotification(String(buf));
     Serial.printf("LAYER: OSL(%d) gedrückt -> Layer %d\n", action - ACT_OSL_BASE, newL);
+  } else if (action == ACT_NUM_WORD) {
+    // Combo-Kandidaten sind ausgeschlossen (ADD_COMBO lehnt die Aktion ab): der Druck wirkt sofort
+    numWordPress(keyPressTime[r][c] ? keyPressTime[r][c] : millis());
+    uint8_t newL = getActiveLayer();
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"NUM_WORD\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, action, currentLayer, newL);
+    sendConfigNotification(String(buf));
   } else if (action == ACT_LAYER_LOCK) {
     uint8_t newL = applyLayerLock();
     char buf[128];
@@ -2556,11 +2636,18 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
       d.active = true;
       swapNoteKeyPress();                        // auch dieser Druck verbraucht die Vormerkung
       oslNoteKeyPress(d.dtapAction, 0, 0);
+      numWordNoteKeyPress(d.dtapAction, 0, 0, now);   // die Doppel-Tipp-Aktion steht schon fest
       dispatchPress(r, c, d.dtapAction, layer);
       return;
     }
     uint16_t tapAct, holdAct, dtapAct;
     resolveKeyActions(layer, r, c, tapAct, holdAct, dtapAct);
+    // Num Word: eine Taste, die keine Zahl ist, beendet es und gilt auf der Ebene darunter
+    if (numWordNoteKeyPress(tapAct, holdAct, dtapAct, now)) {
+      layer = getActiveLayer();
+      comboPressLayer1[r][c] = (uint8_t)(layer + 1);
+      resolveKeyActions(layer, r, c, tapAct, holdAct, dtapAct);
+    }
     // Swap hands: bei aktivem Wechsel gilt die gespiegelte Taste. Eine SWAP_HANDS-Taste bleibt an ihrem Platz,
     // sonst ließe sich eine Einrastung nicht lösen. Das Loslassen liest pressedAction[r][c] und bleibt sauber.
     bool isSwapKey = tapAct == ACT_SWAP_HANDS || holdAct == ACT_SWAP_HANDS;
@@ -2975,6 +3062,10 @@ void loadKeymapFromNVS() {
     uint8_t rt = preferences.getUChar("retro_tap", 0);
     if (rt <= 1) retroTap = rt;
   }
+  if (preferences.isKey("nw_layer")) {
+    uint8_t nw = preferences.getUChar("nw_layer", 1);
+    if (nw < NUM_LAYERS) numWordLayer = nw;
+  }
   if (preferences.isKey("auto_shift")) {
     uint8_t as = preferences.getUChar("auto_shift", 0);
     if (as <= AUTO_SHIFT_MAX_MODE) autoShift = as;
@@ -3312,6 +3403,15 @@ bool saveTriLayerToNVS(const uint8_t* rules, uint8_t n) {
     numTriLayers = n;
   }
   Serial.printf("NVS: Tri-Layer %s: %u Regeln\n", ok ? "gespeichert" : "FEHLER", n);
+  return ok;
+}
+
+bool saveNumWordLayerToNVS(uint8_t layer) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("nw_layer", layer) > 0;
+  preferences.end();
+  if (ok) numWordLayer = layer;
+  Serial.printf("NVS: Num-Word-Ebene %s: %u\n", ok ? "gespeichert" : "FEHLER", layer);
   return ok;
 }
 
@@ -4051,6 +4151,14 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_NUM_WORD_LAYER ")) {
+    String arg = cmd.substring(19);
+    arg.trim();
+    if (arg.length() == 1 && arg.charAt(0) >= '0' && arg.charAt(0) <= '7') {
+      sendConfigNotification(saveNumWordLayerToNVS((uint8_t)(arg.charAt(0) - '0')) ? "OK SET_NUM_WORD_LAYER " + arg : String("ERR NVS SET_NUM_WORD_LAYER"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd.startsWith("SET_AUTO_SHIFT ")) {
     String arg = cmd.substring(15);
     arg.trim();
@@ -4158,7 +4266,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && !isBleHostAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isBleHostAction((uint16_t)act) &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;
@@ -4394,12 +4502,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     sendConfigNotification("BLE_HOST:" + String((int)bleHostSlot));
 #endif
     char buf[768];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"pi\":%u,\"chordal_hold\":%u,\"rt\":%u,\"as\":%u,\"at\":%u,\"ld\":%u,\"ot\":%u,\"lt\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"pi\":%u,\"chordal_hold\":%u,\"rt\":%u,\"nwl\":%u,\"as\":%u,\"at\":%u,\"ld\":%u,\"ot\":%u,\"lt\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)retroTap, (unsigned)autoShift, (unsigned)autoShiftMs, (unsigned)leaderTimeoutMs, (unsigned)oneShotTimeoutMs, (unsigned)layerTimeoutMs, triJson, hostJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)retroTap, (unsigned)numWordLayer, (unsigned)autoShift, (unsigned)autoShiftMs, (unsigned)leaderTimeoutMs, (unsigned)oneShotTimeoutMs, (unsigned)layerTimeoutMs, triJson, hostJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

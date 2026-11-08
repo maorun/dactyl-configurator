@@ -81,6 +81,7 @@ uint16_t quickTapMs = 0;
 uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
 uint8_t retroTap = 0;
+uint8_t numWordLayer = 1;
 uint8_t autoShift = 0;
 uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
@@ -839,6 +840,7 @@ void setup() {
 void loop() {
   // oneShotTimeoutMs: eine unverbrauchte One-Shot-Ebene verfällt (die Modifier führt der Master)
   oslExpireLocal(millis());
+  numWordExpire(millis());   // Num Word endet ohne Tastendruck nach NUM_WORD_IDLE_MS
   // layerTimeoutMs: kein Ablauf links. Die Layer-Lock-Ebenen führt der Master (layerLockedMask); er löscht die TG-Ebenen
   // und meldet sie der linken Hälfte mit LAYER_STATE.
   // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende

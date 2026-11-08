@@ -516,6 +516,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("holdTapModeSelect", info.hold_tap_mode);
         if (settingsTarget) settingsTarget.holdTapMode = info.hold_tap_mode;
       }
+      if (info.qt !== undefined && info.quick_tap_ms === undefined) info.quick_tap_ms = info.qt;
       if (info.quick_tap_ms !== undefined) {
         setInput("quickTapInput", info.quick_tap_ms);
         if (settingsTarget) settingsTarget.quickTapMs = info.quick_tap_ms;
@@ -551,6 +552,10 @@ function handleSerialLine(line, side = null, transport = "ble") {
       if (info.nwl !== undefined) {
         setInput("numWordLayerSelect", info.nwl);
         if (settingsTarget) settingsTarget.numWordLayer = info.nwl;
+      }
+      if (info.bl !== undefined) {
+        setInput("bootLayerSelect", info.bl);
+        if (settingsTarget) settingsTarget.bootLayer = info.bl;
       }
       if (info.as !== undefined) {
         setInput("autoShiftSelect", info.as);

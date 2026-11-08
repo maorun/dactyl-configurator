@@ -82,6 +82,7 @@ uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
 uint8_t retroTap = 0;
 uint8_t numWordLayer = 1;
+uint8_t bootLayer = 0;
 uint8_t autoShift = 0;
 uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
@@ -807,6 +808,7 @@ void setup() {
     nvs_flash_init();
   }
   loadKeymapFromNVS();
+  applyBootLayer();   // bootLayer: Start und Aufwachen aus dem Deep Sleep
 
   // 3. Zeilen lesen mit Pull-up; Spalten hochohmig, bis sie im Scan auf LOW gehen
   for (int r = 0; r < NUM_ROWS; r++) {

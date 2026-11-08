@@ -116,6 +116,7 @@ uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
 uint8_t retroTap = 0;
 uint8_t numWordLayer = 1;
+uint8_t bootLayer = 0;
 uint8_t autoShift = 0;
 uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
@@ -996,6 +997,7 @@ void setup() {
 
   // 2b. Gespeicherte Belegung und Namen aus NVS laden
   loadKeymapFromNVS();
+  applyBootLayer();   // bootLayer: Start und Aufwachen aus dem Deep Sleep
   loadBleHostFromNVS();
   bleKeyboard.hostSlot = bleHostSlot;
   // Gespeicherten Gerätenamen (SET_DEV_NAME) für das BLE-HID-Advertising übernehmen

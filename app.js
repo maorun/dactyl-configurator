@@ -461,6 +461,7 @@ function applySettingsToInputs(settings) {
   setVal("chordalHoldSelect", settings.chordalHold ?? 0);
   setVal("retroTapSelect", settings.retroTap ?? 0);
   setVal("numWordLayerSelect", settings.numWordLayer ?? 1);
+  setVal("bootLayerSelect", settings.bootLayer ?? 0);
   setVal("autoShiftSelect", settings.autoShift ?? 0);
   setVal("autoShiftTermInput", settings.autoShiftMs ?? 175);
   applyTriLayersToInputs(settings.triLayers);

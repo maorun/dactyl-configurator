@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Boot layer setting (`bootLayer`)
-
-- **Rank:** Feature model. Total 23/40 (typing 5, configuration 3, harmony 7, safety 8). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/config-model.js`, `js/editor-events.js`, `server.py`.
-- **Problem:** The keyboard always starts on layer 0. A user who works with a game or number layout must switch it after each wake-up.
-- **Goal:** Add the setting `bootLayer` per half (`0..7`, default `0`; `SET_BOOT_LAYER`, NVS key `boot_layer`, `DEVICE_INFO` field `bl`). The firmware toggles this layer on at boot and after deep sleep. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test sets `bootLayer = 3`, restarts the logic and expects layer 3 for the next key press; `TG_0` clears it.
-
 ### Hold-tap flavor per key (`HOLDFLAVORMAP`)
 
 - **Rank:** Feature model. Total 23/40 (typing 6, configuration 3, harmony 8, safety 6). Effort M. Estimate.

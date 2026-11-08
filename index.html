@@ -844,6 +844,21 @@
         </div>
 
         <div class="form-group">
+          <label for="bootLayerSelect">Start-Ebene:</label>
+          <select id="bootLayerSelect" class="form-control">
+            <option value="0">Ebene 0 (Basis)</option>
+            <option value="1">Ebene 1</option>
+            <option value="2">Ebene 2</option>
+            <option value="3">Ebene 3</option>
+            <option value="4">Ebene 4</option>
+            <option value="5">Ebene 5</option>
+            <option value="6">Ebene 6</option>
+            <option value="7">Ebene 7</option>
+          </select>
+          <small class="form-hint">Diese Ebene ist nach dem Start und nach dem Aufwachen aus dem Deep Sleep eingeschaltet. Sie verhält sich wie eine Toggle-Ebene: „TG_0“ schaltet sie aus. Stelle auf beiden Hälften denselben Wert ein. Erfordert Firmware-Version 45 oder neuer.</small>
+        </div>
+
+        <div class="form-group">
           <label for="autoShiftSelect">Auto Shift:</label>
           <select id="autoShiftSelect" class="form-control">
             <option value="0">Aus</option>

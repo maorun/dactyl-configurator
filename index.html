@@ -782,6 +782,12 @@
         </div>
 
         <div class="form-group">
+          <label for="layerTimeoutInput">Ebenen-Rückfall (Millisekunden, 0 = aus, sonst 1000 bis 60000):</label>
+          <input type="number" id="layerTimeoutInput" class="form-control" value="0" min="0" max="60000">
+          <small class="form-hint">Ohne Tastendruck auf beiden Hälften fallen per <code>TG_n</code> eingerastete Ebenen nach dieser Zeit zurück. Layer lock und <code>MO_n</code> bleiben. Es gilt der Wert der rechten Hälfte für beide Hälften. Werte von 1 bis 999 gelten als 1000. Erfordert Firmware-Version 41 oder neuer.</small>
+        </div>
+
+        <div class="form-group">
           <label for="priorIdleInput">Hold nur nach Tipp-Pause (Millisekunden, 0 = aus):</label>
           <input type="number" id="priorIdleInput" class="form-control" value="0" min="0" max="500">
           <small class="form-hint">Drückst du eine Mod-Tap-Taste weniger als diese Zeit nach dem letzten Tastendruck (beide Hälften), gilt sie sofort als Tipp. So lösen schnell getippte Buchstaben keinen Modifier aus. Layer-Tap-Tasten (MO_n) bleiben unverändert. Erfordert Firmware-Version 22 oder neuer.</small>

@@ -70,6 +70,12 @@ struct SplitSendQueue {
   // erwartet = beobachteter Zählerstand + 1. Ein später Callback, der vor dem Retry eintrifft,
   // und ein ganz fehlender Callback verschieben die Zuordnung deshalb nicht dauerhaft.
   uint32_t expectedSeq;
+  // Diagnose (GET_DIAG sq_max, sq_drop): höchster Füllstand und verworfene Ereignisse seit dem Start.
+  // dropped zählt abgelehnte queuePush-Aufrufe (Versuche): Sender, die bei voller Warteschlange im nächsten
+  // Durchlauf erneut einreihen, zählen mehrfach. Ein Wert über 0 zeigt, dass die Warteschlange voll war.
+  // queueReset() lässt beide stehen, auch beim ESP-NOW-Neustart.
+  uint8_t highWater = 0;
+  uint32_t dropped = 0;
 };
 
 inline unsigned long leftLoopDelayMs(bool isStandby, const SplitSendQueue &q) {
@@ -98,9 +104,13 @@ bool queueCallbackIsCurrent(const SplitSendQueue &q, uint32_t callbackSeq) {
 
 // false, wenn die Warteschlange voll ist (das Ereignis wird dann nicht eingereiht)
 bool queuePush(SplitSendQueue &q, const SplitHidEvent &ev) {
-  if (q.count >= SPLIT_QUEUE_SIZE) return false;
+  if (q.count >= SPLIT_QUEUE_SIZE) {
+    q.dropped++;
+    return false;
+  }
   q.items[(q.head + q.count) % SPLIT_QUEUE_SIZE] = ev;
   q.count++;
+  if (q.count > q.highWater) q.highWater = q.count;
   return true;
 }
 
@@ -124,7 +134,8 @@ bool queueHasRoomForMacro(const SplitSendQueue &q) {
 // false nur, wenn auch danach kein Platz ist.
 template <class DrainFn>
 bool queuePushAfterDrain(SplitSendQueue &q, const SplitHidEvent &ev, DrainFn drain) {
-  if (queuePush(q, ev)) return true;
+  // Der erste Versuch zählt nicht als verworfen: nach drain() kommt das Ereignis meist noch hinein
+  if (q.count < SPLIT_QUEUE_SIZE) return queuePush(q, ev);
   drain();
   return queuePush(q, ev);
 }

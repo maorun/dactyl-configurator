@@ -245,6 +245,32 @@ TEST(test_diagnostic_events_keep_room_for_hid_events) {
   assert(q.count == SPLIT_QUEUE_SIZE);
 }
 
+TEST(test_send_queue_high_water_and_drop_counter) {
+  queueReset(q);
+  q.highWater = 0;
+  q.dropped = 0;
+  for (int i = 0; i < SPLIT_QUEUE_SIZE; i++) assert(queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a')));
+  assert(q.highWater == SPLIT_QUEUE_SIZE && q.dropped == 0);
+  assert(!queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a')));
+  assert(q.highWater == SPLIT_QUEUE_SIZE && q.dropped == 1);
+  // Diagnose-Ereignisse über dem Limit zählen nicht als verworfen (eigener Zähler key_dropped)
+  assert(!queuePushDiagnostic(q, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, 0)));
+  assert(q.dropped == 1);
+  // queueReset() (auch beim ESP-NOW-Neustart) lässt beide Zähler stehen
+  queueReset(q);
+  assert(q.count == 0 && q.highWater == SPLIT_QUEUE_SIZE && q.dropped == 1);
+  for (int i = 0; i < SPLIT_QUEUE_SIZE; i++) queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  // Ein Ereignis, das nach drain() Platz findet, zählt nicht; der Höchststand bleibt nach queueReset()
+  int drained = 0;
+  assert(queuePushAfterDrain(q, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL), [&]() { queueReset(q); drained++; }));
+  assert(drained == 1 && q.dropped == 1 && q.highWater == SPLIT_QUEUE_SIZE && q.count == 1);
+  // Bleibt auch nach drain() kein Platz, zählt das verworfene Ereignis
+  queueReset(q);
+  for (int i = 0; i < SPLIT_QUEUE_SIZE; i++) queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  assert(!queuePushAfterDrain(q, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL), []() {}));
+  assert(q.dropped == 2);
+}
+
 TEST(test_retry_waits_for_delay) {
   queueReset(q);
   queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, keyCode(1, 1)));

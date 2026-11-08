@@ -335,7 +335,7 @@
     return { state: "down", weak: false, text: `${label}: getrennt seit ${formatTime(status.since)}`, title: counters };
   }
 
-  // Diagnose (GET_DIAG): DIAG:{"reset":"<Grund>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n}
+  // Diagnose (GET_DIAG): DIAG:{"reset":"<Grund>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n[,"sq_max":n,"sq_drop":n]}
   // Reset-Gründe, die keine Störung zeigen (Firmware: resetReasonName in DactylLogic.h)
   const NORMAL_RESET_REASONS = ["power_on", "deep_sleep", "software"];
   // Rückgabe: bereinigte Werte oder undefined (kein DIAG, ungültiges JSON, Feld fehlt oder falscher Typ)
@@ -346,10 +346,13 @@
     if (!raw || typeof raw !== "object") return undefined;
     if (typeof raw.reset !== "string" || !/^[a-z_]{1,24}$/.test(raw.reset)) return undefined;
     if (!isCount(raw.uptime_s) || !isCount(raw.heap_free) || !isCount(raw.heap_min) || !isCount(raw.loop_max_us)) return undefined;
-    return {
+    const out = {
       reset: raw.reset, uptimeS: raw.uptime_s, heapFree: raw.heap_free, heapMin: raw.heap_min, loopMaxUs: raw.loop_max_us,
       abnormal: !NORMAL_RESET_REASONS.includes(raw.reset)
     };
+    // Sendewarteschlange (nur die linke Hälfte); ältere Firmware oder der Master senden sie nicht
+    if (isCount(raw.sq_max) && isCount(raw.sq_drop)) { out.sqMax = raw.sq_max; out.sqDrop = raw.sq_drop; }
+    return out;
   }
 
   function formatUptime(s) {
@@ -365,7 +368,8 @@
       uptime: formatUptime(diag.uptimeS),
       heapFree: `${diag.heapFree} B`,
       heapMin: `${diag.heapMin} B`,
-      loopMax: `${diag.loopMaxUs} µs`
+      loopMax: `${diag.loopMaxUs} µs`,
+      sendQueue: typeof diag.sqMax === "number" ? `höchster Füllstand ${diag.sqMax}, verworfen ${diag.sqDrop}` : null
     };
   }
 

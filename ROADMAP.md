@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Send queue high-water mark in `GET_DIAG` (`DactylLeftLogic.h`)
-
-- **Rank:** Feature model. Total 25/40 (typing 2, configuration 7, harmony 7, safety 9). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_left/DactylLeftLogic.h`, `firmware/dactyl_right/DactylLogic.h` (`GET_DIAG`), `firmware/dactyl_right/DactylVersion.h`, `js/serial.js`.
-- **Problem:** The user cannot see if the left send queue nearly overflows. A lost key shows no cause.
-- **Goal:** Count the highest fill level of the send queue and the number of dropped events since boot. Report both in `GET_DIAG` of the left half (`sq_max`, `sq_drop`) and show them in the diagnostics view. Keep the `DEVICE_INFO` line unchanged. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test queues events up to the limit plus one and expects `sq_max` equal to the limit and `sq_drop` equal to 1.
-
 ### Num Word (`ACT_NUM_WORD`)
 
 - **Rank:** Feature model. Total 25/40 (typing 7, configuration 2, harmony 8, safety 8). Effort M. Estimate.

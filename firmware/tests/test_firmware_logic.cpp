@@ -110,6 +110,11 @@ static long testLeftFw = 0;
 static const char *testLeftLink = "{\"up\":1,\"ms\":1234,\"ever\":1,\"losses\":2,\"rx_dropped\":3,\"key_dropped\":4,\"rssi\":-61,\"rssi_min\":-70}";
 #define DEVICE_INFO_LEFT_LINK(buf, size) snprintf(buf, size, "%s", testLeftLink)
 
+// Wie dactyl_left.ino: GET_DIAG meldet Füllstand und Verluste der Sendewarteschlange der linken Hälfte
+static uint32_t testSqMax = 0, testSqDrop = 0;
+#define DIAG_SEND_QUEUE_MAX() testSqMax
+#define DIAG_SEND_QUEUE_DROPPED() testSqDrop
+
 // Repeat über beide Hälften: die Hooks rufen den Test ein, damit der Pfad zur anderen Hälfte prüfbar ist
 static bool testRemoteTakesRepeat = false;
 static std::vector<std::string> testRemoteCalls;
@@ -6080,16 +6085,24 @@ TEST(test_get_diag_json_and_reset_reason_mapping) {
   std::string big = buildDiagLine(ESP_RST_CPU_LOCKUP, 4294967295u, 4294967295u, 4294967295u, 4294967295u).c_str();
   assert(big.size() < 159 && big.back() == '}' && big.find("\"loop_max_us\":4294967295}") != std::string::npos);
 
+  // Linke Hälfte: Warteschlangenwerte am Ende; ohne Angabe bleibt die Zeile des Masters unverändert
+  assert(buildDiagLine(ESP_RST_TASK_WDT, 12, 3, 4, 5, true, 64, 1).c_str() == std::string(
+    "DIAG:{\"reset\":\"task_wdt\",\"uptime_s\":12,\"heap_free\":3,\"heap_min\":4,\"loop_max_us\":5,\"sq_max\":64,\"sq_drop\":1}"));
+  std::string bigQ = buildDiagLine(ESP_RST_CPU_LOCKUP, 4294967295u, 4294967295u, 4294967295u, 4294967295u, true, 4294967295u, 4294967295u).c_str();
+  assert(bigQ.size() < 223 && bigQ.back() == '}' && bigQ.find("\"sq_drop\":4294967295}") != std::string::npos);
+
   // Befehl über USB-Serial
   diagBootReason = ESP_RST_BROWNOUT;
   diagLoopMaxUs = 0;
   diagNoteLoopUs(700);
   diagNoteLoopUs(200);                      // kleinerer Wert senkt das Maximum nicht
   _mock_heap_free = 111; _mock_heap_min = 99;
+  testSqMax = 64; testSqDrop = 1;
   setMillis(5000);
   mockChar.notifications.clear();
   handleConfigCommand("GET_DIAG", false);
-  assert(mockChar.value == "DIAG:{\"reset\":\"brownout\",\"uptime_s\":5,\"heap_free\":111,\"heap_min\":99,\"loop_max_us\":700}");
+  // Das Makro DIAG_SEND_QUEUE_* (nur die linke Hälfte) hängt die Warteschlangenwerte an
+  assert(mockChar.value == "DIAG:{\"reset\":\"brownout\",\"uptime_s\":5,\"heap_free\":111,\"heap_min\":99,\"loop_max_us\":700,\"sq_max\":64,\"sq_drop\":1}");
 }
 
 TEST(test_get_diag_ble_rejected_in_keyboard_mode) {

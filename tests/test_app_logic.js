@@ -8238,7 +8238,12 @@ test("Diagnosebericht: enthält alle Felder aus den Beispieldaten", () => {
   assert.strictEqual(h.device_info.config_mode, false);
   assert.strictEqual(h.left_fw, 11);
   assert.deepStrictEqual(h.left_link, { up: 1, ms: 5000, ever: 1, losses: 2, rx_dropped: 0, key_dropped: 1, rssi: -60, rssi_min: -80 });
-  assert.deepStrictEqual(h.diag, { reset: "power_on", uptimeS: 90, heapFree: 1000, heapMin: 800, loopMaxUs: 400 });
+  assert.deepStrictEqual(h.diag, { reset: "power_on", uptimeS: 90, heapFree: 1000, heapMin: 800, loopMaxUs: 400, sqMax: null, sqDrop: null });
+  // Sendewarteschlange der linken Hälfte gelangt in den Bericht, fehlt sie, wird sie null
+  const repQ = JSON.parse(JSON.stringify(api.buildSupportReport({ devices: { L: { diag: { ...diag, sqMax: 7, sqDrop: 2 } } } }))).halves.L;
+  assert.strictEqual(repQ.diag.sqMax, 7);
+  assert.strictEqual(repQ.diag.sqDrop, 2);
+  assert.strictEqual(h.diag.sqMax, null);
   // Fehlende Hälfte-Daten werden null
   const empty = JSON.parse(JSON.stringify(api.buildSupportReport({ devices: { L: {} } }))).halves.L;
   assert.strictEqual(empty.diag, null);

@@ -365,6 +365,9 @@ void leftRepeatReleaseHeldPairs();
 static SplitTapPendingReporter tapPendingReporter = {};
 static void onDoubleTapFlushed();
 #define DOUBLE_TAP_FLUSHED() onDoubleTapFlushed()
+// Diagnose (GET_DIAG): Füllstand und Verluste der Sendewarteschlange
+#define DIAG_SEND_QUEUE_MAX() sendQueue.highWater
+#define DIAG_SEND_QUEUE_DROPPED() sendQueue.dropped
 #include "../dactyl_right/DactylLogic.h"
 
 static void onDoubleTapFlushed() {

@@ -258,8 +258,9 @@ function updateDiagUI() {
     const view = Dactyl.describeDiag(diagByRole[id]);
     const li = document.createElement("li");
     li.textContent = `${SIDE_PROFILES[id].label}: Reset-Grund ${view.reset}, Laufzeit ${view.uptime}, ` +
-      `Heap frei ${view.heapFree} (Minimum ${view.heapMin}), längster loop() ${view.loopMax} ` +
-      `(Stand ${new Date(diagByRole[id].at).toLocaleTimeString()})`;
+      `Heap frei ${view.heapFree} (Minimum ${view.heapMin}), längster loop() ${view.loopMax}` +
+      (view.sendQueue ? `, Sendewarteschlange ${view.sendQueue}` : "") +
+      ` (Stand ${new Date(diagByRole[id].at).toLocaleTimeString()})`;
     if (view.abnormal) {
       const flag = document.createElement("span");
       flag.className = "diag-flag";

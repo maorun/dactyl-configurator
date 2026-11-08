@@ -3768,11 +3768,15 @@ const char* resetReasonName(esp_reset_reason_t reason) {
   }
 }
 
-// DIAG:{"reset":"<Grund>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n}
-String buildDiagLine(esp_reset_reason_t reason, uint32_t uptimeS, uint32_t heapFree, uint32_t heapMin, uint32_t loopMaxUs) {
-  char buf[160];
-  snprintf(buf, sizeof(buf), "DIAG:{\"reset\":\"%s\",\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"loop_max_us\":%lu}",
+// DIAG:{"reset":"<Grund>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n[,"sq_max":n,"sq_drop":n]}
+// sq_max und sq_drop (Sendewarteschlange) meldet nur die linke Hälfte (DIAG_SEND_QUEUE_MAX / DIAG_SEND_QUEUE_DROPPED)
+String buildDiagLine(esp_reset_reason_t reason, uint32_t uptimeS, uint32_t heapFree, uint32_t heapMin, uint32_t loopMaxUs,
+                     bool withQueue = false, uint32_t sqMax = 0, uint32_t sqDrop = 0) {
+  char buf[224];
+  int n = snprintf(buf, sizeof(buf), "DIAG:{\"reset\":\"%s\",\"uptime_s\":%lu,\"heap_free\":%lu,\"heap_min\":%lu,\"loop_max_us\":%lu",
     resetReasonName(reason), (unsigned long)uptimeS, (unsigned long)heapFree, (unsigned long)heapMin, (unsigned long)loopMaxUs);
+  if (withQueue) n += snprintf(buf + n, sizeof(buf) - n, ",\"sq_max\":%lu,\"sq_drop\":%lu", (unsigned long)sqMax, (unsigned long)sqDrop);
+  snprintf(buf + n, sizeof(buf) - n, "}");
   return String(buf);
 }
 
@@ -4413,7 +4417,11 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd == "GET_DIAG") {
     // Über BLE im Tastaturmodus schon oben abgelehnt; hier: USB-Serial und Config-Modus
     sendConfigNotification(buildDiagLine((esp_reset_reason_t)diagBootReason, (uint32_t)(esp_timer_get_time() / 1000000LL),
-      (uint32_t)ESP.getFreeHeap(), (uint32_t)ESP.getMinFreeHeap(), diagLoopMaxUs));
+      (uint32_t)ESP.getFreeHeap(), (uint32_t)ESP.getMinFreeHeap(), diagLoopMaxUs
+#ifdef DIAG_SEND_QUEUE_MAX
+      , true, (uint32_t)DIAG_SEND_QUEUE_MAX(), (uint32_t)DIAG_SEND_QUEUE_DROPPED()
+#endif
+      ));
   } else if (cmd == "RESET_CONFIG") {
     bool ok = preferences.begin("dactyl", false) && preferences.clear();
     preferences.end();

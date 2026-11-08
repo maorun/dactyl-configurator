@@ -527,6 +527,13 @@ Rules for this file:
 - `loop_max_us` is the longest `loop()` pass since the start in microseconds, without the final `delay()` (`diagNoteLoopUs` at the end of `loop()` in both `.ino` files). `uptime_s` comes from `esp_timer_get_time()`, `heap_min` from `ESP.getMinFreeHeap()`.
 - The app (`Dactyl.parseDiagLine`, `Dactyl.describeDiag`, `js/side-routing.js`; `updateDiagUI`, `requestDiag`, `js/serial.js`) checks every field type and the reason name. The collapsible panel `#diagPanel` "Diagnose" shows one line per half and the button `#btnDiagRefresh` sends `GET_DIAG` on the connection of the active half. The panel is marked when a half reports a reason other than `power_on`, `deep_sleep` or `software`. The left half has its own USB port: connect it to read its values.
 
+### Support report (`buildSupportReport`)
+
+- The button `#btnSupportReport` "Diagnosebericht speichern" in the panel `#diagPanel` saves one JSON file (`dactyl_diagnose_<date>.json`, `saveSupportReport`, `js/serial.js`). It reports the last `DEVICE_INFO` and `GET_DIAG` values of each half that the app received in this session. Without any value, the app shows a toast and saves nothing.
+- `buildSupportReport` (`js/config-model.js`) is a pure function with a fixed field list. It never copies `DEVICE_INFO`: only the listed numbers, `side`, `config_mode`, `left_fw`, `left_link` and `diag` reach the report. Strings from the device (name, MAC) stay out. Each half carries the receive time of its `DEVICE_INFO` and `DIAG` values (`device_info_at`, `diag_at`), so an old value of a disconnected half shows its age. A new `DEVICE_INFO` field stays out until it is added to the list.
+- The report holds no keymap, no macro, no key pair, no combo or leader sequence and no key press data. Tests: `Diagnosebericht:` in `tests/test_app_logic.js`.
+- `appVersion` comes from `APP_VERSION`; a test compares it with `package.json`. Change both together.
+
 ### Split link status (`SPLIT_LINK`, `left_link`)
 
 - The master counts the state of the radio link to the left half in `SplitLeftHeld` (`DactylSplitHid.h`): `linkChangedMs` (last change up/down), `everUp`, `linkLosses` (link timeouts), `rxDropped` (packets dropped by a full receive ring, from `SplitRxQueue.dropped`) and `keyDropped` (`KEY_EVENT`s over `SPLIT_KEY_EVENTS_PER_RX`). The counters saturate (`splitCountAdd`) and count since the start of the master. A reset (`splitHeldReset`) clears them, so they also restart with each `setupSplitReceiver()`.

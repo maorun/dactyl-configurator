@@ -447,7 +447,8 @@ public:
   std::vector<int> oneShotEvents; // +mask = press, -mask = release, 0 = Caps Word umschalten, SENTENCE_CASE_EVENT = Satzanfang groß umschalten
   void oneShotPress(uint8_t mask) { oneShotEvents.push_back(mask); }
   void oneShotRelease(uint8_t mask) { oneShotEvents.push_back(-(int)mask); }
-  void capsWordToggle() { oneShotEvents.push_back(0); }
-  void sentenceCaseToggle() { oneShotEvents.push_back(SENTENCE_CASE_EVENT); }
-  void clearState() { oneShotEvents.push_back(CLEAR_STATE_EVENT); }
+  struct { bool capsWord = false; bool sentenceCase = false; } oneShot;  // Zustand für MODE_STATE
+  void capsWordToggle() { oneShot.capsWord = !oneShot.capsWord; oneShotEvents.push_back(0); }
+  void sentenceCaseToggle() { oneShot.sentenceCase = !oneShot.sentenceCase; oneShotEvents.push_back(SENTENCE_CASE_EVENT); }
+  void clearState() { oneShot.capsWord = oneShot.sentenceCase = false; oneShotEvents.push_back(CLEAR_STATE_EVENT); }
 };

@@ -502,6 +502,13 @@ Rules for this file:
 - `GET_INFO` over BLE in keyboard mode omits `host_leds` and `caps_led` (a nearby BLE client reads only `GET_INFO`); USB and config mode include them. The left half answers `SET_CAPS_LED` with `ERR UNKNOWN`. A BLE disconnect keeps the pill while USB to the master stays up (`forgetHostLeds`).
 - Hardware check: GPIO 22 is not in the deep-sleep hold lists; check that the LED is off in deep sleep and that it follows Caps Lock again after the wakeup. Caps Lock on the Mac changes the pill and the LED (GPIO 22); the macOS Caps Lock key press must reach the master as an output report after a reconnect.
 
+### Active mode pills (`MODE_STATE`)
+
+- The master prints `MODE_STATE:{"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1}` on USB serial only, never over BLE. The fields are Caps Word, Num Word, Sentence Case, Swap Hands (held, armed or locked) and Keep Awake.
+- `modeStateService()` (`DactylLogic.h`, called from `loop()`) prints one line for each change of the state. It prints no line at start while all modes are off.
+- `GET_INFO` over USB makes the next `loop()` print the line again, so an app that connects later sees the state. `GET_INFO` over BLE sets nothing and no notification carries the line (same rule as `HOST_LEDS` and `DM_REC`). The code exists only in the master (`DEVICE_INFO_HOST_LEDS_BITS`); the left half prints no line.
+- App: `Dactyl.parseModeStateLine` (`js/side-routing.js`) accepts the line only from the master and only with five flags `0` or `1`. `js/serial.js` shows one pill per active mode in `#modeStatePills` (`index.html`) and drops the state on disconnect (`forgetModeState`, also in `js/ble.js`) unless USB to the master stays up.
+
 ### Layer auto-return timeout (`layerTimeoutMs`)
 
 - Setting `layerTimeoutMs` (stored per half) (`0` = off, `1000..60000`, default `0`; command `SET_LAYER_TIMEOUT <ms>`, NVS key `layer_to`, `DEVICE_INFO` field `lt`). Values `1..999` are invalid for the command; the app and `server.py` raise them to `1000` (app) or reject them (server).

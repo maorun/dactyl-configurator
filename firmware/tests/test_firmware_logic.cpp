@@ -11017,6 +11017,62 @@ TEST(test_clear_state_key_releases_held_keys_and_is_no_combo_action) {
   assert(isNumWordKeepAction(ACT_CLEAR_STATE));
 }
 
+// Aktive Modi (MODE_STATE): eine Zeile je Änderung, GET_INFO meldet erneut, nie über BLE
+static int modeStateCount(const char *line) {
+  int n = 0;
+  for (const auto &l : Serial.outputLines) if (l == line) n++;
+  return n;
+}
+
+TEST(test_mode_state_reports_caps_word_and_keep_awake_on_serial) {
+  keepAwakeSetup();
+  bleKeyboard.oneShot.capsWord = bleKeyboard.oneShot.sentenceCase = false;
+  modeStateReported = 0;
+  Serial.clear();
+  modeStateService();
+  assert(Serial.outputLines.empty());               // Ruhestand: keine Zeile beim Start
+  bleKeyboard.capsWordToggle();
+  modeStateService();
+  modeStateService();
+  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0}") == 1);   // eine Zeile je Änderung
+  keepAwakeToggleOn(1000);
+  modeStateService();
+  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":1}") == 1);
+  keepAwakeToggleOn(2000);
+  bleKeyboard.capsWordToggle();
+  modeStateService();
+  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0}");
+  // Sentence Case, Swap Hands und Num Word
+  bleKeyboard.sentenceCaseToggle();
+  swapLocked = true;
+  numWordActive = true;
+  modeStateService();
+  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":1,\"sc\":1,\"sh\":1,\"ka\":0}");
+  numWordActive = false;
+  swapClearAll();
+  bleKeyboard.sentenceCaseToggle();
+}
+
+TEST(test_mode_state_get_info_resends_on_usb_but_never_over_ble) {
+  keepAwakeSetup();
+  bleKeyboard.oneShot.capsWord = bleKeyboard.oneShot.sentenceCase = false;
+  modeStateReported = 0;
+  bleKeyboard.capsWordToggle();
+  modeStateService();
+  Serial.clear();
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_INFO", false);           // USB
+  modeStateService();
+  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0}") == 1);
+  Serial.clear();
+  handleConfigCommand("GET_INFO", true);            // BLE: keine neue Meldung
+  modeStateService();
+  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0}") == 0);
+  for (const auto &n : mockChar.notifications) assert(n.find("MODE_STATE") == std::string::npos);
+  assert(mockChar.value.find("MODE_STATE") == std::string::npos);
+  bleKeyboard.oneShot.capsWord = bleKeyboard.oneShot.sentenceCase = false;
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

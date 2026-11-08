@@ -128,6 +128,7 @@ async function disconnectSerialNow() {
   forgetSplitLink();
   forgetHostLeds();
   forgetDmRec();
+  forgetModeState();
   abortDeviceSnapshotReadIfDisconnected();
   updateConnectionUI(false, "Nicht verbunden");
   showToast("ESP32 getrennt.");
@@ -373,6 +374,27 @@ function forgetDmRec() {
   if (Dactyl.splitLinkStaysValid(connectionState())) return;
   dmRecording = false;
   updateDmRecUI();
+}
+
+// Aktive Modi des Masters (MODE_STATE): Pills im Kopf. Die Zeile kommt nur vom Master und nur über USB;
+// endet die Verbindung, gelten die Modi nicht mehr.
+let modeState = null;
+function noteModeState(modes) {
+  if (!modes) return;
+  modeState = modes;
+  updateModeStateUI();
+}
+function updateModeStateUI() {
+  const box = document.getElementById("modeStatePills");
+  if (!box) return;
+  const active = Dactyl.describeModeState(modeState);
+  box.hidden = active.length === 0;
+  for (const el of box.querySelectorAll("[data-mode]")) el.hidden = !active.some(m => m.key === el.dataset.mode);
+}
+function forgetModeState() {
+  if (Dactyl.splitLinkStaysValid(connectionState())) return;
+  modeState = null;
+  updateModeStateUI();
 }
 
 function forgetHostLeds() {
@@ -641,6 +663,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
   // 2a''. LED-Zustand des Hosts (Num/Caps/Scroll Lock), nur vom Master und nur über USB-Serial
   else if (line.startsWith("HOST_LEDS:")) {
     if (transport === "usb") noteHostLeds(Dactyl.parseHostLedsLine(line, lineSide));
+  }
+
+  // 2a-4. Aktive Modi (MODE_STATE), nur vom Master und nur über USB-Serial
+  else if (line.startsWith("MODE_STATE:")) {
+    if (transport === "usb") noteModeState(Dactyl.parseModeStateLine(line, lineSide));
   }
 
   // 2a'''. Aufnahmestand des dynamischen Makros (DM_REC:0|1), nur vom Master und nur über USB-Serial

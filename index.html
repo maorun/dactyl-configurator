@@ -57,6 +57,14 @@
           <span class="caps-lock-icon">⇪</span>
           <strong>Caps Lock</strong>
         </div>
+        <!-- Aktive Modi des Masters (MODE_STATE, js/serial.js) -->
+        <div id="modeStatePills" class="mode-state-pills" hidden>
+          <div class="caps-lock-pill" data-mode="cw" hidden><strong>Caps Word</strong></div>
+          <div class="caps-lock-pill" data-mode="nw" hidden><strong>Num Word</strong></div>
+          <div class="caps-lock-pill" data-mode="sc" hidden><strong>Satzanfang</strong></div>
+          <div class="caps-lock-pill" data-mode="sh" hidden><strong>Swap Hands</strong></div>
+          <div class="caps-lock-pill" data-mode="ka" hidden><strong>Keep Awake</strong></div>
+        </div>
         <!-- Aufnahme eines dynamischen Makros aktiv (DM_REC:1, js/serial.js) -->
         <div class="caps-lock-pill dm-rec-pill" id="dmRecPill" hidden title="Dynamisches Makro: Aufnahme läuft (DM_REC beendet sie)">
           <span class="caps-lock-icon">●</span>

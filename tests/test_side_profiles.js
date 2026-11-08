@@ -60,6 +60,25 @@ const pins = (src, name) => {
   return raw.replace(/[{}]/g, "").split(",").map(v => Number(v.trim()));
 };
 
+test("MODE_STATE: Parser nur für den Master, Anzeige und Firmware nur über USB", () => {
+  const D = ctx.Dactyl;
+  const plain = v => JSON.parse(JSON.stringify(v));
+  const line = '{"cw":1,"nw":0,"sc":1,"sh":0,"ka":0}';
+  assert.deepStrictEqual(plain(D.parseModeStateLine("MODE_STATE:" + line, "R")), { cw: true, nw: false, sc: true, sh: false, ka: false });
+  assert.strictEqual(D.parseModeStateLine("MODE_STATE:" + line, "L"), undefined);
+  for (const bad of ['{"cw":1}', '{"cw":1,"nw":0,"sc":1,"sh":0,"ka":2}', "kaputt", "null", ""]) assert.strictEqual(D.parseModeStateLine("MODE_STATE:" + bad, "R"), undefined, bad);
+  assert.strictEqual(D.parseModeStateLine("HOST_LEDS:" + line, "R"), undefined);
+  assert.deepStrictEqual(plain(D.describeModeState({ cw: true, nw: false, sc: false, sh: false, ka: true })).map(m => m.key), ["cw", "ka"]);
+  assert.deepStrictEqual(plain(D.describeModeState(null)), []);
+  // Firmware: nur auf dem Master, nur über Serial
+  const svc = logic.slice(logic.indexOf("inline void modeStateService"), logic.indexOf("inline void modeStateService") + 200);
+  assert.ok(svc.includes("Serial.println(line)") && !svc.includes("sendConfigNotification"));
+  assert.ok(rightIno.includes("modeStateService();"));
+  assert.ok(logic.includes("if (!fromBle) modeStateReported = -1;"));
+  // Nur der Master meldet Modi: die linke Hälfte hat weder den Aufruf noch das Makro
+  assert.ok(!leftIno.includes("modeStateService") && !leftIno.includes("DEVICE_INFO_HOST_LEDS_BITS"));
+});
+
 test("Links: Config-Combo, BLE-Name, Gerätename und Hälfte entsprechen dactyl_left.ino", () => {
   const combo = [
     { r: Number(define(leftIno, "CONFIG_COMBO_R1")), c: Number(define(leftIno, "CONFIG_COMBO_C1")) },

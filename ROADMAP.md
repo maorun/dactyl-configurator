@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Layout preset templates (`layoutPresets`)
-
-- **Rank:** Feature model. Total 25/40 (typing 6, configuration 6, harmony 6, safety 7). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/editor.js`, `js/config-model.js`.
-- **Problem:** New users start with a blank layout or default QWERTY. Setting up Colemak-DH or specialized layers requires manual key assignment.
-- **Goal:** Add a "Belegungsvorlagen" dialog in the layout editor. It provides ergonomic base layouts (QWERTZ, Colemak-DH, Dvorak) and specialized layer templates (Numpad, Navigation, Symbols). Applying a preset updates layer 0 or a target layer as a pending change.
-- **Acceptance test:** A unit test applies each layout preset to a clean configuration and expects valid keycodes for all positions; applying a layer preset changes only the target layer.
-
 ### Num Word (`ACT_NUM_WORD`)
 
 - **Rank:** Feature model. Total 25/40 (typing 7, configuration 2, harmony 8, safety 8). Effort M. Estimate.

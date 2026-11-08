@@ -59,7 +59,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
              moveKeySelection, ARROW_KEY_DIRECTIONS,
              createNdjsonSplitter, appendFlashLogLine, readFlashStream, flashStageLabel, FLASH_LOG_MAX_LINES,
-             buildLayerOverview, buildLayerSheet, buildDualSideBundle, parseConfigImport,
+             LAYOUT_PRESETS, applyLayoutPreset, buildLayerOverview, buildLayerSheet, buildDualSideBundle, parseConfigImport,
              findCharPosition, buildPracticeSteps, createPracticeSession, practiceKeyPress, practiceSpeed, practiceTextFromHeatmap, practiceCharForCode, practiceDrillText, PRACTICE_FIXED_TEXT, buildSupportReport, APP_VERSION,
              ON_SCREEN_KEYBOARD_ROWS: typeof ON_SCREEN_KEYBOARD_ROWS !== "undefined" ? ON_SCREEN_KEYBOARD_ROWS : undefined,
              KEYCODE_OPTIONS: typeof KEYCODE_OPTIONS !== "undefined" ? KEYCODE_OPTIONS : undefined,
@@ -3682,6 +3682,154 @@ test("Preset Deutsch QWERTZ: Umlaut-Aktionen und US-Codes, keine deutschen Besch
   const base = R.presets.de_qwertz.layers[0];
   assert.deepStrictEqual([base[0][5].tap, base[1][0].tap, base[1][5].tap, base[2][4].tap, base[2][5].tap, base[3][4].tap],
                          ["UMLAUT_SZ", "KEY_Z", "UMLAUT_UE", "UMLAUT_OE", "UMLAUT_AE", "KEY_MINUS"]);
+});
+
+test("Belegungsvorlagen: jede Basis-Vorlage liefert gültige Codes für alle Matrix-Positionen", () => {
+  const base = Object.keys(api.LAYOUT_PRESETS).filter(k => api.LAYOUT_PRESETS[k].kind === "base");
+  assert.deepStrictEqual(base.sort(), ["colemak_dh", "dvorak", "qwertz"]);
+  for (const key of Object.keys(api.LAYOUT_PRESETS)) {
+    const out = api.applyLayoutPreset({ layers: [] }, key, 0);
+    assert.ok(out, key);
+    const layer = out.layers[0];
+    assert.strictEqual(layer.length, 6, key);
+    layer.forEach((row, r) => {
+      assert.strictEqual(row.length, 7, `${key} R${r}`);
+      row.forEach((cell, c) => {
+        const num = api.actionCodeToNumeric(cell.tap);
+        assert.ok(cell.tap === "NONE" || num > 0, `${key} R${r}C${c}: ${cell.tap}`);
+        assert.ok(typeof cell.label === "string" && cell.hold === "NONE", `${key} R${r}C${c}`);
+      });
+    });
+    // Die Vorlage übersteht die Prüfung des Imports
+    const cfg = { layers: out.layers };
+    api.validateConfigShape(cfg, R);
+  }
+  for (const key of base) {
+    const layer = api.applyLayoutPreset({ layers: [] }, key, 0).layers[0];
+    const letters = new Set();
+    layer.forEach(row => row.forEach(cell => { if (/^KEY_[A-Z]$/.test(cell.tap)) letters.add(cell.tap); }));
+    assert.ok(letters.size >= 10, `${key}: ${letters.size} Buchstaben`);
+    assert.strictEqual(layer[5][3].tap, "KEY_SPACE", key);
+  }
+  // Auf R4C0 und R5C5 liegt bei keiner Vorlage eine Aktion (die Positionen existieren nicht)
+  for (const key of Object.keys(api.LAYOUT_PRESETS)) {
+    const layer = api.applyLayoutPreset({ layers: [] }, key, 0).layers[0];
+    assert.strictEqual(layer[4][0].tap, "NONE", `${key}: R4C0 existiert nicht`);
+    layer.forEach((row, r) => row.forEach((cell, c) => {
+      if (!api.isWiredSwitch(r, c, R)) assert.strictEqual(cell.tap, "NONE", `${key}: R${r}C${c} ist nicht verlötet`);
+    }));
+    if (api.LAYOUT_PRESETS[key].kind === "base") {
+      assert.ok(layer.some(row => row.some(cell => cell.tap === "KEY_BACKSPACE")), `${key}: Backspace fehlt`);
+    }
+  }
+  assert.strictEqual(api.applyLayoutPreset({ layers: [] }, "colemak_dh").layers[0][2][2].tap, "KEY_E");
+  assert.strictEqual(api.applyLayoutPreset({ layers: [] }, "dvorak").layers[0][2][2].tap, "KEY_T");
+});
+
+test("Belegungsvorlagen: Ebenen-Vorlage ändert nur die Ziel-Ebene", () => {
+  const cfg = { layers: [0, 1, 2].map(l => api.applyLayoutPreset({ layers: [] }, l === 2 ? "dvorak" : "qwertz", 0).layers[0]) };
+  const plain = x => JSON.parse(JSON.stringify(x)); // Objekte aus dem vm-Kontext haben einen anderen Prototype
+  const before = plain(cfg);
+  for (const key of ["numpad", "navigation", "symbols"]) {
+    const out = api.applyLayoutPreset(cfg, key, 1);
+    assert.deepStrictEqual(plain(out.layers[0]), before.layers[0], key);
+    assert.deepStrictEqual(plain(out.layers[2]), before.layers[2], key);
+    assert.notDeepStrictEqual(plain(out.layers[1]), before.layers[1], key);
+    assert.deepStrictEqual(plain(out.layers[1]), plain(api.applyLayoutPreset({ layers: [] }, key, 1).layers[1]), key);
+  }
+  assert.strictEqual(api.applyLayoutPreset(cfg, "numpad", 1).layers[1][2][2].tap, "KEY_5");
+  assert.strictEqual(api.applyLayoutPreset(cfg, "navigation", 1).layers[1][1][2].tap, "KEY_UP_ARROW");
+  // Eine Ebene hinter dem Ende füllt die Lücken transparent
+  const far = api.applyLayoutPreset(cfg, "symbols", 5);
+  assert.strictEqual(far.layers.length, 6);
+  assert.deepStrictEqual(plain(far.layers[4]), plain(api.transparentLayer()));
+});
+
+test("Belegungsvorlagen: Undo stellt den vorherigen Zustand wieder her", () => {
+  const cfg = { layers: [api.applyLayoutPreset({ layers: [] }, "qwertz", 0).layers[0]], layerNames: ["A"] };
+  const plain = x => JSON.parse(JSON.stringify(x));
+  const snapshot = plain(cfg);
+  const oldLayers = cfg.layers;
+  const next = api.applyLayoutPreset(cfg, "colemak_dh", 0);
+  // Die Eingabe bleibt unverändert; der Revert setzt die alten Ebenen zurück
+  assert.deepStrictEqual(plain(cfg), snapshot);
+  assert.notStrictEqual(next.layers, oldLayers);
+  const state = { ...next };
+  state.layers = oldLayers;
+  assert.deepStrictEqual(plain(state.layers), snapshot.layers);
+  assert.strictEqual(next.layerNames, cfg.layerNames);
+  // Der Snapshot blockiert ältere Änderungen, nur der letzte Eintrag ist rückgängig machbar
+  assert.strictEqual(api.isUndoBlocked([{ snapshot: true }], 0), false);
+  assert.strictEqual(api.isUndoBlocked([{ snapshot: true }, {}], 0), true);
+});
+
+test("Belegungsvorlagen: Dialog und Revert in editor.js (DOM-Stub)", () => {
+  const src = section("js/editor.js", "function openLayoutTemplatesDialog", "// Hälfte, von der gerade eine Taste gezogen wird");
+  const els = {};
+  const el = id => (els[id] = els[id] || { id, value: "", style: {}, children: [], innerHTML: "", appendChild(c) { this.children.push(c); } });
+  const sandbox = {
+    document: { getElementById: el, createElement: () => ({ children: [], appendChild(c) { this.children.push(c); } }) },
+    LAYOUT_PRESETS: api.LAYOUT_PRESETS, applyLayoutPreset: api.applyLayoutPreset, NUM_LAYERS: 8, DEFAULT_LAYER_NAMES: [],
+    activeLayerIndex: 3, selectedKey: null, toasts: [], pending: [], confirms: [], renders: 0, saves: 0, confirmAnswer: true,
+    activeProfile: () => ({ label: "rechte Hälfte", presets: {} }),
+    showToast(m) { sandbox.toasts.push(m); }, confirm(m) { sandbox.confirms.push(m); return sandbox.confirmAnswer; },
+    renderMatrix() { sandbox.renders++; }, saveConfigToServer() { sandbox.saves++; }, updateInspector() {},
+    markPendingSync(c) { sandbox.pending.push(c); },
+    currentConfig: { layers: [api.transparentLayer(), api.transparentLayer()], layerNames: ["Base"] }
+  };
+  const vmCtx = vm.createContext(sandbox);
+  vm.runInContext(src, vmCtx);
+  const run = code => vm.runInContext(code, vmCtx);
+  run("openLayoutTemplatesDialog()");
+  assert.strictEqual(els.layoutTemplatesModal.style.display, "flex");
+  assert.strictEqual(els.layoutTemplateLayer.value, "3", "Ziel-Ebene ist die angezeigte Ebene");
+  assert.strictEqual(els.layoutTemplateLayer.children.length, 8);
+  assert.strictEqual(els.layoutTemplateSelect.children.length, 2);
+  assert.strictEqual(els.layoutTemplateSelect.children.reduce((n, g) => n + g.children.length, 0), Object.keys(api.LAYOUT_PRESETS).length);
+  // Abbrechen im confirm ändert nichts
+  els.layoutTemplateSelect.value = "numpad";
+  els.layoutTemplateLayer.value = "1";
+  sandbox.confirmAnswer = false;
+  const before = JSON.stringify(sandbox.currentConfig.layers);
+  run("applyLayoutTemplateFromUI()");
+  assert.strictEqual(JSON.stringify(sandbox.currentConfig.layers), before);
+  assert.strictEqual(sandbox.pending.length, 0);
+  assert.match(sandbox.confirms[0], /Halte-/);
+  // Anwenden: Snapshot-Änderung, nur Ebene 1 ändert sich
+  sandbox.confirmAnswer = true;
+  const oldLayers = sandbox.currentConfig.layers;
+  run("applyLayoutTemplateFromUI()");
+  assert.strictEqual(sandbox.pending.length, 1);
+  assert.strictEqual(sandbox.pending[0].snapshot, true);
+  assert.strictEqual(sandbox.pending[0].type, "layout_template");
+  assert.strictEqual(sandbox.currentConfig.layers[1][2][2].tap, "KEY_5");
+  assert.strictEqual(JSON.stringify(sandbox.currentConfig.layers[0]), JSON.stringify(oldLayers[0]), "Ebene 0 bleibt");
+  assert.strictEqual(els.layoutTemplatesModal.style.display, "none");
+  // Der echte Revert stellt die alten Ebenen wieder her
+  sandbox.pending[0].revert();
+  assert.strictEqual(sandbox.currentConfig.layers, oldLayers);
+  // Ungültige Eingabe: Hinweis, keine Änderung
+  els.layoutTemplateLayer.value = "9";
+  run("applyLayoutTemplateFromUI()");
+  assert.strictEqual(sandbox.pending.length, 1);
+  assert.ok(sandbox.toasts.length >= 1);
+  // Linke Hälfte ohne Presets öffnet den Dialog nicht
+  els.layoutTemplatesModal.style.display = "none";
+  sandbox.activeProfile = () => ({ label: "linke Hälfte", presets: null });
+  run("openLayoutTemplatesDialog()");
+  assert.strictEqual(els.layoutTemplatesModal.style.display, "none");
+});
+
+test("Belegungsvorlagen: ungültige Vorlage oder Ebene wird abgelehnt", () => {
+  const cfg = { layers: [api.transparentLayer()] };
+  for (const key of ["", "nope", "__proto__", "constructor", "toString", undefined, null, 5]) {
+    assert.strictEqual(api.applyLayoutPreset(cfg, key, 0), null, String(key));
+  }
+  for (const layer of [-1, 8, 1.5, NaN, "1", null]) {
+    assert.strictEqual(api.applyLayoutPreset(cfg, "qwertz", layer), null, String(layer));
+  }
+  assert.strictEqual(api.applyLayoutPreset(null, "qwertz", 0), null);
+  assert.strictEqual(api.applyLayoutPreset({}, "qwertz", 0), null);
 });
 
 test("Sonderzeichen: Label aus GET_CONFIG-Codes", () => {

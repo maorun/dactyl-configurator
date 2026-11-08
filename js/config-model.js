@@ -3010,3 +3010,98 @@ function buildSupportReport({ appVersion = APP_VERSION, now = Date.now(), device
   }
   return { reportVersion: SUPPORT_REPORT_VERSION, appVersion: String(appVersion).slice(0, 32), createdAt: new Date(now).toISOString(), halves };
 }
+
+// Belegungsvorlagen (Dialog "Belegungsvorlagen"): Basis-Layouts der rechten Hand und Ebenen-Vorlagen.
+// Eine Vorlage ersetzt die ganze Ebene; die Ebenen-Vorlagen lassen alle anderen Tasten transparent (NONE).
+const presetKeyCell = (tap, label) => ({ tap, label: label === undefined ? tap.replace(/^KEY_/, "") : label, hold: "NONE", dtap: "NONE" });
+
+// Daumen-Cluster, Shift und Pfeile wie im Preset "Deutsch QWERTZ"; nur verlötete Positionen (R2C6 und R5C5 gibt es nicht),
+// darum liegt Backspace auf R4C5
+function layoutPresetBaseLayer(fingerRows) {
+  const layer = transparentLayer();
+  fingerRows.forEach((row, r) => row.forEach((cell, c) => { layer[r][c] = cell; }));
+  layer[3][5] = presetKeyCell("KEY_RIGHT_SHIFT", "Shift");
+  layer[4][1] = presetKeyCell("KEY_LEFT_ARROW", "←");
+  layer[4][2] = presetKeyCell("KEY_DOWN_ARROW", "↓");
+  layer[4][3] = presetKeyCell("KEY_UP_ARROW", "↑");
+  layer[4][4] = presetKeyCell("KEY_RIGHT_ARROW", "→");
+  layer[4][5] = presetKeyCell("KEY_BACKSPACE", "Bksp");
+  layer[5] = [presetKeyCell("KEY_LEFT_GUI", "Cmd"), presetKeyCell("KEY_LEFT_ALT", "Alt"), presetKeyCell("KEY_RETURN", "Enter (2U)"), presetKeyCell("KEY_SPACE", "Space (2U)"),
+              presetKeyCell("KEY_TAB", "Tab"), presetKeyCell("NONE", "---"), presetKeyCell("KEY_ESC", "Esc")]; // R5C5 existiert nicht
+  return layer;
+}
+
+const presetKeyRow = codes => codes.map(c => (Array.isArray(c) ? presetKeyCell(c[0], c[1]) : presetKeyCell(c)));
+const LAYOUT_PRESETS = {
+  qwertz: {
+    kind: "base", name: "QWERTZ (macOS US-Layout)",
+    build: () => layoutPresetBaseLayer([
+      presetKeyRow(["KEY_6", "KEY_7", "KEY_8", "KEY_9", "KEY_0", ["UMLAUT_SZ", "ß"]]),
+      presetKeyRow(["KEY_Z", "KEY_U", "KEY_I", "KEY_O", "KEY_P", ["UMLAUT_UE", "ü"]]),
+      presetKeyRow(["KEY_H", "KEY_J", "KEY_K", "KEY_L", ["UMLAUT_OE", "ö"], ["UMLAUT_AE", "ä"]]),
+      presetKeyRow(["KEY_N", "KEY_M", ["KEY_COMMA", ","], ["KEY_PERIOD", "."], ["KEY_MINUS", "-"]])
+    ])
+  },
+  colemak_dh: {
+    kind: "base", name: "Colemak-DH",
+    build: () => layoutPresetBaseLayer([
+      presetKeyRow(["KEY_6", "KEY_7", "KEY_8", "KEY_9", "KEY_0", ["KEY_MINUS", "-"]]),
+      presetKeyRow(["KEY_J", "KEY_L", "KEY_U", "KEY_Y", ["KEY_SEMICOLON", ";"], ["KEY_LEFT_BRACKET", "["]]),
+      presetKeyRow(["KEY_M", "KEY_N", "KEY_E", "KEY_I", "KEY_O", ["KEY_QUOTE", "'"]]),
+      presetKeyRow(["KEY_K", "KEY_H", ["KEY_COMMA", ","], ["KEY_PERIOD", "."], ["KEY_SLASH", "/"]])
+    ])
+  },
+  dvorak: {
+    kind: "base", name: "Dvorak",
+    build: () => layoutPresetBaseLayer([
+      presetKeyRow(["KEY_6", "KEY_7", "KEY_8", "KEY_9", "KEY_0", ["KEY_LEFT_BRACKET", "["]]),
+      presetKeyRow(["KEY_F", "KEY_G", "KEY_C", "KEY_R", "KEY_L", ["KEY_SLASH", "/"]]),
+      presetKeyRow(["KEY_D", "KEY_H", "KEY_T", "KEY_N", "KEY_S", ["KEY_MINUS", "-"]]),
+      presetKeyRow(["KEY_B", "KEY_M", "KEY_W", "KEY_V", "KEY_Z"])
+    ])
+  },
+  numpad: {
+    kind: "layer", name: "Numpad (3x3 rechts)",
+    build: () => {
+      const layer = transparentLayer();
+      const put = (r, c, tap, label) => { layer[r][c] = presetKeyCell(tap, label); };
+      ["KEY_7", "KEY_8", "KEY_9"].forEach((k, i) => put(1, 1 + i, k));
+      ["KEY_4", "KEY_5", "KEY_6"].forEach((k, i) => put(2, 1 + i, k));
+      ["KEY_1", "KEY_2", "KEY_3"].forEach((k, i) => put(3, 1 + i, k));
+      put(4, 1, "KEY_0"); put(4, 2, "KEY_PERIOD", "."); put(4, 3, "KEY_COMMA", ","); put(4, 4, "KEY_RETURN", "Enter");
+      put(1, 4, "KEY_SLASH", "/"); put(2, 4, "KEY_MINUS", "-"); put(3, 4, "+"); put(1, 5, "*"); put(2, 5, "KEY_EQUAL", "=");
+      return layer;
+    }
+  },
+  navigation: {
+    kind: "layer", name: "Navigation (Pfeile, Pos 1, Ende, Bild)",
+    build: () => {
+      const layer = transparentLayer();
+      const put = (r, c, tap, label) => { layer[r][c] = presetKeyCell(tap, label); };
+      put(1, 1, "KEY_HOME", "Pos 1"); put(1, 2, "KEY_UP_ARROW", "↑"); put(1, 3, "KEY_END", "Ende"); put(1, 4, "KEY_PAGE_UP", "Bild ↑");
+      put(2, 1, "KEY_LEFT_ARROW", "←"); put(2, 2, "KEY_DOWN_ARROW", "↓"); put(2, 3, "KEY_RIGHT_ARROW", "→"); put(2, 4, "KEY_PAGE_DOWN", "Bild ↓");
+      return layer;
+    }
+  },
+  symbols: {
+    kind: "layer", name: "Symbole (Klammern, Mathe, Satzzeichen)",
+    build: () => {
+      const layer = transparentLayer();
+      const rows = [["(", ")", "[", "]", "{", "}"], ["+", "-", "*", "/", "=", "%"], ["!", "?", ":", ";", "'", "\""], ["<", ">", "|", "\\", "~", "`"]];
+      rows.forEach((row, r) => row.forEach((ch, c) => { layer[r][c] = presetKeyCell(ch, ch); }));
+      return layer;
+    }
+  }
+};
+
+// Neue Config mit der Vorlage auf der Ebene targetLayer (config bleibt unverändert, so reicht ein Zurücksetzen auf das
+// Original als Undo). null bei unbekannter Vorlage oder Ebene außerhalb von 0..NUM_LAYERS-1.
+function applyLayoutPreset(config, presetKey, targetLayer = 0) {
+  if (!config || typeof config !== "object" || !Array.isArray(config.layers)) return null;
+  if (typeof presetKey !== "string" || !Object.prototype.hasOwnProperty.call(LAYOUT_PRESETS, presetKey)) return null;
+  if (!isValidIndex(targetLayer, NUM_LAYERS)) return null;
+  const layers = JSON.parse(JSON.stringify(config.layers));
+  while (layers.length <= targetLayer) layers.push(transparentLayer());
+  layers[targetLayer] = LAYOUT_PRESETS[presetKey].build();
+  return { ...config, layers };
+}

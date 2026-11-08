@@ -10795,6 +10795,105 @@ TEST(test_tt_keys_keep_num_word_open) {
   assert(numWordActive && tappingTermMs == 210);
 }
 
+// Keep-awake (ACT_KEEP_AWAKE): alle 60 s ein Mausschritt +1 / -1, Tastendruck startet die Frist neu, Standby und RELEASE_ALL beenden
+static void keepAwakeSetup() {
+  resetState();
+  keepAwakeStop();
+  KEYMAP[0][5][0] = ACT_KEEP_AWAKE;
+  bleKeyboard.mouseMoves.clear();
+}
+
+static void keepAwakeToggleOn(unsigned long t) { setMillis(t); pressKey(5, 0, true); setMillis(t + 20); pressKey(5, 0, false); }
+
+TEST(test_keep_awake_sends_opposite_mouse_steps_every_60s) {
+  assert(ACT_KEEP_AWAKE == 0x190 && ACT_KEEP_AWAKE > ACT_TT_DOWN && KEEP_AWAKE_INTERVAL_MS == 60000);
+  keepAwakeSetup();
+  keepAwakeToggleOn(1000);
+  assert(keepAwakeActive && bleKeyboard.pressedKeys.empty());
+  keepAwakeTick(30000);
+  assert(bleKeyboard.mouseMoves.empty());
+  keepAwakeTick(61000);
+  assert(bleKeyboard.mouseMoves.size() == 2);
+  assert(bleKeyboard.mouseMoves[0].first == 1 && bleKeyboard.mouseMoves[1].first == -1);
+  keepAwakeTick(100000);
+  assert(bleKeyboard.mouseMoves.size() == 2);
+  keepAwakeTick(121000);
+  assert(bleKeyboard.mouseMoves.size() == 4);
+  keepAwakeToggleOn(122000);                         // zweites Tippen schaltet aus
+  assert(!keepAwakeActive);
+  keepAwakeTick(300000);
+  assert(bleKeyboard.mouseMoves.size() == 4);
+}
+
+TEST(test_keep_awake_key_press_resets_timer) {
+  keepAwakeSetup();
+  KEYMAP[0][5][1] = 'a';
+  keepAwakeToggleOn(1000);
+  setMillis(50000); pressKey(5, 1, true); pressKey(5, 1, false);
+  keepAwakeTick(61000);                              // 60 s nach dem Einschalten, aber nur 11 s nach der Taste
+  assert(bleKeyboard.mouseMoves.empty());
+  keepAwakeTick(110500);
+  assert(bleKeyboard.mouseMoves.size() == 2);
+  notePriorKeyPress(120000);                         // Druck der anderen Hälfte
+  keepAwakeTick(170000);
+  assert(bleKeyboard.mouseMoves.size() == 2);
+  keepAwakeTick(180100);
+  assert(bleKeyboard.mouseMoves.size() == 4);
+}
+
+TEST(test_keep_awake_stops_on_release_all_standby_host_loss_and_config_mode) {
+  keepAwakeSetup();
+  keepAwakeToggleOn(1000);
+  oslClearAll();                                     // RELEASE_ALL, Link-Ausfall, Verlust des Hosts
+  assert(!keepAwakeActive);
+  keepAwakeTick(100000);
+  assert(bleKeyboard.mouseMoves.empty());
+  keepAwakeToggleOn(2000);
+  bleKeyboard.setDisconnected();                     // ohne Mac: nichts senden, Zustand endet
+  keepAwakeTick(100000);
+  assert(!keepAwakeActive && bleKeyboard.mouseMoves.empty());
+  keepAwakeSetup();
+  keepAwakeToggleOn(3000);
+  isConfigMode = true;
+  keepAwakeTick(100000);
+  assert(!keepAwakeActive && bleKeyboard.mouseMoves.empty());
+  isConfigMode = false;
+  keepAwakeSetup();
+  keepAwakeToggleOn(4000);
+  keepAwakeStop();                                   // enterStandby() in dactyl_right.ino
+  keepAwakeTick(100000);
+  assert(bleKeyboard.mouseMoves.empty());
+}
+
+TEST(test_keep_awake_toggles_as_tap_of_hold_and_double_tap_keys_and_ignores_config_mode) {
+  keepAwakeSetup();
+  HOLDMAP[0][5][0] = KEY_LEFT_SHIFT;                 // Mod-Tap: der Tipp ist KEEP_AWAKE
+  setMillis(1000); pressKey(5, 0, true); setMillis(1050); pressKey(5, 0, false);
+  assert(keepAwakeActive);
+  keepAwakeSetup();
+  handleConfigCommand("SET_K 0 5 0 400 0 120", false);   // Tipp KEEP_AWAKE, Doppel-Tipp 'x'
+  setMillis(1000); keyState[5][0] = true; onMatrixKeyChange(5, 0, true);
+  setMillis(1030); keyState[5][0] = false; onMatrixKeyChange(5, 0, false);
+  setMillis(1400); doubleTapTick(1400);
+  assert(keepAwakeActive);
+  keepAwakeSetup();
+  isConfigMode = true;
+  keepAwakeToggleOn(1000);
+  assert(!keepAwakeActive);
+  isConfigMode = false;
+  bleKeyboard.setDisconnected();
+  keepAwakeToggleOn(2000);
+  assert(!keepAwakeActive);                          // ohne Mac schaltet der Tipp nicht ein
+}
+
+TEST(test_keep_awake_is_no_combo_action_and_keeps_num_word) {
+  keepAwakeSetup();
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 400", false);   // ACT_KEEP_AWAKE = 0x190
+  assert(numCombos == 0);
+  assert(isNumWordKeepAction(ACT_KEEP_AWAKE));
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

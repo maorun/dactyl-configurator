@@ -23,14 +23,7 @@ Rules for this file:
 
 ## Priority 4
 
-### Keep-awake key (`ACT_KEEP_AWAKE`)
-
-- **Rank:** Feature model. Total 19/40 (typing 3, configuration 1, harmony 6, safety 9). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** During a long video call or a read phase, the Mac goes to sleep because no input arrives.
-- **Goal:** Add the toggle action `KEEP_AWAKE` on the master. While on, it sends a mouse move of one pixel and back every 60 s when the BLE link is up and the config mode is off. `RELEASE_ALL`, host loss, standby and a physical key press stop the timer or reset it. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test turns `KEEP_AWAKE` on, advances 60 s and expects two mouse reports with opposite steps; a standby clears the state.
+No open entry.
 
 ## Priority 5
 

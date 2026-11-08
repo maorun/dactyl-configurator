@@ -196,6 +196,7 @@ void checkUserCombos();
 void stopMacro(bool releaseKeys);
 void resetMouseMove();
 void oslClearAll();
+void keepAwakeStop();
 void keyLockReleaseAll();
 void swapClearAll();
 void dynamicMacroReset();
@@ -344,6 +345,7 @@ void enterStandby() {
     isStandby = true;
     keyLockReleaseAll();
     swapClearAll();
+    keepAwakeStop();   // Standby beendet Keep-awake
     setCpuFrequencyMhz(80);
     bleKeyboard.setStandbyMode(true);
     applySplitWakeWindow(true);
@@ -1035,6 +1037,7 @@ void loop() {
   oneShotExpire(bleKeyboard.oneShot, millis(), oneShotTimeoutMs);
   oslExpireLocal(millis());
   numWordExpire(millis());   // Num Word endet ohne Tastendruck nach NUM_WORD_IDLE_MS
+  keepAwakeTick(millis());   // Keep-awake: alle 60 s ein Mausschritt +1 / -1
   ttExpire(millis());         // beide TT-Tasten lange gehalten: tappingTermMs im NVS speichern
   // layerTimeoutMs: eingerastete TG-Ebenen fallen ohne Tastendruck beider Hälften zurück
   layerTimeoutExpire(millis());

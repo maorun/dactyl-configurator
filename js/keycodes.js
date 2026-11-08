@@ -86,7 +86,8 @@ const KEYCODES = [
     { code: "SWAP_HANDS", label: "Swap Hands (Hälften spiegeln)", char: "" },
     { code: "NUM_WORD", label: "Num Word (Ebene bis zur ersten Nicht-Zahl-Taste)", char: "" },
     { code: "TT_UP", label: "Tapping Term +10 ms (beide lange halten: speichern)", char: "" },
-    { code: "TT_DOWN", label: "Tapping Term -10 ms (beide lange halten: speichern)", char: "" }
+    { code: "TT_DOWN", label: "Tapping Term -10 ms (beide lange halten: speichern)", char: "" },
+    { code: "KEEP_AWAKE", label: "Keep-awake (alle 60 s Mausschritt, nur Master)", char: "" }
   ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
@@ -304,6 +305,7 @@ const ACTION_TO_NUMERIC = {
   "NUM_WORD": 0x18D,
   "TT_UP": 0x18E,
   "TT_DOWN": 0x18F,
+  "KEEP_AWAKE": 0x190,
 
   // Mouse Actions (0x130..0x13A)
   "MOUSE_LEFT": 0x130,
@@ -345,7 +347,7 @@ const ONE_SHOT_LABELS = {
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
   CAPS_WORD: "CapsWd", SENTENCE_CASE: "Sentence", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
   DM_REC: "DM Rec", DM_PLAY: "DM Play", LEADER: "Leader", KEY_LOCK: "KeyLock",
-  HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3", SWAP_HANDS: "Swap", NUM_WORD: "NumWd", TT_UP: "TT+", TT_DOWN: "TT-"
+  HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3", SWAP_HANDS: "Swap", NUM_WORD: "NumWd", TT_UP: "TT+", TT_DOWN: "TT-", KEEP_AWAKE: "Awake"
 };
 
 // true für die Leader-Taste (keine Combo-Aktion)
@@ -371,6 +373,11 @@ function isNumWordCode(code) {
 // true für die Tapping-Term-Tasten TT_UP und TT_DOWN (keine Combo-Aktion)
 function isTtCode(code) {
   return /^(ACT_)?TT_(UP|DOWN)$/.test(String(code || ""));
+}
+
+// true für die Keep-awake-Taste (nur Master, keine Combo-Aktion)
+function isKeepAwakeCode(code) {
+  return /^(ACT_)?KEEP_AWAKE$/.test(String(code || ""));
 }
 
 // true für BLE-Host-Slots HOST_1 .. HOST_3 (nur Master, keine Combo-Aktion)

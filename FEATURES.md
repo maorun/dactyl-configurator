@@ -217,6 +217,17 @@ Rules for this file:
 - Set the same value on both halves. The master takes over the toggle layers of the left half through the layer sync without a lock bit, so `layerTimeoutMs` can drop a boot layer that only the left half holds, and a different value on the other half can switch the layer off again. This needs a hardware check.
 - `DEVICE_INFO` grows by `"bl":N,` (7 bytes) and the field `quick_tap_ms` became `qt` (10 bytes less) to stay under the limit; the line stays under the BLE limit of 512 bytes (a test checks it). `DACTYL_FW_VERSION` is 45; flash both halves.
 
+### Keep-awake key (`ACT_KEEP_AWAKE`)
+
+- `ACT_KEEP_AWAKE` (`0x190`, app name `KEEP_AWAKE`, keycap label `Awake`) keeps the Mac awake during a video call or a long read. A tap on the master toggles `keepAwakeActive` (`keepAwakeToggle` in `DactylLogic.h`).
+- While active, `keepAwakeTick` in `loop()` sends two mouse reports every `KEEP_AWAKE_INTERVAL_MS` (60000 ms): `+1` pixel on X, then `-1`. The net move is zero.
+- Each physical key press of either half restarts the 60 s timer (`notePriorKeyPress`), because real input already keeps the Mac awake.
+- The state lives in RAM only. `RELEASE_ALL`, host loss, link loss and the config mode (`oslClearAll`), `enterStandby` and a tick without BLE link or in config mode end it. A reboot starts with Keep-awake off.
+- Standby ends the state after `standbyTimeoutMinutes` without key presses (default 5 min), because the nudges do not count as activity. Press the key again after a wake-up. A tap while the Mac is not connected or in config mode changes nothing.
+- The key sends no keycode. It works only on the master: the left half has no mouse, and `server.py` and the app reject the action on the left half.
+- The key is no combo action: `ADD_COMBO`, `server.py` (`KEEP_AWAKE_CPP`) and the app reject it. `REPEAT` does not repeat it. It keeps Num Word on (`isNumWordKeepAction`) and ends a Leader capture.
+- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 47; flash both halves.
+
 ### Key lock (`ACT_KEY_LOCK`, `DactylKeyLock.h`)
 
 - `ACT_KEY_LOCK` (`0x16F`, app name `KEY_LOCK`, keycap label `KeyLock`) arms the lock. The next key press or mouse button press of either half stays held after the physical release of the key. A second press of the same input releases it. Use it for a long drag with a mouse button, a held `Shift` for a selection or a held game key.

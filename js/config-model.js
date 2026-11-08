@@ -1581,6 +1581,53 @@ function maxKeyCount(stats, layer = null) {
   return max;
 }
 
+// CSV-Feld: Anführungszeichen bei Trennzeichen; ein Text von mehr als einem Zeichen mit Anfang = + - @ oder Tab
+// bekommt ein ', damit eine Tabellenkalkulation das Feld nicht als Formel liest (ein einzelnes Zeichen bleibt)
+function heatmapCsvField(value) {
+  let text = String(value === undefined || value === null ? "" : value).replace(/[\r\n]+/g, " ");
+  if (text.length > 1 && /^[=+\-@\t]/.test(text)) text = `'${text}`;
+  return /[",;]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+// CSV der Tipp-Statistik: eine Zeile je gezählter Taste. heatmapData: [{ side, stats }], config: { <Hälfte>: Config }
+// (nur für das Label der Ebene 0). Spalten: half,row,column,label,total,layer_0..layer_7,corrections. Die Datei hat
+// nur Zähler: keinen Text, keine Zeit eines Anschlags und keine Folge von Tasten (kein Bigramm, keine
+// Same-Finger-Paare). Ungültige oder leere Eingabe gibt null zurück; Zeilenende ist CRLF (RFC 4180).
+function buildHeatmapCsv(heatmapData, config) {
+  if (!Array.isArray(heatmapData) || !heatmapData.length) return null;
+  const header = ["half", "row", "column", "layer_0_label", "total"];
+  for (let l = 0; l < NUM_LAYERS; l++) header.push(`layer_${l}`);
+  header.push("corrections");
+  const rows = [];
+  for (const entry of heatmapData) {
+    const stats = entry && entry.stats;
+    if (!entry || typeof entry.side !== "string" || !stats || typeof stats.counts !== "object" || stats.counts === null
+      || !Array.isArray(stats.layerCounts)) return null;
+    const layer0 = config && config[entry.side] && Array.isArray(config[entry.side].layers) ? config[entry.side].layers[0] : null;
+    const corrections = stats.corrections && typeof stats.corrections === "object" ? stats.corrections : {};
+    const ids = new Set([...Object.keys(stats.counts), ...Object.keys(corrections)]);
+    const positions = [];
+    for (const id of ids) {
+      const m = /^(\d+)_(\d+)$/.exec(id);
+      if (!m) continue;
+      const r = Number(m[1]), c = Number(m[2]);
+      if (!isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS)) continue;
+      positions.push({ id, r, c });
+    }
+    positions.sort((a, b) => (a.r - b.r) || (a.c - b.c));
+    for (const { id, r, c } of positions) {
+      const cell = layer0 && layer0[r] ? layer0[r][c] : null;
+      const label = cell && typeof cell.label === "string" ? cell.label : "";
+      const num = n => (Number.isSafeInteger(n) && n > 0 ? n : 0);
+      const fields = [entry.side, r, c, label, num(stats.counts[id])];
+      for (let l = 0; l < NUM_LAYERS; l++) fields.push(num(stats.layerCounts[l] && stats.layerCounts[l][id]));
+      fields.push(num(corrections[id]));
+      rows.push(fields.map(heatmapCsvField).join(","));
+    }
+  }
+  return [header.join(","), ...rows].join("\r\n") + "\r\n";
+}
+
 // Rolle einer Aktion für recordKeyPress: Backspace, ohne Zeichen (keine Belegung, Modifier, Ebenen- und
 // One-Shot-Tasten) oder getippt
 function keyPressRole(tap) {

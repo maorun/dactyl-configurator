@@ -32,7 +32,7 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTriLayers, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
-             createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, suggestCombos, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, WPM_WINDOW_MS, HEAT_LEVELS,
+             createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, suggestCombos, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, buildHeatmapCsv, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
              COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
@@ -8713,4 +8713,70 @@ test("Makro-Bibliothek: index.html, Buttons und Import als Snapshot-Änderung", 
   assert.ok(html.includes("Makro exportieren") && html.includes("Makro importieren"));
   const imp = section("js/macros-ui.js", "function importMacroText", "function importMacroFromFile");
   assert.ok(/snapshot: true/.test(imp) && /macros: true/.test(imp) && /parseMacroImport\(/.test(imp));
+});
+
+const csvConfig = side => ({ [side]: { layers: [[[{ label: "a" }, { label: 'Q"x,y' }], [{ label: "=SUM(A1)" }]]] } });
+const parseCsv = text => text.split("\r\n").filter(Boolean);
+
+test("Heatmap-CSV: Kopfzeile, eine Zeile je gezählter Taste und genaue Zähler", () => {
+  const s = api.createTypingStats(null, R);
+  api.recordKeyPress(s, 0, 0, 0, 0);
+  api.recordKeyPress(s, 0, 0, 5000, 2);
+  api.recordKeyPress(s, 0, 1, 10000, 0);
+  api.recordKeyPress(s, 0, 1, 10100, 0, "backspace"); // Korrektur von 0_1; Backspace-Taste selbst bleibt eine Taste (0_1)
+  const lines = parseCsv(api.buildHeatmapCsv([{ side: "R", stats: s }], csvConfig("R")));
+  assert.strictEqual(lines[0], "half,row,column,layer_0_label,total,layer_0,layer_1,layer_2,layer_3,layer_4,layer_5,layer_6,layer_7,corrections");
+  assert.strictEqual(lines.length, 3);
+  assert.strictEqual(lines[1], "R,0,0,a,2,1,0,1,0,0,0,0,0,0");
+  assert.strictEqual(lines[2], 'R,0,1,"Q""x,y",2,2,0,0,0,0,0,0,0,1');
+  assert.strictEqual(s.total, 4); // 2 + 2 Zähler der Zeilen
+});
+
+test("Heatmap-CSV: beide Hälften und Formel-Schutz im Label", () => {
+  const r = api.createTypingStats(null, R), l = api.createTypingStats(null, api.SIDE_PROFILES.L);
+  api.recordKeyPress(r, 1, 0, 0, 0);
+  api.recordKeyPress(l, 1, 0, 0, 0);
+  const lines = parseCsv(api.buildHeatmapCsv([{ side: "R", stats: r }, { side: "L", stats: l }], { ...csvConfig("R"), ...csvConfig("L") }));
+  assert.strictEqual(lines.length, 3);
+  assert.ok(lines[1].startsWith("R,1,0,'=SUM(A1),1,1"));
+  assert.ok(lines[2].startsWith("L,1,0,'=SUM(A1),1,1"));
+});
+
+test("Heatmap-CSV: Formel-Schutz für jeden Anfang, einzelne Zeichen bleiben", () => {
+  const cfg = label => ({ R: { layers: [[[{ label }]]] } });
+  const label = text => {
+    const s = api.createTypingStats(null, R);
+    api.recordKeyPress(s, 0, 0, 0, 0);
+    const line = parseCsv(api.buildHeatmapCsv([{ side: "R", stats: s }], cfg(text)))[1];
+    return line.split(",").slice(3, -10).join(",");
+  };
+  for (const t of ["=1+1", "+1", "-1", "@SUM", "\tx"]) assert.strictEqual(label(t), `'${t}`, JSON.stringify(t));
+  for (const t of ["=", "+", "-", "@", "a"]) assert.strictEqual(label(t), t, t);
+  assert.strictEqual(label("a\nb"), "a b");
+});
+
+test("Heatmap-CSV: kein Text, keine Zeiten, keine Folgen", () => {
+  const s = api.createTypingStats(null, R);
+  for (let i = 0; i < 6; i++) api.recordKeyPress(s, 2, 1 + (i % 2), 1700000000000 + i * 100, 0);
+  assert.ok(Object.keys(s.bigrams).length > 0);
+  const csv = api.buildHeatmapCsv([{ side: "R", stats: s }], csvConfig("R"));
+  assert.ok(!csv.includes("|"), "kein Bigramm oder Tastenpaar");
+  assert.ok(!/1700000000/.test(csv), "kein Zeitstempel");
+  assert.ok(!/(bigram|recent|sameFinger|timestamp)/i.test(csv));
+  for (const line of parseCsv(csv).slice(1)) assert.strictEqual(line.split(",").length, 14);
+});
+
+test("Heatmap-CSV: leere und ungültige Eingabe gibt null", () => {
+  for (const bad of [undefined, null, [], "x", 5, {}, [null], [{}], [{ side: "R" }], [{ side: "R", stats: {} }],
+    [{ side: 1, stats: api.createTypingStats(null, R) }]]) {
+    assert.strictEqual(api.buildHeatmapCsv(bad, {}), null, JSON.stringify(bad));
+  }
+  const s = api.createTypingStats(null, R);
+  assert.strictEqual(api.buildHeatmapCsv([{ side: "R", stats: s }], null).split("\r\n").length, 2); // nur Kopf, kein Absturz
+});
+
+test("Heatmap-CSV: Button in index.html und Download in js/heatmap.js", () => {
+  assert.ok(read("index.html").includes('id="btnHeatmapCsv"') && read("index.html").includes("Als CSV speichern"));
+  assert.ok(/buildHeatmapCsv\(/.test(read("js/heatmap.js")) && read("js/heatmap.js").includes('"btnHeatmapCsv"'));
+  assert.ok(read("js/heatmap.js").includes("\\uFEFF") && read("js/heatmap.js").includes("showToast("));
 });

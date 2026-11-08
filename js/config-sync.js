@@ -363,6 +363,7 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_AUTO_SHIFT_TERM ${clampSetting("autoShiftMs", s.autoShiftMs ?? 175)}`, ack: "SET_AUTO_SHIFT_TERM", optional: true },
     { cmd: `SET_RETRO_TAP ${clampSetting("retroTap", s.retroTap ?? 0)}`, ack: "SET_RETRO_TAP", optional: true },
     { cmd: `SET_NUM_WORD_LAYER ${clampSetting("numWordLayer", s.numWordLayer ?? 1)}`, ack: "SET_NUM_WORD_LAYER", optional: "args" },
+    { cmd: `SET_BOOT_LAYER ${clampSetting("bootLayer", s.bootLayer ?? 0)}`, ack: "SET_BOOT_LAYER", optional: "args" },
     { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true }
   ];
 }

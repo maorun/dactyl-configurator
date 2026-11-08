@@ -603,6 +603,7 @@ function setupEventListeners() {
       const chordalHold = clampSetting("chordalHold", parseInt(document.getElementById("chordalHoldSelect")?.value, 10));
       const retroTap = clampSetting("retroTap", parseInt(document.getElementById("retroTapSelect")?.value, 10));
       const numWordLayer = clampSetting("numWordLayer", parseInt(document.getElementById("numWordLayerSelect")?.value, 10));
+      const bootLayer = clampSetting("bootLayer", parseInt(document.getElementById("bootLayerSelect")?.value, 10));
       const autoShift = clampSetting("autoShift", parseInt(document.getElementById("autoShiftSelect")?.value, 10));
       const autoShiftMs = clampSetting("autoShiftMs", parseInt(document.getElementById("autoShiftTermInput")?.value, 10));
       const standbyMinutes = clampSetting("standbyTimeoutMinutes", parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10));
@@ -621,6 +622,7 @@ function setupEventListeners() {
       setVal("chordalHoldSelect", chordalHold);
       setVal("retroTapSelect", retroTap);
       setVal("numWordLayerSelect", numWordLayer);
+      setVal("bootLayerSelect", bootLayer);
       setVal("autoShiftSelect", autoShift);
       setVal("autoShiftTermInput", autoShiftMs);
 
@@ -644,6 +646,7 @@ function setupEventListeners() {
         chordalHold: chordalHold,
         retroTap: retroTap,
         numWordLayer: numWordLayer,
+        bootLayer: bootLayer,
         autoShift: autoShift,
         autoShiftMs: autoShiftMs,
         triLayers: triLayers,

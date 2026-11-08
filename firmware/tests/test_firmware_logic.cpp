@@ -49,6 +49,7 @@ static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
 static uint8_t retroTap = 0;
 static uint8_t numWordLayer = 1;
+static uint8_t bootLayer = 0;
 static uint8_t autoShift = 0;
 static uint16_t autoShiftMs = 175;
 static uint16_t leaderTimeoutMs = 1000;
@@ -221,6 +222,7 @@ void resetState() {
   chordalHold = 0;
   retroTap = 0;
   numWordLayer = 1;
+  bootLayer = 0;
   numWordActive = false;
   ttReset();
   autoShift = 0;
@@ -5100,7 +5102,7 @@ TEST(test_quick_tap_command_nvs_and_info) {
   assert(mockChar.value == "OK SET_QUICK_TAP 120");
   assert(quickTapMs == 120);
   handleConfigCommand("GET_INFO", false);
-  assert(mockChar.value.find("\"quick_tap_ms\":120") != std::string::npos);
+  assert(mockChar.value.find("\"qt\":120") != std::string::npos);
   quickTapMs = 0;
   loadKeymapFromNVS();
   assert(quickTapMs == 120);
@@ -10422,6 +10424,45 @@ TEST(test_num_word_stops_on_release_all_and_manual_layer_change) {
   toggleLayers[1] = false;                                        // Ebene von Hand gelöst
   setMillis(2100); pressKey(2, 1, true); pressKey(2, 1, false);
   assert(!numWordActive);
+}
+
+// Boot layer: bootLayer rastet die Ebene beim Start ein; TG_0 löst sie
+TEST(test_boot_layer_applies_at_boot_and_tg0_clears_it) {
+  resetState();
+  applyBootLayer();
+  assert(getActiveLayer() == 0);                   // bootLayer 0: keine Wirkung
+  bootLayer = 3;
+  applyBootLayer();
+  assert(getActiveLayer() == 3 && toggleLayers[3] && (layerLockedMask & (1u << 3)));
+  layerTimeoutMs = 1000;                           // der Rückfall lässt die Start-Ebene stehen
+  setMillis(0); layerTimeoutExpire(0);
+  setMillis(5000); layerTimeoutExpire(5000);
+  assert(getActiveLayer() == 3);
+  KEYMAP[3][2][2] = ACT_TG_BASE;
+  setMillis(100); pressKey(2, 2, true); pressKey(2, 2, false);
+  assert(getActiveLayer() == 0 && !toggleLayers[3]);
+}
+
+TEST(test_set_boot_layer_args_nvs_and_device_info) {
+  resetState();
+  for (const char* bad : {"SET_BOOT_LAYER 8", "SET_BOOT_LAYER -1", "SET_BOOT_LAYER abc", "SET_BOOT_LAYER 12"}) {
+    handleConfigCommand(bad, false);
+    assert(mockChar.value == std::string("ERR ARGS ") + bad);
+  }
+  assert(bootLayer == 0);
+  handleConfigCommand("SET_BOOT_LAYER 3", false);
+  assert(mockChar.value == "OK SET_BOOT_LAYER 3" && bootLayer == 3);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"bl\":3,") != std::string::npos && mockChar.value.size() < 512);
+  bootLayer = 0;
+  loadKeymapFromNVS();
+  assert(bootLayer == 3);
+  preferences.begin("dactyl", false);
+  preferences.putUChar("boot_layer", 9);
+  preferences.end();
+  bootLayer = 0;
+  loadKeymapFromNVS();
+  assert(bootLayer == 0);
 }
 
 TEST(test_set_num_word_layer_args_nvs_and_device_info) {

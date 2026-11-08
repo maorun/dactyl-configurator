@@ -26,7 +26,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, numWordLayer, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, numWordLayer, bootLayer, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -3125,6 +3125,10 @@ void loadKeymapFromNVS() {
     uint8_t nw = preferences.getUChar("nw_layer", 1);
     if (nw < NUM_LAYERS) numWordLayer = nw;
   }
+  if (preferences.isKey("boot_layer")) {
+    uint8_t bl = preferences.getUChar("boot_layer", 0);
+    if (bl < NUM_LAYERS) bootLayer = bl;
+  }
   if (preferences.isKey("auto_shift")) {
     uint8_t as = preferences.getUChar("auto_shift", 0);
     if (as <= AUTO_SHIFT_MAX_MODE) autoShift = as;
@@ -3463,6 +3467,23 @@ bool saveTriLayerToNVS(const uint8_t* rules, uint8_t n) {
   }
   Serial.printf("NVS: Tri-Layer %s: %u Regeln\n", ok ? "gespeichert" : "FEHLER", n);
   return ok;
+}
+
+bool saveBootLayerToNVS(uint8_t layer) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("boot_layer", layer) > 0;
+  preferences.end();
+  if (ok) bootLayer = layer;
+  Serial.printf("NVS: Boot-Ebene %s: %u\n", ok ? "gespeichert" : "FEHLER", layer);
+  return ok;
+}
+
+// bootLayer (1..7): rastet die Ebene beim Start und nach dem Deep Sleep als TG-Ebene ein. Sie gilt wie ein Lock (kein
+// layerTimeoutMs-Rückfall); TG_0 oder ein Umschalten der Ebene löst sie wie jede TG-Ebene.
+void applyBootLayer() {
+  if (bootLayer == 0 || bootLayer >= NUM_LAYERS) return;
+  toggleLayers[bootLayer] = true;
+  layerLockedMask |= (uint8_t)(1u << bootLayer);
 }
 
 bool saveNumWordLayerToNVS(uint8_t layer) {
@@ -4218,6 +4239,14 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_BOOT_LAYER ")) {
+    String arg = cmd.substring(15);
+    arg.trim();
+    if (arg.length() == 1 && arg.charAt(0) >= '0' && arg.charAt(0) <= '7') {
+      sendConfigNotification(saveBootLayerToNVS((uint8_t)(arg.charAt(0) - '0')) ? "OK SET_BOOT_LAYER " + arg : String("ERR NVS SET_BOOT_LAYER"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd.startsWith("SET_AUTO_SHIFT ")) {
     String arg = cmd.substring(15);
     arg.trim();
@@ -4561,12 +4590,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     sendConfigNotification("BLE_HOST:" + String((int)bleHostSlot));
 #endif
     char buf[768];
-    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"quick_tap_ms\":%u,\"pi\":%u,\"chordal_hold\":%u,\"rt\":%u,\"nwl\":%u,\"as\":%u,\"at\":%u,\"ld\":%u,\"ot\":%u,\"lt\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
+    int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"qt\":%u,\"pi\":%u,\"chordal_hold\":%u,\"rt\":%u,\"nwl\":%u,\"bl\":%u,\"as\":%u,\"at\":%u,\"ld\":%u,\"ot\":%u,\"lt\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
       m[0], m[1], m[2], m[3], m[4], m[5],
       (unsigned)standbyTimeoutMinutes, (unsigned)deepSleepTimeoutMinutes,
       (unsigned)debounceMs, (unsigned)comboTimeoutMs, (unsigned)tappingTermMs,
-      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)retroTap, (unsigned)numWordLayer, (unsigned)autoShift, (unsigned)autoShiftMs, (unsigned)leaderTimeoutMs, (unsigned)oneShotTimeoutMs, (unsigned)layerTimeoutMs, triJson, hostJson,
+      (unsigned)holdTapMode, (unsigned)quickTapMs, (unsigned)requirePriorIdleMs, (unsigned)chordalHold, (unsigned)retroTap, (unsigned)numWordLayer, (unsigned)bootLayer, (unsigned)autoShift, (unsigned)autoShiftMs, (unsigned)leaderTimeoutMs, (unsigned)oneShotTimeoutMs, (unsigned)layerTimeoutMs, triJson, hostJson,
       isConfigMode ? "true" : "false");
     if (n < 0 || n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
 #ifdef DEVICE_INFO_LEFT_FW

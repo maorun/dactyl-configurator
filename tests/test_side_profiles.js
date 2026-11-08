@@ -130,6 +130,18 @@ test("Einstellung numWordLayer: beide Sketche deklarieren sie, DactylLogic.h mel
   assert.ok(read("server.py").includes('uint8_t numWordLayer = {values["numWordLayer"]};'), "server.py rendert numWordLayer nicht");
 });
 
+test("Einstellung bootLayer: beide Sketche deklarieren sie und rufen applyBootLayer, DactylLogic.h meldet und setzt sie, der Server rendert sie", () => {
+  for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
+    assert.ok(/^uint8_t bootLayer = 0;$/m.test(src), `${name}: bootLayer fehlt im Sketch`);
+    assert.ok(/loadKeymapFromNVS\(\);\n\s*applyBootLayer\(\);/.test(src), `${name}: applyBootLayer muss auf loadKeymapFromNVS folgen`);
+  }
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  assert.ok(logic.includes('\\"bl\\":%u'), "GET_INFO meldet bl nicht");
+  assert.ok(logic.includes('cmd.startsWith("SET_BOOT_LAYER ")'), "SET_BOOT_LAYER fehlt");
+  assert.ok(logic.includes('"boot_layer"'), "NVS-Schlüssel boot_layer fehlt");
+  assert.ok(read("server.py").includes('uint8_t bootLayer = {values["bootLayer"]};'), "server.py rendert bootLayer nicht");
+});
+
 test("Einstellung chordalHold: beide Sketche deklarieren sie, DactylLogic.h meldet sie und der Server rendert sie", () => {
   for (const [name, src] of [["rechts", rightIno], ["links", leftIno]]) {
     assert.ok(/^uint8_t chordalHold = 0;$/m.test(src), `${name}: chordalHold fehlt im Sketch`);

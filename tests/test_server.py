@@ -706,6 +706,15 @@ class TestServerAndCodegen(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.generate_settings_cpp({"numWordLayer": -1})
 
+    def test_boot_layer_setting_renders_and_validates(self):
+        self.assertIn("uint8_t bootLayer = 0;", server.generate_settings_cpp({}))
+        self.assertIn("uint8_t bootLayer = 3;", server.generate_settings_cpp({"bootLayer": 3}))
+        self.assertIn("uint8_t bootLayer = 7;", server.generate_settings_cpp({"bootLayer": 7}))
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"bootLayer": 8})
+        with self.assertRaises(ValueError):
+            server.generate_settings_cpp({"bootLayer": -1})
+
     def test_sentence_case_code_matches_firmware_and_needs_key_press_combo(self):
         with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
             common = f.read()

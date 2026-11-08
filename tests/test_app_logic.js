@@ -3141,7 +3141,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|LAYER_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP|NUM_WORD_LAYER) |CLEAR_TAP_TERMS$)/.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|LAYER_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP|NUM_WORD_LAYER|BOOT_LAYER) |CLEAR_TAP_TERMS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -3229,8 +3229,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 20);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_LAYER_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "SET_NUM_WORD_LAYER", "CLEAR_TAP_TERMS"]);
+  assert.strictEqual(cmds.length, 21);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_LAYER_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "SET_NUM_WORD_LAYER", "SET_BOOT_LAYER", "CLEAR_TAP_TERMS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
@@ -3248,7 +3248,7 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(cmds[11].cmd, "SET_CAPS_LED 0");
   assert.strictEqual(ctx.build({ capsLed: 1 }, R)[11].cmd, "SET_CAPS_LED 1");
   // Die linke Hälfte hat keinen Host: kein Befehl
-  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 19);
+  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 20);
   // Auto Shift: Modus 0..4, Zeitlimit 50..500 (Standard 175); beide Befehle sind optional (ältere Firmware)
   const asCmd = (c, a) => c.find(x => x.ack === a);
   assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 0");
@@ -3263,6 +3263,10 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(asCmd(ctx.build({ numWordLayer: 4 }, R), "SET_NUM_WORD_LAYER").cmd, "SET_NUM_WORD_LAYER 4");
   assert.strictEqual(asCmd(ctx.build({ numWordLayer: 9 }, R), "SET_NUM_WORD_LAYER").cmd, "SET_NUM_WORD_LAYER 7");
   assert.strictEqual(asCmd(cmds, "SET_NUM_WORD_LAYER").optional, "args");
+  assert.strictEqual(asCmd(cmds, "SET_BOOT_LAYER").cmd, "SET_BOOT_LAYER 0");
+  assert.strictEqual(asCmd(ctx.build({ bootLayer: 3 }, R), "SET_BOOT_LAYER").cmd, "SET_BOOT_LAYER 3");
+  assert.strictEqual(asCmd(ctx.build({ bootLayer: 9 }, R), "SET_BOOT_LAYER").cmd, "SET_BOOT_LAYER 7");
+  assert.strictEqual(asCmd(cmds, "SET_BOOT_LAYER").optional, "args");
   assert.strictEqual(asCmd(ctx.build({ autoShift: 1 }, R), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 1");
   assert.strictEqual(asCmd(ctx.build({ autoShift: 7 }, L), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 4");
   assert.strictEqual(asCmd(ctx.build({ autoShift: 3 }, R), "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 3");
@@ -6307,7 +6311,7 @@ test("Tapping-Term-Tasten: Codes passen zur Firmware, Palette, Label und Rundlau
   const common = read("firmware/dactyl_right/DactylCommon.h");
   assert.match(common, /#define ACT_TT_UP\s+0x18E/);
   assert.match(common, /#define ACT_TT_DOWN\s+0x18F/);
-  assert.match(read("firmware/dactyl_right/DactylVersion.h"), /DACTYL_FW_VERSION 44/);
+  assert.match(read("firmware/dactyl_right/DactylVersion.h"), /DACTYL_FW_VERSION 45/);
   for (const [name, n] of [["TT_UP", 0x18E], ["TT_DOWN", 0x18F]]) {
     assert.strictEqual(api.actionCodeToNumeric(name), n);
     assert.strictEqual(api.keyToNumericActions({ tap: name }).tapCode, n);
@@ -6337,6 +6341,18 @@ test("Einstellung numWordLayer: Standard 1, Bereich 0..7, Sync-Befehl optional, 
   assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { numWordLayer: -2 } }, R).settings.numWordLayer, 0);
   assert.ok(read("js/serial.js").includes("info.nwl"));
   assert.ok(read("js/config-sync.js").includes('ack: "SET_NUM_WORD_LAYER", optional: "args"'));
+});
+
+test("Einstellung bootLayer: Standard 0, Bereich 0..7, bl aus DEVICE_INFO, Eingabefeld vorhanden", () => {
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: {} }, R).settings.bootLayer, 0);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { bootLayer: 3 } }, R).settings.bootLayer, 3);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { bootLayer: 9 } }, R).settings.bootLayer, 7);
+  assert.strictEqual(api.normalizeConfig({ layers: [[]], settings: { bootLayer: -2 } }, R).settings.bootLayer, 0);
+  assert.strictEqual(api.settingsFromDeviceInfo({ bl: 4 }, {}).bootLayer, 4);
+  assert.ok(read("js/serial.js").includes("info.bl"));
+  assert.ok(read("index.html").includes('id="bootLayerSelect"'));
+  assert.ok(read("js/editor-events.js").includes('bootLayerSelect'));
+  assert.ok(read("js/config-sync.js").includes('ack: "SET_BOOT_LAYER", optional: "args"'));
 });
 
 test("Sentence Case: Code passt zur Firmware, Tastenpalette, Label und Rundlauf; MODIFIER_HOLD-Combo wird abgelehnt", () => {
@@ -8432,7 +8448,7 @@ function openComboModal(pair) { openedPair = pair; }`);
 
 test("Diagnosebericht: enthält alle Felder aus den Beispieldaten", () => {
   const info = { side: "R", fw: 12, name: "Dactyl", standby_timeout: 5, sleep_timeout: 30, debounce_ms: 5, combo_timeout_ms: 50,
-    tapping_term_ms: 200, hold_tap_mode: 1, quick_tap_ms: 120, pi: 100, chordal_hold: 1, rt: 1, nwl: 2, as: 1, at: 175, ld: 2, ot: 3, lt: 4,
+    tapping_term_ms: 200, hold_tap_mode: 1, quick_tap_ms: 120, pi: 100, chordal_hold: 1, rt: 1, nwl: 2, bl: 3, qt: 120, as: 1, at: 175, ld: 2, ot: 3, lt: 4,
     config_mode: false, left_fw: 11,
     left_link: { up: 1, ms: 5000, ever: 1, losses: 2, rx_dropped: 0, key_dropped: 1, rssi: -60, rssi_min: -80 } };
   const diag = { reset: "power_on", uptimeS: 90, heapFree: 1000, heapMin: 800, loopMaxUs: 400, abnormal: false, at: 5 };

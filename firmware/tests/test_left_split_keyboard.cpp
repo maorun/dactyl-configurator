@@ -57,6 +57,7 @@ static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
 static uint8_t retroTap = 0;
 static uint8_t numWordLayer = 1;
+static uint8_t bootLayer = 0;
 static uint8_t autoShift = 0;
 static uint16_t autoShiftMs = 175;
 static uint8_t holdTapMode = 0;

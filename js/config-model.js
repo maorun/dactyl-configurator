@@ -23,6 +23,7 @@ const SETTINGS_RANGES = {
   chordalHold: [0, 1, 0],
   retroTap: [0, 1, 0],
   numWordLayer: [0, 7, 1],
+  bootLayer: [0, 7, 0],
   autoShift: [0, 4, 0],
   autoShiftMs: [50, 500, 175],
   capsLed: [0, 1, 0],
@@ -1219,6 +1220,7 @@ function normalizeConfig(cfg, profile) {
     chordalHold: clampSetting("chordalHold", s.chordalHold ?? 0),
     retroTap: clampSetting("retroTap", s.retroTap ?? 0),
     numWordLayer: clampSetting("numWordLayer", s.numWordLayer ?? 1),
+    bootLayer: clampSetting("bootLayer", s.bootLayer ?? 0),
     autoShift: clampSetting("autoShift", s.autoShift ?? 0),
     autoShiftMs: clampSetting("autoShiftMs", s.autoShiftMs ?? 175),
     triLayers: normalizeTriLayers(s.triLayers),
@@ -1899,7 +1901,7 @@ function settingsFromDeviceInfo(info, base) {
   const map = {
     standby_timeout: "standbyTimeoutMinutes", sleep_timeout: "sleepTimeoutMinutes", debounce_ms: "debounceMs",
     combo_timeout_ms: "comboTimeoutMs", tapping_term_ms: "tappingTermMs", hold_tap_mode: "holdTapMode",
-    quick_tap_ms: "quickTapMs", leader_timeout_ms: "leaderTimeoutMs", ld: "leaderTimeoutMs", lt: "layerTimeoutMs", require_prior_idle_ms: "requirePriorIdleMs", pi: "requirePriorIdleMs", chordal_hold: "chordalHold", rt: "retroTap", nwl: "numWordLayer", ot: "oneShotTimeoutMs",
+    quick_tap_ms: "quickTapMs", qt: "quickTapMs", leader_timeout_ms: "leaderTimeoutMs", ld: "leaderTimeoutMs", lt: "layerTimeoutMs", require_prior_idle_ms: "requirePriorIdleMs", pi: "requirePriorIdleMs", chordal_hold: "chordalHold", rt: "retroTap", nwl: "numWordLayer", bl: "bootLayer", ot: "oneShotTimeoutMs",
     as: "autoShift", at: "autoShiftMs"
   };
   for (const [key, field] of Object.entries(map)) if (info[key] !== undefined) out[field] = info[key];
@@ -3013,7 +3015,7 @@ function parseConfigImport(raw, profiles, activeSide) {
 const APP_VERSION = "1.0.0"; // gleich package.json (Test)
 const SUPPORT_REPORT_VERSION = 1;
 const SUPPORT_INFO_NUMBERS = ["fw", "standby_timeout", "sleep_timeout", "debounce_ms", "combo_timeout_ms", "tapping_term_ms",
-  "hold_tap_mode", "quick_tap_ms", "pi", "chordal_hold", "rt", "nwl", "as", "at", "ld", "ot", "lt"];
+  "hold_tap_mode", "quick_tap_ms", "qt", "pi", "chordal_hold", "rt", "nwl", "bl", "as", "at", "ld", "ot", "lt"];
 const SUPPORT_LINK_NUMBERS = ["up", "ms", "ever", "losses", "rx_dropped", "key_dropped", "rssi", "rssi_min"];
 const SUPPORT_DIAG_NUMBERS = ["uptimeS", "heapFree", "heapMin", "loopMaxUs", "sqMax", "sqDrop"];
 

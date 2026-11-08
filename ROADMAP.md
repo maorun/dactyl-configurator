@@ -19,7 +19,61 @@ Rules for this file:
 
 ## Priority 2
 
+### Deep-sleep key (`ACT_DEEP_SLEEP`)
+
+- **Rank:** Feature model. Total 28/40 (typing 5, configuration 6, harmony 8, safety 9). Effort S. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
+- **Problem:** The keyboard has no battery switch. Before transport, the user must wait for the timeout before the halves enter deep sleep.
+- **Goal:** Add the action `DEEP_SLEEP` (`ACT_DEEP_SLEEP`). A press arms deep sleep and waits until no key is held, so `ESP_EXT1_WAKEUP_ANY_HIGH` does not wake the board at once. Then the master sends `SPLIT_OP_SLEEP` to the left half and calls `enterDeepSleep()`. On the left half, the action enters deep sleep of the left half after key release. Increase `DACTYL_FW_VERSION`.
+- **Acceptance test:** A firmware test presses `DEEP_SLEEP`, verifies that deep sleep waits while the key is held, and expects `enterDeepSleep()` after the release.
+
+### Clear-state panic key (`ACT_CLEAR_STATE`)
+
+- **Rank:** Feature model. Total 28/40 (typing 6, configuration 4, harmony 9, safety 9). Effort S. Estimate.
+- **Area:** Firmware, App, Server.
+- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
+- **Problem:** When a toggled layer, layer lock, Caps Word, Num Word, Swap Hands, One-Shot modifier or repeating macro stays on by mistake, the user must find and undo each active state by hand.
+- **Goal:** Add the action `CLEAR_STATE` (`ACT_CLEAR_STATE`). A press stops running macros and mouse movement, releases all held HID keys, clears all toggled and locked layers back to layer 0, and turns off One-Shot modifiers, One-Shot layers, Caps Word, Num Word, Sentence Case, Swap Hands and Keep Awake. Increase `DACTYL_FW_VERSION`.
+- **Acceptance test:** A firmware test activates a toggled layer, Caps Word, Num Word and Swap Hands, presses `CLEAR_STATE` and expects layer 0 and all modes off.
+
+### Combo and leader preset templates (`COMBO_PRESETS`, `LEADER_PRESETS`)
+
+- **Rank:** Feature model. Total 27/40 (typing 5, configuration 7, harmony 8, safety 7). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/config-model.js`, `js/editor-events.js`, `js/leader-ui.js`.
+- **Problem:** Users must configure common combos and leader sequences manually key by key.
+- **Goal:** Add preset selectors in the combo and leader editors (`COMBO_PRESETS`, `LEADER_PRESETS`, `applyComboPreset`, `applyLeaderPreset`). Selecting a template inserts the combo or leader sequence as a pending change when a slot is free and the keys do not duplicate an existing entry.
+- **Acceptance test:** A unit test applies each combo and leader preset to an empty configuration and expects valid entries; a duplicate preset is rejected.
+
+### Per-key tapping term suggestions in the timing assistant (`computePerKeyTimingSuggestions`)
+
+- **Rank:** Feature model. Total 26/40 (typing 5, configuration 6, harmony 7, safety 8). Effort S. Estimate.
+- **Area:** App.
+- **Code:** `js/config-model.js`, `js/editor-events.js`.
+- **Problem:** A global `tappingTermMs` is too short for slow fingers and too long for fast home-row keys.
+- **Goal:** Extend the timing assistant with `computePerKeyTimingSuggestions(samples, config, profile)`. List Mod-Tap and Layer-Tap keys whose p95 hold time differs by at least 25 ms from `tappingTermMs` and add a button to apply the recommended per-key `tappingTerm` values as a pending change.
+- **Acceptance test:** A unit test feeds hold samples for two Mod-Tap keys and expects a per-key recommendation only for the outlier key.
+
+### Layer swap and move with reference updates (`swapLayersWithRefs`)
+
+- **Rank:** Feature model. Total 26/40 (typing 3, configuration 7, harmony 8, safety 8). Effort M. Estimate.
+- **Area:** App.
+- **Code:** `js/config-model.js`, `js/editor-events.js`.
+- **Problem:** Swapping two layers leaves `MO_n`, `TG_n`, `OSL_n`, `triLayers`, `bootLayer`, `numWordLayer`, combo `layerMask` and key override `layerMask` pointing to the old layer indices.
+- **Goal:** Update the layer swap tool (`swapLayersWithRefs(config, layerA, layerB)`) so that swapping layer A and layer B also swaps all references to A and B in key actions, combo actions, combo layer masks, key override layer masks, `triLayers`, `bootLayer` and `numWordLayer`.
+- **Acceptance test:** A unit test swaps layer 1 and layer 2 in a configuration with `MO_1`, `triLayers`, `bootLayer = 1` and a layer mask, and expects all references updated to layer 2; swapping twice restores the original configuration.
+
 ## Priority 3
+
+### Live status pills for active keyboard modes (`MODE_STATE`)
+
+- **Rank:** Feature model. Total 25/40 (typing 4, configuration 6, harmony 7, safety 8). Effort S. Estimate.
+- **Area:** Firmware, App.
+- **Code:** `firmware/dactyl_right/DactylLogic.h`, `js/side-routing.js`, `js/serial.js`, `index.html`.
+- **Problem:** The user cannot see in the app whether `Caps Word`, `Num Word`, `Sentence Case`, `Swap Hands` or `Keep Awake` is currently active on the keyboard.
+- **Goal:** Print `MODE_STATE:{"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1}` on USB serial of the master when a mode changes and on `GET_INFO` (never over BLE). Show active modes as pills in the app header and clear them on disconnect.
+- **Acceptance test:** A firmware test toggles `Caps Word` and `Keep Awake` and expects the matching `MODE_STATE:` line; a JS test parses the line and updates the state.
 
 ## Priority 4
 

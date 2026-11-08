@@ -53,7 +53,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              computeTimingRecommendations, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isBleHostCode,
+             macroSaveIndex, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isKeepAwakeCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -6390,7 +6390,7 @@ test("Tapping-Term-Tasten: Codes passen zur Firmware, Palette, Label und Rundlau
   const common = read("firmware/dactyl_right/DactylCommon.h");
   assert.match(common, /#define ACT_TT_UP\s+0x18E/);
   assert.match(common, /#define ACT_TT_DOWN\s+0x18F/);
-  assert.match(read("firmware/dactyl_right/DactylVersion.h"), /DACTYL_FW_VERSION 46/);
+  assert.match(read("firmware/dactyl_right/DactylVersion.h"), /DACTYL_FW_VERSION 47/);
   for (const [name, n] of [["TT_UP", 0x18E], ["TT_DOWN", 0x18F]]) {
     assert.strictEqual(api.actionCodeToNumeric(name), n);
     assert.strictEqual(api.keyToNumericActions({ tap: name }).tapCode, n);
@@ -6409,6 +6409,31 @@ test("Tapping-Term-Tasten: Codes passen zur Firmware, Palette, Label und Rundlau
   const norm = api.normalizeConfig(cfg, R);
   assert.strictEqual(norm.layers[0][2][1].tap, "TT_UP");
   api.validateConfigShape(norm, R);
+});
+
+test("Keep-awake: Code passt zur Firmware, Palette, Label und Rundlauf; Combos und linke Hälfte lehnen ihn ab", () => {
+  const common = read("firmware/dactyl_right/DactylCommon.h");
+  assert.match(common, /#define ACT_KEEP_AWAKE\s+0x190/);
+  assert.match(common, /#define KEEP_AWAKE_INTERVAL_MS\s+60000/);
+  assert.strictEqual(api.actionCodeToNumeric("KEEP_AWAKE"), 0x190);
+  assert.strictEqual(api.keyToNumericActions({ tap: "KEEP_AWAKE" }).tapCode, 0x190);
+  assert.ok(api.isKeepAwakeCode("KEEP_AWAKE") && api.isKeepAwakeCode("ACT_KEEP_AWAKE"));
+  assert.ok(!api.isKeepAwakeCode("TT_UP") && !api.isKeepAwakeCode(""));
+  assert.ok(api.KEYCODES.some(g => g.keys.some(k => k.code === "KEEP_AWAKE")));
+  assert.strictEqual(api.keyPressRole("KEEP_AWAKE"), "silent");
+  assert.strictEqual(api.ONE_SHOT_LABELS.KEEP_AWAKE, "Awake");
+  const copy = o => JSON.parse(JSON.stringify(o));
+  const cfg = copy(R.defaultConfig);
+  cfg.layers[0][2][1] = { tap: "KEEP_AWAKE" };
+  const norm = api.normalizeConfig(cfg, R);
+  assert.strictEqual(norm.layers[0][2][1].tap, "KEEP_AWAKE");
+  api.validateConfigShape(norm, R);
+  const combo = copy(R.defaultConfig);
+  combo.combos = [{ key1: { r: 2, c: 1 }, key2: { r: 2, c: 2 }, behavior: "KEY_PRESS", action: "KEEP_AWAKE" }];
+  assert.throws(() => api.validateConfigShape(combo, R), /Keep-awake/);
+  const left = copy(L.defaultConfig);
+  left.layers[0][2][1] = { tap: "KEEP_AWAKE" };
+  assert.throws(() => api.validateConfigShape(left, L), /Keep-awake/);
 });
 
 test("Einstellung numWordLayer: Standard 1, Bereich 0..7, Sync-Befehl optional, nwl aus DEVICE_INFO", () => {

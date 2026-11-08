@@ -117,6 +117,15 @@ test("Einstellung retroTap: beide Sketche deklarieren sie, DactylLogic.h meldet 
   assert.ok(read("server.py").includes('uint8_t retroTap = {values["retroTap"]};'), "server.py rendert retroTap nicht");
 });
 
+test("Keep-awake: nur der Master-Sketch ruft keepAwakeTick auf und beendet den Zustand im Standby", () => {
+  const right = read("firmware/dactyl_right/dactyl_right.ino");
+  assert.ok(right.includes("keepAwakeTick(millis());"), "keepAwakeTick fehlt in loop()");
+  const standby = right.slice(right.indexOf("void enterStandby()"), right.indexOf("void enterDeepSleep()"));
+  assert.ok(standby.includes("keepAwakeStop();"), "enterStandby beendet Keep-awake nicht");
+  assert.ok(right.includes("void keepAwakeStop();"), "Vorwärtsdeklaration von keepAwakeStop fehlt vor enterStandby");
+  assert.ok(!read("firmware/dactyl_left/dactyl_left.ino").includes("keepAwakeTick"), "die linke Hälfte hat keine Maus");
+});
+
 test("Einstellung numWordLayer: beide Sketche deklarieren sie, DactylLogic.h meldet und setzt sie, der Server rendert sie", () => {
   for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
     assert.ok(/^uint8_t numWordLayer = 1;$/m.test(src), `${name}: numWordLayer fehlt im Sketch`);

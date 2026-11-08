@@ -1007,6 +1007,7 @@ function validateConfigShape(cfg, profile) {
   if ((cfg.combos || []).some(cb => cb && isSwapHandsCode(cb.action))) throw new Error("Combos unterstützen kein Swap Hands.");
   if ((cfg.combos || []).some(cb => cb && isNumWordCode(cb.action))) throw new Error("Combos unterstützen kein Num Word.");
   if ((cfg.combos || []).some(cb => cb && isTtCode(cb.action))) throw new Error("Combos unterstützen keine Tapping-Term-Tasten.");
+  if ((cfg.combos || []).some(cb => cb && isKeepAwakeCode(cb.action))) throw new Error("Combos unterstützen kein Keep-awake.");
   if ((cfg.combos || []).some(cb => cb && isBleHostCode(cb.action))) throw new Error("Combos unterstützen keine BLE-Host-Slots.");
   // Den Slot hat nur der Master: auf der anderen Hälfte tun DM_REC und DM_PLAY nichts (wie validate_config in server.py)
   if (profile && !profile.master && Array.isArray(cfg.layers) &&
@@ -1023,6 +1024,13 @@ function validateConfigShape(cfg, profile) {
         return actions.some(isBleHostCode);
       })))) {
     throw new Error(`BLE-Host-Slots (HOST_1 .. HOST_3) gelten nur für die ${Dactyl.SIDE_PROFILES[Dactyl.getMasterSide()].label} (Master).`);
+  }
+  if (profile && !profile.master && Array.isArray(cfg.layers) &&
+      cfg.layers.some(layer => Array.isArray(layer) && layer.some(row => Array.isArray(row) && row.some(cell => {
+        const actions = typeof cell === "string" ? [cell] : (cell && typeof cell === "object" ? [cell.tap, cell.hold, cell.dtap] : []);
+        return actions.some(isKeepAwakeCode);
+      })))) {
+    throw new Error(`Keep-awake (KEEP_AWAKE) gilt nur für die ${Dactyl.SIDE_PROFILES[Dactyl.getMasterSide()].label} (Master).`);
   }
   if (cfg.layerNames !== undefined && !Array.isArray(cfg.layerNames)) throw new Error("'layerNames' muss eine Liste sein.");
   if (cfg.settings !== undefined && (typeof cfg.settings !== "object" || cfg.settings === null)) throw new Error("'settings' muss ein Objekt sein.");
@@ -1132,7 +1140,7 @@ function mirrorLayerAcrossSides(layer, srcProfile, dstProfile) {
         // Tastenpaare und Makros sind Listen je Hälfte: der Index würde auf der Zielhälfte etwas anderes meinen
         if (pairIndexFromCode(out[field]) >= 0 || macroIndexFromCode(out[field]) >= 0) out[field] = "NONE";
         // Host-Slots und dynamische Makros hat nur der Master; die andere Hälfte lehnt sie ab
-        if (!dstProfile.master && (isBleHostCode(out[field]) || isDynamicMacroCode(out[field]))) out[field] = "NONE";
+        if (!dstProfile.master && (isBleHostCode(out[field]) || isKeepAwakeCode(out[field]) || isDynamicMacroCode(out[field]))) out[field] = "NONE";
       }
       if (out.tap !== originalTap) {
         const def = findDefinitionByCode(actionCodeToNumeric(out.tap));
@@ -1634,7 +1642,7 @@ function keyPressRole(tap) {
   if (tap === "KEY_BACKSPACE") return "backspace";
   const n = actionCodeToNumeric(tap);
   const silent = n === 0 || (n >= 0x80 && n <= 0x87) || (n >= 0x100 && n <= 0x119) || (n >= 0x160 && n <= 0x167)
-    || (n >= 0x180 && n <= 0x18F);
+    || (n >= 0x180 && n <= 0x190);
   return silent ? "silent" : "typed";
 }
 

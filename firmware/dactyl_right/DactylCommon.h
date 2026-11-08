@@ -135,6 +135,10 @@
 #define ACT_TT_DOWN              0x18F
 #define TT_STEP_MS               10
 #define TT_SAVE_HOLD_MS          1000
+// Keep-awake: Tippen schaltet auf dem Master um; solange aktiv, schickt er alle KEEP_AWAKE_INTERVAL_MS einen Mausschritt von
+// +1 und -1 Pixel, wenn der Mac verbunden und der Config Mode aus ist. Ein Tastendruck beider Hälften startet die Frist neu
+#define ACT_KEEP_AWAKE           0x190
+#define KEEP_AWAKE_INTERVAL_MS   60000
 
 #define NUM_LAYERS 8
 

@@ -422,6 +422,10 @@ function setupEventListeners() {
       alert("Combos unterstützen keine Tapping-Term-Tasten. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
+    if (isKeepAwakeCode(action)) {
+      alert("Combos unterstützen kein Keep-awake. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
     if (isBleHostCode(action)) {
       alert("Combos unterstützen keine BLE-Host-Slots. Bitte eine normale Taste mit der Aktion belegen.");
       return;

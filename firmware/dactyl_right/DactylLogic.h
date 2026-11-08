@@ -371,7 +371,7 @@ bool isNumWordKeepAction(uint16_t a) {
     return a >= KEY_NUM_SLASH && a <= KEY_NUM_PERIOD;
   }
   if (a >= 0x100 && a <= 0x119) return true;                       // MO_n, TG_n, LAYER_UP, LAYER_DOWN
-  return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD || a == ACT_TT_UP || a == ACT_TT_DOWN;
+  return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD || a == ACT_TT_UP || a == ACT_TT_DOWN || a == ACT_KEEP_AWAKE;
 }
 
 void numWordStop() {
@@ -470,6 +470,38 @@ void ttExpire(unsigned long now) {
   if ((unsigned long)(now - ttChordMs) < TT_SAVE_HOLD_MS) return;
   ttSaved = true;
   saveTappingTermToNVS(tappingTermMs);
+}
+
+// -----------------------------------------------------------------------------
+// Keep-awake (ACT_KEEP_AWAKE)
+// -----------------------------------------------------------------------------
+// Nur der Master. Tippen schaltet keepAwakeActive um. Aktiv, schickt keepAwakeTick alle KEEP_AWAKE_INTERVAL_MS einen Mausschritt
+// +1 und danach -1 (Nettobewegung 0), wenn der Mac verbunden und der Config Mode aus ist. Jeder Tastendruck beider Hälften
+// (notePriorKeyPress) startet die Frist neu. Der Zustand liegt nur im RAM und endet bei RELEASE_ALL, Verlust des Hosts,
+// Config Mode (oslClearAll) und Standby.
+bool keepAwakeActive = false;
+unsigned long keepAwakeLastMs = 0;
+
+bool isKeepAwakeAction(uint16_t a) { return a == ACT_KEEP_AWAKE; }
+
+void keepAwakeStop() { keepAwakeActive = false; }
+
+void keepAwakeToggle(unsigned long now) {
+  // Einschalten nur mit Mac-Verbindung: keepAwakeTick beendet den Zustand sonst beim nächsten Aufruf ohne Hinweis
+  if (!keepAwakeActive && (isConfigMode || !bleKeyboard.isConnected())) return;
+  keepAwakeActive = !keepAwakeActive;
+  keepAwakeLastMs = now;
+  Serial.printf("KEEP_AWAKE: %s\n", keepAwakeActive ? "an" : "aus");
+}
+
+// Aufruf in loop(): nach KEEP_AWAKE_INTERVAL_MS ohne Tastendruck zwei Mausberichte mit entgegengesetztem Schritt
+void keepAwakeTick(unsigned long now) {
+  if (!keepAwakeActive) return;
+  if (isConfigMode || !bleKeyboard.isConnected()) { keepAwakeStop(); return; }
+  if ((unsigned long)(now - keepAwakeLastMs) < KEEP_AWAKE_INTERVAL_MS) return;
+  keepAwakeLastMs = now;
+  bleKeyboard.mouseMove(1, 0);
+  bleKeyboard.mouseMove(-1, 0);
 }
 
 // -----------------------------------------------------------------------------
@@ -656,6 +688,7 @@ void oslClearAll() {
   swapClearAll();
   numWordStop();
   ttReset();
+  keepAwakeStop();
   // Die Leader-Erfassung endet an denselben Stellen
   leaderReset();
   uint8_t before = getActiveLayer();
@@ -1566,7 +1599,7 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
     // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
     if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
         isDynamicMacroAction(action) || isOneShotAction(action) || isTextToggleAction(action) || action == ACT_LEADER ||
-        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || action == ACT_NUM_WORD || isTtAction(action) || isBleHostAction(action)) {
+        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || action == ACT_NUM_WORD || isTtAction(action) || isKeepAwakeAction(action) || isBleHostAction(action)) {
       leaderState.reset();
     }
     return false;
@@ -1690,6 +1723,15 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     ttPress(action, keyPressTime[r][c] ? keyPressTime[r][c] : millis());
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, action == ACT_TT_UP ? "TT_UP" : "TT_DOWN", action, currentLayer);
+    sendConfigNotification(String(buf));
+  } else if (isKeepAwakeAction(action)) {
+    // Der Druck wirkt sofort, auch auf einer Combo-Position (ADD_COMBO lehnt die Aktion nur als Combo-Aktion ab).
+    // Die linke Hälfte hat keine Maus: dort ohne Wirkung
+#ifdef DACTYL_BLE_HOST
+    if (!isConfigMode) keepAwakeToggle(keyPressTime[r][c] ? keyPressTime[r][c] : millis());
+#endif
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"KEEP_AWAKE\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
     sendConfigNotification(String(buf));
   } else if (action == ACT_LAYER_LOCK) {
     uint8_t newL = applyLayerLock();
@@ -2207,6 +2249,7 @@ uint32_t retroPressSeq = 0;
 // Einen Tastendruck vormerken (eigene Matrix oder Meldung der anderen Hälfte). Ein späterer Zeitpunkt gewinnt.
 void notePriorKeyPress(unsigned long at) {
   retroPressSeq++;
+  if (keepAwakeActive) keepAwakeLastMs = at;
   if (!priorKeyValid || (int32_t)(uint32_t)(at - priorKeyAt) > 0) priorKeyAt = at;
   priorKeyValid = true;
 }
@@ -4450,7 +4493,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isTtAction((uint16_t)act) && !isBleHostAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isTtAction((uint16_t)act) && !isKeepAwakeAction((uint16_t)act) && !isBleHostAction((uint16_t)act) &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;

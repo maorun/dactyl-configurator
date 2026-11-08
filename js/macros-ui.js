@@ -307,6 +307,59 @@ function deleteMacro(idx) {
   });
 }
 
+// Das gespeicherte Makro als JSON-Datei speichern: das im Editor geöffnete (ohne ungespeicherte Änderungen), sonst das letzte der Liste
+function exportMacroFromUI() {
+  const idx = macroEditSide === editSide && macroEditIndex >= 0 ? macroEditIndex : currentConfig.macros.length - 1;
+  const macro = currentConfig.macros[idx];
+  if (!macro) {
+    showToast("Kein Makro zum Exportieren vorhanden.");
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([JSON.stringify(buildMacroExport(macro), null, 2)], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dactyl_makro_${sanitizeCommandText(macro.name, "makro").replace(/[^A-Za-z0-9_-]+/g, "_")}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Eine Makro-Datei mit 32 Schritten ist weit unter 64 KB
+const MACRO_IMPORT_MAX_BYTES = 64 * 1024;
+
+// Importiert den Text einer Makro-Datei in den ersten freien Slot als Snapshot-Änderung
+function importMacroText(text) {
+  const result = parseMacroImport(text, currentConfig.macros);
+  if (!result.ok) {
+    showToast(`Makro-Import abgelehnt: ${result.error}`);
+    return false;
+  }
+  const old = { macros: JSON.parse(JSON.stringify(currentConfig.macros)) };
+  const next = { macros: JSON.parse(JSON.stringify(currentConfig.macros)) };
+  next.macros[result.index] = result.macro;
+  applyMacroState(next);
+  markPendingSync({
+    type: "macro",
+    snapshot: true,
+    macros: true,
+    title: `Makro ${result.index} importiert`,
+    description: `${result.macro.name}: ${macroSummary(result.macro)}`,
+    revert: () => applyMacroState(old)
+  });
+  showToast(`Makro ${result.index} importiert.`);
+  return true;
+}
+
+function importMacroFromFile(file) {
+  if (file.size > MACRO_IMPORT_MAX_BYTES) {
+    showToast("Makro-Import abgelehnt: Die Datei ist zu groß.");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => importMacroText(String(reader.result));
+  reader.onerror = () => showToast("Die Makro-Datei konnte nicht gelesen werden.");
+  reader.readAsText(file);
+}
+
 function initMacrosUI() {
   const codeSel = document.getElementById("macroStepCode");
   if (!codeSel) return;
@@ -331,6 +384,14 @@ function initMacrosUI() {
   document.getElementById("macroTextInput").addEventListener("input", updateMacroTextPreview);
   document.getElementById("btnMacroFromText").addEventListener("click", addMacroFromTextUI);
   document.getElementById("btnNewMacro").addEventListener("click", () => openMacroEditor(-1));
+  document.getElementById("btnExportMacro").addEventListener("click", exportMacroFromUI);
+  const macroFileInput = document.getElementById("macroImportInput");
+  document.getElementById("btnImportMacro").addEventListener("click", () => macroFileInput.click());
+  macroFileInput.addEventListener("change", e => {
+    const file = e.target.files && e.target.files[0];
+    if (file) importMacroFromFile(file);
+    e.target.value = "";
+  });
   document.getElementById("btnSaveMacro").addEventListener("click", saveMacroFromUI);
   document.getElementById("btnCancelMacro").addEventListener("click", closeMacroEditor);
   updateMacroStepInputs();

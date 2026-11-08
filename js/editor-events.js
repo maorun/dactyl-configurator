@@ -5,6 +5,33 @@
 // Öffnet den Combo-Dialog; setupEventListeners setzt die Funktion
 let openComboModal = () => {};
 
+// Legt eine Vorlage als neue Combo an (Snapshot-Änderung mit Undo)
+function applyComboPresetFromUI(presetKey) {
+  const result = applyComboPreset(presetKey, currentConfig);
+  if (result.error) {
+    showToast(result.error);
+    return false;
+  }
+  const old = JSON.parse(JSON.stringify(currentConfig.combos || []));
+  currentConfig.combos = result.combos;
+  renderCombosTable();
+  renderMatrix();
+  saveConfigToServer();
+  markPendingSync({
+    type: "combo_add",
+    snapshot: true,
+    title: "Combo-Chord aus Vorlage",
+    description: result.combo.name,
+    revert: () => {
+      currentConfig.combos = old;
+      renderCombosTable();
+      renderMatrix();
+      saveConfigToServer();
+    }
+  });
+  return true;
+}
+
 window.deleteCombo = function(id) {
   const deletedCombo = currentConfig.combos ? currentConfig.combos.find(c => c.id === id) : null;
   currentConfig.combos = currentConfig.combos.filter(c => c.id !== id);
@@ -343,6 +370,17 @@ function setupEventListeners() {
     comboModal.style.display = "flex";
   };
   document.getElementById("btnOpenAddComboModal").addEventListener("click", () => openComboModal());
+  const comboPresetSel = document.getElementById("comboPresetSelect");
+  Object.keys(COMBO_PRESETS).forEach(key => {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = COMBO_PRESETS[key].name;
+    comboPresetSel.appendChild(opt);
+  });
+  comboPresetSel.addEventListener("change", () => {
+    if (comboPresetSel.value) applyComboPresetFromUI(comboPresetSel.value);
+    comboPresetSel.value = "";
+  });
   // Tastenaufnahme: Druck auf Taste 1, 2, 3 der bearbeiteten Hälfte füllt die Auswahlfelder
   const btnCaptureCombo = document.getElementById("btnCaptureComboKeys");
   const comboKeySelectIds = ["comboKey1Select", "comboKey2Select", "comboKey3Select"];

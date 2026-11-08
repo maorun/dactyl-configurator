@@ -1536,6 +1536,87 @@ function suggestCombos(stats, config, profile, limit = COMBO_SUGGESTION_LIMIT) {
     .map(p => ({ a: p.a, b: p.b, count: p.count }));
 }
 
+// Combo-Vorlagen: häufige Zwei-Tasten-Combos. Die Tasten stehen als Tap-Aktion der Ebene 0 (nicht als Matrix-Platz),
+// weil die Matrix je Hälfte anders belegt ist; applyComboPreset sucht ihren Platz in der bearbeiteten Hälfte.
+const COMBO_PRESETS = {
+  esc_jk: { name: "J + K → Escape", keys: ["KEY_J", "KEY_K"], action: "KEY_ESC" },
+  backspace_ui: { name: "U + I → Backspace", keys: ["KEY_U", "KEY_I"], action: "KEY_BACKSPACE" },
+  delete_io: { name: "I + O → Delete", keys: ["KEY_I", "KEY_O"], action: "KEY_DELETE" },
+  tab_df: { name: "D + F → Tab", keys: ["KEY_D", "KEY_F"], action: "KEY_TAB" },
+  enter_kl: { name: "K + L → Enter", keys: ["KEY_K", "KEY_L"], action: "KEY_RETURN" },
+  space_cv: { name: "C + V → Space", keys: ["KEY_C", "KEY_V"], action: "KEY_SPACE" }
+};
+
+// Leader-Vorlagen: Folge von Tasten (nach LEADER) und eine Tasten-Aktion; unabhängig von der Matrix
+const LEADER_PRESETS = {
+  escape_e: { name: "E → Escape", keys: ["KEY_E"], action: "KEY_ESC" },
+  backspace_b: { name: "B → Backspace", keys: ["KEY_B"], action: "KEY_BACKSPACE" },
+  delete_d: { name: "D → Delete", keys: ["KEY_D"], action: "KEY_DELETE" },
+  tab_t: { name: "T → Tab", keys: ["KEY_T"], action: "KEY_TAB" },
+  enter_r: { name: "R → Enter", keys: ["KEY_R"], action: "KEY_RETURN" },
+  page_up_g_u: { name: "G, U → Bild ↑", keys: ["KEY_G", "KEY_U"], action: "KEY_PAGE_UP" },
+  page_down_g_d: { name: "G, D → Bild ↓", keys: ["KEY_G", "KEY_D"], action: "KEY_PAGE_DOWN" }
+};
+
+function presetByKey(table, presetKey) {
+  return typeof presetKey === "string" && Object.prototype.hasOwnProperty.call(table, presetKey) ? table[presetKey] : null;
+}
+
+// Erster Platz der Ebene 0 mit genau dieser Tap-Aktion ohne Halte- und Doppel-Tipp-Aktion (Zeilen, dann Spalten)
+function findPlainKeyPosition(config, code) {
+  for (let r = 0; r < NUM_ROWS; r++) {
+    for (let c = 0; c < NUM_COLS; c++) {
+      const a = lintCellAt(config, 0, r, c);
+      if (a.tap === code && a.hold === "NONE" && a.dtap === "NONE") return { r, c };
+    }
+  }
+  return null;
+}
+
+// Fügt die Combo-Vorlage als neue Combo an config.combos an. Ändert config nicht; liefert { combos, combo } mit der neuen
+// Liste oder { error } bei unbekannter Vorlage, voller Liste, fehlender Taste auf Ebene 0 oder vorhandener Combo mit denselben Tasten.
+function applyComboPreset(presetKey, config) {
+  const preset = presetByKey(COMBO_PRESETS, presetKey);
+  if (!preset) return { error: "Die Combo-Vorlage ist ungültig." };
+  const combos = Array.isArray(config && config.combos) ? config.combos : [];
+  if (combos.length >= MAX_COMBOS) return { error: `Alle ${MAX_COMBOS} Combo-Plätze sind belegt.` };
+  const positions = preset.keys.map(code => findPlainKeyPosition(config || {}, code));
+  if (positions.some(p => !p)) return { error: "Die Tasten der Vorlage fehlen auf Ebene 0 oder tragen eine Halte- oder Doppel-Tipp-Aktion." };
+  const id = list => list.map(k => `${k.r}_${k.c}`).sort().join("|");
+  if (combos.some(cb => cb && typeof cb === "object" && id(comboKeys(cb).filter(isValidComboKey)) === id(positions))) {
+    return { error: "Eine Combo mit denselben Tasten gibt es schon." };
+  }
+  const labelOf = (p, code) => {
+    const cell = config.layers[0][p.r][p.c];
+    return (cell && cell.label) || findDefinitionByCode(actionCodeToNumeric(code)).label;
+  };
+  const labels = positions.map((p, i) => labelOf(p, preset.keys[i]));
+  const actionLabel = findDefinitionByCode(actionCodeToNumeric(preset.action)).label;
+  const combo = {
+    id: "combo-" + Date.now(),
+    name: `${labels[0]} + ${labels[1]} -> ${actionLabel}`,
+    key1: { ...positions[0], label: labels[0] },
+    key2: { ...positions[1], label: labels[1] },
+    behavior: "KEY_PRESS",
+    action: preset.action,
+    actionLabel
+  };
+  return { combos: [...JSON.parse(JSON.stringify(combos)), combo], combo };
+}
+
+// Fügt die Leader-Vorlage als neue Sequenz an. Ändert die Liste nicht; liefert { sequences, sequence } oder { error }
+// bei unbekannter Vorlage, voller Liste oder vorhandener Sequenz mit denselben Tasten.
+function applyLeaderPreset(presetKey, sequences) {
+  const preset = presetByKey(LEADER_PRESETS, presetKey);
+  if (!preset) return { error: "Die Leader-Vorlage ist ungültig." };
+  if (!Array.isArray(sequences)) return { error: "Die Leader-Liste ist ungültig." };
+  const sequence = normalizeLeaderSequence({ keys: preset.keys, action: preset.action });
+  if (!isValidLeaderSequence(sequence)) return { error: "Die Leader-Vorlage ist ungültig." };
+  if (sequences.length >= MAX_LEADER_SEQS) return { error: `Alle ${MAX_LEADER_SEQS} Leader-Plätze sind belegt.` };
+  if (hasDuplicateLeaderSequence([...sequences, sequence])) return { error: "Eine Leader-Sequenz mit denselben Tasten gibt es schon." };
+  return { sequences: [...JSON.parse(JSON.stringify(sequences)), sequence], sequence };
+}
+
 // Alt-Repeat-Paare aus den häufigsten Folgen eines Fingers: je Folge a|b die Richtungen a → b und b → a, damit die
 // Alt-Repeat-Taste (eines anderen Fingers) die zweite Taste der Folge ersetzt. Tasten kommen aus der Tap-Aktion der
 // Ebene 0 (normale Taste oder Modifier, 1..255). Vorhandene Auslöser, doppelte und ungültige Richtungen entfallen,

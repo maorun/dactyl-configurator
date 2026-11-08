@@ -345,9 +345,14 @@
             <h3>Tasten-Kombinationen (Combos / Chords)</h3>
             <p class="subtitle">Drücke 2 Tasten gleichzeitig, um eine alternative Aktion oder einen Modifier (z.B. Strg, Alt, Escape) auszulösen.</p>
           </div>
-          <button id="btnOpenAddComboModal" class="btn btn-primary">
-            + Neue Combo hinzufügen
-          </button>
+          <div>
+            <select id="comboPresetSelect" class="form-control" title="Vorlage als neue Combo anlegen (Tasten auf Ebene 0)" aria-label="Combo-Vorlage">
+              <option value="">Combo-Vorlage …</option>
+            </select>
+            <button id="btnOpenAddComboModal" class="btn btn-primary">
+              + Neue Combo hinzufügen
+            </button>
+          </div>
         </div>
 
         <div class="combos-list-card">
@@ -471,6 +476,9 @@
               <strong>→</strong>
               <select id="leaderActionSelect" class="form-control" title="Aktion der Sequenz"></select>
               <button id="btnCaptureLeader" class="btn btn-secondary btn-sm" type="button" aria-pressed="false">Auf Tastatur drücken</button>
+              <select id="leaderPresetSelect" class="form-control" title="Vorlage als neue Sequenz anlegen" aria-label="Leader-Vorlage">
+                <option value="">Leader-Vorlage …</option>
+              </select>
               <button id="btnAddLeader" class="btn btn-primary btn-sm" type="button">+ Sequenz hinzufügen</button>
             </div>
             <table class="combos-table">

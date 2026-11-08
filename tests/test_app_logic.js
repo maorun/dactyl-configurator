@@ -53,7 +53,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              computeTimingRecommendations, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isKeepAwakeCode, isDeepSleepCode, isClearStateCode, isBleHostCode,
+             macroSaveIndex, COMBO_PRESETS, LEADER_PRESETS, applyComboPreset, applyLeaderPreset, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isKeepAwakeCode, isDeepSleepCode, isClearStateCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -8851,4 +8851,138 @@ test("Heatmap-CSV: Button in index.html und Download in js/heatmap.js", () => {
   assert.ok(read("index.html").includes('id="btnHeatmapCsv"') && read("index.html").includes("Als CSV speichern"));
   assert.ok(/buildHeatmapCsv\(/.test(read("js/heatmap.js")) && read("js/heatmap.js").includes('"btnHeatmapCsv"'));
   assert.ok(read("js/heatmap.js").includes("\\uFEFF") && read("js/heatmap.js").includes("showToast("));
+});
+
+// Combo- und Leader-Vorlagen
+function presetConfig(keys) {
+  const cfg = ergoConfig();
+  keys.forEach((code, i) => { cfg.layers[0][1 + Math.floor(i / 6)][i % 6] = { label: code.slice(4), tap: code, hold: "NONE", dtap: "NONE" }; });
+  cfg.combos = [];
+  return cfg;
+}
+const PRESET_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map(l => `KEY_${l}`);
+
+test("Combo-Vorlagen: jede Vorlage ergibt auf leerer Config eine gültige Combo", () => {
+  const keys = Object.keys(api.COMBO_PRESETS);
+  assert.ok(keys.length >= 4);
+  for (const key of keys) {
+    const cfg = presetConfig(PRESET_ALPHABET);
+    const r = api.applyComboPreset(key, cfg);
+    assert.ok(!r.error, `${key}: ${r.error}`);
+    assert.strictEqual(r.combos.length, 1);
+    const cb = r.combos[0];
+    assert.strictEqual(cb.behavior, "KEY_PRESS");
+    assert.strictEqual(cb.action, api.COMBO_PRESETS[key].action);
+    assert.ok(cb.key1.r !== cb.key2.r || cb.key1.c !== cb.key2.c);
+    assert.strictEqual(cfg.layers[0][cb.key1.r][cb.key1.c].tap, api.COMBO_PRESETS[key].keys[0]);
+    assert.strictEqual(cfg.layers[0][cb.key2.r][cb.key2.c].tap, api.COMBO_PRESETS[key].keys[1]);
+    assert.strictEqual(cfg.combos.length, 0, "ändert die Config nicht");
+    assert.ok(api.validateConfigShape({ ...cfg, combos: r.combos }) !== false);
+  }
+});
+
+test("Combo-Vorlagen: Duplikat, volle Liste, fehlende Taste und ungültiger Schlüssel werden abgelehnt", () => {
+  const cfg = presetConfig(PRESET_ALPHABET);
+  const first = api.applyComboPreset("esc_jk", cfg);
+  const dup = api.applyComboPreset("esc_jk", { ...cfg, combos: first.combos });
+  assert.ok(dup.error && !dup.combos);
+  // Dieselben Tasten mit anderer Aktion zählen auch als Duplikat
+  const swapped = { ...cfg, combos: [{ ...first.combos[0], key1: first.combos[0].key2, key2: first.combos[0].key1, action: "KEY_A" }] };
+  assert.ok(api.applyComboPreset("esc_jk", swapped).error);
+  const full = Array.from({ length: 16 }, (_, i) => ({ id: `c${i}`, key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, action: "KEY_A" }));
+  assert.ok(api.applyComboPreset("backspace_ui", { ...cfg, combos: full }).error);
+  assert.ok(api.applyComboPreset("esc_jk", presetConfig(["KEY_J"])).error); // K fehlt
+  const held = presetConfig(PRESET_ALPHABET);
+  const pos = JSON.parse(JSON.stringify(first.combos[0].key1));
+  held.layers[0][pos.r][pos.c].hold = "KEY_LEFT_CTRL";
+  assert.ok(api.applyComboPreset("esc_jk", held).error);
+  for (const bad of ["", "nope", "__proto__", "constructor", null, 3]) assert.ok(api.applyComboPreset(bad, cfg).error, String(bad));
+});
+
+test("Leader-Vorlagen: jede Vorlage ergibt auf leerer Liste eine gültige Sequenz", () => {
+  const keys = Object.keys(api.LEADER_PRESETS);
+  assert.ok(keys.length >= 4);
+  for (const key of keys) {
+    const empty = [];
+    const r = api.applyLeaderPreset(key, empty);
+    assert.ok(!r.error, key);
+    assert.strictEqual(r.sequences.length, 1);
+    assert.ok(api.isValidLeaderSequence(r.sequences[0]), key);
+    assert.ok(!api.hasDuplicateLeaderSequence(r.sequences), key);
+    assert.strictEqual(empty.length, 0);
+  }
+  const all = Object.keys(api.LEADER_PRESETS).reduce((list, key) => api.applyLeaderPreset(key, list).sequences, []);
+  assert.strictEqual(all.length, Object.keys(api.LEADER_PRESETS).length);
+});
+
+test("Leader-Vorlagen: Duplikat, volle Liste und ungültiger Schlüssel werden abgelehnt", () => {
+  const one = api.applyLeaderPreset("escape_e", []).sequences;
+  assert.ok(api.applyLeaderPreset("escape_e", one).error);
+  const full = Array.from({ length: api.MAX_LEADER_SEQS }, (_, i) => ({ keys: [PRESET_ALPHABET[i % 26], PRESET_ALPHABET[(i + 7) % 26]], action: "KEY_A" }));
+  assert.ok(api.applyLeaderPreset("tab_t", full).error);
+  for (const bad of ["", "nope", "__proto__", null, 3]) assert.ok(api.applyLeaderPreset(bad, []).error, String(bad));
+  assert.ok(api.applyLeaderPreset("tab_t", null).error);
+});
+
+test("Combo- und Leader-Vorlagen: Auswahlfelder in index.html und Anwendung in der UI", () => {
+  const html = read("index.html");
+  assert.ok(html.includes('id="comboPresetSelect"') && html.includes('id="leaderPresetSelect"'));
+  assert.ok(/applyComboPreset\(/.test(read("js/editor-events.js")) && read("js/editor-events.js").includes("snapshot: true"));
+  assert.ok(/applyLeaderPreset\(/.test(read("js/leader-ui.js")) && read("js/leader-ui.js").includes("snapshot: true"));
+});
+
+test("Combo-Vorlagen: ein ungültiger Eintrag in der Liste wirft nicht", () => {
+  const cfg = presetConfig(PRESET_ALPHABET);
+  cfg.combos = [null, 5, "x"];
+  const r = api.applyComboPreset("esc_jk", cfg);
+  assert.ok(!r.error && r.combos.length === 4);
+});
+
+// Verhalten der UI-Funktionen mit Stubs: Einfügen, Undo und unveränderter Zustand bei Fehler
+function presetUiContext(file, startMarker, endMarker, extra) {
+  const calls = { toasts: [], pending: [], saved: 0 };
+  const c = {
+    calls, currentConfig: extra.config,
+    showToast: m => calls.toasts.push(m), saveConfigToServer: () => { calls.saved++; },
+    markPendingSync: ch => calls.pending.push(ch), renderLeaderSequences() {}, renderCombosTable() {}, renderMatrix() {},
+    leaderCodeLabel: x => x,
+    applyComboPreset: api.applyComboPreset, applyLeaderPreset: api.applyLeaderPreset, leaderSequenceLabel: api.leaderSequenceLabel
+  };
+  vm.createContext(c);
+  vm.runInContext(section(file, startMarker, endMarker), c);
+  return c;
+}
+
+test("Leader-Vorlage in der UI: Einfügen mit Undo, Fehler ändern nichts", () => {
+  const u = presetUiContext("js/leader-ui.js", "// Legt eine Vorlage als neue Sequenz an", "function deleteLeaderSequence",
+    { config: { leaderSequences: [] } });
+  assert.strictEqual(u.applyLeaderPresetFromUI("tab_t"), true);
+  assert.strictEqual(u.currentConfig.leaderSequences.length, 1);
+  assert.strictEqual(u.calls.pending[0].snapshot, true);
+  u.calls.pending[0].revert();
+  assert.strictEqual(u.currentConfig.leaderSequences.length, 0);
+  u.applyLeaderPresetFromUI("tab_t");
+  const saved = u.calls.saved, pend = u.calls.pending.length;
+  assert.strictEqual(u.applyLeaderPresetFromUI("tab_t"), false); // Duplikat
+  assert.strictEqual(u.applyLeaderPresetFromUI("nope"), false);
+  assert.strictEqual(u.currentConfig.leaderSequences.length, 1);
+  assert.strictEqual(u.calls.saved, saved);
+  assert.strictEqual(u.calls.pending.length, pend);
+  assert.strictEqual(u.calls.toasts.length, 2);
+});
+
+test("Combo-Vorlage in der UI: Einfügen mit Undo, volle Liste ändert nichts", () => {
+  const cfg = presetConfig(PRESET_ALPHABET);
+  const u = presetUiContext("js/editor-events.js", "// Legt eine Vorlage als neue Combo an", "window.deleteCombo", { config: cfg });
+  assert.strictEqual(u.applyComboPresetFromUI("esc_jk"), true);
+  assert.strictEqual(u.currentConfig.combos.length, 1);
+  assert.strictEqual(u.calls.pending[0].snapshot, true);
+  u.calls.pending[0].revert();
+  assert.strictEqual(u.currentConfig.combos.length, 0);
+  u.currentConfig.combos = Array.from({ length: 16 }, (_, i) => ({ id: `c${i}`, key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, action: "KEY_A" }));
+  const pend = u.calls.pending.length, saved = u.calls.saved;
+  assert.strictEqual(u.applyComboPresetFromUI("tab_df"), false);
+  assert.strictEqual(u.currentConfig.combos.length, 16);
+  assert.strictEqual(u.calls.pending.length, pend);
+  assert.strictEqual(u.calls.saved, saved);
 });

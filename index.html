@@ -508,6 +508,9 @@
             <p class="subtitle">Ein Makro spielt Schritte nacheinander ab: Tippen, Drücken, Loslassen und Pausen (1 bis 5000 ms). Mit Drücken und Loslassen entstehen Kürzel, z. B. <code>Cmd</code> drücken, <code>c</code> tippen, <code>Cmd</code> loslassen. Weise das Makro danach im Tasten-Inspektor einer Taste als Tap-, Halte- oder Doppel-Tipp-Aktion zu. Ein Druck während des Ablaufs startet das Makro nicht erneut. Combos unterstützen keine Makros.</p>
           </div>
           <div>
+            <select id="macroPresetSelect" class="form-control" title="Vorlage in das geöffnete Makro oder in den ersten freien Platz laden" aria-label="Makro-Vorlage">
+              <option value="">Makro-Vorlage …</option>
+            </select>
             <button id="btnExportMacro" class="btn btn-secondary btn-sm" type="button" title="Das geöffnete oder letzte gespeicherte Makro als Datei speichern">Makro exportieren</button>
             <button id="btnImportMacro" class="btn btn-secondary btn-sm" type="button" title="Makro aus Datei in den ersten freien Platz laden">Makro importieren</button>
             <input type="file" id="macroImportInput" accept=".json" style="display: none;">
@@ -1187,13 +1190,13 @@
   <script src="js/side-routing.js?v=6"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=3"></script>
-  <script src="js/config-model.js?v=11"></script>
+  <script src="js/config-model.js?v=12"></script>
   <script src="js/editor.js?v=7"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/key-overrides-ui.js?v=2"></script>
   <script src="js/leader-ui.js?v=2"></script>
   <script src="js/alt-repeats-ui.js?v=1"></script>
-  <script src="js/macros-ui.js?v=3"></script>
+  <script src="js/macros-ui.js?v=4"></script>
   <script src="js/layout-profiles-ui.js?v=2"></script>
   <script src="js/flash-log.js?v=1"></script>
   <script src="js/editor-events.js?v=8"></script>

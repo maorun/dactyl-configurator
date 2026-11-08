@@ -349,6 +349,31 @@ function importMacroText(text) {
   return true;
 }
 
+// Lädt eine Vorlage in den Slot des geöffneten Makros, sonst in den ersten freien Platz (Snapshot-Änderung mit Undo)
+function applyMacroPresetFromUI(presetKey) {
+  const editing = macroEditSide === editSide && macroEditIndex >= 0;
+  const idx = editing ? macroEditIndex : currentConfig.macros.length;
+  const macros = applyMacroPreset(presetKey, idx, currentConfig.macros);
+  if (!macros) {
+    showToast(idx >= MAX_MACROS ? `Alle ${MAX_MACROS} Makro-Plätze sind belegt.` : "Die Makro-Vorlage ist ungültig.");
+    return false;
+  }
+  const old = { macros: JSON.parse(JSON.stringify(currentConfig.macros)) };
+  const hadDraft = macroEditSide !== null;
+  if (hadDraft) closeMacroEditor();
+  applyMacroState({ macros });
+  if (hadDraft) showToast(`Der offene Entwurf wurde durch die Vorlage "${macros[idx].name}" ersetzt.`);
+  markPendingSync({
+    type: "macro",
+    snapshot: true,
+    macros: true,
+    title: `Makro ${idx} aus Vorlage`,
+    description: `${macros[idx].name}: ${macroSummary(macros[idx])}`,
+    revert: () => applyMacroState(old)
+  });
+  return true;
+}
+
 function importMacroFromFile(file) {
   if (file.size > MACRO_IMPORT_MAX_BYTES) {
     showToast("Makro-Import abgelehnt: Die Datei ist zu groß.");
@@ -384,6 +409,17 @@ function initMacrosUI() {
   document.getElementById("macroTextInput").addEventListener("input", updateMacroTextPreview);
   document.getElementById("btnMacroFromText").addEventListener("click", addMacroFromTextUI);
   document.getElementById("btnNewMacro").addEventListener("click", () => openMacroEditor(-1));
+  const presetSel = document.getElementById("macroPresetSelect");
+  Object.keys(MACRO_PRESETS).forEach(key => {
+    const opt = document.createElement("option");
+    opt.value = key;
+    opt.textContent = MACRO_PRESETS[key].name;
+    presetSel.appendChild(opt);
+  });
+  presetSel.addEventListener("change", () => {
+    if (presetSel.value) applyMacroPresetFromUI(presetSel.value);
+    presetSel.value = "";
+  });
   document.getElementById("btnExportMacro").addEventListener("click", exportMacroFromUI);
   const macroFileInput = document.getElementById("macroImportInput");
   document.getElementById("btnImportMacro").addEventListener("click", () => macroFileInput.click());

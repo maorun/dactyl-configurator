@@ -200,6 +200,7 @@
             <option value="us_qwerty">US QWERTY</option>
           </select>
           <button id="btnApplyPreset" class="btn btn-outline btn-sm">Preset anwenden</button>
+          <button id="btnLayoutTemplates" class="btn btn-outline btn-sm" type="button" title="Basis-Layouts und Ebenen-Vorlagen auf eine Ebene anwenden">Belegungsvorlagen</button>
         </div>
       </div>
 
@@ -912,6 +913,29 @@
         </div>
       </div>
     </main>
+
+    <!-- Modal: Belegungsvorlagen (Basis-Layouts und Ebenen-Vorlagen auf eine Ebene anwenden) -->
+    <div class="modal-backdrop" id="layoutTemplatesModal" style="display: none;">
+      <div class="modal-dialog">
+        <div class="modal-header">
+          <h4>Belegungsvorlagen</h4>
+          <button class="modal-close" id="btnCloseLayoutTemplates">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="modal-form-grid">
+            <label for="layoutTemplateSelect">Vorlage</label>
+            <select id="layoutTemplateSelect" class="form-control"></select>
+            <label for="layoutTemplateLayer">Ziel-Ebene</label>
+            <select id="layoutTemplateLayer" class="form-control"></select>
+          </div>
+          <p class="form-hint">Die Vorlage ersetzt alle Tasten der Ziel-Ebene. Die Änderung lässt sich in der Änderungsliste rückgängig machen.</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCancelLayoutTemplates">Abbrechen</button>
+          <button class="btn btn-primary" id="btnApplyLayoutTemplate">Vorlage anwenden</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Modal: Spickzettel (Druckansicht aller benutzten Ebenen beider Hälften) -->
     <div class="modal-backdrop" id="layerSheetModal" style="display: none;">

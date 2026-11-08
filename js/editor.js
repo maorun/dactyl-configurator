@@ -87,6 +87,78 @@ function applyLayerToolFromUI() {
   });
 }
 
+// Dialog "Belegungsvorlagen": Vorlage und Ziel-Ebene wählen, als Snapshot vormerken (Undo über die Änderungsliste)
+function openLayoutTemplatesDialog() {
+  const modal = document.getElementById("layoutTemplatesModal");
+  if (!modal) return;
+  if (!activeProfile().presets) {
+    showToast(`Für die ${activeProfile().label} gibt es keine Belegungsvorlagen.`, 5000);
+    return;
+  }
+  const select = document.getElementById("layoutTemplateSelect");
+  select.innerHTML = "";
+  for (const [kind, title] of [["base", "Basis-Layouts"], ["layer", "Ebenen-Vorlagen"]]) {
+    const group = document.createElement("optgroup");
+    group.label = title;
+    for (const [key, preset] of Object.entries(LAYOUT_PRESETS)) {
+      if (preset.kind !== kind) continue;
+      const opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = preset.name;
+      group.appendChild(opt);
+    }
+    select.appendChild(group);
+  }
+  const layerSel = document.getElementById("layoutTemplateLayer");
+  layerSel.innerHTML = "";
+  const names = currentConfig.layerNames || DEFAULT_LAYER_NAMES;
+  for (let l = 0; l < NUM_LAYERS; l++) {
+    const opt = document.createElement("option");
+    opt.value = String(l);
+    opt.textContent = `L${l} (${names[l] || `Layer ${l}`})`;
+    layerSel.appendChild(opt);
+  }
+  layerSel.value = String(activeLayerIndex);
+  modal.style.display = "flex";
+}
+
+function closeLayoutTemplatesDialog() {
+  const modal = document.getElementById("layoutTemplatesModal");
+  if (modal) modal.style.display = "none";
+}
+
+function applyLayoutTemplateFromUI() {
+  const presetKey = document.getElementById("layoutTemplateSelect").value;
+  const targetLayer = parseInt(document.getElementById("layoutTemplateLayer").value, 10);
+  const next = applyLayoutPreset(currentConfig, presetKey, targetLayer);
+  if (!next) {
+    showToast("Vorlage oder Ziel-Ebene ist ungültig.");
+    return;
+  }
+  const preset = LAYOUT_PRESETS[presetKey];
+  const names = currentConfig.layerNames || DEFAULT_LAYER_NAMES;
+  const label = `L${targetLayer} (${names[targetLayer] || `Layer ${targetLayer}`})`;
+  if (!confirm(`Vorlage "${preset.name}" auf ${label} anwenden? Die Ebene wird ersetzt; Halte-, Doppel-Tipp- und Ebenen-Tasten dieser Ebene gehen verloren.`)) return;
+  const oldLayers = currentConfig.layers;
+  currentConfig.layers = next.layers;
+  closeLayoutTemplatesDialog();
+  renderMatrix();
+  if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+  saveConfigToServer();
+  markPendingSync({
+    type: "layout_template",
+    snapshot: true,
+    title: "Belegungsvorlage angewendet",
+    description: `${preset.name} (${label})`,
+    revert: () => {
+      currentConfig.layers = oldLayers;
+      renderMatrix();
+      if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+      saveConfigToServer();
+    }
+  });
+}
+
 // Hälfte, von der gerade eine Taste gezogen wird (null = kein Ziehen)
 let keyDragSource = null;
 
@@ -264,6 +336,15 @@ function initUI() {
         });
       }
     });
+  }
+
+  // Belegungsvorlagen: Dialog mit Vorlage und Ziel-Ebene
+  const btnTemplates = document.getElementById("btnLayoutTemplates");
+  if (btnTemplates) {
+    btnTemplates.addEventListener("click", openLayoutTemplatesDialog);
+    document.getElementById("btnCloseLayoutTemplates").addEventListener("click", closeLayoutTemplatesDialog);
+    document.getElementById("btnCancelLayoutTemplates").addEventListener("click", closeLayoutTemplatesDialog);
+    document.getElementById("btnApplyLayoutTemplate").addEventListener("click", applyLayoutTemplateFromUI);
   }
 
   // Ebenen-Werkzeuge: Kopieren / Tauschen / Leeren der angezeigten Ebene
@@ -899,6 +980,11 @@ function updateSideLabels() {
   if (presetBtn) {
     presetBtn.disabled = !profile.presets;
     presetBtn.title = profile.presets ? "" : `Für die ${profile.label} gibt es keine Layout-Presets`;
+  }
+  const templatesBtn = document.getElementById("btnLayoutTemplates");
+  if (templatesBtn) {
+    templatesBtn.disabled = !profile.presets;
+    templatesBtn.title = profile.presets ? "Basis-Layouts und Ebenen-Vorlagen auf eine Ebene anwenden" : `Für die ${profile.label} gibt es keine Belegungsvorlagen`;
   }
 }
 

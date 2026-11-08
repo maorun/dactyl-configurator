@@ -101,7 +101,8 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_MASTER_PRESS = 29, // nur Master -> links: eine Taste des Masters wurde gedrückt (retroTap, Tipp-Pause), ohne Werte
   SPLIT_OP_SENTENCE_CASE_TOGGLE = 30, // links -> Master: Satzanfang groß umschalten, ohne Werte
   SPLIT_OP_MOUSE_SPEED = 31,  // beide Richtungen: gehaltene Mauspräzisions-Tasten des Absenders (code Bit 0 = MOUSE_SLOW, Bit 1 = MOUSE_FAST), arg 0
-  SPLIT_OP_COUNT = 32
+  SPLIT_OP_CLEAR_STATE = 32,  // links -> Master: One-Shot-Modifier, Caps Word und Satzanfang groß beenden (CLEAR_STATE), ohne Werte
+  SPLIT_OP_COUNT = 33
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -196,6 +197,7 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
     case SPLIT_OP_CAPS_WORD_TOGGLE:
     case SPLIT_OP_SENTENCE_CASE_TOGGLE:
     case SPLIT_OP_KEY_LOCK:
+    case SPLIT_OP_CLEAR_STATE:
       return ev.code == 0 && ev.arg == 0;
     case SPLIT_OP_LAYER_STATE:
       return isValidSplitLayerEvent(ev);
@@ -342,10 +344,11 @@ inline bool splitDisconnectedDeepSleepDue(SplitDisconnectedSleep &s, bool config
 // KEY_EVENT zählte in Heatmap und Statistik doppelt; ein verlorenes kostet nur eine Anzeige.
 // MOUSE_MOVE bewegt den Zeiger bei jedem Paket: ein Duplikat sprang doppelt, ein verlorener Schritt fällt nicht auf.
 // CAPS_WORD_TOGGLE und SENTENCE_CASE_TOGGLE schalten um: ein Duplikat nähme das Umschalten zurück, ein verlorenes Paket tippt man neu.
+// CLEAR_STATE: ein verspätetes Duplikat löschte Caps Word oder Satzanfang groß, die der Nutzer danach wieder einschaltete.
 // MASTER_PRESS geht nur Master -> links und nie durch diese Warteschlange.
 inline bool splitEventRetryable(const SplitHidEvent &ev) {
   return ev.op != SPLIT_OP_MOUSE_SCROLL && ev.op != SPLIT_OP_MOUSE_MOVE && ev.op != SPLIT_OP_KEY_EVENT &&
-         ev.op != SPLIT_OP_CAPS_WORD_TOGGLE && ev.op != SPLIT_OP_SENTENCE_CASE_TOGGLE;
+         ev.op != SPLIT_OP_CAPS_WORD_TOGGLE && ev.op != SPLIT_OP_SENTENCE_CASE_TOGGLE && ev.op != SPLIT_OP_CLEAR_STATE;
 }
 
 // -----------------------------------------------------------------------------
@@ -1199,6 +1202,8 @@ struct SplitHidSink {
   virtual void leftOneShotRelease(uint8_t mask, bool arm) = 0;
   virtual void leftCapsWordToggle() = 0;
   virtual void leftSentenceCaseToggle() = 0;
+  // CLEAR_STATE: One-Shot-Modifier, Caps Word und Satzanfang groß beenden
+  virtual void leftClearState() {}
   // Key lock (DactylKeyLock.h). Ohne Überschreibung wirkt ein sperrbarer Druck wie ein gewöhnlicher.
   virtual void leftKeyPressLockable(uint8_t code) { leftKeyPress(code); }
   virtual void leftMousePressLockable(uint8_t buttons) { leftMousePress(buttons); }
@@ -1369,6 +1374,9 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
     case SPLIT_OP_KEY_LOCK:
       sink.leftKeyLockArm();
       return true;
+    case SPLIT_OP_CLEAR_STATE:
+      sink.leftClearState();
+      return true;
     default:
       return false;
   }
@@ -1447,6 +1455,7 @@ inline bool splitIsPressOp(uint8_t op) {
     case SPLIT_OP_ONE_SHOT_PRESS:
     case SPLIT_OP_CAPS_WORD_TOGGLE:
     case SPLIT_OP_SENTENCE_CASE_TOGGLE:
+    case SPLIT_OP_CLEAR_STATE:   // wartende Einzel-Tipps des Masters laufen vor dem Löschen, nicht danach
       return true;
     default:
       return false;
@@ -1821,6 +1830,11 @@ public:
   }
   void capsWordToggle() { ::capsWordToggle(oneShot); }
   void sentenceCaseToggle() { ::sentenceCaseToggle(oneShot); }
+  // Clear-state key: auch den Dauermodus (Satzanfang groß) beenden, anders als beim Host-Verlust
+  void clearState() {
+    right.oneShot = 0;   // eine noch gehaltene One-Shot-Taste löst später nichts mehr aus
+    oneShotReset(oneShot);
+  }
 
   // --- Key lock (DactylKeyLock.h) ---
   void keyLockArm() { klArm(keyLock); }
@@ -1984,6 +1998,7 @@ public:
   void leftOneShotRelease(uint8_t mask, bool arm) override { oneShotKeyUp(oneShot, mask, arm); }
   void leftCapsWordToggle() override { ::capsWordToggle(oneShot); }
   void leftSentenceCaseToggle() override { ::sentenceCaseToggle(oneShot); }
+  void leftClearState() override { clearState(); }
 
 private:
   SplitHeldSet right = {};
@@ -2297,7 +2312,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
                              SplitRxAppliedFn onBeforeLeftPress = nullptr, SplitRxAppliedFn onRepeat = nullptr,
                              SplitRxAppliedFn onHoldResolve = nullptr,
                              unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS,
-                             SplitRxAppliedFn onOsl = nullptr, SplitRxAppliedFn onMouseSpeed = nullptr) {
+                             SplitRxAppliedFn onOsl = nullptr, SplitRxAppliedFn onMouseSpeed = nullptr,
+                             SplitRxAppliedFn onClearState = nullptr) {
   SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -2363,6 +2379,20 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
       kbd.splitLeft.linkUp = true;
       speedEv = ev;
       haveSpeed = true;
+      continue;
+    }
+
+    // CLEAR_STATE räumt auch den Zustand des Masters wie ein eigener Druck, also auch ohne Mac. Die Modi des
+    // Masters (One-Shot, Caps Word, Satzanfang groß) bleiben ohne Host ohnehin leer; die Ereignisse gehen nicht an den Report.
+    if (ev.op == SPLIT_OP_CLEAR_STATE) {
+      kbd.splitLeft.lastRxMs = nowMs;
+      kbd.splitLeft.linkUp = true;
+      if (hostReady) splitApplyHidEvent(kbd.splitLeft, ev, nowMs, kbd);
+      if (onClearState) onClearState(ev);
+      if (hostReady) {
+        if (rep.applied < 255) rep.applied++;
+        if (onApplied) onApplied(ev);
+      }
       continue;
     }
 

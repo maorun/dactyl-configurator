@@ -236,7 +236,17 @@ Rules for this file:
 - Master: `enterDeepSleep()` sends `SPLIT_OP_SLEEP` (`sendSplitSleep()`) to the left half and sleeps. Left half: the key on the left half enters its own `enterDeepSleep()` after the release. A key on one half does not wake or sleep the other half, unless the master sends `SPLIT_OP_SLEEP`.
 - The request lives in RAM only. `enterConfigMode()` clears it (`deepSleepClear`); a press in config mode changes nothing, and `deepSleepKeyDue` drops a request that meets config mode.
 - The key is no combo action: `ADD_COMBO`, `server.py` (`DEEP_SLEEP_CPP`) and the app reject it. It ends a Leader capture. The key works on both halves.
-- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 48; flash both halves.
+- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` was 48 for this key; flash both halves.
+
+### Clear-state key (`ACT_CLEAR_STATE`)
+
+- `ACT_CLEAR_STATE` (`0x192`, app name `CLEAR_STATE`, keycap label `Clear`) is a panic key. One press resets the half and, through the master, the shared text modes. The key sends no keycode.
+- `clearStatePress()` (`DactylLogic.h`) stops a running macro and all mouse movement (`stopMacro`, `resetMouseMove`), calls `oslClearAll()` (One-Shot layers, Num Word, Swap Hands, Tapping-Term keys, Keep-awake, Leader capture), clears every toggle layer and the Layer Lock mask (back to layer 0), drops a deep-sleep request, and releases all held HID keys (`releaseAll`).
+- `bleKeyboard.clearState()` resets the One-Shot state on the master (`oneShotReset`): One-Shot modifiers, Caps Word and Sentence Case. Unlike a host loss, it also switches off the Sentence Case mode. On the left half, the proxy sends `SPLIT_OP_CLEAR_STATE` (32, left -> master, no values) after `RELEASE_ALL`; the master runs it with `leftClearState()`. The packet is never retried (a late duplicate would undo a mode that the user turned on again) and counts as a press op (waiting master taps go first). The master also runs `clearStatePress()` itself, like a local press and also without a Mac connection (`onSplitClearState` under `configMutex`; a busy mutex sets `clearStatePending` and `processSplitEvents` retries at the next pass), so a press on the left half also stops its macro, mouse movement, toggle layers, Num Word, Swap Hands, Leader capture and Keep-awake. It also clears a held One-Shot key in the arbitrated report.
+- A press on the master does not clear the left half: the master sends no clear packet, so macros, Num Word, Swap hands and Leader capture on the left half stay on. Press the key on that half too. The toggle layers of the left half follow the normal layer sync.
+- Layer state of the other half follows through the normal layer sync. A key that is still held stays physically down; release and press it again.
+- The key is no combo action: `ADD_COMBO`, `server.py` (`CLEAR_STATE_CPP`) and the app reject it. It keeps Num Word on (`isNumWordKeepAction`; the key then ends Num Word itself) and ends a Leader capture. It works on both halves.
+- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 49; flash both halves.
 
 ### Key lock (`ACT_KEY_LOCK`, `DactylKeyLock.h`)
 

@@ -443,9 +443,11 @@ public:
 
   // One-Shot-Modifier und Caps Word: der Master führt den Zustand; der Mock protokolliert nur die Aufrufe
   static constexpr int SENTENCE_CASE_EVENT = 1000000; // Satzanfang groß umschalten
+  static constexpr int CLEAR_STATE_EVENT = 1000001;   // Clear-state key: alle Modi beenden
   std::vector<int> oneShotEvents; // +mask = press, -mask = release, 0 = Caps Word umschalten, SENTENCE_CASE_EVENT = Satzanfang groß umschalten
   void oneShotPress(uint8_t mask) { oneShotEvents.push_back(mask); }
   void oneShotRelease(uint8_t mask) { oneShotEvents.push_back(-(int)mask); }
   void capsWordToggle() { oneShotEvents.push_back(0); }
   void sentenceCaseToggle() { oneShotEvents.push_back(SENTENCE_CASE_EVENT); }
+  void clearState() { oneShotEvents.push_back(CLEAR_STATE_EVENT); }
 };

@@ -197,6 +197,7 @@ void stopMacro(bool releaseKeys);
 void resetMouseMove();
 void oslClearAll();
 void keepAwakeStop();
+void clearStatePress();
 void deepSleepClear();
 void keyLockReleaseAll();
 void swapClearAll();
@@ -840,16 +841,35 @@ static void onSplitMouseSpeed(const SplitHidEvent &ev) {
   applyRemoteMouseSpeed((uint8_t)ev.code, millis());
 }
 
+// CLEAR_STATE der linken Hälfte: der Master räumt seinen Zustand wie bei einem eigenen Druck (unter configMutex)
+// Ein belegter Mutex verwirft das Paket nicht: processSplitEvents versucht es beim nächsten Durchlauf erneut.
+static bool clearStatePending = false;
+static void runClearStateOnMaster() {
+  if (configMutex && xSemaphoreTake(configMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+    Serial.println("WARN: configMutex busy, CLEAR_STATE der linken Hälfte wird wiederholt");
+    clearStatePending = true;
+    return;
+  }
+  clearStatePending = false;
+  clearStatePress();
+  if (configMutex) xSemaphoreGive(configMutex);
+}
+static void onSplitClearState(const SplitHidEvent &ev) {
+  (void)ev;
+  runClearStateOnMaster();
+}
+
 // Ereignisse der linken Hälfte aus loop() ausführen (Logik: splitProcessRx in DactylSplitHid.h)
 void processSplitEvents(unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
   if (!splitRxReady) return;
+  if (clearStatePending) runClearStateOnMaster();
   unsigned long now = millis();
   bool hostReady = !isConfigMode && bleKeyboard.isConnected();
   bool linkWasUp = bleKeyboard.splitLeft.linkUp;
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
                                      hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer,
                                      onSplitBeforeLeftPress, onSplitRepeat, onSplitHoldResolve,
-                                     linkTimeoutMs, onSplitOsl, onSplitMouseSpeed);
+                                     linkTimeoutMs, onSplitOsl, onSplitMouseSpeed, onSplitClearState);
   // Mac getrennt oder Config Mode: nichts bleibt vorgemerkt (auch die eigene Vormerkung)
   if (rep.hostLost) oslClearAll();
   // Linke Hälfte gerade erreichbar (Start, Aufwachen): sofort den Layer-Zustand des Masters senden

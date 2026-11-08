@@ -422,6 +422,10 @@ function setupEventListeners() {
       alert("Combos unterstützen keine Tapping-Term-Tasten. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
+    if (isClearStateCode(action)) {
+      alert("Combos unterstützen kein Clear State. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
     if (isDeepSleepCode(action)) {
       alert("Combos unterstützen kein Deep Sleep. Bitte eine normale Taste mit der Aktion belegen.");
       return;

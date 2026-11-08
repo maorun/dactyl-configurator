@@ -88,7 +88,8 @@ const KEYCODES = [
     { code: "TT_UP", label: "Tapping Term +10 ms (beide lange halten: speichern)", char: "" },
     { code: "TT_DOWN", label: "Tapping Term -10 ms (beide lange halten: speichern)", char: "" },
     { code: "KEEP_AWAKE", label: "Keep-awake (alle 60 s Mausschritt, nur Master)", char: "" },
-    { code: "DEEP_SLEEP", label: "Deep Sleep (nach dem Loslassen aller Tasten)", char: "" }
+    { code: "DEEP_SLEEP", label: "Deep Sleep (nach dem Loslassen aller Tasten)", char: "" },
+    { code: "CLEAR_STATE", label: "Clear State (Ebenen und alle Modi zurücksetzen)", char: "" }
   ]},
   { group: "Funktionstasten (F1 bis F12)", keys: [
     { code: "KEY_F1", label: "F1", char: "" }, { code: "KEY_F2", label: "F2", char: "" },
@@ -308,6 +309,7 @@ const ACTION_TO_NUMERIC = {
   "TT_DOWN": 0x18F,
   "KEEP_AWAKE": 0x190,
   "DEEP_SLEEP": 0x191,
+  "CLEAR_STATE": 0x192,
 
   // Mouse Actions (0x130..0x13A)
   "MOUSE_LEFT": 0x130,
@@ -349,7 +351,7 @@ const ONE_SHOT_LABELS = {
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
   CAPS_WORD: "CapsWd", SENTENCE_CASE: "Sentence", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
   DM_REC: "DM Rec", DM_PLAY: "DM Play", LEADER: "Leader", KEY_LOCK: "KeyLock",
-  HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3", SWAP_HANDS: "Swap", NUM_WORD: "NumWd", TT_UP: "TT+", TT_DOWN: "TT-", KEEP_AWAKE: "Awake", DEEP_SLEEP: "Sleep"
+  HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3", SWAP_HANDS: "Swap", NUM_WORD: "NumWd", TT_UP: "TT+", TT_DOWN: "TT-", KEEP_AWAKE: "Awake", DEEP_SLEEP: "Sleep", CLEAR_STATE: "Clear"
 };
 
 // true für die Leader-Taste (keine Combo-Aktion)
@@ -385,6 +387,11 @@ function isKeepAwakeCode(code) {
 // true für die Deep-sleep-Taste (beide Hälften, keine Combo-Aktion)
 function isDeepSleepCode(code) {
   return /^(ACT_)?DEEP_SLEEP$/.test(String(code || ""));
+}
+
+// true für die Clear-state-Taste (beide Hälften, keine Combo-Aktion)
+function isClearStateCode(code) {
+  return /^(ACT_)?CLEAR_STATE$/.test(String(code || ""));
 }
 
 // true für BLE-Host-Slots HOST_1 .. HOST_3 (nur Master, keine Combo-Aktion)

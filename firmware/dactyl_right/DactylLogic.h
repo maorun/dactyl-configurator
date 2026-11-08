@@ -371,7 +371,7 @@ bool isNumWordKeepAction(uint16_t a) {
     return a >= KEY_NUM_SLASH && a <= KEY_NUM_PERIOD;
   }
   if (a >= 0x100 && a <= 0x119) return true;                       // MO_n, TG_n, LAYER_UP, LAYER_DOWN
-  return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD || a == ACT_TT_UP || a == ACT_TT_DOWN || a == ACT_KEEP_AWAKE || a == ACT_DEEP_SLEEP;
+  return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD || a == ACT_TT_UP || a == ACT_TT_DOWN || a == ACT_KEEP_AWAKE || a == ACT_DEEP_SLEEP || a == ACT_CLEAR_STATE;
 }
 
 void numWordStop() {
@@ -524,6 +524,11 @@ bool deepSleepKeyDue(bool configMode, bool anyKeyHeld) {
   deepSleepRequested = false;
   return true;
 }
+
+// -----------------------------------------------------------------------------
+// Clear-state key (ACT_CLEAR_STATE)
+// -----------------------------------------------------------------------------
+bool isClearStateAction(uint16_t a) { return a == ACT_CLEAR_STATE; }
 
 // -----------------------------------------------------------------------------
 // One-Shot-Ebene (OSL_0 .. OSL_7)
@@ -1571,6 +1576,23 @@ uint8_t applyLayerLock() {
   return getActiveLayer();
 }
 
+// Druck von ACT_CLEAR_STATE: stoppt Makro und Mausbewegung, löst alle gehaltenen Tasten, rastet jede Ebene aus und beendet
+// One-Shot-Ebenen, Num Word, Swap hands, Leader, Keep-awake sowie (über bleKeyboard.clearState) One-Shot-Modifier,
+// Caps Word und Satzanfang groß. Die Tapping-Term-Tasten und eine Deep-sleep-Anforderung räumt oslClearAll bzw. der Aufrufer.
+void clearStatePress() {
+  uint8_t before = getActiveLayer();
+  stopMacro(false);
+  resetMouseMove();
+  oslClearAll();
+  for (int i = 1; i < NUM_LAYERS; i++) toggleLayers[i] = false;
+  layerLockedMask = 0;
+  deepSleepClear();
+  if (!isConfigMode && bleKeyboard.isConnected()) bleKeyboard.releaseAll();
+  bleKeyboard.clearState();
+  uint8_t after = getActiveLayer();
+  if (after != before) Serial.printf("LAYER: CLEAR_STATE -> Layer %d\n", after);
+}
+
 // -----------------------------------------------------------------------------
 // Leader-Folgen (ACT_LEADER): nach der Leader-Taste sammelt die Hälfte bis zu LEADER_MAX_KEYS Tasten
 // -----------------------------------------------------------------------------
@@ -1620,7 +1642,7 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
     // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
     if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
         isDynamicMacroAction(action) || isOneShotAction(action) || isTextToggleAction(action) || action == ACT_LEADER ||
-        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || action == ACT_NUM_WORD || isTtAction(action) || isKeepAwakeAction(action) || isDeepSleepAction(action) || isBleHostAction(action)) {
+        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || action == ACT_NUM_WORD || isTtAction(action) || isKeepAwakeAction(action) || isDeepSleepAction(action) || isClearStateAction(action) || isBleHostAction(action)) {
       leaderState.reset();
     }
     return false;
@@ -1759,6 +1781,12 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     if (!isConfigMode) deepSleepRequested = true;
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"DEEP_SLEEP\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
+    sendConfigNotification(String(buf));
+  } else if (isClearStateAction(action)) {
+    // Beide Hälften: die eigene Hälfte räumt auf; die linke bittet den Master um das Löschen seiner Text-Modi
+    clearStatePress();
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"CLEAR_STATE\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
     sendConfigNotification(String(buf));
   } else if (action == ACT_LAYER_LOCK) {
     uint8_t newL = applyLayerLock();
@@ -4520,7 +4548,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isTtAction((uint16_t)act) && !isKeepAwakeAction((uint16_t)act) && !isDeepSleepAction((uint16_t)act) && !isBleHostAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isTtAction((uint16_t)act) && !isKeepAwakeAction((uint16_t)act) && !isDeepSleepAction((uint16_t)act) && !isClearStateAction((uint16_t)act) && !isBleHostAction((uint16_t)act) &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;

@@ -10974,6 +10974,49 @@ TEST(test_deep_sleep_key_as_mod_tap_tap_arms_sleep) {
   deepSleepClear();
 }
 
+// Clear-state key (ACT_CLEAR_STATE): ein Druck setzt Ebenen und alle Modi zurück
+TEST(test_clear_state_key_resets_layers_and_all_modes) {
+  assert(ACT_CLEAR_STATE == 0x192 && ACT_CLEAR_STATE > ACT_DEEP_SLEEP && DACTYL_FW_VERSION >= 49);
+  nwSetup();
+  uint8_t mirror = swapMirrorCol(5, 4);
+  KEYMAP[0][5][4] = ACT_CLEAR_STATE;
+  KEYMAP[0][5][mirror] = ACT_CLEAR_STATE;          // Swap hands spiegelt die Suche: beide Stellen belegt
+  setMillis(1000);
+  toggleLayers[3] = true;                           // TG-Ebene
+  toggleLayers[5] = true; layerLockedMask = (uint8_t)(1u << 5);   // LAYER_LOCK-Ebene
+  numWordPress(1000);                               // Num Word rastet Ebene 1 ein
+  swapLocked = true;
+  oslArmed = 0x04;
+  keepAwakeActive = true;
+  leaderState.start(1000);
+  bleKeyboard.oneShotEvents.clear();
+  macroRun.active = true;
+  mouseMoveActive[2][2] = true;
+  assert(getActiveLayer() != 0);
+  setMillis(2000); pressKey(5, 4, true); pressKey(5, 4, false);
+  assert(getActiveLayer() == 0);
+  for (int l = 1; l < NUM_LAYERS; l++) assert(!toggleLayers[l]);
+  assert(layerLockedMask == 0 && !numWordActive && !swapLocked && !swapActive());
+  assert(oslArmed == 0 && !keepAwakeActive && !leaderState.active);
+  assert(!macroRun.active && !mouseMoveActive[2][2]);
+  assert((bleKeyboard.oneShotEvents == std::vector<int>{BleKeyboard::CLEAR_STATE_EVENT}));
+  assert(bleKeyboard.pressedKeys.empty() && bleKeyboard.writtenKeys.empty());
+}
+
+TEST(test_clear_state_key_releases_held_keys_and_is_no_combo_action) {
+  resetState();
+  KEYMAP[0][5][4] = ACT_CLEAR_STATE;
+  KEYMAP[0][2][1] = 'a';
+  setMillis(1000); pressKey(2, 1, true);
+  assert(!bleKeyboard.pressedKeys.empty());
+  setMillis(1100); pressKey(5, 4, true); pressKey(5, 4, false);
+  assert(bleKeyboard.pressedKeys.empty());          // releaseAll
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 402", false);   // ACT_CLEAR_STATE = 0x192
+  assert(numCombos == 0);
+  assert(isNumWordKeepAction(ACT_CLEAR_STATE));
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

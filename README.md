@@ -239,6 +239,7 @@ dactyl_configurator/
 | `0x80` .. `0x87` | HID Modifier | `KEY_LEFT_GUI`, `KEY_LEFT_ALT` | Modifier-Hold |
 | `0x100` .. `0x107` | Momentary Layer | `ACT_MO_0` .. `ACT_MO_7` | Ebene aktiv, solange Taste gehalten wird |
 | `0x110` .. `0x117` | Toggle Layer | `ACT_TG_0` .. `ACT_TG_7` | Einrastende Ebene; `TG_0` setzt auf Base zurück |
+| `0x193` .. `0x19A` | Tap-Toggle Layer | `ACT_TT_BASE` + n (`TT_0` .. `TT_7`) | Halten: Ebene wie `MO_n`; zweimal schnell tippen: Ebene einrasten wie `TG_n` |
 | `0x118` | Layer +1 Hoch | `ACT_LAYER_UP` (`LAYER_UP`) | Schaltet 1 Ebene höher (`0 ➔ 1 ➔ ... ➔ 7 ➔ 0`) |
 | `0x119` | Layer -1 Runter | `ACT_LAYER_DOWN` (`LAYER_DOWN`) | Schaltet 1 Ebene tiefer (`0 ➔ 7 ➔ ... ➔ 1 ➔ 0`) |
 | `0x16A` | Layer Lock | `ACT_LAYER_LOCK` (`LAYER_LOCK`) | Rastet die gehaltene `MO_n`-Ebene ein; zweiter Druck löst sie |

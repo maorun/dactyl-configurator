@@ -191,6 +191,7 @@ Keys in the matrix use `uint16_t` action codes:
 | `0xF0` .. `0xFB` | Function Keys F13..F24 | `KEY_F13` (0xF0) to `KEY_F24` (0xFB) |
 | `0x100` .. `0x107` | Momentary Layer (`MO_0`..`MO_7`) | Activates target layer while held; `MO_0` forces temporary return to Base Layer 0 |
 | `0x110` .. `0x117` | Toggle Layer (`TG_0`..`TG_7`) | Toggles layer on/off; `TG_0` clears all toggled layers and resets to Base Layer 0 |
+| `0x193` .. `0x19A` | Tap-Toggle Layer (`TT_0`..`TT_7`) | Hold activates the layer like `MO_n`; two quick taps toggle it like `TG_n`; see `FEATURES.md`, section "Tap-Toggle layer keys" |
 | `0x118` | Layer +1 Up (`LAYER_UP`) | `ACT_LAYER_UP` (`0x118`) steps +1 to next layer (wrapping `7 -> 0`) |
 | `0x119` | Layer -1 Down (`LAYER_DOWN`) | `ACT_LAYER_DOWN` (`0x119`) steps -1 to previous layer (wrapping `0 -> 7`) |
 | `0x16A` | Layer Lock (`LAYER_LOCK`) | Locks the highest held `MO_n` layer as a toggle layer; a second press, or a press without a held `MO_n`, releases it; see `FEATURES.md`, section "Layer lock" |

@@ -487,6 +487,10 @@ function setupEventListeners() {
       alert("Combos unterstützen keine One-Shot-Ebene. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
+    if (isTapToggleCode(action)) {
+      alert("Combos unterstützen keine Tap-Toggle-Ebene. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
     if (isLeaderCode(action)) {
       alert("Combos unterstützen kein Leader. Bitte eine normale Taste mit der Aktion belegen.");
       return;

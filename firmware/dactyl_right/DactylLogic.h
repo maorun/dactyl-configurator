@@ -371,6 +371,7 @@ bool isNumWordKeepAction(uint16_t a) {
     return a >= KEY_NUM_SLASH && a <= KEY_NUM_PERIOD;
   }
   if (a >= 0x100 && a <= 0x119) return true;                       // MO_n, TG_n, LAYER_UP, LAYER_DOWN
+  if (isTapToggleAction(a)) return true;
   return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD || a == ACT_TT_UP || a == ACT_TT_DOWN || a == ACT_KEEP_AWAKE || a == ACT_DEEP_SLEEP || a == ACT_CLEAR_STATE;
 }
 
@@ -420,6 +421,57 @@ void numWordExpire(unsigned long now) {
   if (!numWordActive) return;
   if (!toggleLayers[numWordOn]) { numWordActive = false; return; }
   if ((unsigned long)(now - numWordLastMs) >= NUM_WORD_IDLE_MS) numWordStop();
+}
+
+// -----------------------------------------------------------------------------
+// Tap-Toggle-Ebenen (ACT_TT_BASE + n)
+// -----------------------------------------------------------------------------
+// Halten aktiviert die Ebene wie MO_n. Ein kurzer Tipp (kürzer als der Tapping-Term) merkt sich das Loslassen; ein zweiter
+// Druck innerhalb des Tapping-Terms ab diesem Loslassen schaltet die Ebene wie TG_n um. Der Zustand liegt nur im RAM.
+bool tapToggleArmed[NUM_LAYERS] = {false};
+unsigned long tapTogglePressMs[NUM_LAYERS] = {0};
+unsigned long tapToggleReleaseMs[NUM_LAYERS] = {0};
+bool tapToggleSecond[NUM_LAYERS] = {false};   // der laufende Druck war der zweite Tipp (Toggle ausgelöst)
+bool tapToggleHeld[NUM_LAYERS] = {false};     // die Taste ist gedrückt; nach tapToggleReset ändert ihr spätes Loslassen nichts
+// Eine Taste je Ebene: der Zustand gilt je Ebene, nicht je Taste
+
+void tapToggleReset() {
+  for (int l = 0; l < NUM_LAYERS; l++) tapToggleArmed[l] = tapToggleSecond[l] = tapToggleHeld[l] = false;
+}
+
+// Abstand zweier Matrix-Zeiten; eine Zeit vor dem Bezug (nachgespieltes Ereignis) zählt als 0
+static inline unsigned long tapToggleDelta(unsigned long now, unsigned long since) {
+  return (long)(now - since) < 0 ? 0 : (unsigned long)(now - since);
+}
+
+// Gibt true zurück, wenn dieser Druck die Ebene umschaltet
+bool tapTogglePress(uint8_t l, unsigned long now) {
+  if (l >= NUM_LAYERS) return false;
+  momentaryLayers[l] = true;
+  tapToggleHeld[l] = true;
+  tapTogglePressMs[l] = now;
+  bool second = tapToggleArmed[l] && tapToggleDelta(now, tapToggleReleaseMs[l]) < tappingTermMs;
+  tapToggleArmed[l] = false;
+  tapToggleSecond[l] = second;
+  if (!second) return false;
+  if (l == 0) {
+    for (int i = 1; i < NUM_LAYERS; i++) toggleLayers[i] = false;
+  } else {
+    toggleLayers[l] = !toggleLayers[l];
+  }
+  return true;
+}
+
+void tapToggleRelease(uint8_t l, unsigned long now) {
+  if (l >= NUM_LAYERS) return;
+  momentaryLayers[l] = false;
+  if (!tapToggleHeld[l]) return;   // nach tapToggleReset (RELEASE_ALL) merkt das späte Loslassen keinen Tipp vor
+  tapToggleHeld[l] = false;
+  bool wasSecond = tapToggleSecond[l];
+  tapToggleSecond[l] = false;
+  if (wasSecond) return;
+  tapToggleArmed[l] = tapToggleDelta(now, tapTogglePressMs[l]) < tappingTermMs;
+  tapToggleReleaseMs[l] = now;
 }
 
 // -----------------------------------------------------------------------------
@@ -714,6 +766,7 @@ void oslClearAll() {
   swapClearAll();
   numWordStop();
   ttReset();
+  tapToggleReset();
   keepAwakeStop();
   // Die Leader-Erfassung endet an denselben Stellen
   leaderReset();
@@ -1720,6 +1773,14 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"MO_%d\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, l, action, currentLayer, newL);
     sendConfigNotification(String(buf));
     Serial.printf("LAYER: MO(%d) aktiv -> Layer %d\n", l, newL);
+  } else if (isTapToggleAction(action)) {
+    uint8_t l = tapToggleLayer(action);
+    bool toggled = tapTogglePress(l, keyPressTime[r][c] ? keyPressTime[r][c] : millis());
+    uint8_t newL = getActiveLayer();
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"TT_%d\",\"code\":%d,\"layer\":%d,\"target_layer\":%d}", r, c, l, action, currentLayer, newL);
+    sendConfigNotification(String(buf));
+    Serial.printf("LAYER: TT(%d)%s -> Layer %d\n", l, toggled ? " Toggle" : "", newL);
   } else if (action >= 0x110 && action <= 0x117) {
     uint8_t l = action - 0x110;
     if (l == 0) {
@@ -2018,6 +2079,10 @@ void dispatchRelease(uint8_t r, uint8_t c, uint16_t action) {
     uint8_t l = action - 0x100;
     if (l < NUM_LAYERS) momentaryLayers[l] = false;
     Serial.printf("LAYER: MO(%d) gelöst -> Layer %d\n", l, getActiveLayer());
+  } else if (isTapToggleAction(action)) {
+    uint8_t l = tapToggleLayer(action);
+    tapToggleRelease(l, swapEventMs != 0 ? swapEventMs : millis());
+    Serial.printf("LAYER: TT(%d) gelöst -> Layer %d\n", l, getActiveLayer());
   } else if (isOslAction(action)) {
     oslRelease(action);
   } else if (isTtAction(action)) {
@@ -2672,7 +2737,7 @@ void resolvePendingTapHoldsAsTapSameHalf(uint8_t r, uint8_t c, unsigned long now
       if (!k.pending || tapHoldDtap[pr][pc] != 0 || k.tapAction == 0) continue;
       // Tapping-Term schon erreicht (Tick lief noch nicht): die Taste ist Hold, die Regel ändert das nicht
       if ((unsigned long)(now - k.pressTime) >= effectiveTapTerm(k.term)) continue;
-      if (k.holdAction >= ACT_MO_BASE && k.holdAction < ACT_MO_BASE + NUM_LAYERS) continue;
+      if ((k.holdAction >= ACT_MO_BASE && k.holdAction < ACT_MO_BASE + NUM_LAYERS) || isTapToggleAction(k.holdAction)) continue;
       // Beide Tasten bilden eine Combo im Fenster: checkUserCombos() löst sie im selben Scan aus; der Tipp darf nicht vorher raus
       if (hasPressedComboPartnerInWindow(pr, pc)) continue;
       k.pending = false;
@@ -2876,7 +2941,7 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
     // Hold nur nach einer Tipp-Pause: ein Mod-Tap-Druck kurz nach dem letzten Tastendruck (beider Hälften) ist sofort ein
     // Tipp. Layer-Tap mit MO_n und Tasten mit Doppel-Tipp-Aktion behalten ihre Entscheidung.
     bool priorIdleTap = holdAct != 0 && dtapAct == 0 && tapAct != 0 &&
-                        !(holdAct >= ACT_MO_BASE && holdAct < ACT_MO_BASE + NUM_LAYERS) && priorRecent;
+                        !(holdAct >= ACT_MO_BASE && holdAct < ACT_MO_BASE + NUM_LAYERS) && !isTapToggleAction(holdAct) && priorRecent;
     if (priorIdleTap) {
       tapHoldDtap[r][c] = 0;
       dispatchPress(r, c, tapAct, layer);
@@ -4583,7 +4648,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isTtAction((uint16_t)act) && !isKeepAwakeAction((uint16_t)act) && !isDeepSleepAction((uint16_t)act) && !isClearStateAction((uint16_t)act) && !isBleHostAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && !isTapToggleAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isTtAction((uint16_t)act) && !isKeepAwakeAction((uint16_t)act) && !isDeepSleepAction((uint16_t)act) && !isClearStateAction((uint16_t)act) && !isBleHostAction((uint16_t)act) &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;

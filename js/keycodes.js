@@ -182,7 +182,10 @@ const KEYCODES = [
     { code: "TG_4", label: "Toggle Layer 4", char: "" },
     { code: "TG_5", label: "Toggle Layer 5", char: "" },
     { code: "TG_6", label: "Toggle Layer 6", char: "" },
-    { code: "TG_7", label: "Toggle Layer 7", char: "" }
+    { code: "TG_7", label: "Toggle Layer 7", char: "" },
+    ...Array.from({ length: 8 }, (_, n) => ({
+      code: `TT_${n}`, label: `Tap-Toggle Layer ${n} (Ebene bei Hold, einrasten bei Doppel-Tap)`, char: ""
+    }))
   ]}
 ];
 
@@ -280,6 +283,9 @@ const ACTION_TO_NUMERIC = {
   "LAYER_UP": 0x118,
   "LAYER_DOWN": 0x119,
   "LAYER_LOCK": 0x16A,
+  // Tap-Toggle-Ebene (0x193..0x19A): halten = MO_n, zweimal schnell tippen = TG_n
+  "TT_0": 0x193, "TT_1": 0x194, "TT_2": 0x195, "TT_3": 0x196,
+  "TT_4": 0x197, "TT_5": 0x198, "TT_6": 0x199, "TT_7": 0x19A,
   // One-Shot-Ebene (0x180..0x187): Tippen merkt die Ebene für den nächsten Tastendruck beider Hälften vor
   "OSL_0": 0x180, "OSL_1": 0x181, "OSL_2": 0x182, "OSL_3": 0x183,
   "OSL_4": 0x184, "OSL_5": 0x185, "OSL_6": 0x186, "OSL_7": 0x187,
@@ -407,6 +413,11 @@ function isDynamicMacroCode(code) {
 // true für One-Shot-Ebenen OSL_0 .. OSL_7 (Combos führen sie nicht aus)
 function isOslCode(code) {
   return /^(ACT_)?OSL_[0-7]$/.test(String(code || ""));
+}
+
+// true für Tap-Toggle-Ebenen TT_0 .. TT_7 (Combos führen sie nicht aus)
+function isTapToggleCode(code) {
+  return /^(ACT_)?TT_[0-7]$/.test(String(code || ""));
 }
 
 // true für Mausbewegung (Combos führen sie nicht aus)
@@ -685,6 +696,7 @@ function findDefinitionByCode(numericCode) {
       else if (UMLAUT_LABELS[key]) lbl = UMLAUT_LABELS[key];
       else if (ONE_SHOT_LABELS[key]) lbl = ONE_SHOT_LABELS[key];
       else if (isOslCode(key)) lbl = `OSL${key.slice(-1)}`;
+      else if (isTapToggleCode(key)) lbl = `TT${key.slice(-1)}`;
       return { label: lbl, tap: key };
     }
   }

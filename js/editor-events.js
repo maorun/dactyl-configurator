@@ -416,6 +416,10 @@ function setupEventListeners() {
       alert("Combos unterstützen kein Num Word. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
+    if (isTtCode(action)) {
+      alert("Combos unterstützen keine Tapping-Term-Tasten. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
     if (isBleHostCode(action)) {
       alert("Combos unterstützen keine BLE-Host-Slots. Bitte eine normale Taste mit der Aktion belegen.");
       return;

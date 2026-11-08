@@ -129,6 +129,12 @@
 // folgen, und endet bei der ersten anderen Taste oder nach NUM_WORD_IDLE_MS ohne Tastendruck; ein zweites Tippen beendet sie
 #define ACT_NUM_WORD             0x18D
 #define NUM_WORD_IDLE_MS         5000
+// Tapping-Term-Tasten: ein Tipp ändert tappingTermMs der Hälfte um TT_STEP_MS (RAM); beide Tasten zusammen für TT_SAVE_HOLD_MS
+// gehalten speichern den Wert im NVS
+#define ACT_TT_UP                0x18E
+#define ACT_TT_DOWN              0x18F
+#define TT_STEP_MS               10
+#define TT_SAVE_HOLD_MS          1000
 
 #define NUM_LAYERS 8
 

@@ -679,6 +679,24 @@ class TestServerAndCodegen(unittest.TestCase):
             with self.assertRaises(ValueError):
                 server.generate_combos_cpp([combo])
 
+    def test_tt_keys_match_firmware_and_are_no_combo_action(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_TT_UP\s+0x18E")
+        self.assertRegex(common, r"#define ACT_TT_DOWN\s+0x18F")
+        with open(server.DEFAULT_CONFIG_FILE, encoding="utf-8") as f:
+            cfg = json.load(f)
+        for name in ("TT_UP", "TT_DOWN"):
+            self.assertEqual(server.code_to_cpp(name), "ACT_" + name)
+            self.assertEqual(server.code_to_cpp("ACT_" + name), "ACT_" + name)
+            cfg["layers"][0][2][1] = {"tap": name}
+            server.validate_config(cfg, "R")
+            self.assertIn("ACT_" + name, server.generate_keymap_cpp(cfg["layers"]))
+            for behavior in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
+                combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": behavior, "action": name}
+                with self.assertRaises(ValueError):
+                    server.generate_combos_cpp([combo])
+
     def test_num_word_layer_setting_renders_and_validates(self):
         self.assertIn("uint8_t numWordLayer = 1;", server.generate_settings_cpp({}))
         self.assertIn("uint8_t numWordLayer = 0;", server.generate_settings_cpp({"numWordLayer": 0}))

@@ -1030,6 +1030,7 @@ void loop() {
   oneShotExpire(bleKeyboard.oneShot, millis(), oneShotTimeoutMs);
   oslExpireLocal(millis());
   numWordExpire(millis());   // Num Word endet ohne Tastendruck nach NUM_WORD_IDLE_MS
+  ttExpire(millis());         // beide TT-Tasten lange gehalten: tappingTermMs im NVS speichern
   // layerTimeoutMs: eingerastete TG-Ebenen fallen ohne Tastendruck beider Hälften zurück
   layerTimeoutExpire(millis());
   dynamicMacroService();

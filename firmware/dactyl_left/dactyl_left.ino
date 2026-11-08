@@ -148,6 +148,7 @@ void flushSendQueue(unsigned long maxMs);
 void stopMacro(bool releaseKeys);
 void resetMouseMove();
 void oslClearAll();
+void deepSleepClear();
 void swapClearAll();
 static void queueSplitLayerRelease();
 
@@ -161,6 +162,7 @@ void enterConfigMode() {
   stopMacro(false);
   resetMouseMove();
   oslClearAll();
+  deepSleepClear();   // Config Mode verwirft eine vorgemerkte Deep-sleep-Anforderung
   bleKeyboard.releaseAll();
   queueSplitLayerRelease();
   Serial.println("\n=============================================");
@@ -231,7 +233,7 @@ void enterStandby() {
 }
 
 void enterDeepSleep() {
-  Serial.println("\n[POWER] Inaktivitäts-Timeout erreicht! Gehe in Deep Sleep...");
+  Serial.println("\n[POWER] Deep Sleep wird eingeleitet (Timeout, Partnerverlust, Master-Signal oder Deep-sleep-Taste)...");
   Serial.flush();
 
   // Alles lösen, was die linke Hälfte am Master gedrückt hält, und kurz auf die Zustellung warten
@@ -1032,7 +1034,8 @@ void loop() {
     bleKeyboard.isConnected(), keyHeld, deepSleepTimeoutMinutes, lastActivityTime, nowSleep);
   bool timeoutSleepDue = !isConfigMode && deepSleepTimeoutMinutes > 0 &&
     (nowSleep - lastActivityTime > ((unsigned long)deepSleepTimeoutMinutes * 60UL * 1000UL));
-  bool deepSleepDue = masterSleepDue || disconnectedSleepDue || timeoutSleepDue;
+  bool keySleepDue = deepSleepKeyDue(isConfigMode, keyHeld);   // Deep-sleep key: erst nach dem Loslassen aller Tasten
+  bool deepSleepDue = masterSleepDue || disconnectedSleepDue || timeoutSleepDue || keySleepDue;
   if (shouldRestartEspNow(restartGuard, nowSleep, espNowRestartAllowed(isConfigMode, deepSleepDue, espNowReady))) {
     restartEspNow();
   }

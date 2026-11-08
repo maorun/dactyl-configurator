@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Deep-sleep key (`ACT_DEEP_SLEEP`)
-
-- **Rank:** Feature model. Total 28/40 (typing 5, configuration 6, harmony 8, safety 9). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** The keyboard has no battery switch. Before transport, the user must wait for the timeout before the halves enter deep sleep.
-- **Goal:** Add the action `DEEP_SLEEP` (`ACT_DEEP_SLEEP`). A press arms deep sleep and waits until no key is held, so `ESP_EXT1_WAKEUP_ANY_HIGH` does not wake the board at once. Then the master sends `SPLIT_OP_SLEEP` to the left half and calls `enterDeepSleep()`. On the left half, the action enters deep sleep of the left half after key release. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test presses `DEEP_SLEEP`, verifies that deep sleep waits while the key is held, and expects `enterDeepSleep()` after the release.
-
 ### Clear-state panic key (`ACT_CLEAR_STATE`)
 
 - **Rank:** Feature model. Total 28/40 (typing 6, configuration 4, harmony 9, safety 9). Effort S. Estimate.

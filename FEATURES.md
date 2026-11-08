@@ -226,7 +226,17 @@ Rules for this file:
 - Standby ends the state after `standbyTimeoutMinutes` without key presses (default 5 min), because the nudges do not count as activity. Press the key again after a wake-up. A tap while the Mac is not connected or in config mode changes nothing.
 - The key sends no keycode. It works only on the master: the left half has no mouse, and `server.py` and the app reject the action on the left half.
 - The key is no combo action: `ADD_COMBO`, `server.py` (`KEEP_AWAKE_CPP`) and the app reject it. `REPEAT` does not repeat it. It keeps Num Word on (`isNumWordKeepAction`) and ends a Leader capture.
-- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 47; flash both halves.
+- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` was 47 for this key; flash both halves.
+
+### Deep-sleep key (`ACT_DEEP_SLEEP`)
+
+- `ACT_DEEP_SLEEP` (`0x191`, app name `DEEP_SLEEP`, keycap label `Sleep`) puts the keyboard into deep sleep before transport. The board has no battery switch.
+- A press outside the config mode sets `deepSleepRequested` (`DactylLogic.h`). The key sends no keycode.
+- `deepSleepKeyDue` in `loop()` of each sketch returns true once, as soon as no key of this half is held. It checks `keyState` and `rawKeyState` (`anyRightKeyHeld`, `anyLeftKeyHeld`). A held key would wake the board at once through `ESP_EXT1_WAKEUP_ANY_HIGH`.
+- Master: `enterDeepSleep()` sends `SPLIT_OP_SLEEP` (`sendSplitSleep()`) to the left half and sleeps. Left half: the key on the left half enters its own `enterDeepSleep()` after the release. A key on one half does not wake or sleep the other half, unless the master sends `SPLIT_OP_SLEEP`.
+- The request lives in RAM only. `enterConfigMode()` clears it (`deepSleepClear`); a press in config mode changes nothing, and `deepSleepKeyDue` drops a request that meets config mode.
+- The key is no combo action: `ADD_COMBO`, `server.py` (`DEEP_SLEEP_CPP`) and the app reject it. It ends a Leader capture. The key works on both halves.
+- Codes in `DactylCommon.h`, `server.py` and `js/keycodes.js` must match; tests compare them. `DACTYL_FW_VERSION` is 48; flash both halves.
 
 ### Key lock (`ACT_KEY_LOCK`, `DactylKeyLock.h`)
 

@@ -10894,6 +10894,86 @@ TEST(test_keep_awake_is_no_combo_action_and_keeps_num_word) {
   assert(isNumWordKeepAction(ACT_KEEP_AWAKE));
 }
 
+// Deep-sleep key (ACT_DEEP_SLEEP): Schlaf erst nach dem Loslassen aller Tasten, Config Mode verwirft die Anforderung
+static bool anyHeldForTest() {
+  for (int r = 0; r < NUM_ROWS; r++)
+    for (int c = 0; c < NUM_COLS; c++)
+      if (keyState[r][c]) return true;
+  return false;
+}
+
+TEST(test_deep_sleep_key_waits_for_release_then_fires_once) {
+  assert(ACT_DEEP_SLEEP == 0x191 && ACT_DEEP_SLEEP > ACT_KEEP_AWAKE);
+  resetState();
+  deepSleepClear();
+  KEYMAP[0][5][0] = ACT_DEEP_SLEEP;
+  setMillis(1000); pressKey(5, 0, true);
+  assert(deepSleepRequested);
+  assert(!deepSleepKeyDue(false, anyHeldForTest()));   // Taste gehalten: kein Schlaf
+  assert(deepSleepRequested);
+  pressKey(5, 0, false);
+  assert(!anyHeldForTest());
+  assert(!deepSleepKeyDue(false, true));               // die Rohmatrix (rawKeyState des Sketches) hält noch
+  assert(deepSleepKeyDue(false, anyHeldForTest()));    // alles losgelassen
+  assert(!deepSleepKeyDue(false, false));              // nur einmal
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_deep_sleep_key_is_cancelled_or_ignored_in_config_mode) {
+  resetState();
+  deepSleepClear();
+  KEYMAP[0][5][0] = ACT_DEEP_SLEEP;
+  isConfigMode = true;
+  setMillis(1000); pressKey(5, 0, true); pressKey(5, 0, false);
+  assert(!deepSleepRequested);                         // im Config Mode ohne Wirkung
+  isConfigMode = false;
+  pressKey(5, 0, true); pressKey(5, 0, false);
+  assert(deepSleepRequested);
+  isConfigMode = true;                                 // Config Mode verwirft die Anforderung
+  assert(!deepSleepKeyDue(true, false));
+  assert(!deepSleepRequested);
+  isConfigMode = false;
+  assert(!deepSleepKeyDue(false, false));
+  pressKey(5, 0, true); pressKey(5, 0, false);
+  deepSleepClear();                                    // enterConfigMode() ruft dies auf
+  assert(!deepSleepKeyDue(false, false));
+}
+
+TEST(test_deep_sleep_key_is_no_combo_action) {
+  resetState();
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 401", false);   // ACT_DEEP_SLEEP = 0x191
+  assert(numCombos == 0);
+}
+
+TEST(test_deep_sleep_key_keeps_num_word_and_ends_a_leader_capture) {
+  resetState();
+  deepSleepClear();
+  assert(isNumWordKeepAction(ACT_DEEP_SLEEP));
+  leaderMapKeys();
+  KEYMAP[0][3][0] = ACT_DEEP_SLEEP;
+  setMillis(1000);
+  dmTap(0, 0);                                    // Leader startet die Erfassung
+  assert(leaderState.active);
+  setMillis(1100);
+  dmTap(3, 0);                                    // Deep Sleep bricht sie ab und merkt den Schlaf vor
+  assert(!leaderState.active && deepSleepRequested);
+  assert(bleKeyboard.pressedKeys.empty() && bleKeyboard.writtenKeys.empty());
+  deepSleepClear();
+}
+
+TEST(test_deep_sleep_key_as_mod_tap_tap_arms_sleep) {
+  resetState();
+  deepSleepClear();
+  KEYMAP[0][3][0] = ACT_DEEP_SLEEP;
+  HOLDMAP[0][3][0] = KEY_LEFT_SHIFT;
+  setMillis(1000); pressKey(3, 0, true);
+  setMillis(1050); pressKey(3, 0, false);          // kurz: Tap
+  setMillis(1500); doubleTapTick(1500);
+  assert(deepSleepRequested);
+  deepSleepClear();
+}
+
 int main() {
   std::cout << "==================================================" << std::endl;
   std::cout << "  Dactyl Firmware Unit Test Suite" << std::endl;

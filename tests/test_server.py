@@ -755,6 +755,23 @@ class TestServerAndCodegen(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.validate_config(left, "L")
 
+    def test_deep_sleep_matches_firmware_on_both_halves_and_no_combo_action(self):
+        with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:
+            common = f.read()
+        self.assertRegex(common, r"#define ACT_DEEP_SLEEP\s+0x191")
+        self.assertEqual(server.code_to_cpp("DEEP_SLEEP"), "ACT_DEEP_SLEEP")
+        self.assertEqual(server.code_to_cpp("ACT_DEEP_SLEEP"), "ACT_DEEP_SLEEP")
+        for path, side in ((server.DEFAULT_CONFIG_FILE, "R"), (server.LEFT_DEFAULT_CONFIG_FILE, "L")):
+            with open(path, encoding="utf-8") as f:
+                cfg = json.load(f)
+            cfg["layers"][0][2][1] = {"tap": "DEEP_SLEEP"}
+            server.validate_config(cfg, side)
+            self.assertIn("ACT_DEEP_SLEEP", server.generate_keymap_cpp(cfg["layers"]))
+        for behavior in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
+            combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": behavior, "action": "DEEP_SLEEP"}
+            with self.assertRaises(ValueError):
+                server.generate_combos_cpp([combo])
+
     def test_num_word_layer_setting_renders_and_validates(self):
         self.assertIn("uint8_t numWordLayer = 1;", server.generate_settings_cpp({}))
         self.assertIn("uint8_t numWordLayer = 0;", server.generate_settings_cpp({"numWordLayer": 0}))

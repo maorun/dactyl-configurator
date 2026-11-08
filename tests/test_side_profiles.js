@@ -574,6 +574,16 @@ test("Diagnose: DIAG-Zeile wird geprüft, Reset-Gründe außer Power-On, Deep-Sl
   for (const r of ["panic", "brownout", "int_wdt", "wdt", "external", "unknown"]) assert.strictEqual(D.parseDiagLine(line(r)).abnormal, true, r);
   const view = D.describeDiag(D.parseDiagLine(line("panic")));
   assert.deepStrictEqual([view.uptime, view.heapFree, view.loopMax], ["1 h 1 min", "150000 B", "900 µs"]);
+  // Sendewarteschlange der linken Hälfte: beide Felder oder keines
+  const withQ = line("power_on").replace("}", ',"sq_max":64,"sq_drop":1}');
+  const q = JSON.parse(JSON.stringify(D.parseDiagLine(withQ)));
+  assert.strictEqual(q.sqMax, 64);
+  assert.strictEqual(q.sqDrop, 1);
+  assert.strictEqual(D.describeDiag(D.parseDiagLine(withQ)).sendQueue, "höchster Füllstand 64, verworfen 1");
+  assert.strictEqual(D.parseDiagLine(line("power_on")).sqMax, undefined);
+  assert.strictEqual(D.describeDiag(D.parseDiagLine(line("power_on"))).sendQueue, null);
+  assert.strictEqual(D.parseDiagLine(line("power_on").replace("}", ',"sq_max":64}')).sqMax, undefined);
+  assert.strictEqual(D.parseDiagLine(line("power_on").replace("}", ',"sq_max":-1,"sq_drop":1}')).sqMax, undefined);
   assert.strictEqual(D.parseDiagLine("DIAG:kaputt"), undefined);
   assert.strictEqual(D.parseDiagLine("DIAG:null"), undefined);
   assert.strictEqual(D.parseDiagLine('DEVICE_INFO:{}'), undefined);
@@ -600,6 +610,12 @@ test("Diagnose: Kopfzeile markiert nur unerwartete Resets", () => {
   const bad = D.summarizeDiag([mk("power_on"), mk("panic")]);
   assert.deepStrictEqual([bad.abnormal, bad.summary], [true, "Diagnose (unerwarteter Neustart)"]);
   assert.ok(read("js/serial.js").includes("Dactyl.summarizeDiag("));
+});
+
+test("Diagnose: nur die linke Hälfte meldet sq_max und sq_drop", () => {
+  assert.ok(leftIno.includes("#define DIAG_SEND_QUEUE_MAX() sendQueue.highWater"));
+  assert.ok(leftIno.includes("#define DIAG_SEND_QUEUE_DROPPED() sendQueue.dropped"));
+  assert.ok(!rightIno.includes("DIAG_SEND_QUEUE_"));
 });
 
 test("Diagnose: Firmware kennt GET_DIAG in beiden Bauarten und misst loop_max_us", () => {

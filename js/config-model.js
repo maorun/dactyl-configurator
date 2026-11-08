@@ -2981,7 +2981,7 @@ const SUPPORT_REPORT_VERSION = 1;
 const SUPPORT_INFO_NUMBERS = ["fw", "standby_timeout", "sleep_timeout", "debounce_ms", "combo_timeout_ms", "tapping_term_ms",
   "hold_tap_mode", "quick_tap_ms", "pi", "chordal_hold", "rt", "as", "at", "ld", "ot", "lt"];
 const SUPPORT_LINK_NUMBERS = ["up", "ms", "ever", "losses", "rx_dropped", "key_dropped", "rssi", "rssi_min"];
-const SUPPORT_DIAG_NUMBERS = ["uptimeS", "heapFree", "heapMin", "loopMaxUs"];
+const SUPPORT_DIAG_NUMBERS = ["uptimeS", "heapFree", "heapMin", "loopMaxUs", "sqMax", "sqDrop"];
 
 // devices: { <Hälfte>: { info, infoAt, diag, diagAt } } (DEVICE_INFO, bereinigtes GET_DIAG, Empfangszeit in ms); fehlende Angaben werden null
 function buildSupportReport({ appVersion = APP_VERSION, now = Date.now(), devices = {} } = {}) {

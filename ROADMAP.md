@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Heatmap CSV export (`buildHeatmapCsv`)
-
-- **Rank:** Feature model. Total 22/40 (typing 1, configuration 5, harmony 6, safety 10). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/heatmap.js`, `js/config-model.js`.
-- **Problem:** The user cannot analyze the typing statistics in a spreadsheet or compare two weeks.
-- **Goal:** Add the button "Als CSV speichern". The file has one row for each key (half, row, column, layer 0 label, total presses, presses for each layer, corrections). It holds no text, no time stamp of single presses and no sequence of keys.
-- **Acceptance test:** A unit test builds a CSV from sample statistics and expects the header, one row for each counted key and the exact counts.
-
 ## Priority 4
 
 ### Keep-awake key (`ACT_KEEP_AWAKE`)

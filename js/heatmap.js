@@ -221,6 +221,24 @@ function onTypingStatsChanged(side = editSide) {
   if (heatmapEnabled) applyHeatmap();
 }
 
+// Lädt die Zähler beider Hälften als CSV herunter (nur Zähler, siehe buildHeatmapCsv)
+function downloadHeatmapCsv() {
+  const config = {};
+  for (const side of Dactyl.SIDE_IDS) config[side] = configFor(side);
+  const csv = buildHeatmapCsv(Dactyl.SIDE_IDS.map(side => ({ side, stats: typingStatsFor(side) })), config);
+  if (!csv || csv.split("\r\n").length <= 2) {
+    showToast("Keine Anschläge gezählt: Es gibt nichts zu speichern.");
+    return;
+  }
+  // BOM, damit Excel die Umlaute der Labels als UTF-8 liest
+  const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dactyl_heatmap_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function initHeatmapUI() {
   const toggle = document.getElementById("btnToggleHeatmap");
   const reset = document.getElementById("btnResetHeatmap");
@@ -242,6 +260,8 @@ function initHeatmapUI() {
       applyHeatmap();
     });
   }
+  const csvBtn = document.getElementById("btnHeatmapCsv");
+  if (csvBtn) csvBtn.addEventListener("click", downloadHeatmapCsv);
   if (toggle) {
     toggle.addEventListener("click", () => {
       heatmapEnabled = !heatmapEnabled;

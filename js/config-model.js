@@ -748,6 +748,41 @@ function normalizeMacroStep(step) {
   return step.type === "pause" ? { type: "pause", ms: step.ms } : { type: step.type, code: step.code };
 }
 
+// Exportdatei eines einzelnen Makros: Name, Wiederholen-Flag und Schritte (ohne Slot, ohne Verweise von Tasten)
+const MACRO_EXPORT_FORMAT = "dactyl-macro";
+const MACRO_EXPORT_VERSION = 1;
+
+function buildMacroExport(macro) {
+  const out = { format: MACRO_EXPORT_FORMAT, version: MACRO_EXPORT_VERSION, name: sanitizeCommandText(macro.name, "Makro"),
+    steps: macro.steps.map(normalizeMacroStep) };
+  if (macro.repeat === true) out.repeat = true;
+  return out;
+}
+
+// Prüft eine Makro-Exportdatei und ordnet das Makro dem ersten freien Slot zu (ohne die Liste zu ändern).
+// Ergebnis: { ok: true, index, macro } oder { ok: false, error }
+function parseMacroImport(jsonStr, existingMacros) {
+  let data;
+  try {
+    data = JSON.parse(jsonStr);
+  } catch (e) {
+    return { ok: false, error: "Die Datei ist kein gültiges JSON." };
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data) || data.format !== MACRO_EXPORT_FORMAT || data.version !== MACRO_EXPORT_VERSION) {
+    return { ok: false, error: "Die Datei ist kein Makro-Export dieser App." };
+  }
+  if (!Array.isArray(data.steps) || !data.steps.length) return { ok: false, error: "Das Makro braucht mindestens einen Schritt." };
+  if (data.steps.length > MAX_MACRO_STEPS) return { ok: false, error: `Ein Makro hat maximal ${MAX_MACRO_STEPS} Schritte (Datei: ${data.steps.length}).` };
+  if (!data.steps.every(isValidMacroStep)) {
+    return { ok: false, error: `Das Makro enthält ungültige Schritte (tap/down/up mit normaler Taste, pause 1..${MACRO_MAX_PAUSE_MS} ms).` };
+  }
+  const index = macroSaveIndex(existingMacros, -1);
+  if (index === null) return { ok: false, error: `Alle ${MAX_MACROS} Makro-Plätze sind belegt.` };
+  const macro = { name: sanitizeCommandText(data.name, `Makro ${index}`), steps: data.steps.map(normalizeMacroStep) };
+  if (data.repeat === true) macro.repeat = true;
+  return { ok: true, index, macro };
+}
+
 // Firmware-Befehle eines Makros: ADD_MACRO [1], dann je Schritt ADD_MACRO_STEP <typ> <code> <ms>.
 // Das Argument 1 (Wiederholen, solange die Taste gehalten wird) steht nur bei gesetztem Flag: ältere Firmware kennt es nicht.
 function macroCommands(macro) {

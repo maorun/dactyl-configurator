@@ -53,7 +53,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              computeTimingRecommendations, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
-             macroSaveIndex, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isBleHostCode,
+             macroSaveIndex, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
              ACTION_CODE_TO_EVENT_CODES, findKeyForEventCode, resolveKeyForSide, browserKeySides,
@@ -4329,6 +4329,24 @@ test("Makro-UI: Speichern und Rückgängig ersetzen nur die Makro-Liste", () => 
   assert.strictEqual(vm.runInContext("currentConfig.macros.length", w), 0);
 });
 
+test("Makro-UI: Import legt das Makro in den ersten freien Slot, Rückgängig entfernt es", () => {
+  const { w, log } = uiHarness();
+  vm.runInContext(`currentConfig.macros = [{ name: "a", steps: [{ type: "tap", code: "KEY_A" }] }];`, w);
+  const text = JSON.stringify({ format: "dactyl-macro", version: 1, name: "Neu", steps: [{ type: "tap", code: "KEY_B" }] });
+  assert.strictEqual(w.importMacroText(text), true);
+  assert.strictEqual(vm.runInContext("currentConfig.macros.length", w), 2);
+  assert.strictEqual(vm.runInContext("currentConfig.macros[1].name", w), "Neu");
+  const change = log.pending.at(-1);
+  assert.ok(change.snapshot && change.macros);
+  assert.strictEqual(change.title, "Makro 1 importiert");
+  change.revert();
+  assert.strictEqual(vm.runInContext("currentConfig.macros.length", w), 1);
+  const before = log.pending.length;
+  assert.strictEqual(w.importMacroText("{kaputt"), false);
+  assert.strictEqual(log.pending.length, before);
+  assert.ok(log.toasts.at(-1).startsWith("Makro-Import abgelehnt"));
+});
+
 test("Makro-UI: Löschen und Rückgängig behalten spätere Tastenänderungen", () => {
   const { w, log } = uiHarness();
   vm.runInContext(`currentConfig.macros = [{ name: "a", steps: [{ type: "tap", code: "KEY_A" }] },
@@ -8262,4 +8280,64 @@ document.createElement = () => ({ click() { saved.push("click"); } });`);
   assert.strictEqual(report.halves.R.diag_at, "1970-01-01T00:00:02.000Z");
   assert.ok(!vm.runInContext("saved[0]", w).includes("GEHEIM"));
   assert.strictEqual(vm.runInContext("saved[1]", w), "click");
+});
+
+// Makro-Bibliothek: Export und Import eines einzelnen Makros
+const libMacro = { name: "Kopieren", repeat: true, steps: [{ type: "down", code: "KEY_LEFT_GUI" }, { type: "tap", code: "KEY_C" },
+  { type: "pause", ms: 50 }, { type: "up", code: "KEY_LEFT_GUI" }] };
+
+test("Makro-Bibliothek: Export und Import in leere Liste liefert gleichen Namen und Schritte", () => {
+  const json = JSON.stringify(api.buildMacroExport(libMacro));
+  const r = api.parseMacroImport(json, []);
+  assert.strictEqual(r.ok, true);
+  assert.strictEqual(r.index, 0);
+  assert.strictEqual(r.macro.name, libMacro.name);
+  assert.strictEqual(JSON.stringify(r.macro.steps), JSON.stringify(libMacro.steps));
+  assert.strictEqual(r.macro.repeat, true);
+  assert.ok(api.isValidMacro(r.macro));
+});
+
+test("Makro-Bibliothek: Import nutzt den ersten freien Slot", () => {
+  const r = api.parseMacroImport(JSON.stringify(api.buildMacroExport(libMacro)), [{ name: "A", steps: [{ type: "tap", code: "KEY_A" }] }]);
+  assert.strictEqual(r.index, 1);
+});
+
+test("Makro-Bibliothek: Import mit mehr als 32 Schritten wird abgelehnt", () => {
+  const data = api.buildMacroExport(libMacro);
+  data.steps = Array.from({ length: api.MAX_MACRO_STEPS + 1 }, () => ({ type: "tap", code: "KEY_A" }));
+  assert.strictEqual(api.parseMacroImport(JSON.stringify(data), []).ok, false);
+  data.steps.pop();
+  assert.strictEqual(api.parseMacroImport(JSON.stringify(data), []).ok, true);
+});
+
+test("Makro-Bibliothek: Import ohne freien Slot wird abgelehnt", () => {
+  const full = Array.from({ length: api.MAX_MACROS }, () => ({ name: "X", steps: [{ type: "tap", code: "KEY_A" }] }));
+  const r = api.parseMacroImport(JSON.stringify(api.buildMacroExport(libMacro)), full);
+  assert.strictEqual(r.ok, false);
+  assert.ok(/belegt/.test(r.error));
+});
+
+test("Makro-Bibliothek: ungültiges JSON und fehlerhafte Schritte werden abgelehnt", () => {
+  const base = api.buildMacroExport(libMacro);
+  const bad = [
+    "{kein json", "null", "[]", JSON.stringify({ ...base, format: "anderes" }), JSON.stringify({ ...base, version: 2 }),
+    JSON.stringify({ ...base, steps: "tap" }), JSON.stringify({ ...base, steps: [] }),
+    JSON.stringify({ ...base, steps: [null] }), JSON.stringify({ ...base, steps: [{ type: "tap" }] }),
+    JSON.stringify({ ...base, steps: [{ type: "tap", code: "MO_1" }] }),
+    JSON.stringify({ ...base, steps: [{ type: "jump", code: "KEY_A" }] }),
+    JSON.stringify({ ...base, steps: [{ type: "pause", ms: 0 }] }),
+    JSON.stringify({ ...base, steps: [{ type: "pause", ms: api.MACRO_MAX_PAUSE_MS + 1 }] })
+  ];
+  for (const text of bad) assert.strictEqual(api.parseMacroImport(text, []).ok, false, text);
+});
+
+test("Makro-Bibliothek: index.html, Buttons und Import als Snapshot-Änderung", () => {
+  const html = read("index.html");
+  const ui = read("js/macros-ui.js");
+  for (const id of ["btnExportMacro", "btnImportMacro", "macroImportInput"]) {
+    assert.ok(html.includes(`id="${id}"`) && ui.includes(`"${id}"`), id);
+  }
+  assert.ok(html.includes("Makro exportieren") && html.includes("Makro importieren"));
+  const imp = section("js/macros-ui.js", "function importMacroText", "function importMacroFromFile");
+  assert.ok(/snapshot: true/.test(imp) && /macros: true/.test(imp) && /parseMacroImport\(/.test(imp));
 });

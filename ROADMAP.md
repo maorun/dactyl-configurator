@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Macro library import and export (`buildMacroExport`, `js/macros-ui.js`)
-
-- **Rank:** Feature model. Total 26/40 (typing 3, configuration 6, harmony 8, safety 9). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/macros-ui.js`, `js/config-model.js` (`parseConfigImport`).
-- **Problem:** The user can move a whole configuration, but not a single macro. A good macro stays on one half.
-- **Goal:** Add the buttons "Makro exportieren" and "Makro importieren" for one macro. The file holds the steps and the name. The import validates the steps with the existing macro limits and puts the macro into the first free slot as a pending change.
-- **Acceptance test:** A unit test exports a macro, imports it into an empty config and expects equal steps; an import with more than 32 steps is rejected.
-
 ## Priority 3
 
 ### Send queue high-water mark in `GET_DIAG` (`DactylLeftLogic.h`)

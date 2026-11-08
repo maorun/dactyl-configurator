@@ -371,7 +371,7 @@ bool isNumWordKeepAction(uint16_t a) {
     return a >= KEY_NUM_SLASH && a <= KEY_NUM_PERIOD;
   }
   if (a >= 0x100 && a <= 0x119) return true;                       // MO_n, TG_n, LAYER_UP, LAYER_DOWN
-  return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD || a == ACT_TT_UP || a == ACT_TT_DOWN || a == ACT_KEEP_AWAKE;
+  return a == ACT_LAYER_LOCK || isOslAction(a) || a == ACT_NUM_WORD || a == ACT_TT_UP || a == ACT_TT_DOWN || a == ACT_KEEP_AWAKE || a == ACT_DEEP_SLEEP;
 }
 
 void numWordStop() {
@@ -502,6 +502,27 @@ void keepAwakeTick(unsigned long now) {
   keepAwakeLastMs = now;
   bleKeyboard.mouseMove(1, 0);
   bleKeyboard.mouseMove(-1, 0);
+}
+
+// -----------------------------------------------------------------------------
+// Deep-sleep key (ACT_DEEP_SLEEP)
+// -----------------------------------------------------------------------------
+// Jede Hälfte schläft für sich: Der Druck merkt den Schlaf nur an der eigenen Hälfte vor. Der Master schickt beim
+// enterDeepSleep() SPLIT_OP_SLEEP an die linke Hälfte. Der Zustand liegt nur im RAM; der Config Mode löscht ihn.
+bool deepSleepRequested = false;
+
+bool isDeepSleepAction(uint16_t a) { return a == ACT_DEEP_SLEEP; }
+
+void deepSleepClear() { deepSleepRequested = false; }
+
+// Aufruf in loop(): true genau einmal, sobald eine Anforderung vorliegt und keine Taste mehr gehalten ist
+// (keyState und rawKeyState beider Seiten des Aufrufers). Im Config Mode verfällt die Anforderung.
+bool deepSleepKeyDue(bool configMode, bool anyKeyHeld) {
+  if (!deepSleepRequested) return false;
+  if (configMode) { deepSleepRequested = false; return false; }
+  if (anyKeyHeld) return false;
+  deepSleepRequested = false;
+  return true;
 }
 
 // -----------------------------------------------------------------------------
@@ -1599,7 +1620,7 @@ bool leaderConsumeKey(uint8_t r, uint8_t c, uint16_t action) {
     // eine weitere Leader-Taste) brechen die Erfassung ab; Ebenen-, Modifier-, Medien- und Maustasten laufen durch
     if (isKeyPairAction(action) || isMacroAction(action) || isUmlautAction(action) || isRepeatKeyAction(action) ||
         isDynamicMacroAction(action) || isOneShotAction(action) || isTextToggleAction(action) || action == ACT_LEADER ||
-        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || action == ACT_NUM_WORD || isTtAction(action) || isKeepAwakeAction(action) || isBleHostAction(action)) {
+        action == ACT_KEY_LOCK || action == ACT_SWAP_HANDS || action == ACT_NUM_WORD || isTtAction(action) || isKeepAwakeAction(action) || isDeepSleepAction(action) || isBleHostAction(action)) {
       leaderState.reset();
     }
     return false;
@@ -1732,6 +1753,12 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
 #endif
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"KEEP_AWAKE\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
+    sendConfigNotification(String(buf));
+  } else if (isDeepSleepAction(action)) {
+    // Beide Hälften: die eigene Hälfte schläft, sobald alle Tasten losgelassen sind
+    if (!isConfigMode) deepSleepRequested = true;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"DEEP_SLEEP\",\"code\":%d,\"layer\":%d}", r, c, action, currentLayer);
     sendConfigNotification(String(buf));
   } else if (action == ACT_LAYER_LOCK) {
     uint8_t newL = applyLayerLock();
@@ -4493,7 +4520,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
         numCombos < MAX_COMBOS && r1 >= 0 && r1 < NUM_ROWS && c1 >= 0 && c1 < NUM_COLS &&
         r2 >= 0 && r2 < NUM_ROWS && c2 >= 0 && c2 < NUM_COLS &&
         beh >= 0 && beh <= 2 && act >= 0 && act <= 0xFFFF && !isMacroAction((uint16_t)act) && !isDynamicMacroAction((uint16_t)act) &&
-        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isTtAction((uint16_t)act) && !isKeepAwakeAction((uint16_t)act) && !isBleHostAction((uint16_t)act) &&
+        !isMouseMoveAction((uint16_t)act) && !isOslAction((uint16_t)act) && act != ACT_LEADER && act != ACT_KEY_LOCK && act != ACT_SWAP_HANDS && act != ACT_NUM_WORD && !isTtAction((uint16_t)act) && !isKeepAwakeAction((uint16_t)act) && !isDeepSleepAction((uint16_t)act) && !isBleHostAction((uint16_t)act) &&
         !(beh != 0 && (isRepeatKeyAction((uint16_t)act) || act == ACT_LAYER_LOCK))) {
       userCombos[numCombos].r1 = (uint8_t)r1;
       userCombos[numCombos].c1 = (uint8_t)c1;

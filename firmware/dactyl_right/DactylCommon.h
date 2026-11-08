@@ -139,6 +139,9 @@
 // +1 und -1 Pixel, wenn der Mac verbunden und der Config Mode aus ist. Ein Tastendruck beider Hälften startet die Frist neu
 #define ACT_KEEP_AWAKE           0x190
 #define KEEP_AWAKE_INTERVAL_MS   60000
+// Deep-sleep key: Ein Druck außerhalb des Config Mode merkt den Schlaf vor. Der Schlaf beginnt erst, wenn an dieser Hälfte keine
+// Taste mehr gehalten ist, sonst weckt die gehaltene Taste das Board sofort wieder (ESP_EXT1_WAKEUP_ANY_HIGH)
+#define ACT_DEEP_SLEEP           0x191
 
 #define NUM_LAYERS 8
 

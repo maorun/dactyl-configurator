@@ -126,6 +126,26 @@ test("Keep-awake: nur der Master-Sketch ruft keepAwakeTick auf und beendet den Z
   assert.ok(!read("firmware/dactyl_left/dactyl_left.ino").includes("keepAwakeTick"), "die linke Hälfte hat keine Maus");
 });
 
+test("Deep Sleep: beide Sketche prüfen deepSleepKeyDue in loop() und löschen die Anforderung im Config Mode", () => {
+  const right = read("firmware/dactyl_right/dactyl_right.ino");
+  const left = read("firmware/dactyl_left/dactyl_left.ino");
+  assert.ok(right.includes("deepSleepKeyDue(isConfigMode, anyRightKeyHeld())"), "Master prüft die Deep-sleep-Taste nicht");
+  assert.ok(left.includes("deepSleepKeyDue(isConfigMode, keyHeld)"), "linke Hälfte prüft die Deep-sleep-Taste nicht");
+  for (const [name, src] of [["rechts", right], ["links", left]]) {
+    const start = src.indexOf("void enterConfigMode() {");
+    const cfgMode = src.slice(start, start + 700);
+    assert.ok(cfgMode.includes("deepSleepClear();"), `${name}: enterConfigMode löscht die Anforderung nicht`);
+    assert.ok(src.includes("void deepSleepClear();"), `${name}: Vorwärtsdeklaration fehlt`);
+  }
+  // Master: der Aufruf steht im Zweig außerhalb des Config Mode; links gibt der Aufruf isConfigMode selbst weiter
+  const call = right.indexOf("deepSleepKeyDue(isConfigMode,");
+  const configBranch = right.indexOf("} else {", right.indexOf("exitConfigMode();", right.indexOf("3UL * 60UL * 1000UL")));
+  assert.ok(call > configBranch && configBranch > 0, "Master: deepSleepKeyDue steht nicht im Zweig außerhalb des Config Mode");
+  assert.ok(left.indexOf("deepSleepKeyDue(isConfigMode, keyHeld)") > left.indexOf("bool keyHeld = anyLeftKeyHeld();"), "links: keyHeld wird vor dem Aufruf gebildet");
+  const rightSleep = right.slice(right.indexOf("void enterDeepSleep()"));
+  assert.ok(rightSleep.includes("sendSplitSleep();"), "enterDeepSleep sendet SPLIT_OP_SLEEP nicht");
+});
+
 test("Einstellung numWordLayer: beide Sketche deklarieren sie, DactylLogic.h meldet und setzt sie, der Server rendert sie", () => {
   for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
     assert.ok(/^uint8_t numWordLayer = 1;$/m.test(src), `${name}: numWordLayer fehlt im Sketch`);

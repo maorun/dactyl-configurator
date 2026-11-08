@@ -286,7 +286,7 @@ KEY_TO_CPP = {
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
     "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "SENTENCE_CASE": "ACT_SENTENCE_CASE", "REPEAT": "ACT_REPEAT", "ALT_REPEAT": "ACT_ALT_REPEAT",
     "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY", "LEADER": "ACT_LEADER", "KEY_LOCK": "ACT_KEY_LOCK",
-    "HOST_1": "(ACT_HOST_BASE + 0)", "HOST_2": "(ACT_HOST_BASE + 1)", "HOST_3": "(ACT_HOST_BASE + 2)", "SWAP_HANDS": "ACT_SWAP_HANDS", "NUM_WORD": "ACT_NUM_WORD", "TT_UP": "ACT_TT_UP", "TT_DOWN": "ACT_TT_DOWN", "KEEP_AWAKE": "ACT_KEEP_AWAKE",
+    "HOST_1": "(ACT_HOST_BASE + 0)", "HOST_2": "(ACT_HOST_BASE + 1)", "HOST_3": "(ACT_HOST_BASE + 2)", "SWAP_HANDS": "ACT_SWAP_HANDS", "NUM_WORD": "ACT_NUM_WORD", "TT_UP": "ACT_TT_UP", "TT_DOWN": "ACT_TT_DOWN", "KEEP_AWAKE": "ACT_KEEP_AWAKE", "DEEP_SLEEP": "ACT_DEEP_SLEEP",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -614,6 +614,9 @@ TT_CPP = {"ACT_TT_UP", "ACT_TT_DOWN"}
 # Keep-awake schickt Mausschritte des Masters; als Combo-Aktion und auf der linken Hälfte ergibt es nichts
 KEEP_AWAKE_CPP = {"ACT_KEEP_AWAKE"}
 
+# Deep Sleep legt die eigene Hälfte schlafen; als Combo-Aktion ergibt es nichts
+DEEP_SLEEP_CPP = {"ACT_DEEP_SLEEP"}
+
 # BLE-Host-Slots wechseln die Verbindung des Masters; als Combo-Aktion und auf der linken Hälfte ergeben sie nichts
 BLE_HOST_CPP = {f"(ACT_HOST_BASE + {n})" for n in range(3)}
 
@@ -659,6 +662,8 @@ def generate_combos_cpp(combos):
             raise ValueError("Combos unterstützen keine Tapping-Term-Tasten.")
         if act in KEEP_AWAKE_CPP:
             raise ValueError("Combos unterstützen kein Keep-awake.")
+        if act in DEEP_SLEEP_CPP:
+            raise ValueError("Combos unterstützen kein Deep Sleep.")
         if act in BLE_HOST_CPP:
             raise ValueError("Combos unterstützen keine BLE-Host-Slots.")
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts

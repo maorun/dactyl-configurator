@@ -314,6 +314,17 @@
               <small class="form-hint">100 bis 500 ms für Halte- und Doppel-Tipp-Aktion dieser Taste, zum Beispiel länger für Ring- und kleinen Finger. Wirkt nur mit einer Halte- oder Doppel-Tipp-Aktion.</small>
             </div>
 
+            <div class="form-group">
+              <label for="keyHoldFlavorSelect">Eigene Hold-Tap-Variante:</label>
+              <select id="keyHoldFlavorSelect" class="form-control">
+                <option value="0" selected>Wert der Hälfte</option>
+                <option value="1">Sofort bei zweiter Taste (Hold on other key press)</option>
+                <option value="2">Permissive Hold (Hold bei verschachteltem Tap)</option>
+                <option value="3">Tap Preferred (Hold nur nach Zeitablauf)</option>
+              </select>
+              <small class="form-hint">Überschreibt die Einstellung der Hälfte nur für diese Taste, zum Beispiel Permissive Hold für Home-Row-Tasten und sofortiges Halten für Daumentasten. Wirkt nur mit einer Halte- oder Doppel-Tipp-Aktion.</small>
+            </div>
+
             <div class="inspector-actions">
               <button id="btnApplyKey" class="btn btn-primary btn-sm">Änderung übernehmen</button>
             </div>

@@ -330,6 +330,9 @@ uint16_t HOLDMAP[NUM_LAYERS][6][7] = {};
 // [[[START_TAPTERMMAP]]]
 uint16_t TAPTERMMAP[NUM_LAYERS][6][7] = {};
 // [[[END_TAPTERMMAP]]]
+// [[[START_HOLDFLAVORMAP]]]
+uint16_t HOLDFLAVORMAP[NUM_LAYERS][6][7] = {};
+// [[[END_HOLDFLAVORMAP]]]
 
 // Doppel-Tipp-Aktionen (Tap-Dance): 0 = keine
 // [[[START_DTAPMAP]]]

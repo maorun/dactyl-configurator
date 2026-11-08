@@ -24,6 +24,7 @@ static uint16_t KEYMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t HOLDMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t DTAPMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t TAPTERMMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+static uint16_t HOLDFLAVORMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static String layerNames[NUM_LAYERS] = {
   "Base", "Nav & Pfeile", "Symbole", "Numpad",
   "Function", "Media", "Shortcuts", "Custom"
@@ -177,7 +178,7 @@ void resetState() {
   }
   for (int l = 0; l < NUM_LAYERS; l++)
     for (int r = 0; r < NUM_ROWS; r++)
-      for (int c = 0; c < NUM_COLS; c++) { HOLDMAP[l][r][c] = 0; DTAPMAP[l][r][c] = 0; TAPTERMMAP[l][r][c] = 0; }
+      for (int c = 0; c < NUM_COLS; c++) { HOLDMAP[l][r][c] = 0; DTAPMAP[l][r][c] = 0; TAPTERMMAP[l][r][c] = 0; HOLDFLAVORMAP[l][r][c] = 0; }
   resetTapHold();
   resetMouseMove();
   resetDoubleTap();
@@ -228,6 +229,7 @@ void resetState() {
   autoShift = 0;
   autoShiftMs = 175;
   tapTermsCompiledIn = false;
+  holdFlavorsCompiledIn = false;
   holdTapMode = 0;
   numTriLayers = 0;
   memset(triLayerRules, 0, sizeof(triLayerRules));
@@ -4806,6 +4808,197 @@ TEST(test_hold_tap_mode_hold_on_other_key_press) {
   assert(bleKeyboard.pressHistory.size() == 2);
   assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL);
   assert(bleKeyboard.pressHistory[1] == 'b');
+}
+
+
+// Hold-Tap-Variante je Taste (HOLDFLAVORMAP, SET_KF): 0 = holdTapMode der Hälfte, 1..3 = fester Modus
+// Rollen A down, B down, A up, B up: Modus 0 ergibt Ctrl + B, Permissive und Tap Preferred ergeben a, b.
+static void holdFlavorRoll(uint8_t keyRow, uint8_t keyCol) {
+  setMillis(1000);
+  keyState[keyRow][keyCol] = true; onMatrixKeyChange(keyRow, keyCol, true, 1000);
+  setMillis(1050);
+  keyState[2][5] = true; onMatrixKeyChange(2, 5, true, 1050);
+  setMillis(1080);
+  keyState[keyRow][keyCol] = false; onMatrixKeyChange(keyRow, keyCol, false, 1080);
+  setMillis(1120);
+  keyState[2][5] = false; onMatrixKeyChange(2, 5, false, 1120);
+}
+
+TEST(test_hold_flavor_per_key_overrides_only_that_key) {
+  resetState();
+  holdTapMode = 0;                       // Hälfte: sofort bei zweiter Taste
+  KEYMAP[0][2][1] = 'a'; HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'c'; HOLDMAP[0][2][2] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][5] = 'b';
+  handleConfigCommand("SET_KF 0 2 1 2", false);   // nur R2C1: Permissive (Modus 1 + 1)
+  assert(HOLDFLAVORMAP[0][2][1] == 2 && HOLDFLAVORMAP[0][2][2] == 0);
+
+  holdFlavorRoll(2, 1);                  // R2C1 mit eigener Variante: Rollen ergibt a, b
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'a' && bleKeyboard.pressHistory[1] == 'b');
+
+  resetState();
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a'; HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'c'; HOLDMAP[0][2][2] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][5] = 'b';
+  handleConfigCommand("SET_KF 0 2 1 2", false);
+  holdFlavorRoll(2, 2);                  // R2C2 ohne Variante bleibt beim Modus der Hälfte: Ctrl + b
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL && bleKeyboard.pressHistory[1] == 'b');
+}
+
+TEST(test_hold_flavor_per_key_overrides_half_mode_both_ways) {
+  // Hälfte Permissive, Taste auf "sofort bei zweiter Taste" (Wert 1): nur diese Taste wird Ctrl
+  resetState();
+  holdTapMode = 1;
+  KEYMAP[0][2][1] = 'a'; HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'c'; HOLDMAP[0][2][2] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][5] = 'b';
+  handleConfigCommand("SET_KF 0 2 1 1", false);
+  holdFlavorRoll(2, 1);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == KEY_LEFT_CTRL && bleKeyboard.pressHistory[1] == 'b');
+
+  resetState();
+  holdTapMode = 1;
+  KEYMAP[0][2][1] = 'a'; HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'c'; HOLDMAP[0][2][2] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][5] = 'b';
+  handleConfigCommand("SET_KF 0 2 1 1", false);
+  holdFlavorRoll(2, 2);                  // Taste ohne Variante: Permissive der Hälfte, Rollen ergibt a/c, b
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'c' && bleKeyboard.pressHistory[1] == 'b');
+}
+
+TEST(test_hold_flavor_per_key_tap_preferred_buffers_next_key) {
+  // Hälfte "sofort", Taste Tap Preferred (Wert 3): der nächste Druck wird gepuffert, Rollen ergibt a, b
+  resetState();
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a'; HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][5] = 'b';
+  handleConfigCommand("SET_KF 0 2 1 3", false);
+  holdFlavorRoll(2, 1);
+  assert(bleKeyboard.pressHistory.size() == 2);
+  assert(bleKeyboard.pressHistory[0] == 'a' && bleKeyboard.pressHistory[1] == 'b');
+}
+
+TEST(test_hold_flavor_per_key_mixed_pending_keys_resolve_by_own_mode) {
+  // Zwei offene Tasten: R2C1 Modus 0 (Hälfte), R2C2 Tap Preferred. Ein Druck löst nur R2C1 als Hold.
+  resetState();
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a'; HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'c'; HOLDMAP[0][2][2] = KEY_LEFT_SHIFT;
+  KEYMAP[0][2][5] = 'b';
+  handleConfigCommand("SET_KF 0 2 2 3", false);
+  setMillis(1000);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1000);   // Tap Preferred, offen
+  setMillis(1010);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1010);   // wird gepuffert, solange R2C2 offen ist
+  assert(tapHold[2][2].pending);
+  setMillis(1500);                                              // Tapping-Term abgelaufen: R2C2 wird Hold
+  tapHoldTick(1500);
+  assert(tapHold[2][2].holdActive);
+}
+
+TEST(test_hold_flavor_per_key_release_path_uses_key_mode) {
+  // Hälfte Modus 0, Taste Permissive: verschachteltes Drücken und Loslassen von B entscheidet A als Hold
+  resetState();
+  holdTapMode = 0;
+  KEYMAP[0][2][1] = 'a'; HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][5] = 'b';
+  handleConfigCommand("SET_KF 0 2 1 2", false);
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][5] = true; onMatrixKeyChange(2, 5, true, 1050);
+  assert(tapHold[2][1].pending);                                // Modus 0 hätte A schon als Hold entschieden
+  setMillis(1080);
+  keyState[2][5] = false; onMatrixKeyChange(2, 5, false, 1080); // volles Paar: A wird Hold
+  assert(tapHold[2][1].holdActive);
+}
+
+TEST(test_hold_flavor_per_key_commands_and_nvs) {
+  resetState();
+  assert(isValidKeyHoldFlavor(0) && isValidKeyHoldFlavor(HOLD_FLAVOR_MAX));
+  assert(!isValidKeyHoldFlavor(HOLD_FLAVOR_MAX + 1) && !isValidKeyHoldFlavor(-1));
+  handleConfigCommand("SET_KF 0 2 1 4", false);
+  assert(mockChar.value == "ERR ARGS SET_KF 0 2 1 4");
+  handleConfigCommand("SET_KF 8 2 1 1", false);
+  assert(mockChar.value == "ERR ARGS SET_KF 8 2 1 1");
+  handleConfigCommand("SET_KF 0 2 1 1 7", false);
+  assert(mockChar.value == "ERR ARGS SET_KF 0 2 1 1 7");
+  assert(HOLDFLAVORMAP[0][2][1] == 0);
+  handleConfigCommand("SET_KF 0 2 1 2", false);
+  handleConfigCommand("SET_KF 1 3 4 3", false);
+  assert(HOLDFLAVORMAP[0][2][1] == 2 && HOLDFLAVORMAP[1][3][4] == 3);
+
+  // GET_CONFIG meldet die Werte je Ebene
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool foundL0 = false, foundL1 = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n.rfind("FLAVOR_DATA:{\"l\":0,", 0) == 0 && n.find("[0,2,0,0,0,0,0]") != std::string::npos) foundL0 = true;
+    if (n.rfind("FLAVOR_DATA:{\"l\":1,", 0) == 0 && n.find("[0,0,0,0,3,0,0]") != std::string::npos) foundL1 = true;
+  }
+  assert(foundL0 && foundL1);
+
+  // Ohne SAVE_NVS bleibt der NVS leer; danach überlebt der Wert einen Neustart
+  assert(!preferences.isKey("holdflv"));
+  handleConfigCommand("SAVE_NVS", false);
+  assert(mockChar.value == "OK SAVE_NVS");
+  assert(preferences.getBytesLength("holdflv") == sizeof(HOLDFLAVORMAP));
+  memset(HOLDFLAVORMAP, 0, sizeof(HOLDFLAVORMAP));
+  loadKeymapFromNVS();
+  assert(HOLDFLAVORMAP[0][2][1] == 2 && HOLDFLAVORMAP[1][3][4] == 3);
+
+  // CLEAR_HOLD_FLAVORS + SAVE_NVS entfernt den Schlüssel
+  handleConfigCommand("CLEAR_HOLD_FLAVORS", false);
+  assert(mockChar.value == "OK CLEAR_HOLD_FLAVORS");
+  assert(HOLDFLAVORMAP[0][2][1] == 0);
+  handleConfigCommand("SAVE_NVS", false);
+  assert(!preferences.isKey("holdflv"));
+  loadKeymapFromNVS();
+  assert(HOLDFLAVORMAP[0][2][1] == 0);
+
+  // Ungültiger gespeicherter Wert zählt als 0
+  std::vector<uint8_t> raw(sizeof(HOLDFLAVORMAP), 0);
+  uint16_t bad = 9, good = 2;
+  memcpy(raw.data(), &bad, sizeof(bad));
+  memcpy(raw.data() + sizeof(uint16_t), &good, sizeof(good));
+  Preferences::bytesStore["holdflv"] = raw;
+  loadKeymapFromNVS();
+  assert(HOLDFLAVORMAP[0][0][0] == 0 && HOLDFLAVORMAP[0][0][1] == 2);
+}
+
+TEST(test_hold_flavor_per_key_cleared_compiled_in_stay_cleared_and_fingerprint) {
+  resetState();
+  uint32_t base = keymapDefaultsFingerprint();
+  HOLDFLAVORMAP[0][2][1] = 2;
+  assert(keymapDefaultsFingerprint() != base);
+  HOLDFLAVORMAP[0][2][1] = 0;
+  assert(keymapDefaultsFingerprint() == base);          // leer = Fingerprint der Firmware davor
+
+  HOLDFLAVORMAP[0][2][1] = 2;                           // einkompilierter Wert
+  loadKeymapFromNVS();
+  handleConfigCommand("CLEAR_HOLD_FLAVORS", false);
+  handleConfigCommand("SAVE_NVS", false);
+  assert(preferences.isKey("holdflv"));                 // Null-Blob statt fehlendem Schlüssel
+  HOLDFLAVORMAP[0][2][1] = 2;
+  holdFlavorsCompiledIn = false;
+  loadKeymapFromNVS();
+  assert(HOLDFLAVORMAP[0][2][1] == 0 && !anyKeyHoldFlavor());
+}
+
+TEST(test_hold_flavor_per_key_transparent_key_inherits_layer0_flavor) {
+  resetState();
+  handleConfigCommand("SET_K 0 2 1 106 0 0", false);
+  handleConfigCommand("SET_K 0 2 1 97 128 0", false);
+  handleConfigCommand("SET_KF 0 2 1 2", false);
+  assert(resolveKeyHoldFlavor(0, 2, 1) == 2);
+  assert(resolveKeyHoldFlavor(1, 2, 1) == 2);           // Ebene 1 leer: erbt von Ebene 0
+  handleConfigCommand("SET_K 1 2 1 107", false);
+  assert(resolveKeyHoldFlavor(1, 2, 1) == 0);
 }
 
 TEST(test_hold_tap_mode_permissive_hold) {

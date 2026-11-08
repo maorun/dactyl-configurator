@@ -503,6 +503,14 @@ TEST(test_one_shot_and_caps_word_are_forwarded) {
   assert(is(ev[2], SPLIT_OP_CAPS_WORD_TOGGLE, 0));
 }
 
+TEST(test_clear_state_key_is_forwarded_to_the_master) {
+  KEYMAP[0][5][1] = ACT_CLEAR_STATE;
+  tap(5, 1);
+  std::vector<SplitHidEvent> ev = drain();
+  for (const SplitHidEvent &e : ev) assert(isValidSplitHidEvent(e));
+  assert(ev.size() == 2 && is(ev[0], SPLIT_OP_RELEASE_ALL, 0) && is(ev[1], SPLIT_OP_CLEAR_STATE, 0));
+}
+
 TEST(test_sentence_case_toggle_is_forwarded) {
   KEYMAP[0][5][1] = ACT_SENTENCE_CASE;
   tap(5, 1);

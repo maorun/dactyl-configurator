@@ -616,6 +616,7 @@ const ON_SCREEN_KEYBOARD_TABS = {
         { code: "TT_DOWN", label: "TT -10", width: 2 },
         { code: "KEEP_AWAKE", label: "Keep-awake", width: 2 },
         { code: "DEEP_SLEEP", label: "Deep Sleep", width: 2 },
+        { code: "CLEAR_STATE", label: "Clear State", width: 2 },
         { code: "MAC_GLOBE", label: "🌐 Globus / Fn", width: 2 }
       ]
     ]

@@ -150,6 +150,7 @@ public:
   }
   void capsWordToggle() { pushEvent(makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE)); }
   void sentenceCaseToggle() { pushEvent(makeSplitHidEvent(SPLIT_OP_SENTENCE_CASE_TOGGLE)); }
+  void clearState() { pushEvent(makeSplitHidEvent(SPLIT_OP_CLEAR_STATE)); }
 
   // Key lock: der Master führt Vormerkung und gesperrte Eingaben beider Hälften
   void keyLockArm() { pushEvent(makeSplitHidEvent(SPLIT_OP_KEY_LOCK)); }

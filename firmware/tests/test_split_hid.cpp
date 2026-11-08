@@ -32,6 +32,7 @@ struct RecordingSink : SplitHidSink {
   void leftOneShotRelease(uint8_t m, bool arm) override { log.push_back((arm ? "or" : "ox") + std::to_string(m)); }
   void leftCapsWordToggle() override { log.push_back("cw"); }
   void leftSentenceCaseToggle() override { log.push_back("sc"); }
+  void leftClearState() override { log.push_back("cs"); }
 };
 
 static SplitLeftHeld held;
@@ -104,6 +105,7 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_MOVE, 0xFF, 5),   // x = 5, y = -1
     makeSplitOslEvent(0x04, 0x02),                     // One-Shot-Ebene 2 vorgemerkt, Ebene 1 des Empfängers verbraucht
     makeSplitHidEvent(SPLIT_OP_KEY_LOCK),
+    makeSplitHidEvent(SPLIT_OP_CLEAR_STATE),
     makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a', 1),     // sperrbarer Tastendruck
     makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 1, 1),     // sperrbarer Mausdruck
     makeSplitMouseSpeedEvent(2),                       // MOUSE_FAST gehalten
@@ -111,7 +113,7 @@ TEST(test_valid_event_per_op) {
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
   // ACTIVITY, TAP_FLUSH, REPEAT_RUN, SLEEP und MASTER_PRESS sind die einzigen Ops nur der Rückrichtung. Jede dieser fünf
   // fehlt, vier Ops stehen doppelt, KEY_PRESS und MOUSE_PRESS kommen zusätzlich mit arg 1 vor: SPLIT_OP_COUNT - 5 + 4 + 2.
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 5 + 4 + 2);
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 5 + 4 + 2);  // CLEAR_STATE ist ein Op mehr, SPLIT_OP_COUNT zählt ihn mit
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
     if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP || op == SPLIT_OP_MASTER_PRESS) continue;
     bool seen = false;
@@ -1705,6 +1707,33 @@ TEST(test_caps_word_mouse_click_and_reset_follow_idle_rules) {
   assert(!k.oneShot.capsWord);
 }
 
+static int clearStateCalls = 0;
+static void recordClearState(const SplitHidEvent &) { clearStateCalls++; }
+
+TEST(test_clear_state_op_resets_master_modes_and_calls_the_master_hook) {
+  Kbd k;
+  k.capsWordToggle();
+  k.sentenceCaseToggle();
+  k.oneShotPress(0x02);                              // rechte One-Shot-Taste noch gehalten
+  assert(k.oneShot.capsWord && k.oneShot.sentenceCase && k.rightHeld().oneShot);
+  left(k, SPLIT_OP_CLEAR_STATE);
+  assert(!k.oneShot.capsWord && !k.oneShot.sentenceCase && k.rightHeld().oneShot == 0);
+  assert(!splitEventRetryable(makeSplitHidEvent(SPLIT_OP_CLEAR_STATE)));
+  assert(splitIsPressOp(SPLIT_OP_CLEAR_STATE));
+  // Der Master ruft seinen Haken wie bei einem eigenen Druck auf, auch ohne Mac-Verbindung
+  uint32_t droppedSeen = 0;
+  bool hostWas = true;
+  clearStateCalls = 0;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_CLEAR_STATE));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, recordClearState);
+  assert(clearStateCalls == 1);
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_CLEAR_STATE));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, false, 200, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, recordClearState);
+  assert(clearStateCalls == 2);
+}
+
 TEST(test_caps_word_toggle_off_and_modifier_keeps_it) {
   Kbd k;
   k.capsWordToggle();
@@ -2140,7 +2169,7 @@ TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
   assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25);
-  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_SENTENCE_CASE_TOGGLE == 30 && SPLIT_OP_COUNT == 32 && SPLIT_OP_MOUSE_SPEED == 31);
+  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_SENTENCE_CASE_TOGGLE == 30 && SPLIT_OP_COUNT == 33 && SPLIT_OP_MOUSE_SPEED == 31 && SPLIT_OP_CLEAR_STATE == 32);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -2186,7 +2215,7 @@ TEST(test_process_rx_skips_before_left_press_without_host) {
 TEST(test_press_ops_for_before_left_press) {
   const uint8_t press[] = {SPLIT_OP_KEY_PRESS, SPLIT_OP_KEY_WRITE, SPLIT_OP_MEDIA_PRESS, SPLIT_OP_MEDIA_WRITE,
                            SPLIT_OP_MOUSE_PRESS, SPLIT_OP_MOUSE_CLICK, SPLIT_OP_MOUSE_SCROLL,
-                           SPLIT_OP_ONE_SHOT_PRESS, SPLIT_OP_CAPS_WORD_TOGGLE, SPLIT_OP_SENTENCE_CASE_TOGGLE};
+                           SPLIT_OP_ONE_SHOT_PRESS, SPLIT_OP_CAPS_WORD_TOGGLE, SPLIT_OP_SENTENCE_CASE_TOGGLE, SPLIT_OP_CLEAR_STATE};
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
     bool expected = false;
     for (uint8_t p : press) if (p == op) expected = true;

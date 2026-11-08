@@ -146,6 +146,23 @@ test("Deep Sleep: beide Sketche prüfen deepSleepKeyDue in loop() und löschen d
   assert.ok(rightSleep.includes("sendSplitSleep();"), "enterDeepSleep sendet SPLIT_OP_SLEEP nicht");
 });
 
+test("Clear State: der Master-Sketch und die linke Hälfte führen die Aktion über DactylLogic.h und das Split-Protokoll aus", () => {
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  const split = read("firmware/dactyl_right/DactylSplitHid.h");
+  const leftKbd = read("firmware/dactyl_left/DactylSplitKeyboard.h");
+  assert.ok(logic.includes("isClearStateAction(action)") && logic.includes("clearStatePress();"), "dispatchPress ruft clearStatePress nicht");
+  assert.ok(/SPLIT_OP_CLEAR_STATE = 32/.test(split), "SPLIT_OP_CLEAR_STATE fehlt im Protokoll");
+  assert.ok(split.includes("case SPLIT_OP_CLEAR_STATE:\n      sink.leftClearState();"), "der Master führt CLEAR_STATE nicht aus");
+  assert.ok(leftKbd.includes("void clearState() { pushEvent(makeSplitHidEvent(SPLIT_OP_CLEAR_STATE)); }"), "die linke Hälfte sendet CLEAR_STATE nicht");
+  assert.ok(!read("firmware/dactyl_left/dactyl_left.ino").includes("ACT_CLEAR_STATE"), "kein Sonderfall im linken Sketch");
+  // Der Master räumt bei einem CLEAR_STATE der linken Hälfte auch seinen eigenen Zustand (Makro, Ebenen, Num Word ...)
+  const right = read("firmware/dactyl_right/dactyl_right.ino");
+  assert.ok(/static void runClearStateOnMaster\(\) \{[\s\S]*?clearStatePress\(\);/.test(right) && right.includes("runClearStateOnMaster();"), "runClearStateOnMaster ruft clearStatePress nicht");
+  assert.ok(right.includes("onSplitMouseSpeed, onSplitClearState);"), "processSplitEvents übergibt den Haken nicht");
+  assert.ok(split.includes("if (onClearState) onClearState(ev);"), "splitProcessRx ruft den Haken nicht");
+  assert.ok(right.includes("if (clearStatePending) runClearStateOnMaster();"), "ein belegter Mutex wird nicht wiederholt");
+});
+
 test("Einstellung numWordLayer: beide Sketche deklarieren sie, DactylLogic.h meldet und setzt sie, der Server rendert sie", () => {
   for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
     assert.ok(/^uint8_t numWordLayer = 1;$/m.test(src), `${name}: numWordLayer fehlt im Sketch`);

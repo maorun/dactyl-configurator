@@ -142,6 +142,8 @@
 // Deep-sleep key: Ein Druck außerhalb des Config Mode merkt den Schlaf vor. Der Schlaf beginnt erst, wenn an dieser Hälfte keine
 // Taste mehr gehalten ist, sonst weckt die gehaltene Taste das Board sofort wieder (ESP_EXT1_WAKEUP_ANY_HIGH)
 #define ACT_DEEP_SLEEP           0x191
+// Clear-state key: ein Druck beendet Makros, Mausbewegung, Ebenen-Einrastungen und alle Modi (Caps Word, Num Word, Swap hands ...)
+#define ACT_CLEAR_STATE          0x192
 
 #define NUM_LAYERS 8
 

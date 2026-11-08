@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Clear-state panic key (`ACT_CLEAR_STATE`)
-
-- **Rank:** Feature model. Total 28/40 (typing 6, configuration 4, harmony 9, safety 9). Effort S. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylVersion.h`, `js/keycodes.js`, `server.py`.
-- **Problem:** When a toggled layer, layer lock, Caps Word, Num Word, Swap Hands, One-Shot modifier or repeating macro stays on by mistake, the user must find and undo each active state by hand.
-- **Goal:** Add the action `CLEAR_STATE` (`ACT_CLEAR_STATE`). A press stops running macros and mouse movement, releases all held HID keys, clears all toggled and locked layers back to layer 0, and turns off One-Shot modifiers, One-Shot layers, Caps Word, Num Word, Sentence Case, Swap Hands and Keep Awake. Increase `DACTYL_FW_VERSION`.
-- **Acceptance test:** A firmware test activates a toggled layer, Caps Word, Num Word and Swap Hands, presses `CLEAR_STATE` and expects layer 0 and all modes off.
-
 ### Combo and leader preset templates (`COMBO_PRESETS`, `LEADER_PRESETS`)
 
 - **Rank:** Feature model. Total 27/40 (typing 5, configuration 7, harmony 8, safety 7). Effort S. Estimate.

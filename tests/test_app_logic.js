@@ -51,7 +51,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_ALT_REPEATS, isValidAltRepeat, hasDuplicateAltRepeat, normalizeAltRepeat, altRepeatsFromSameFingerPairs, localAltRepeatTuples, describeAltRepeatTuple,
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
-             computeTimingRecommendations, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
+             computeTimingRecommendations, computePerKeyTimingSuggestions, applyPerKeyTimingSuggestions, revertPerKeyTimingSuggestions, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
              macroSaveIndex, COMBO_PRESETS, LEADER_PRESETS, applyComboPreset, applyLeaderPreset, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isKeepAwakeCode, isDeepSleepCode, isClearStateCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
@@ -8401,6 +8401,88 @@ test("Tapping-Term-Assistent: Perzentil, Klemmung und unvollständige Paare", ()
   const wrap = [];
   for (let i = 0; i < 25; i++) wrap.push(ev(0, 0, true, (0xFFFFFFFF - 2000 + i * 400) >>> 0), ev(0, 0, false, (0xFFFFFFFF - 2000 + i * 400 + 90) >>> 0));
   assert.strictEqual(api.computeTimingRecommendations(wrap).stats.holdP95, 90);
+});
+
+function perKeyTimingFixture() {
+  const cfg = ergoConfig({ "2_1": { tap: "KEY_A", hold: "KEY_LEFT_SHIFT" }, "2_2": { tap: "KEY_S", hold: "KEY_LEFT_CTRL" }, "2_3": { tap: "KEY_D", hold: "KEY_LEFT_ALT" } });
+  cfg.settings = { tappingTermMs: 200 };
+  const samples = [];
+  // R2C1 hält 90 ms (p95 + 30 = 120, Unterschied 80 ms), R2C2 hält 150 ms (180, Unterschied 20 ms), R2C3 nur 5 Tipps
+  for (let i = 0; i < 12; i++) samples.push({ r: 2, c: 1, pressed: true, t: i * 400 }, { r: 2, c: 1, pressed: false, t: i * 400 + 90 });
+  for (let i = 0; i < 12; i++) samples.push({ r: 2, c: 2, pressed: true, t: 10000 + i * 400 }, { r: 2, c: 2, pressed: false, t: 10000 + i * 400 + 150 });
+  for (let i = 0; i < 5; i++) samples.push({ r: 2, c: 3, pressed: true, t: 20000 + i * 400 }, { r: 2, c: 3, pressed: false, t: 20000 + i * 400 + 90 });
+  return { cfg, samples };
+}
+
+test("Tapping-Term je Taste: nur die abweichende Mod-Tap-Taste bekommt einen Vorschlag", () => {
+  const { cfg, samples } = perKeyTimingFixture();
+  const sug = api.computePerKeyTimingSuggestions(samples, cfg, api.SIDE_PROFILES.R);
+  assert.strictEqual(sug.length, 1);
+  assert.strictEqual(sug[0].r, 2); assert.strictEqual(sug[0].c, 1);
+  assert.strictEqual(sug[0].recommended, 120);
+  assert.strictEqual(sug[0].current, 200);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(sug[0].layers)), [0]);
+  // Taste ohne Halte-Aktion: kein Vorschlag, auch bei Abweichung
+  cfg.layers[0][2][1].hold = "NONE";
+  assert.strictEqual(api.computePerKeyTimingSuggestions(samples, cfg, api.SIDE_PROFILES.R).length, 0);
+  // Ein Tapping-Term der Hälfte nahe 120 ms macht den Vorschlag für R2C1 überflüssig; nun weicht R2C2 (180 ms) ab
+  cfg.layers[0][2][1].hold = "KEY_LEFT_SHIFT";
+  cfg.settings.tappingTermMs = 140;
+  const near = api.computePerKeyTimingSuggestions(samples, cfg, api.SIDE_PROFILES.R);
+  assert.deepStrictEqual([...near.map(x => x.c)], [2]);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.computePerKeyTimingSuggestions(null, cfg, null))), []);
+});
+
+test("Tapping-Term je Taste: Profilfilter, Layer-Tap und mehrere Ebenen", () => {
+  const { cfg, samples } = perKeyTimingFixture();
+  // Zweite Ebene mit Layer-Tap (MO_1) auf derselben Taste: beide Ebenen bekommen den Wert
+  cfg.layers.push(JSON.parse(JSON.stringify(cfg.layers[0])));
+  cfg.layers[1][2][1] = { label: "L", tap: "KEY_A", hold: "MO_1", dtap: "NONE" };
+  let sug = api.computePerKeyTimingSuggestions(samples, cfg, api.SIDE_PROFILES.R);
+  assert.deepStrictEqual([...sug[0].layers], [0, 1]);
+  api.applyPerKeyTimingSuggestions(cfg, sug);
+  assert.strictEqual(cfg.layers[1][2][1].tapTerm, 120);
+  // R2C1 fehlt auf keiner Hälfte, R4C0 fehlt rechts: eine Taste außerhalb des Profils bekommt keinen Vorschlag
+  const miss = [];
+  for (let i = 0; i < 12; i++) miss.push({ r: 4, c: 0, pressed: true, t: i * 400 }, { r: 4, c: 0, pressed: false, t: i * 400 + 90 });
+  const cfg2 = ergoConfig({ "4_0": { tap: "KEY_A", hold: "KEY_LEFT_SHIFT" } });
+  cfg2.settings = { tappingTermMs: 200 };
+  assert.strictEqual(api.computePerKeyTimingSuggestions(miss, cfg2, api.SIDE_PROFILES.R).length, 0);
+  assert.strictEqual(api.computePerKeyTimingSuggestions(miss, cfg2, null).length, 1);
+});
+
+test("Tapping-Term je Taste: Übernehmen und Rückgängig", () => {
+  const { cfg, samples } = perKeyTimingFixture();
+  cfg.layers[0][2][1].tapTerm = 250;
+  const sug = api.computePerKeyTimingSuggestions(samples, cfg, api.SIDE_PROFILES.R);
+  const changed = api.applyPerKeyTimingSuggestions(cfg, sug);
+  assert.strictEqual(cfg.layers[0][2][1].tapTerm, 120);
+  assert.strictEqual(api.computePerKeyTimingSuggestions(samples, cfg, api.SIDE_PROFILES.R).length, 0, "ist schon gesetzt");
+  api.revertPerKeyTimingSuggestions(cfg, changed);
+  assert.strictEqual(cfg.layers[0][2][1].tapTerm, 250);
+  delete cfg.layers[0][2][1].tapTerm;
+  const changed2 = api.applyPerKeyTimingSuggestions(cfg, sug);
+  api.revertPerKeyTimingSuggestions(cfg, changed2);
+  assert.ok(!("tapTerm" in cfg.layers[0][2][1]));
+});
+
+test("Tapping-Term je Taste in der UI: Snapshot-Änderung mit Undo", () => {
+  const { cfg, samples } = perKeyTimingFixture();
+  const u = presetUiContext("js/editor-events.js", "// Trägt die Vorschläge je Taste als Snapshot-Änderung", "function setupTimingAssistant", { config: cfg });
+  u.editSide = "R";
+  u.applyPerKeyTimingSuggestions = api.applyPerKeyTimingSuggestions;
+  u.revertPerKeyTimingSuggestions = api.revertPerKeyTimingSuggestions;
+  u.timingAssistant = { perKey: api.computePerKeyTimingSuggestions(samples, cfg, api.SIDE_PROFILES.R), resultSide: "R" };
+  assert.strictEqual(u.applyPerKeyTimingFromUI(), true);
+  assert.strictEqual(u.currentConfig.layers[0][2][1].tapTerm, 120);
+  assert.strictEqual(u.calls.pending[0].snapshot, true);
+  assert.strictEqual(u.calls.saved, 1);
+  u.calls.pending[0].revert();
+  assert.ok(!("tapTerm" in u.currentConfig.layers[0][2][1]));
+  // andere Hälfte: nichts ändert sich
+  u.editSide = "L";
+  assert.strictEqual(u.applyPerKeyTimingFromUI(), false);
+  assert.strictEqual(u.calls.pending.length, 1);
 });
 
 function ergoConfig(overrides = {}) {

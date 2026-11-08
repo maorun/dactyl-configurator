@@ -206,8 +206,10 @@ function percentile(values, p) {
   return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
 }
 
-function computeTimingRecommendations(samples) {
+// Paart Druck und Loslassen und sammelt die Messgrößen; holdIds[i] ist die Taste ("r_c") der Haltezeit holds[i]
+function collectTimingMeasurements(samples) {
   const holds = [];
+  const holdIds = [];
   const rolls = [];
   const presses = [];
   const sameKeyGaps = [];
@@ -238,6 +240,7 @@ function computeTimingRecommendations(samples) {
       const held = lastHold.get(id);
       if (held && lastRelease.get(id) !== undefined && t - lastRelease.get(id) <= MATRIX_BOUNCE_MS && holds.length === held.index + 1) {
         holds.pop();
+        holdIds.pop();
         open.set(id, held.press);
         lastHold.delete(id);
         lastRelease.delete(id);
@@ -254,12 +257,17 @@ function computeTimingRecommendations(samples) {
       const hold = t - open.get(id);
       open.delete(id);
       lastRelease.set(id, t);
-      if (hold >= 0 && hold <= TIMING_MAX_HOLD_MS) { lastHold.set(id, { press: t - hold, index: holds.length }); holds.push(hold); } else incomplete++;
+      if (hold >= 0 && hold <= TIMING_MAX_HOLD_MS) { lastHold.set(id, { press: t - hold, index: holds.length }); holds.push(hold); holdIds.push(id); } else incomplete++;
     } else {
       incomplete++;
     }
   }
   incomplete += open.size;
+  return { holds, holdIds, rolls, presses, sameKeyGaps, incomplete };
+}
+
+function computeTimingRecommendations(samples) {
+  const { holds, rolls, presses, sameKeyGaps, incomplete } = collectTimingMeasurements(samples);
   const stats = {
     holds: holds.length, rolls: rolls.length, incomplete,
     holdP95: percentile(holds, 0.95),
@@ -273,6 +281,62 @@ function computeTimingRecommendations(samples) {
   if (stats.sameKeyP5 !== null) settings.quickTapMs = clampSetting("quickTapMs", Math.round(stats.sameKeyP5));
   if (stats.pressGapP10 !== null) settings.requirePriorIdleMs = clampSetting("requirePriorIdleMs", Math.round(stats.pressGapP10));
   return { enough: true, stats, settings };
+}
+
+// Eigener Tapping-Term je Mod-Tap- und Layer-Tap-Taste: p95 der Haltezeiten der Taste + TIMING_MARGIN_MS (geklemmt).
+// Aufgenommen wird die physische Taste ohne Ebene; der Vorschlag gilt für jede Ebene, in der die Taste eine Halte-
+// oder Doppel-Tipp-Aktion hat. Nur Tasten mit mindestens TIMING_MIN_KEY_HOLDS Tipps und einem Unterschied von
+// mindestens TIMING_PER_KEY_DIFF_MS zum tappingTermMs der Hälfte; ohne Änderung gegenüber den vorhandenen Werten entfällt der Eintrag.
+const TIMING_MIN_KEY_HOLDS = 10;
+const TIMING_PER_KEY_DIFF_MS = 25;
+
+function computePerKeyTimingSuggestions(samples, config, profile) {
+  const layers = config && Array.isArray(config.layers) ? config.layers : [];
+  const global = clampSetting("tappingTermMs", config && config.settings && config.settings.tappingTermMs !== undefined ? config.settings.tappingTermMs : 200);
+  const byKey = new Map();
+  const { holds, holdIds } = collectTimingMeasurements(samples);
+  holds.forEach((h, i) => {
+    if (!byKey.has(holdIds[i])) byKey.set(holdIds[i], []);
+    byKey.get(holdIds[i]).push(h);
+  });
+  const result = [];
+  for (const [id, values] of byKey) {
+    if (values.length < TIMING_MIN_KEY_HOLDS) continue;
+    const [r, c] = id.split("_").map(Number);
+    if (profile && !isPhysicalKey(r, c, profile)) continue;
+    const recommended = clampSetting("tappingTermMs", Math.round(percentile(values, 0.95) + TIMING_MARGIN_MS));
+    if (Math.abs(recommended - global) < TIMING_PER_KEY_DIFF_MS) continue;
+    const cells = [];
+    layers.forEach((layer, l) => {
+      const cell = layer && layer[r] && layer[r][c];
+      if (cell && typeof cell === "object" && (keyToNumericActions(cell).holdCode || keyToNumericActions(cell).dtapCode) && keyTapTerm(cell) !== recommended) cells.push(l);
+    });
+    if (cells.length === 0) continue;
+    result.push({ r, c, holds: values.length, p95: percentile(values, 0.95), current: global, recommended, layers: cells });
+  }
+  return result.sort((a, b) => a.r - b.r || a.c - b.c);
+}
+
+// Trägt die Vorschläge als tapTerm in die Tasten ein; Rückgabe: die geänderten Zellen { l, r, c, old } für das Rückgängigmachen
+function applyPerKeyTimingSuggestions(config, suggestions) {
+  const changed = [];
+  for (const sug of Array.isArray(suggestions) ? suggestions : []) {
+    for (const l of sug.layers || []) {
+      const cell = config.layers[l] && config.layers[l][sug.r] && config.layers[l][sug.r][sug.c];
+      if (!cell || typeof cell !== "object") continue;
+      changed.push({ l, r: sug.r, c: sug.c, old: Number.isInteger(cell.tapTerm) ? cell.tapTerm : undefined });
+      cell.tapTerm = sug.recommended;
+    }
+  }
+  return changed;
+}
+
+function revertPerKeyTimingSuggestions(config, changed) {
+  for (const ch of changed) {
+    const cell = config.layers[ch.l] && config.layers[ch.l][ch.r] && config.layers[ch.l][ch.r][ch.c];
+    if (!cell) continue;
+    if (ch.old === undefined) delete cell.tapTerm; else cell.tapTerm = ch.old;
+  }
 }
 
 // Tastenaufnahme: ein Druck auf der Tastatur füllt den nächsten freien Platz eines Editors (Combo, Leader).

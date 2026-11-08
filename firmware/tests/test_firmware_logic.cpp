@@ -48,6 +48,7 @@ static uint16_t quickTapMs = 0;
 static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
 static uint8_t retroTap = 0;
+static uint8_t numWordLayer = 1;
 static uint8_t autoShift = 0;
 static uint16_t autoShiftMs = 175;
 static uint16_t leaderTimeoutMs = 1000;
@@ -219,6 +220,8 @@ void resetState() {
   requirePriorIdleMs = 0;
   chordalHold = 0;
   retroTap = 0;
+  numWordLayer = 1;
+  numWordActive = false;
   autoShift = 0;
   autoShiftMs = 175;
   tapTermsCompiledIn = false;
@@ -10333,6 +10336,119 @@ TEST(test_mouse_speed_keys_are_not_combo_targets_and_report_local_mask) {
   applyMatrixKeyChange(2, 1, false, 1100);
   applyMatrixKeyChange(2, 2, false, 1100);
   assert(localMouseSpeedMask() == 0);
+}
+
+// Num Word (ACT_NUM_WORD): Tippen rastet numWordLayer ein; Ziffern, Zahlzeichen, Modifier und Ebenen-Tasten halten sie offen
+static void nwSetup() {
+  resetState();
+  KEYMAP[0][5][0] = ACT_NUM_WORD;
+  KEYMAP[1][2][1] = '1';
+  KEYMAP[1][2][2] = '2';
+  KEYMAP[1][2][3] = KEY_LEFT_SHIFT;
+  KEYMAP[0][2][1] = 'a';
+  KEYMAP[0][2][2] = 'b';
+  KEYMAP[1][3][1] = '.';
+}
+
+TEST(test_num_word_digits_from_layer_space_from_layer_zero) {
+  assert(ACT_NUM_WORD == 0x18D && ACT_NUM_WORD > ACT_SENTENCE_CASE);
+  nwSetup();
+  KEYMAP[0][3][3] = ' ';
+  KEYMAP[1][3][3] = 'q';           // Ebene 1 belegt die Stelle mit einem Buchstaben: Space kommt trotzdem von Ebene 0
+  setMillis(1000); pressKey(5, 0, true); pressKey(5, 0, false);
+  assert(numWordActive && getActiveLayer() == 1);
+  setMillis(1100); pressKey(2, 1, true); pressKey(2, 1, false);   // '1' von der Ebene (Ebene 0 hat 'a')
+  setMillis(1200); pressKey(2, 2, true); pressKey(2, 2, false);   // '2' von der Ebene (Ebene 0 hat 'b')
+  assert(countPresses('1') == 1 && countPresses('2') == 1 && countPresses('a') == 0 && countPresses('b') == 0);
+  assert(numWordActive && getActiveLayer() == 1);
+  setMillis(1300); pressKey(3, 3, true);                          // beendet Num Word und gilt auf Ebene 0
+  assert(!numWordActive && getActiveLayer() == 0);
+  assert(countPresses(' ') == 1 && countPresses('q') == 0 && pressedAction[3][3] == ' ');
+  pressKey(3, 3, false);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_num_word_symbols_modifiers_and_layer_keys_keep_it_open) {
+  nwSetup();
+  KEYMAP[1][4][0] = ACT_MO_BASE + 2;
+  setMillis(1000); pressKey(5, 0, true); pressKey(5, 0, false);
+  setMillis(1100); pressKey(3, 1, true); pressKey(3, 1, false);   // '.'
+  assert(numWordActive);
+  setMillis(1200); pressKey(2, 3, true);                          // Shift
+  assert(numWordActive);
+  pressKey(2, 3, false);
+  setMillis(1300); pressKey(4, 0, true); pressKey(4, 0, false);   // Ebenen-Taste
+  assert(numWordActive);
+  for (char ch : {',', '-', '+', '*', '/', '='}) {
+    nwSetup();
+    KEYMAP[1][3][1] = (uint16_t)ch;
+    setMillis(1000); pressKey(5, 0, true); pressKey(5, 0, false);
+    setMillis(1100); pressKey(3, 1, true); pressKey(3, 1, false);
+    assert(numWordActive);
+  }
+}
+
+TEST(test_num_word_idle_timer_resets_and_expires) {
+  nwSetup();
+  setMillis(1000); pressKey(5, 0, true); pressKey(5, 0, false);
+  setMillis(5900); pressKey(2, 1, true); pressKey(2, 1, false);   // Ziffer startet die Frist neu
+  setMillis(10800); numWordExpire(10800);
+  assert(numWordActive);                                          // 4900 ms seit der Ziffer
+  setMillis(10950); numWordExpire(10950);
+  assert(!numWordActive && getActiveLayer() == 0);                // 5050 ms ohne Taste
+}
+
+TEST(test_num_word_second_tap_ends_and_layer_zero_setting_does_nothing) {
+  nwSetup();
+  setMillis(1000); pressKey(5, 0, true); pressKey(5, 0, false);
+  assert(numWordActive);
+  setMillis(1100); pressKey(5, 0, true); pressKey(5, 0, false);
+  assert(!numWordActive && getActiveLayer() == 0);
+  numWordLayer = 0;
+  setMillis(1200); pressKey(5, 0, true); pressKey(5, 0, false);
+  assert(!numWordActive && getActiveLayer() == 0);
+  numWordLayer = 3;
+  setMillis(1300); pressKey(5, 0, true); pressKey(5, 0, false);
+  assert(numWordActive && getActiveLayer() == 3);
+}
+
+TEST(test_num_word_stops_on_release_all_and_manual_layer_change) {
+  nwSetup();
+  setMillis(1000); pressKey(5, 0, true); pressKey(5, 0, false);
+  oslClearAll();
+  assert(!numWordActive && getActiveLayer() == 0);
+  setMillis(2000); pressKey(5, 0, true); pressKey(5, 0, false);
+  toggleLayers[1] = false;                                        // Ebene von Hand gelöst
+  setMillis(2100); pressKey(2, 1, true); pressKey(2, 1, false);
+  assert(!numWordActive);
+}
+
+TEST(test_set_num_word_layer_args_nvs_and_device_info) {
+  resetState();
+  for (const char* bad : {"SET_NUM_WORD_LAYER 8", "SET_NUM_WORD_LAYER -1", "SET_NUM_WORD_LAYER abc", "SET_NUM_WORD_LAYER 12"}) {
+    handleConfigCommand(bad, false);
+    assert(mockChar.value == std::string("ERR ARGS ") + bad);
+  }
+  assert(numWordLayer == 1);
+  handleConfigCommand("SET_NUM_WORD_LAYER 3", false);
+  assert(mockChar.value == "OK SET_NUM_WORD_LAYER 3" && numWordLayer == 3);
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.find("\"nwl\":3,") != std::string::npos && mockChar.value.size() < 512);
+  numWordLayer = 1;
+  loadKeymapFromNVS();
+  assert(numWordLayer == 3);
+  preferences.begin("dactyl", false);
+  preferences.putUChar("nw_layer", 9);
+  preferences.end();
+  numWordLayer = 1;
+  loadKeymapFromNVS();
+  assert(numWordLayer == 1);
+}
+
+TEST(test_num_word_is_no_combo_action) {
+  resetState();
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 397", false);          // ACT_NUM_WORD = 0x18D
+  assert(numCombos == 0);
 }
 
 int main() {

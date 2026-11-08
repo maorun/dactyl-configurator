@@ -548,6 +548,10 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setInput("retroTapSelect", info.rt);
         if (settingsTarget) settingsTarget.retroTap = info.rt;
       }
+      if (info.nwl !== undefined) {
+        setInput("numWordLayerSelect", info.nwl);
+        if (settingsTarget) settingsTarget.numWordLayer = info.nwl;
+      }
       if (info.as !== undefined) {
         setInput("autoShiftSelect", info.as);
         if (settingsTarget) settingsTarget.autoShift = info.as;

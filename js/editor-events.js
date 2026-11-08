@@ -412,6 +412,10 @@ function setupEventListeners() {
       alert("Combos unterstützen kein Swap Hands. Bitte eine normale Taste mit der Aktion belegen.");
       return;
     }
+    if (isNumWordCode(action)) {
+      alert("Combos unterstützen kein Num Word. Bitte eine normale Taste mit der Aktion belegen.");
+      return;
+    }
     if (isBleHostCode(action)) {
       alert("Combos unterstützen keine BLE-Host-Slots. Bitte eine normale Taste mit der Aktion belegen.");
       return;
@@ -594,6 +598,7 @@ function setupEventListeners() {
       const priorIdle = clampSetting("requirePriorIdleMs", parseInt(document.getElementById("priorIdleInput")?.value, 10));
       const chordalHold = clampSetting("chordalHold", parseInt(document.getElementById("chordalHoldSelect")?.value, 10));
       const retroTap = clampSetting("retroTap", parseInt(document.getElementById("retroTapSelect")?.value, 10));
+      const numWordLayer = clampSetting("numWordLayer", parseInt(document.getElementById("numWordLayerSelect")?.value, 10));
       const autoShift = clampSetting("autoShift", parseInt(document.getElementById("autoShiftSelect")?.value, 10));
       const autoShiftMs = clampSetting("autoShiftMs", parseInt(document.getElementById("autoShiftTermInput")?.value, 10));
       const standbyMinutes = clampSetting("standbyTimeoutMinutes", parseInt(document.getElementById("standbyTimeoutSelect")?.value, 10));
@@ -611,6 +616,7 @@ function setupEventListeners() {
       setVal("priorIdleInput", priorIdle);
       setVal("chordalHoldSelect", chordalHold);
       setVal("retroTapSelect", retroTap);
+      setVal("numWordLayerSelect", numWordLayer);
       setVal("autoShiftSelect", autoShift);
       setVal("autoShiftTermInput", autoShiftMs);
 
@@ -633,6 +639,7 @@ function setupEventListeners() {
         requirePriorIdleMs: priorIdle,
         chordalHold: chordalHold,
         retroTap: retroTap,
+        numWordLayer: numWordLayer,
         autoShift: autoShift,
         autoShiftMs: autoShiftMs,
         triLayers: triLayers,

@@ -285,7 +285,7 @@ KEY_TO_CPP = {
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
     "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "SENTENCE_CASE": "ACT_SENTENCE_CASE", "REPEAT": "ACT_REPEAT", "ALT_REPEAT": "ACT_ALT_REPEAT",
     "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY", "LEADER": "ACT_LEADER", "KEY_LOCK": "ACT_KEY_LOCK",
-    "HOST_1": "(ACT_HOST_BASE + 0)", "HOST_2": "(ACT_HOST_BASE + 1)", "HOST_3": "(ACT_HOST_BASE + 2)", "SWAP_HANDS": "ACT_SWAP_HANDS",
+    "HOST_1": "(ACT_HOST_BASE + 0)", "HOST_2": "(ACT_HOST_BASE + 1)", "HOST_3": "(ACT_HOST_BASE + 2)", "SWAP_HANDS": "ACT_SWAP_HANDS", "NUM_WORD": "ACT_NUM_WORD",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
     "MEDIA_VOLUME_UP": "ACT_MEDIA_VOLUME_UP",
@@ -416,6 +416,7 @@ SETTINGS_RANGES = {
     "requirePriorIdleMs": (0, 500, 0),
     "chordalHold": (0, 1, 0),
     "retroTap": (0, 1, 0),
+    "numWordLayer": (0, 7, 1),
     "autoShift": (0, 4, 0),
     "autoShiftMs": (50, 500, 175),
     "capsLed": (0, 1, 0),
@@ -584,6 +585,9 @@ KEY_LOCK_CPP = {"ACT_KEY_LOCK"}
 # Swap hands wirkt nur auf einer Taste (Halten/Tippen); als Combo-Aktion ergibt es nichts
 SWAP_HANDS_CPP = {"ACT_SWAP_HANDS"}
 
+# Num Word schaltet eine Ebene um; als Combo-Aktion ergibt es nichts
+NUM_WORD_CPP = {"ACT_NUM_WORD"}
+
 # BLE-Host-Slots wechseln die Verbindung des Masters; als Combo-Aktion und auf der linken Hälfte ergeben sie nichts
 BLE_HOST_CPP = {f"(ACT_HOST_BASE + {n})" for n in range(3)}
 
@@ -623,6 +627,8 @@ def generate_combos_cpp(combos):
             raise ValueError("Combos unterstützen kein Key Lock.")
         if act in SWAP_HANDS_CPP:
             raise ValueError("Combos unterstützen kein Swap Hands.")
+        if act in NUM_WORD_CPP:
+            raise ValueError("Combos unterstützen kein Num Word.")
         if act in BLE_HOST_CPP:
             raise ValueError("Combos unterstützen keine BLE-Host-Slots.")
         # MODIFIER_HOLD hält einen Code 1..255; One-Shot, Caps Word und Repeat (> 0xFF) senden dort nichts
@@ -1006,6 +1012,7 @@ def generate_settings_cpp(settings, side="R"):
         f'uint16_t requirePriorIdleMs = {values["requirePriorIdleMs"]};',
         f'uint8_t chordalHold = {values["chordalHold"]};',
         f'uint8_t retroTap = {values["retroTap"]};',
+        f'uint8_t numWordLayer = {values["numWordLayer"]};',
         f'uint8_t autoShift = {values["autoShift"]};',
         f'uint16_t autoShiftMs = {values["autoShiftMs"]};',
         f'uint16_t leaderTimeoutMs = {values["leaderTimeoutMs"]};',

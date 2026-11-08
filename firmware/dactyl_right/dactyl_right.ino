@@ -115,6 +115,7 @@ uint16_t quickTapMs = 0;
 uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
 uint8_t retroTap = 0;
+uint8_t numWordLayer = 1;
 uint8_t autoShift = 0;
 uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
@@ -1028,6 +1029,7 @@ void loop() {
   // oneShotTimeoutMs: unverbrauchte Vormerkungen (Modifier und Ebenen) verfallen, auch ohne Funk-Peer
   oneShotExpire(bleKeyboard.oneShot, millis(), oneShotTimeoutMs);
   oslExpireLocal(millis());
+  numWordExpire(millis());   // Num Word endet ohne Tastendruck nach NUM_WORD_IDLE_MS
   // layerTimeoutMs: eingerastete TG-Ebenen fallen ohne Tastendruck beider Hälften zurück
   layerTimeoutExpire(millis());
   dynamicMacroService();

@@ -37,7 +37,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
              COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
              SIDE_PROFILES,
-             applyLayerOperation, transparentLayer, isUndoBlocked, swapLayerKeys, mirrorLayerAcrossSides, swappedSelectionPosition, parseKeyDragPayload,
+             applyLayerOperation, swapLayersWithRefs, transparentLayer, isUndoBlocked, swapLayerKeys, mirrorLayerAcrossSides, swappedSelectionPosition, parseKeyDragPayload,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
              applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell, keyTapTerm, keyHoldFlavor, HOLD_FLAVOR_MAX,
              createDeviceSnapshot, captureListLine, buildConfigFromSnapshot, settingsFromDeviceInfo, deviceNameFromInfo, diffSettings, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, staleLayoutState, describeKeyActions,
@@ -731,6 +731,70 @@ test("Ebenen-Werkzeug: Kopieren ersetzt nur das Ziel und teilt keine Objekte", (
   assert.strictEqual(next[1][0][0].tap, "KEY_1");
   // Eingabe bleibt unverändert
   assert.strictEqual(layers[3][0][0].tap, "KEY_3");
+});
+
+test("Ebenen tauschen mit Verweisen: Tasten, Combos, Masken, Einstellungen; zweimal tauschen stellt her", () => {
+  const layers = sampleLayers();
+  layers[0][0][0] = { label: "a", tap: "MO_1", hold: "ACT_TG_2", dtap: "OSL_1" };
+  layers[0][0][1] = "MO_2";
+  layers[3][0][0] = { label: "b", tap: "OSL_2", hold: "MO_3", dtap: "NONE" };
+  const cfg = {
+    layers,
+    layerNames: ["B", "One", "Two", "C", "D", "E", "F", "G"],
+    combos: [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior: "LAYER_TOGGLE", action: "TG_1", layerMask: 0b00000110 },
+             { key1: { r: 0, c: 0 }, key2: { r: 0, c: 2 }, behavior: "KEY_PRESS", action: "KEY_A", layerMask: 0b00000010 },
+             { key1: { r: 1, c: 0 }, key2: { r: 1, c: 1 }, behavior: "KEY_PRESS", action: "KEY_B" }],
+    keyOverrides: [{ mods: ["LCTRL"], key: "KEY_A", replacement: "KEY_B", layerMask: 0b00000100 }],
+    settings: { bootLayer: 1, numWordLayer: 2, triLayers: [{ a: 1, b: 3, target: 2 }] }
+  };
+  const before = JSON.parse(JSON.stringify(cfg));
+  const plain = v => (v === null ? v : JSON.parse(JSON.stringify(v)));
+  const out = plain(api.swapLayersWithRefs(cfg, 1, 2));
+  assert.deepStrictEqual(cfg, before);
+  assert.strictEqual(out.layers[1][0][0].tap, "KEY_2");
+  assert.strictEqual(out.layers[2][0][0].tap, "KEY_1");
+  assert.deepStrictEqual(out.layerNames.slice(0, 3), ["B", "Two", "One"]);
+  assert.deepStrictEqual(out.layers[0][0][0], { label: "a", tap: "MO_2", hold: "ACT_TG_1", dtap: "OSL_2" });
+  assert.strictEqual(out.layers[0][0][1], "MO_1");
+  assert.deepStrictEqual(out.layers[3][0][0], { label: "b", tap: "OSL_1", hold: "MO_3", dtap: "NONE" });
+  assert.strictEqual(out.combos[0].action, "TG_2");
+  assert.strictEqual(out.combos[0].layerMask, 0b00000110);
+  assert.strictEqual(out.combos[1].layerMask, 0b00000100);
+  assert.strictEqual(out.combos[2].layerMask, undefined);
+  assert.strictEqual(out.keyOverrides[0].layerMask, 0b00000010);
+  assert.strictEqual(out.settings.bootLayer, 2);
+  assert.strictEqual(out.settings.numWordLayer, 1);
+  assert.deepStrictEqual(out.settings.triLayers, [{ a: 2, b: 3, target: 1 }]);
+  assert.deepStrictEqual(plain(api.swapLayersWithRefs(out, 1, 2)), before);
+  assert.strictEqual(api.swapLayersWithRefs(cfg, 1, 1), null);
+  assert.strictEqual(api.swapLayersWithRefs(cfg, 1, 8), null);
+  assert.strictEqual(api.swapLayersWithRefs(null, 1, 2), null);
+});
+
+test("Ebenen tauschen mit Verweisen: Ebene 0, ACT_-Combos, volle Maske, kurze Namen", () => {
+  const plain = v => JSON.parse(JSON.stringify(v));
+  const cfg = {
+    layers: sampleLayers(),
+    layerNames: ["Base", "Eins"],
+    combos: [{ key1: { r: 0, c: 0 }, key2: { r: 0, c: 1 }, behavior: "LAYER_TOGGLE", action: "ACT_TG_3", layerMask: 0xFF },
+             { key1: { r: 1, c: 0 }, key2: { r: 1, c: 1 }, behavior: "KEY_PRESS", action: "ACT_OSL_0", layerMask: 0b00000001 }],
+    keyOverrides: [{ mods: ["LCTRL"], key: "KEY_A", replacement: "KEY_B" }],
+    settings: { bootLayer: 0, numWordLayer: 3, triLayers: [{ a: 1, b: 2, target: 3 }, { a: 2, b: 3, target: 4 }] }
+  };
+  const out = plain(api.swapLayersWithRefs(cfg, 0, 3));
+  assert.strictEqual(out.combos[0].action, "ACT_TG_0");
+  assert.strictEqual(out.combos[0].layerMask, 0xFF);
+  assert.strictEqual(out.combos[1].action, "ACT_OSL_3");
+  assert.strictEqual(out.combos[1].layerMask, 0b00001000);
+  assert.strictEqual(out.keyOverrides[0].layerMask, undefined);
+  assert.strictEqual(out.settings.bootLayer, 3);
+  assert.strictEqual(out.settings.numWordLayer, 0);
+  // Beide Regeln fielen auf Ebene 0 (Ziel bzw. b) und entfallen
+  assert.deepStrictEqual(out.settings.triLayers, []);
+  assert.strictEqual(out.layerNames.length, 8);
+  assert.strictEqual(out.layerNames[1], "Eins");
+  assert.strictEqual(out.layerNames[3], "Base");
+  assert.ok(out.layerNames.every(n => typeof n === "string"));
 });
 
 test("Ebenen-Werkzeug: Tauschen und Leeren", () => {

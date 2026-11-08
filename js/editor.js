@@ -54,24 +54,32 @@ function applyLayerToolFromUI() {
   const texts = {
     copy: [`Ebene ${label(source)} nach ${label(target)} kopieren? Die Belegung von ${label(target)} wird ersetzt.`,
            "Ebene kopiert", `${label(source)} ➔ ${label(target)}`],
-    swap: [`Ebenen ${label(source)} und ${label(target)} tauschen?`,
+    swap: [`Ebenen ${label(source)} und ${label(target)} tauschen? Alle Verweise darauf (MO/TG/OSL, Combos, Überschreibungen, Tri-Layer, Boot- und Num-Word-Ebene) wechseln mit. Die andere Hälfte bleibt unverändert.`,
            "Ebenen getauscht", `${label(source)} ⇄ ${label(target)}`],
     clear: [`Alle Tasten von Ebene ${label(source)} auf transparent setzen?`,
             "Ebene geleert", `${label(source)} ist jetzt transparent`]
   }[op];
   if (!texts) return;
-  const next = applyLayerOperation(currentConfig.layers, op, source, target);
+  const swappedConfig = op === "swap" ? swapLayersWithRefs(currentConfig, source, target) : null;
+  const next = swappedConfig ? swappedConfig.layers : applyLayerOperation(currentConfig.layers, op, source, target);
   if (!next) {
     showToast("Bitte eine andere Ziel-Ebene wählen.");
     return;
   }
   if (!confirm(texts[0])) return;
 
-  const oldLayers = JSON.parse(JSON.stringify(currentConfig.layers));
-  currentConfig.layers = next;
-  renderMatrix();
-  if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
-  saveConfigToServer();
+  const oldConfig = JSON.parse(JSON.stringify(currentConfig));
+  if (swappedConfig) currentConfig = swappedConfig;
+  else currentConfig.layers = next;
+  const rerender = () => {
+    applySettingsToInputs(currentConfig.settings);
+    renderLayerButtons();
+    renderMatrix();
+    renderCombosTable();
+    if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
+    saveConfigToServer();
+  };
+  rerender();
   // Wie Preset/Import: als Snapshot vormerken, Übertragung beim nächsten Sync
   markPendingSync({
     type: "layer_tool",
@@ -79,10 +87,9 @@ function applyLayerToolFromUI() {
     title: texts[1],
     description: texts[2],
     revert: () => {
-      currentConfig.layers = oldLayers;
-      renderMatrix();
-      if (selectedKey) updateInspector(selectedKey.r, selectedKey.c);
-      saveConfigToServer();
+      if (swappedConfig) currentConfig = oldConfig;
+      else currentConfig.layers = oldConfig.layers;
+      rerender();
     }
   });
 }

@@ -1129,6 +1129,64 @@ function applyLayerOperation(layers, op, source, target) {
   return next;
 }
 
+// Tauscht Bit a und Bit b einer Ebenenmaske
+function swapMaskBits(mask, a, b) {
+  if (!Number.isInteger(mask) || ((mask >> a) & 1) === ((mask >> b) & 1)) return mask;
+  return mask ^ ((1 << a) | (1 << b));
+}
+
+// Tauscht zwei Ebenen samt aller Verweise: Tasten (tap, hold, dtap: MO_n, TG_n, OSL_n, auch mit Präfix ACT_),
+// Combo-Aktionen und -Masken, Masken der Überschreibungen, triLayers, bootLayer, numWordLayer und layerNames.
+// Tri-Layer-Regeln, die auf Ebene 0 fielen, entfallen. Gibt eine neue Konfiguration zurück; null bei ungültigen Ebenen. Die Eingabe bleibt unverändert.
+function swapLayersWithRefs(config, layerA, layerB) {
+  if (!config || typeof config !== "object" || !isValidIndex(layerA, NUM_LAYERS) ||
+      !isValidIndex(layerB, NUM_LAYERS) || layerA === layerB) return null;
+  const layers = applyLayerOperation(config.layers, "swap", layerA, layerB);
+  if (!layers) return null;
+  const mapLayer = n => (n === layerA ? layerB : n === layerB ? layerA : n);
+  const mapAction = code => {
+    if (typeof code !== "string") return code;
+    const m = /^(ACT_)?(MO|TG|OSL)_([0-7])$/.exec(code);
+    return m ? `${m[1] || ""}${m[2]}_${mapLayer(Number(m[3]))}` : code;
+  };
+  const out = JSON.parse(JSON.stringify(config));
+  out.layers = layers.map(layer => (Array.isArray(layer) ? layer.map(row => (Array.isArray(row) ? row.map(cell => {
+    if (typeof cell === "string") return mapAction(cell);
+    if (!cell || typeof cell !== "object") return cell;
+    const next = { ...cell };
+    for (const f of ["tap", "hold", "dtap"]) if (f in next) next[f] = mapAction(next[f]);
+    return next;
+  }) : row)) : layer));
+  if (Array.isArray(config.layerNames)) {
+    const names = Array.from({ length: NUM_LAYERS }, (_, i) => (typeof config.layerNames[i] === "string" ? config.layerNames[i] : DEFAULT_LAYER_NAMES[i]));
+    [names[layerA], names[layerB]] = [names[layerB], names[layerA]];
+    out.layerNames = names;
+  }
+  if (Array.isArray(out.combos)) {
+    out.combos = out.combos.map(cb => {
+      if (!cb || typeof cb !== "object") return cb;
+      const next = { ...cb, action: mapAction(cb.action) };
+      if (isValidComboLayerMask(cb.layerMask)) next.layerMask = swapMaskBits(cb.layerMask, layerA, layerB);
+      return next;
+    });
+  }
+  if (Array.isArray(out.keyOverrides)) {
+    out.keyOverrides = out.keyOverrides.map(o => (o && isValidComboLayerMask(o.layerMask)
+      ? { ...o, layerMask: swapMaskBits(o.layerMask, layerA, layerB) } : o));
+  }
+  if (out.settings && typeof out.settings === "object") {
+    const st = out.settings;
+    for (const f of ["bootLayer", "numWordLayer"]) if (Number.isInteger(st[f])) st[f] = mapLayer(st[f]);
+    if (Array.isArray(st.triLayers)) {
+      // Eine Regel, die durch den Tausch auf Ebene 0 fiele, ist ungültig (Ebenen 1..7) und entfällt
+      st.triLayers = st.triLayers.map(r => (r && typeof r === "object"
+        ? { ...r, a: mapLayer(r.a), b: mapLayer(r.b), target: mapLayer(r.target) } : r))
+        .filter(r => !r || typeof r !== "object" || [r.a, r.b, r.target].every(n => !Number.isInteger(n) || n >= 1));
+    }
+  }
+  return out;
+}
+
 // Tauscht zwei Zellen einer Ebene (Ziehen einer Taste auf eine andere). Gibt eine neue Ebene zurück;
 // null bei ungültigen Koordinaten oder gleicher Zelle. Die Eingabe bleibt unverändert.
 function swapLayerKeys(layer, r1, c1, r2, c2) {

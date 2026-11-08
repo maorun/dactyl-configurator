@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Layer swap and move with reference updates (`swapLayersWithRefs`)
-
-- **Rank:** Feature model. Total 26/40 (typing 3, configuration 7, harmony 8, safety 8). Effort M. Estimate.
-- **Area:** App.
-- **Code:** `js/config-model.js`, `js/editor-events.js`.
-- **Problem:** Swapping two layers leaves `MO_n`, `TG_n`, `OSL_n`, `triLayers`, `bootLayer`, `numWordLayer`, combo `layerMask` and key override `layerMask` pointing to the old layer indices.
-- **Goal:** Update the layer swap tool (`swapLayersWithRefs(config, layerA, layerB)`) so that swapping layer A and layer B also swaps all references to A and B in key actions, combo actions, combo layer masks, key override layer masks, `triLayers`, `bootLayer` and `numWordLayer`.
-- **Acceptance test:** A unit test swaps layer 1 and layer 2 in a configuration with `MO_1`, `triLayers`, `bootLayer = 1` and a layer mask, and expects all references updated to layer 2; swapping twice restores the original configuration.
-
 ## Priority 3
 
 ### Live status pills for active keyboard modes (`MODE_STATE`)

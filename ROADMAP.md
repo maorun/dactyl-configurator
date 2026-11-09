@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Auto-mouse layer (`autoMouseLayer`, `mouseTimeoutMs`)
-
-- **Rank:** Feature model. Total 30/40 (typing 7, configuration 7, harmony 8, safety 8). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/dactyl_right.ino`, `firmware/dactyl_left/dactyl_left.ino`, `js/config-sync.js`, `js/settings-ui.js`.
-- **Problem:** Mouse navigation on a split keyboard requires dedicating a thumb key to hold a momentary layer while operating mouse movement and wheel keys.
-- **Goal:** Add `autoMouseLayer` (`0..7`, disabled when `0xFF`) and `mouseTimeoutMs` (100..2000 ms, default 500 ms) in settings. Any mouse action (`ACT_MOUSE_UP`, wheel, buttons) activates `autoMouseLayer`. After `mouseTimeoutMs` without mouse input, the layer deactivates automatically.
-- **Acceptance test:** A firmware test triggers mouse movement, verifies that `autoMouseLayer` activates, advances the clock past `mouseTimeoutMs` and expects the layer to deactivate.
-
 ### Matrix diagnostics and solder tester (`MATRIX_TEST_MODE`)
 
 - **Rank:** Feature model. Total 29/40 (typing 4, configuration 9, harmony 7, safety 9). Effort M. Estimate.

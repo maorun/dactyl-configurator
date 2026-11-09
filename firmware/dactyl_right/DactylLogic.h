@@ -26,7 +26,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, numWordLayer, bootLayer, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, numWordLayer, bootLayer, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, autoMouseLayer, mouseTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -224,6 +224,40 @@ bool isValidTriLayerRule(int a, int b, int t) {
   return a != b && t != a && t != b;
 }
 
+// -----------------------------------------------------------------------------
+// Auto-Mouse-Ebene (autoMouseLayer, mouseTimeoutMs)
+// -----------------------------------------------------------------------------
+// Jede Mausaktion (Bewegung, Präzision, Rad, Pan, Klick, auch von der linken Hälfte) rastet die Ebene autoMouseLayer
+// (0xFF = aus) vorübergehend ein und startet die Frist neu. Ohne Mausaktion für mouseTimeoutMs fällt die Ebene zurück
+// (autoMouseExpire); gehaltene Bewegungs- und Radtasten halten sie offen. Der Zustand liegt nur im RAM.
+bool autoMouseOn = false;
+unsigned long autoMouseLastMs = 0;
+
+// Master: true, solange die linke Hälfte einen Maus-Button hält (Ziehen mit der linken Hälfte); setup() setzt den Hook
+bool (*autoMouseRemoteHeldHook)() = nullptr;
+
+bool autoMouseConfigured() { return autoMouseLayer > 0 && autoMouseLayer < NUM_LAYERS && autoMouseLayer < 8; }
+
+uint8_t getActiveLayer();
+
+void autoMouseNote(unsigned long now) {
+  if (!autoMouseConfigured() || isConfigMode) return;
+  autoMouseLastMs = now;
+  if (autoMouseOn) return;
+  uint8_t before = getActiveLayer();
+  autoMouseOn = true;
+  uint8_t after = getActiveLayer();
+  if (after != before) Serial.printf("LAYER: AUTO_MOUSE an -> Layer %d\n", after);
+}
+
+void autoMouseStop() {
+  if (!autoMouseOn) return;
+  uint8_t before = getActiveLayer();
+  autoMouseOn = false;
+  uint8_t after = getActiveLayer();
+  if (after != before) Serial.printf("LAYER: AUTO_MOUSE aus -> Layer %d\n", after);
+}
+
 uint8_t getActiveLayer() {
   // Momentary Layer 0 zwingt temporär Base-Layer, auch von der anderen Hälfte
   // Vorgemerkte und gehaltene One-Shot-Ebenen gelten wie MO-Ebenen (oslHeld getrennt von momentaryLayers: eine gehaltene
@@ -232,7 +266,7 @@ uint8_t getActiveLayer() {
   if (momentaryLayers[0] || (remoteMomentaryLayers & 1) || (armed & 1)) return 0;
   uint8_t active = 0;
   for (int l = 1; l < NUM_LAYERS && l < 8; l++) {
-    if (momentaryLayers[l] || toggleLayers[l] || (remoteMomentaryLayers & (1u << l)) || (armed & (1u << l))) active |= (uint8_t)(1u << l);
+    if (momentaryLayers[l] || toggleLayers[l] || (remoteMomentaryLayers & (1u << l)) || (armed & (1u << l)) || (autoMouseOn && l == autoMouseLayer)) active |= (uint8_t)(1u << l);
   }
   // Tri-Layer-Regeln einmal auswerten (keine Kaskade): das Ziel gilt zusätzlich zu a und b
   uint8_t withTri = active;
@@ -328,6 +362,7 @@ bool comboOnMaskLayers(uint8_t i) {
 uint8_t localMomentaryLayerMask() {
   uint8_t m = 0;
   for (int l = 0; l < NUM_LAYERS && l < 8; l++) if (momentaryLayers[l]) m |= (uint8_t)(1u << l);
+  if (autoMouseOn && autoMouseConfigured()) m |= (uint8_t)(1u << autoMouseLayer);   // die Auto-Mouse-Ebene gilt auf beiden Hälften
   return (uint8_t)(m | oslHeld);   // eine gehaltene OSL-Taste wirkt auf der anderen Hälfte wie MO_n
 }
 uint8_t toggleLayerMask() {
@@ -765,6 +800,7 @@ void swapClearAll() {
 void oslClearAll() {
   swapClearAll();
   numWordStop();
+  autoMouseStop();
   ttReset();
   tapToggleReset();
   keepAwakeStop();
@@ -874,6 +910,7 @@ const uint8_t *mediaKeyForAction(uint16_t a) {
 
 // Ein Schritt in Richtung der Rad-Aktion (Hoch/Rechts positiv)
 void wheelSend(uint16_t a, int8_t step) {
+  autoMouseNote(millis());
   if (a == ACT_MOUSE_WHEEL_UP) bleKeyboard.mouseScroll(step);
   else if (a == ACT_MOUSE_WHEEL_DOWN) bleKeyboard.mouseScroll(-step);
   else if (a == ACT_MOUSE_WHEEL_RIGHT) bleKeyboard.mousePan(step);
@@ -1362,6 +1399,7 @@ unsigned long mouseMoveLastMs = 0;
 
 void mouseMoveStart(uint8_t r, uint8_t c, uint16_t action, unsigned long now) {
   if (mouseMoveActive[r][c]) return;
+  autoMouseNote(now);
   mouseMoveActive[r][c] = true;
   mouseMoveAction[r][c] = action;
   mouseMoveStartMs[r][c] = now;
@@ -1415,6 +1453,7 @@ unsigned long wheelLastMs[NUM_ROWS][NUM_COLS] = {};
 
 void wheelHoldStart(uint8_t r, uint8_t c, uint16_t action, unsigned long now) {
   if (wheelActive[r][c]) return;
+  autoMouseNote(now);
   wheelActive[r][c] = true;
   wheelAction[r][c] = action;
   wheelStartMs[r][c] = now;
@@ -1452,6 +1491,23 @@ void wheelHoldTick(unsigned long now) {
 void resetMouseMove() {
   for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) { mouseMoveActive[r][c] = false; wheelActive[r][c] = false; }
   remoteMouseSpeed = 0;
+  autoMouseStop();
+}
+
+// Aufruf in loop(): ohne Mausaktion für mouseTimeoutMs fällt die Auto-Mouse-Ebene zurück
+void autoMouseExpire(unsigned long now) {
+  if (!autoMouseOn) return;
+  if (!autoMouseConfigured()) { autoMouseStop(); return; }
+  if (autoMouseRemoteHeldHook && autoMouseRemoteHeldHook()) { autoMouseLastMs = now; return; }
+  // Eine gehaltene Präzisionstaste der anderen Hälfte (MOUSE_SLOW / MOUSE_FAST) hält die Ebene ebenfalls offen
+  if (remoteMouseSpeed && (unsigned long)(now - remoteMouseSpeedRxMs) < MOUSE_SPEED_REMOTE_TIMEOUT_MS) { autoMouseLastMs = now; return; }
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      // Gehaltene Bewegungs-, Rad- und Klick-Tasten halten die Ebene offen (auch ein Ziehen mit gehaltenem Klick)
+      if (mouseMoveActive[r][c] || wheelActive[r][c] || (keyState[r][c] && isMouseKeyAction(pressedAction[r][c]))) { autoMouseLastMs = now; return; }
+    }
+  }
+  if ((unsigned long)(now - autoMouseLastMs) >= mouseTimeoutMs) autoMouseStop();
 }
 
 int8_t mouseMoveStepFor(unsigned long heldMs) {
@@ -1884,6 +1940,7 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
 
     if (!isConfigMode && bleKeyboard.isConnected()) {
       if (!isComboCandidateKey(r, c) && !isConfigComboSuppressed(r, c)) {
+        autoMouseNote(millis());
         if (action == 0x130) bleKeyboard.mousePressLockable(MOUSE_BUTTON_LEFT);
         else if (action == 0x131) bleKeyboard.mousePressLockable(MOUSE_BUTTON_RIGHT);
         else if (action == 0x132) bleKeyboard.mousePressLockable(MOUSE_BUTTON_MIDDLE);
@@ -2619,6 +2676,7 @@ void activateTapHoldAsHold(uint8_t r, uint8_t c) {
       capsWordBuffered[r][c] = false;
       keySentToHost[r][c] = true;
     } else if (act >= 0x130 && act <= 0x132) {
+      autoMouseNote(millis());
       if (act == 0x130) bleKeyboard.mousePressLockable(MOUSE_BUTTON_LEFT);
       else if (act == 0x131) bleKeyboard.mousePressLockable(MOUSE_BUTTON_RIGHT);
       else bleKeyboard.mousePressLockable(MOUSE_BUTTON_MIDDLE);
@@ -3078,6 +3136,7 @@ void processDeferredKeys(unsigned long now) {
               capsWordBuffered[r][c] = false;
               keySentToHost[r][c] = true;
             } else if (isMouseKeyAction(act)) {
+              if (act >= 0x130 && act <= 0x132) autoMouseNote(now);
               if (act == 0x130) bleKeyboard.mousePressLockable(MOUSE_BUTTON_LEFT);
               else if (act == 0x131) bleKeyboard.mousePressLockable(MOUSE_BUTTON_RIGHT);
               else if (act == 0x132) bleKeyboard.mousePressLockable(MOUSE_BUTTON_MIDDLE);
@@ -3348,6 +3407,14 @@ void loadKeymapFromNVS() {
   if (preferences.isKey("osm_to")) {
     uint16_t ot = preferences.getUShort("osm_to", 0);
     if (ot == 0 || (ot >= ONE_SHOT_TIMEOUT_MIN_MS && ot <= ONE_SHOT_TIMEOUT_MAX_MS)) oneShotTimeoutMs = ot;
+  }
+  if (preferences.isKey("am_layer")) {
+    uint8_t am = preferences.getUChar("am_layer", AUTO_MOUSE_LAYER_OFF);
+    if (am < NUM_LAYERS || am == AUTO_MOUSE_LAYER_OFF) autoMouseLayer = am;
+  }
+  if (preferences.isKey("am_to")) {
+    uint16_t at = preferences.getUShort("am_to", MOUSE_TIMEOUT_DEFAULT_MS);
+    if (at >= MOUSE_TIMEOUT_MIN_MS && at <= MOUSE_TIMEOUT_MAX_MS) mouseTimeoutMs = at;
   }
   if (preferences.isKey("layer_to")) {
     uint16_t lt = preferences.getUShort("layer_to", 0);
@@ -3728,6 +3795,24 @@ void applyBootLayer() {
   if (bootLayer == 0 || bootLayer >= NUM_LAYERS) return;
   toggleLayers[bootLayer] = true;
   layerLockedMask |= (uint8_t)(1u << bootLayer);
+}
+
+bool saveAutoMouseLayerToNVS(uint8_t layer) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("am_layer", layer) > 0;
+  preferences.end();
+  if (ok) { autoMouseLayer = layer; if (!autoMouseConfigured()) autoMouseStop(); }
+  Serial.printf("NVS: Auto-Mouse-Ebene %s: %u\n", ok ? "gespeichert" : "FEHLER", layer);
+  return ok;
+}
+
+bool saveMouseTimeoutToNVS(uint16_t ms) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUShort("am_to", ms) > 0;
+  preferences.end();
+  if (ok) mouseTimeoutMs = ms;
+  Serial.printf("NVS: Maus-Zeitlimit %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
+  return ok;
 }
 
 bool saveNumWordLayerToNVS(uint8_t layer) {
@@ -4533,6 +4618,27 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_AUTO_MOUSE_LAYER ")) {
+    String arg = cmd.substring(21);
+    arg.trim();
+    bool off = arg == "255";
+    if (off || (arg.length() == 1 && arg.charAt(0) >= '0' && arg.charAt(0) <= '7')) {
+      uint8_t layer = off ? (uint8_t)AUTO_MOUSE_LAYER_OFF : (uint8_t)(arg.charAt(0) - '0');
+      sendConfigNotification(saveAutoMouseLayerToNVS(layer) ? "OK SET_AUTO_MOUSE_LAYER " + arg : String("ERR NVS SET_AUTO_MOUSE_LAYER"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd.startsWith("SET_MOUSE_TIMEOUT ")) {
+    int ms = cmd.substring(18).toInt();
+    String arg = cmd.substring(18);
+    arg.trim();
+    bool digits = arg.length() > 0 && arg.length() <= 4;
+    for (unsigned i = 0; digits && i < arg.length(); i++) digits = arg.charAt(i) >= '0' && arg.charAt(i) <= '9';
+    if (digits && ms >= MOUSE_TIMEOUT_MIN_MS && ms <= MOUSE_TIMEOUT_MAX_MS) {
+      sendConfigNotification(saveMouseTimeoutToNVS((uint16_t)ms) ? "OK SET_MOUSE_TIMEOUT " + String(ms) : String("ERR NVS SET_MOUSE_TIMEOUT"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd.startsWith("SET_BOOT_LAYER ")) {
     String arg = cmd.substring(15);
     arg.trim();
@@ -4888,6 +4994,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
     // Eigene Zeile vor DEVICE_INFO: die Zeile hat nur wenige Bytes Reserve unter dem BLE-Attributlimit (512)
     sendConfigNotification("BLE_HOST:" + String((int)bleHostSlot));
 #endif
+    // Auto-Mouse-Einstellung ebenfalls in einer eigenen Zeile: DEVICE_INFO hat im Worst Case nur 7 Byte Reserve
+    {
+      char amBuf[48];
+      snprintf(amBuf, sizeof(amBuf), "AUTO_MOUSE:{\"aml\":%u,\"amt\":%u}", (unsigned)autoMouseLayer, (unsigned)mouseTimeoutMs);
+      sendConfigNotification(String(amBuf));
+    }
     char buf[768];
     int n = snprintf(buf, sizeof(buf), "DEVICE_INFO:{\"name\":\"%s\",\"side\":\"" DEVICE_SIDE "\",\"fw\":%u,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"standby_timeout\":%u,\"sleep_timeout\":%u,\"debounce_ms\":%u,\"combo_timeout_ms\":%u,\"tapping_term_ms\":%u,\"hold_tap_mode\":%u,\"qt\":%u,\"pi\":%u,\"chordal_hold\":%u,\"rt\":%u,\"nwl\":%u,\"bl\":%u,\"as\":%u,\"at\":%u,\"ld\":%u,\"ot\":%u,\"lt\":%u,\"tri_layer\":%s%s,\"config_mode\":%s",
       isConfigMode ? CONFIG_BLE_NAME : deviceName.c_str(), (unsigned)DACTYL_FW_VERSION,
@@ -5021,6 +5133,7 @@ void checkUserCombos() {
               if (act == ACT_MAC_GLOBE) { bleKeyboard.press(KEY_MEDIA_GLOBE); delay(10); bleKeyboard.release(KEY_MEDIA_GLOBE); }
               else bleKeyboard.write(mediaKeyForAction(act));
             } else if (isMouseKeyAction(act)) {
+              if (act >= 0x130 && act <= 0x132) autoMouseNote(millis());
               if (act == 0x130) bleKeyboard.mouseClick(MOUSE_BUTTON_LEFT);
               else if (act == 0x131) bleKeyboard.mouseClick(MOUSE_BUTTON_RIGHT);
               else if (act == 0x132) bleKeyboard.mouseClick(MOUSE_BUTTON_MIDDLE);
@@ -5046,6 +5159,7 @@ void checkUserCombos() {
         } else if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
           if (!isConfigMode && bleKeyboard.isConnected()) {
             if (act >= 0x130 && act <= 0x132) {
+              autoMouseNote(millis());
               if (act == 0x130) bleKeyboard.mousePress(MOUSE_BUTTON_LEFT);
               else if (act == 0x131) bleKeyboard.mousePress(MOUSE_BUTTON_RIGHT);
               else if (act == 0x132) bleKeyboard.mousePress(MOUSE_BUTTON_MIDDLE);

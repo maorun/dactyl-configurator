@@ -476,6 +476,31 @@ function handleSerialLine(line, side = null, transport = "ble") {
     return;
   }
 
+  // 0b. Auto-Mouse-Einstellung ("AUTO_MOUSE:{aml,amt}", eigene Zeile: DEVICE_INFO hat kaum Reserve unter dem BLE-Limit)
+  if (line.startsWith("AUTO_MOUSE:")) {
+    try {
+      const am = JSON.parse(line.substring(11));
+      // Wie bei DEVICE_INFO: während "Vom ESP32 laden" bleiben Felder und Config unverändert
+      const hold = (typeof deviceLoadSide !== "undefined" && deviceLoadSide === lineSide) ||
+        (typeof deviceSnapshotRead !== "undefined" && !!deviceSnapshotRead && deviceSnapshotRead.withInfo && deviceSnapshotRead.side === lineSide);
+      const target = hold ? null : cfg.settings;
+      const setField = (id, v) => { if (!isEditSide || hold) return; const el = document.getElementById(id); if (el) el.value = String(v); };
+      if (Number.isInteger(am.aml)) {
+        const layer = clampSetting("autoMouseLayer", am.aml);
+        setField("autoMouseLayerSelect", layer);
+        if (target) target.autoMouseLayer = layer;
+      }
+      if (Number.isInteger(am.amt)) {
+        const ms = clampSetting("mouseTimeoutMs", am.amt);
+        setField("mouseTimeoutInput", ms);
+        if (target) target.mouseTimeoutMs = ms;
+      }
+    } catch (e) {
+      console.warn("AUTO_MOUSE konnte nicht gelesen werden:", e);
+    }
+    return;
+  }
+
   // 1. Device Info (Bluetooth Name, MAC, etc.)
   if (line.startsWith("DEVICE_INFO:")) {
     try {

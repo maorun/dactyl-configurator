@@ -1274,6 +1274,10 @@ inline int32_t splitLeftFwStatus(const SplitLeftHeld &h, unsigned long nowMs) {
 
 // Führt ein bereits geprüftes Ereignis aus. Liefert true, wenn eine HID-Ausgabe erfolgte.
 // Der Zustand wird vor dem Aufruf der Senke aktualisiert, damit die Senke den neuen Besitz sieht.
+// Mausaktivität der linken Hälfte (Bewegung, Rad, Pan, Klick, Präzision): der Master setzt hier autoMouseNote (DactylLogic.h)
+inline void (*splitMouseActivityHook)(unsigned long) = nullptr;
+inline void splitNoteMouseActivity(unsigned long nowMs) { if (splitMouseActivityHook) splitMouseActivityHook(nowMs); }
+
 inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsigned long nowMs, SplitHidSink &sink) {
   h.lastRxMs = nowMs;
   h.linkUp = true;
@@ -1329,6 +1333,7 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
       uint8_t add = (uint8_t)(code8 & ~s.mouse);
       if (!add) return false;
       s.mouse |= add;
+      splitNoteMouseActivity(nowMs);
       if (ev.arg == 1) sink.leftMousePressLockable(add);
       else sink.leftMousePress(add);
       return true;
@@ -1342,13 +1347,16 @@ inline bool splitApplyHidEvent(SplitLeftHeld &h, const SplitHidEvent &ev, unsign
     }
     case SPLIT_OP_MOUSE_CLICK:
       if (code8 & s.mouse) return false;
+      splitNoteMouseActivity(nowMs);
       sink.leftMouseClick(code8);
       return true;
     case SPLIT_OP_MOUSE_SCROLL:
+      splitNoteMouseActivity(nowMs);
       if (ev.code == 1) sink.leftMousePan(ev.arg);
       else sink.leftMouseScroll(ev.arg);
       return true;
     case SPLIT_OP_MOUSE_MOVE:
+      splitNoteMouseActivity(nowMs);
       sink.leftMouseMove(ev.arg, (int8_t)code8);
       return true;
     case SPLIT_OP_ONE_SHOT_PRESS: {

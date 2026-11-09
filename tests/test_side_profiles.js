@@ -126,6 +126,19 @@ test("Einstellung oneShotTimeoutMs: beide Sketche deklarieren sie und rufen den 
   assert.ok(logic.includes('\\"ot\\":%u') && logic.includes('cmd.startsWith("SET_ONESHOT_TIMEOUT ")') && logic.includes('"osm_to"'), "GET_INFO, Befehl oder NVS-Schlüssel fehlt");
 });
 
+test("Einstellung autoMouseLayer/mouseTimeoutMs: beide Sketche deklarieren sie, DactylLogic.h meldet, setzt und speichert sie, loop() läuft den Ablauf", () => {
+  for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
+    assert.ok(/^uint8_t autoMouseLayer = 255;$/m.test(src), `${name}: autoMouseLayer fehlt im Sketch`);
+    assert.ok(/^uint16_t mouseTimeoutMs = 500;$/m.test(src), `${name}: mouseTimeoutMs fehlt im Sketch`);
+    assert.ok(src.includes("autoMouseExpire(millis());"), `${name}: autoMouseExpire fehlt in loop()`);
+  }
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  assert.ok(logic.includes('cmd.startsWith("SET_AUTO_MOUSE_LAYER ")') && logic.includes('"am_layer"'), "Befehl oder NVS-Schlüssel am_layer fehlt");
+  assert.ok(logic.includes('cmd.startsWith("SET_MOUSE_TIMEOUT ")') && logic.includes('"am_to"'), "Befehl oder NVS-Schlüssel am_to fehlt");
+  assert.ok(logic.includes('AUTO_MOUSE:{\\"aml\\":%u,\\"amt\\":%u}'), "AUTO_MOUSE-Zeile fehlt (DEVICE_INFO hat keine Reserve)");
+  assert.ok(read("server.py").includes('uint8_t autoMouseLayer = {values["autoMouseLayer"]};') && read("server.py").includes('uint16_t mouseTimeoutMs = {values["mouseTimeoutMs"]};'), "server.py rendert die Einstellungen nicht");
+});
+
 test("Einstellung retroTap: beide Sketche deklarieren sie, DactylLogic.h meldet und setzt sie, der Server rendert sie", () => {
   for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
     assert.ok(/^uint8_t retroTap = 0;$/m.test(src), `${name}: retroTap fehlt im Sketch`);

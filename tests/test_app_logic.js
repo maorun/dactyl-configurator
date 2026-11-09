@@ -141,6 +141,39 @@ test("Befehlstext: Steuerzeichen, Quotes und Backslashes werden entfernt", () =>
   assert.strictEqual(api.sanitizeCommandText("x".repeat(40)).length, 31);
 });
 
+test("Auto-Mouse-Ebene: Normalisierung, DEVICE_INFO-Rundreise, Ebenentausch und UI-Verdrahtung", () => {
+  const norm = s => api.normalizeConfig({ layers: [[]], settings: s }, R).settings;
+  assert.strictEqual(norm({}).autoMouseLayer, 255);
+  assert.strictEqual(norm({}).mouseTimeoutMs, 500);
+  assert.strictEqual(norm({ autoMouseLayer: 0 }).autoMouseLayer, 0);
+  assert.strictEqual(norm({ autoMouseLayer: 7 }).autoMouseLayer, 7);
+  assert.strictEqual(norm({ autoMouseLayer: 8 }).autoMouseLayer, 255);
+  assert.strictEqual(norm({ autoMouseLayer: -3 }).autoMouseLayer, 0);
+  assert.strictEqual(norm({ mouseTimeoutMs: 5 }).mouseTimeoutMs, 100);
+  assert.strictEqual(norm({ mouseTimeoutMs: 9999 }).mouseTimeoutMs, 2000);
+  const info = api.settingsFromDeviceInfo({ aml: 3, amt: 750 }, {});
+  assert.strictEqual(info.autoMouseLayer, 3);
+  assert.strictEqual(info.mouseTimeoutMs, 750);
+  assert.strictEqual(api.settingsFromDeviceInfo({}, { autoMouseLayer: 2 }).autoMouseLayer, 2);
+  // Ebenentausch führt die Auto-Mouse-Ebene mit, 255 (aus) bleibt
+  const swapped = JSON.parse(JSON.stringify(api.swapLayersWithRefs({ layers: Array.from({ length: 8 }, () => [[]]), layerNames: [], combos: [], settings: { autoMouseLayer: 1 } }, 1, 2)));
+  assert.strictEqual(swapped.settings.autoMouseLayer, 2);
+  const kept = JSON.parse(JSON.stringify(api.swapLayersWithRefs({ layers: Array.from({ length: 8 }, () => [[]]), layerNames: [], combos: [], settings: { autoMouseLayer: 255 } }, 1, 2)));
+  assert.strictEqual(kept.settings.autoMouseLayer, 255);
+  const zero = JSON.parse(JSON.stringify(api.swapLayersWithRefs({ layers: Array.from({ length: 8 }, () => [[]]), layerNames: [], combos: [], settings: { autoMouseLayer: 0 } }, 0, 2)));
+  assert.strictEqual(zero.settings.autoMouseLayer, 0, "Ebene 0 (ohne Wirkung) wandert beim Tausch nicht auf eine echte Ebene");
+  // UI: Auswahl (Aus, Ebene 1..7), Zahlenfeld, Laden, Speichern und AUTO_MOUSE-Zeile der Firmware
+  const html = read("index.html");
+  const sel = html.slice(html.indexOf('id="autoMouseLayerSelect"'), html.indexOf("</select>", html.indexOf('id="autoMouseLayerSelect"')));
+  assert.deepStrictEqual([...sel.matchAll(/<option value="(\d+)"/g)].map(m => m[1]), ["255", "1", "2", "3", "4", "5", "6", "7"]);
+  assert.match(html, /id="mouseTimeoutInput"[^>]*min="100"[^>]*max="2000"/);
+  assert.ok(read("app.js").includes('setVal("autoMouseLayerSelect"') && read("app.js").includes('setVal("mouseTimeoutInput"'));
+  assert.ok(read("js/editor-events.js").includes("autoMouseLayer: autoMouseLayer") && read("js/editor-events.js").includes("mouseTimeoutMs: mouseTimeout"));
+  const serial = read("js/serial.js");
+  assert.ok(serial.includes('line.startsWith("AUTO_MOUSE:")') && serial.includes("am.aml") && serial.includes("am.amt"));
+  assert.ok(read("js/config-sync.js").includes('prefix === "AUTO_MOUSE:"'), "Snapshot muss die AUTO_MOUSE-Zeile übernehmen");
+});
+
 test("Einstellungen: Werte werden auf Firmware-Bereiche begrenzt", () => {
   for (const [field, [lo, hi, def]] of Object.entries(api.SETTINGS_RANGES)) {
     assert.strictEqual(api.clampSetting(field, lo - 1), lo, field);
@@ -3205,7 +3238,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|LAYER_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP|NUM_WORD_LAYER|BOOT_LAYER) |CLEAR_TAP_TERMS$|CLEAR_HOLD_FLAVORS$)/.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|LAYER_TIMEOUT|AUTO_MOUSE_LAYER|MOUSE_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP|NUM_WORD_LAYER|BOOT_LAYER) |CLEAR_TAP_TERMS$|CLEAR_HOLD_FLAVORS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -3372,8 +3405,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 22);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_LAYER_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "SET_NUM_WORD_LAYER", "SET_BOOT_LAYER", "CLEAR_TAP_TERMS", "CLEAR_HOLD_FLAVORS"]);
+  assert.strictEqual(cmds.length, 24);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_LAYER_TIMEOUT", "SET_AUTO_MOUSE_LAYER", "SET_MOUSE_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "SET_NUM_WORD_LAYER", "SET_BOOT_LAYER", "CLEAR_TAP_TERMS", "CLEAR_HOLD_FLAVORS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
@@ -3391,7 +3424,7 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(cmds[11].cmd, "SET_CAPS_LED 0");
   assert.strictEqual(ctx.build({ capsLed: 1 }, R)[11].cmd, "SET_CAPS_LED 1");
   // Die linke Hälfte hat keinen Host: kein Befehl
-  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 21);
+  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 23);
   // Auto Shift: Modus 0..4, Zeitlimit 50..500 (Standard 175); beide Befehle sind optional (ältere Firmware)
   const asCmd = (c, a) => c.find(x => x.ack === a);
   assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 0");
@@ -3438,6 +3471,20 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ltCmd(ctx.build({ layerTimeoutMs: 5000 }, R)).cmd, "SET_LAYER_TIMEOUT 5000");
   assert.strictEqual(ltCmd(ctx.build({ layerTimeoutMs: 9 }, R)).cmd, "SET_LAYER_TIMEOUT 1000");
   assert.strictEqual(ltCmd(ctx.build({ layerTimeoutMs: 99999 }, L)).cmd, "SET_LAYER_TIMEOUT 60000");
+  // Auto-Mouse-Ebene: 0..7 oder 255 (aus), Zeitlimit 100..2000; beide Befehle sind optional (ältere Firmware)
+  const amlCmd = c => c.find(x => x.ack === "SET_AUTO_MOUSE_LAYER");
+  const amtCmd = c => c.find(x => x.ack === "SET_MOUSE_TIMEOUT");
+  assert.strictEqual(amlCmd(cmds).cmd, "SET_AUTO_MOUSE_LAYER 255");
+  assert.strictEqual(amlCmd(cmds).optional, "args");
+  assert.strictEqual(amtCmd(cmds).cmd, "SET_MOUSE_TIMEOUT 500");
+  assert.strictEqual(amtCmd(cmds).optional, "args");
+  assert.strictEqual(amlCmd(ctx.build({ autoMouseLayer: 3 }, R)).cmd, "SET_AUTO_MOUSE_LAYER 3");
+  assert.strictEqual(amlCmd(ctx.build({ autoMouseLayer: 0 }, L)).cmd, "SET_AUTO_MOUSE_LAYER 0");
+  assert.strictEqual(amlCmd(ctx.build({ autoMouseLayer: 8 }, R)).cmd, "SET_AUTO_MOUSE_LAYER 255");
+  assert.strictEqual(amlCmd(ctx.build({ autoMouseLayer: 300 }, R)).cmd, "SET_AUTO_MOUSE_LAYER 255");
+  assert.strictEqual(amtCmd(ctx.build({ mouseTimeoutMs: 800 }, R)).cmd, "SET_MOUSE_TIMEOUT 800");
+  assert.strictEqual(amtCmd(ctx.build({ mouseTimeoutMs: 5 }, R)).cmd, "SET_MOUSE_TIMEOUT 100");
+  assert.strictEqual(amtCmd(ctx.build({ mouseTimeoutMs: 99999 }, L)).cmd, "SET_MOUSE_TIMEOUT 2000");
   // Leader-Phase: je Sequenz ein Schritt plus die Phase (CLEAR/SAVE), auf beiden Hälften
   assert.strictEqual(ctx.count(6, 8, 0, 0, -1, 3) - ctx.count(6, 8, 0, 0, -1, 0), 3);
   // Auch ohne Sequenzen läuft die Phase (CLEAR_LEADER und SAVE_LEADER): 2 Schritte minus 1 für die Zählung je Sequenz
@@ -6580,7 +6627,7 @@ test("Deep Sleep: Code passt zur Firmware, Palette, Label und Rundlauf; Combos l
 
 test("Clear State: Code passt zur Firmware, Palette, Label und Rundlauf; Combos lehnen ihn ab, beide Hälften erlauben ihn", () => {
   assert.match(read("firmware/dactyl_right/DactylCommon.h"), /#define ACT_CLEAR_STATE\s+0x192/);
-  assert.match(read("firmware/dactyl_right/DactylVersion.h"), /#define DACTYL_FW_VERSION 50\b/);
+  assert.ok(Number(/DACTYL_FW_VERSION (\d+)/.exec(read("firmware/dactyl_right/DactylVersion.h"))[1]) >= 50);
   assert.strictEqual(api.actionCodeToNumeric("CLEAR_STATE"), 0x192);
   assert.strictEqual(api.keyToNumericActions({ tap: "CLEAR_STATE" }).tapCode, 0x192);
   assert.ok(api.isClearStateCode("CLEAR_STATE") && api.isClearStateCode("ACT_CLEAR_STATE"));

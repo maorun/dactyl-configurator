@@ -220,6 +220,28 @@ TEST(test_media_report_roundtrip) {
 // -----------------------------------------------------------------------------
 // Master: Zustand, Duplikate, Timeout
 // -----------------------------------------------------------------------------
+// Mausaktionen der linken Hälfte melden dem Master Aktivität (Auto-Mouse-Ebene); Tasten und Medien nicht
+static std::vector<unsigned long> mouseActivity;
+static void recordMouseActivity(unsigned long now) { mouseActivity.push_back(now); }
+
+TEST(test_left_mouse_events_note_mouse_activity) {
+  mouseActivity.clear();
+  splitMouseActivityHook = recordMouseActivity;
+  apply(SPLIT_OP_MOUSE_MOVE, 1, 2, 100);
+  apply(SPLIT_OP_MOUSE_SCROLL, 0, 1, 200);
+  apply(SPLIT_OP_MOUSE_SCROLL, 1, -1, 250);
+  apply(SPLIT_OP_MOUSE_PRESS, 1, 0, 300);
+  apply(SPLIT_OP_MOUSE_CLICK, 2, 0, 400);
+  assert((mouseActivity == std::vector<unsigned long>{100, 200, 250, 300, 400}));
+  mouseActivity.clear();
+  apply(SPLIT_OP_KEY_PRESS, 'a', 0, 500);
+  apply(SPLIT_OP_MOUSE_RELEASE, 1, 0, 600);
+  assert(mouseActivity.empty());
+  splitMouseActivityHook = nullptr;
+  apply(SPLIT_OP_MOUSE_MOVE, 1, 2, 700);       // ohne Hook kein Absturz
+  assert(mouseActivity.empty());
+}
+
 TEST(test_press_release_is_idempotent) {
   assert(apply(SPLIT_OP_KEY_PRESS, 0x81));
   assert(!apply(SPLIT_OP_KEY_PRESS, 0x81)); // Retry-Duplikat

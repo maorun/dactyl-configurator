@@ -416,6 +416,8 @@ SETTINGS_RANGES = {
     "leaderTimeoutMs": (100, 5000, 1000),
     "oneShotTimeoutMs": (0, 10000, 0),  # 0 = aus, sonst 500..10000
     "layerTimeoutMs": (0, 60000, 0),  # 0 = aus, sonst 1000..60000
+    "autoMouseLayer": (0, 255, 255),  # 0..7 = Ebene, 255 = aus
+    "mouseTimeoutMs": (100, 2000, 500),
     "requirePriorIdleMs": (0, 500, 0),
     "chordalHold": (0, 1, 0),
     "retroTap": (0, 1, 0),
@@ -1041,6 +1043,8 @@ def generate_settings_cpp(settings, side="R"):
         values[field] = validate_int(settings.get(field, default), lo, hi, field)
     if 0 < values["oneShotTimeoutMs"] < 500:
         raise ValueError("Ungültiger Wert für oneShotTimeoutMs: 0 oder 500 bis 10000 erwartet.")
+    if 7 < values["autoMouseLayer"] < 255:
+        raise ValueError("Ungültiger Wert für autoMouseLayer: 0 bis 7 oder 255 (aus) erwartet.")
     if 0 < values["layerTimeoutMs"] < 1000:
         raise ValueError("Ungültiger Wert für layerTimeoutMs: 0 oder 1000 bis 60000 erwartet.")
     tri_rules = validate_tri_layers(settings.get("triLayers"))
@@ -1063,6 +1067,8 @@ def generate_settings_cpp(settings, side="R"):
         f'uint16_t leaderTimeoutMs = {values["leaderTimeoutMs"]};',
         f'uint16_t oneShotTimeoutMs = {values["oneShotTimeoutMs"]};',
         f'uint16_t layerTimeoutMs = {values["layerTimeoutMs"]};',
+        f'uint8_t autoMouseLayer = {values["autoMouseLayer"]};',
+        f'uint16_t mouseTimeoutMs = {values["mouseTimeoutMs"]};',
         f'uint8_t holdTapMode = {values["holdTapMode"]};',
         f'uint8_t triLayerRules[{TRI_LAYER_MAX_RULES * 3}] = {{ {", ".join(tri_flat)} }};',
         f"uint8_t numTriLayers = {len(tri_rules)};",

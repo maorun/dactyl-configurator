@@ -21,6 +21,8 @@ const SETTINGS_RANGES = {
   leaderTimeoutMs: [100, 5000, 1000],
   oneShotTimeoutMs: [0, 10000, 0],  // 0 = aus, sonst 500..10000 (kleinere Werte werden 500)
   layerTimeoutMs: [0, 60000, 0],    // 0 = aus, sonst 1000..60000 (kleinere Werte werden 1000)
+  autoMouseLayer: [0, 255, 255],    // 0..7 = Ebene, 255 = aus (8..254 werden 255)
+  mouseTimeoutMs: [100, 2000, 500],
   requirePriorIdleMs: [0, 500, 0],
   chordalHold: [0, 1, 0],
   retroTap: [0, 1, 0],
@@ -480,6 +482,7 @@ function clampSetting(field, value) {
   if (!Number.isInteger(n)) return def;
   if (field === "oneShotTimeoutMs" && n > 0 && n < 500) return 500;
   if (field === "layerTimeoutMs" && n > 0 && n < 1000) return 1000;
+  if (field === "autoMouseLayer" && n > 7) return def;
   return Math.min(hi, Math.max(lo, n));
 }
 
@@ -1178,6 +1181,8 @@ function swapLayersWithRefs(config, layerA, layerB) {
   if (out.settings && typeof out.settings === "object") {
     const st = out.settings;
     for (const f of ["bootLayer", "numWordLayer"]) if (Number.isInteger(st[f])) st[f] = mapLayer(st[f]);
+    // Auto-Mouse-Ebene: 255 (aus) und 0 (ohne Wirkung) bleiben; nur die Ebenen 1..7 wandern mit
+    if (Number.isInteger(st.autoMouseLayer) && st.autoMouseLayer >= 1 && st.autoMouseLayer <= 7) st.autoMouseLayer = mapLayer(st.autoMouseLayer);
     if (Array.isArray(st.triLayers)) {
       // Eine Regel, die durch den Tausch auf Ebene 0 fiele, ist ungültig (Ebenen 1..7) und entfällt
       st.triLayers = st.triLayers.map(r => (r && typeof r === "object"
@@ -1353,6 +1358,8 @@ function normalizeConfig(cfg, profile) {
     leaderTimeoutMs: clampSetting("leaderTimeoutMs", s.leaderTimeoutMs ?? 1000),
     oneShotTimeoutMs: clampSetting("oneShotTimeoutMs", s.oneShotTimeoutMs ?? 0),
     layerTimeoutMs: clampSetting("layerTimeoutMs", s.layerTimeoutMs ?? 0),
+    autoMouseLayer: clampSetting("autoMouseLayer", s.autoMouseLayer ?? 255),
+    mouseTimeoutMs: clampSetting("mouseTimeoutMs", s.mouseTimeoutMs ?? 500),
     requirePriorIdleMs: clampSetting("requirePriorIdleMs", s.requirePriorIdleMs ?? 0),
     chordalHold: clampSetting("chordalHold", s.chordalHold ?? 0),
     retroTap: clampSetting("retroTap", s.retroTap ?? 0),
@@ -2171,7 +2178,7 @@ function settingsFromDeviceInfo(info, base) {
   const map = {
     standby_timeout: "standbyTimeoutMinutes", sleep_timeout: "sleepTimeoutMinutes", debounce_ms: "debounceMs",
     combo_timeout_ms: "comboTimeoutMs", tapping_term_ms: "tappingTermMs", hold_tap_mode: "holdTapMode",
-    quick_tap_ms: "quickTapMs", qt: "quickTapMs", leader_timeout_ms: "leaderTimeoutMs", ld: "leaderTimeoutMs", lt: "layerTimeoutMs", require_prior_idle_ms: "requirePriorIdleMs", pi: "requirePriorIdleMs", chordal_hold: "chordalHold", rt: "retroTap", nwl: "numWordLayer", bl: "bootLayer", ot: "oneShotTimeoutMs",
+    quick_tap_ms: "quickTapMs", qt: "quickTapMs", leader_timeout_ms: "leaderTimeoutMs", ld: "leaderTimeoutMs", lt: "layerTimeoutMs", require_prior_idle_ms: "requirePriorIdleMs", pi: "requirePriorIdleMs", chordal_hold: "chordalHold", rt: "retroTap", nwl: "numWordLayer", bl: "bootLayer", ot: "oneShotTimeoutMs", aml: "autoMouseLayer", amt: "mouseTimeoutMs",
     as: "autoShift", at: "autoShiftMs"
   };
   for (const [key, field] of Object.entries(map)) if (info[key] !== undefined) out[field] = info[key];

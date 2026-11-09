@@ -164,6 +164,7 @@ void enterConfigMode() {
   stopMacro(false);
   resetMouseMove();
   oslClearAll();
+  matrixTestEnd();
   deepSleepClear();   // Config Mode verwirft eine vorgemerkte Deep-sleep-Anforderung
   bleKeyboard.releaseAll();
   queueSplitLayerRelease();
@@ -238,6 +239,7 @@ void enterStandby() {
 void enterDeepSleep() {
   Serial.println("\n[POWER] Deep Sleep wird eingeleitet (Timeout, Partnerverlust, Master-Signal oder Deep-sleep-Taste)...");
   Serial.flush();
+  matrixTestSet(false);
 
   // Alles lösen, was die linke Hälfte am Master gedrückt hält, und kurz auf die Zustellung warten
   stopMacro(false);
@@ -478,7 +480,8 @@ static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, i
   SplitHidEvent ev;
   if (info == nullptr || !parseSplitMasterPacket(info->src_addr, data, len, ev)) return;
   if (ev.op == SPLIT_OP_ACTIVITY) masterActivityReceived = true;
-  else if (ev.op == SPLIT_OP_SLEEP) masterSleepRequested = true;
+  else if (ev.op == SPLIT_OP_SLEEP) { masterSleepRequested = true; matrixTestSet(false); }
+  else if (ev.op == SPLIT_OP_MATRIX_TEST) { if (!matrixTestUsb) matrixTestSet(ev.code != 0); }   // Master schaltet den Test; ein USB-Lauf an dieser Hälfte bleibt
   else if (ev.op == SPLIT_OP_MASTER_PRESS) masterPriorPressNote(masterPriorPress, millis());
   else if (ev.op == SPLIT_OP_TAP_FLUSH) masterTapFlushRequested = true;
   else if (ev.op == SPLIT_OP_HOLD_PENDING) {
@@ -895,6 +898,9 @@ void loop() {
         bool raw = (digitalRead(LEFT_ROW_PINS[r]) == LOW);
         if (updateLeftKey(r, c, raw, now, debounceMs) && leftKeys[r][c].stable != rawKeyState[r][c]) {
           rawKeyState[r][c] = leftKeys[r][c].stable;
+          // Matrix-Test: USB direkt an dieser Hälfte, sonst über ESP-NOW zum Master (nie über BLE)
+          leftMatrixTestReport(matrixTestMode, matrixTestUsb, sendQueue, bleKeyboard.isConnected(), diagDropped,
+                               r, c, rawKeyState[r][c], [](uint8_t rr, uint8_t cc, bool d) { matrixTestEmit('L', rr, cc, d); });
           lastActivityTime = millis();
           exitStandby();
           // Hinter einer unentschiedenen Mod-Tap-Taste am Master zurückhalten (Entscheidung zuerst, dann die Ebene)

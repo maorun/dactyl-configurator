@@ -190,7 +190,7 @@ test("Clear State: der Master-Sketch und die linke Hälfte führen die Aktion ü
   // Der Master räumt bei einem CLEAR_STATE der linken Hälfte auch seinen eigenen Zustand (Makro, Ebenen, Num Word ...)
   const right = read("firmware/dactyl_right/dactyl_right.ino");
   assert.ok(/static void runClearStateOnMaster\(\) \{[\s\S]*?clearStatePress\(\);/.test(right) && right.includes("runClearStateOnMaster();"), "runClearStateOnMaster ruft clearStatePress nicht");
-  assert.ok(right.includes("onSplitMouseSpeed, onSplitClearState);"), "processSplitEvents übergibt den Haken nicht");
+  assert.ok(right.includes("onSplitMouseSpeed, onSplitClearState,\n                                     onSplitMatrixRaw);"), "processSplitEvents übergibt den Haken nicht");
   assert.ok(split.includes("if (onClearState) onClearState(ev);"), "splitProcessRx ruft den Haken nicht");
   assert.ok(right.includes("if (clearStatePending) runClearStateOnMaster();"), "ein belegter Mutex wird nicht wiederholt");
 });

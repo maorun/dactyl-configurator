@@ -109,6 +109,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initModernBleAutoSync();
   initHeatmapUI();
   initMatrixTestUI();
+  initDiagnosticsUI();
   initKeyPairsUI();
   initKeyOverridesUI();
   initLeaderUI();

@@ -120,6 +120,10 @@ static uint32_t testSqMax = 0, testSqDrop = 0;
 #define DIAG_SEND_QUEUE_MAX() testSqMax
 #define DIAG_SEND_QUEUE_DROPPED() testSqDrop
 
+// Wie dactyl_right.ino: TEST_MATRIX wird an die linke Hälfte weitergegeben (SPLIT_OP_MATRIX_TEST)
+static std::vector<int> testMatrixForwardCalls;
+#define MATRIX_TEST_FORWARD(on) testMatrixForwardCalls.push_back((on) ? 1 : 0)
+
 // Repeat über beide Hälften: die Hooks rufen den Test ein, damit der Pfad zur anderen Hälfte prüfbar ist
 static bool testRemoteTakesRepeat = false;
 static std::vector<std::string> testRemoteCalls;
@@ -11380,6 +11384,128 @@ TEST(test_disabling_auto_mouse_layer_drops_active_layer) {
   assert(getActiveLayer() == 2);
   handleConfigCommand("SET_AUTO_MOUSE_LAYER 255", false);
   assert(!autoMouseOn && getActiveLayer() == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Matrix-Test (TEST_MATRIX 1|0, MATRIX_RAW)
+// -----------------------------------------------------------------------------
+TEST(test_matrix_test_command_toggles_ram_flag) {
+  resetState();
+  assert(!matrixTestMode);
+  testMatrixForwardCalls.clear();
+  handleConfigCommand("TEST_MATRIX 1", false);
+  assert(matrixTestMode && matrixTestUsb && mockChar.value == "OK TEST_MATRIX 1");
+  handleConfigCommand("TEST_MATRIX 0", false);
+  assert(!matrixTestMode && !matrixTestUsb && mockChar.value == "OK TEST_MATRIX 0");
+  // Der Master gibt jeden Wechsel an die linke Hälfte weiter (SPLIT_OP_MATRIX_TEST)
+  assert((testMatrixForwardCalls == std::vector<int>{1, 0}));
+  // Falsche Argumente ändern nichts
+  handleConfigCommand("TEST_MATRIX 2", false);
+  assert(!matrixTestMode && mockChar.value == "ERR ARGS TEST_MATRIX 2");
+  handleConfigCommand("TEST_MATRIX", false);
+  assert(!matrixTestMode && mockChar.value == "ERR ARGS TEST_MATRIX");
+}
+
+TEST(test_matrix_test_is_usb_serial_only_never_ble) {
+  resetState();
+  // Über BLE (Config Mode) lehnt die Firmware den Befehl ab: MATRIX_RAW wäre sonst ein Tastenprotokoll über BLE
+  isConfigMode = true;
+  handleConfigCommand("TEST_MATRIX 1", true);
+  assert(!matrixTestMode && mockChar.value == "ERR FORBIDDEN TEST_MATRIX");
+  isConfigMode = false;
+  handleConfigCommand("TEST_MATRIX 1", true);
+  assert(!matrixTestMode);
+  // MATRIX_RAW läuft über Serial.println, nicht über sendConfigNotification (BLE-Notification)
+  handleConfigCommand("TEST_MATRIX 1", false);
+  mockChar.notifications.clear();
+  Serial.outputLines.clear();
+  matrixTestEmit('R', 2, 3, true);
+  assert(Serial.outputLines.size() == 1 && Serial.outputLines[0] == "MATRIX_RAW:R,2,3,1");
+  assert(mockChar.notifications.empty());
+  matrixTestSet(false);
+}
+
+TEST(test_matrix_raw_line_format) {
+  char buf[32];
+  matrixRawFormat(buf, sizeof(buf), 'R', 2, 3, true);
+  assert(std::string(buf) == "MATRIX_RAW:R,2,3,1");
+  matrixRawFormat(buf, sizeof(buf), 'L', 1, 4, false);
+  assert(std::string(buf) == "MATRIX_RAW:L,1,4,0");
+  matrixRawFormat(buf, sizeof(buf), 'R', 5, 6, true);
+  assert(std::string(buf) == "MATRIX_RAW:R,5,6,1");
+  Serial.outputLines.clear();
+  matrixTestEmit('L', 1, 4, false);
+  assert(Serial.outputLines.back() == "MATRIX_RAW:L,1,4,0");
+}
+
+TEST(test_matrix_test_resets_on_config_mode_sleep_and_disconnect_paths) {
+  // Der Standardwert ist aus; matrixTestSet(false) setzt beide Flags zurück (Sleep, Trennung, Config Mode)
+  matrixTestSet(true, true);
+  assert(matrixTestMode && matrixTestUsb);
+  matrixTestSet(false);
+  assert(!matrixTestMode && !matrixTestUsb);
+  // Über den Master (nicht USB) gesetzt: die linke Hälfte meldet per ESP-NOW
+  matrixTestSet(true, false);
+  assert(matrixTestMode && !matrixTestUsb);
+  matrixTestSet(false);
+}
+
+TEST(test_matrix_test_end_reports_off_on_usb_only_when_running) {
+  Serial.outputLines.clear();
+  assert(!matrixTestEnd() && Serial.outputLines.empty());   // kein Test: keine Zeile
+  matrixTestSet(true, true);
+  mockChar.notifications.clear();
+  assert(matrixTestEnd());
+  assert(!matrixTestMode && !matrixTestUsb);
+  assert(Serial.outputLines.size() == 1 && Serial.outputLines[0] == "MATRIX_TEST:OFF");
+  assert(mockChar.notifications.empty());                   // nie über BLE
+  assert(!matrixTestEnd() && Serial.outputLines.size() == 1);
+}
+
+TEST(test_matrix_test_end_deferred_prints_only_from_loop) {
+  Serial.outputLines.clear();
+  matrixTestEndDeferred();                                   // kein Test: nichts vorgemerkt
+  matrixTestOffService();
+  assert(Serial.outputLines.empty());
+  matrixTestSet(true, true);
+  matrixTestEndDeferred();                                   // BLE-Task: Flag aus, noch keine Zeile
+  assert(!matrixTestMode && Serial.outputLines.empty());
+  matrixTestOffService();                                    // loop(): genau eine Zeile
+  matrixTestOffService();
+  assert(Serial.outputLines.size() == 1 && Serial.outputLines[0] == "MATRIX_TEST:OFF");
+}
+
+TEST(test_matrix_test_set_order_and_stray_off_throttle) {
+  matrixTestSet(true, true);
+  assert(matrixTestMode && matrixTestUsb);
+  // Ein vom Master geschalteter Lauf löscht den USB-Weg des vorigen Laufs
+  matrixTestSet(true, false);
+  assert(matrixTestMode && !matrixTestUsb);
+  matrixTestSet(false, true);   // aus gewinnt, auch mit gesetztem Weg
+  assert(!matrixTestMode && !matrixTestUsb);
+  // Verirrtes MATRIX_RAW bei "aus": das erste Paket geht sofort raus, danach höchstens eins je Sekunde
+  unsigned long last = 0;
+  bool sent = false;
+  assert(matrixTestPaceDue(last, sent, 5000));
+  assert(!matrixTestPaceDue(last, sent, 5000 + MATRIX_TEST_STRAY_OFF_MS - 1));
+  assert(matrixTestPaceDue(last, sent, 5000 + MATRIX_TEST_STRAY_OFF_MS));
+  assert(last == 5000 + MATRIX_TEST_STRAY_OFF_MS);
+  // Auffrischung des "ein" mit eigenem Takt
+  unsigned long r = 0;
+  bool rs = false;
+  assert(matrixTestPaceDue(r, rs, 100, MATRIX_TEST_REFRESH_MS));
+  assert(!matrixTestPaceDue(r, rs, 100 + MATRIX_TEST_REFRESH_MS - 1, MATRIX_TEST_REFRESH_MS));
+  assert(matrixTestPaceDue(r, rs, 100 + MATRIX_TEST_REFRESH_MS, MATRIX_TEST_REFRESH_MS));
+  // Auffrischen nur bei laufendem Test und stehendem Link; ein neuer Test sendet sofort
+  unsigned long rl = 0;
+  bool rsent = false;
+  assert(!matrixTestRefreshDue(false, true, rl, rsent, 1000));
+  assert(!matrixTestRefreshDue(true, false, rl, rsent, 1000) && !rsent);
+  assert(matrixTestRefreshDue(true, true, rl, rsent, 1000));
+  assert(!matrixTestRefreshDue(true, true, rl, rsent, 1000 + MATRIX_TEST_REFRESH_MS - 1));
+  assert(matrixTestRefreshDue(true, true, rl, rsent, 1000 + MATRIX_TEST_REFRESH_MS));
+  assert(!matrixTestRefreshDue(false, true, rl, rsent, 9000) && !rsent);
+  assert(matrixTestRefreshDue(true, true, rl, rsent, 9001));
 }
 
 int main() {

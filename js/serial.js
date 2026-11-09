@@ -93,6 +93,9 @@ async function connectSerialNow(options = {}) {
 async function disconnectSerialNow() {
   if (!serialPort && !serialReadPromise) return;
   stopKeyCapture();
+  // Der Port ist hier noch offen: die Firmware bekommt TEST_MATRIX 0. Bei gezogenem Kabel schlägt das Senden still fehl.
+  // Die Firmware erkennt den Verlust des USB-Hosts nicht selbst; der Test endet dann erst mit Schlaf, Config Mode oder Neustart.
+  await stopMatrixRawTest(true);
   keepReading = false;
   if (serialReader) {
     try {
@@ -444,6 +447,16 @@ function handleSerialLine(line, side = null, transport = "ble") {
   // GET_CONFIG für den Layout-Diff: Gerätedaten nicht in die lokale Config übernehmen (js/config-sync.js).
   // Aufgelöste Hälfte übergeben: dieselbe, deren Config die Zeile sonst ändern würde.
   if (captureDeviceSnapshotLine(line, lineSide)) return;
+  // Matrix-Test: ältere Firmware (ERR UNKNOWN), Bluetooth (ERR FORBIDDEN) oder ein Reset der Firmware beenden den Test
+  if (line.startsWith("ERR UNKNOWN TEST_MATRIX") || line.startsWith("ERR FORBIDDEN TEST_MATRIX") ||
+      (line === "MATRIX_TEST:OFF" && transport === "usb")) {
+    if (matrixRawState.active) {
+      matrixRawState.active = false;
+      renderMatrixRaw();
+      showToast(line === "MATRIX_TEST:OFF" ? "Matrix-Test von der Tastatur beendet." : "Die Firmware kennt den Matrix-Test nicht. Flashe beide Hälften (Firmware 52).");
+    }
+    return;
+  }
   if (line.startsWith("ERR ")) {
     console.warn("[ESP32 ERR]", line);
     if (!isAutoSyncing) showToast(`⚠️ Tastatur meldet Fehler: ${line}`, 6000);
@@ -651,6 +664,13 @@ function handleSerialLine(line, side = null, transport = "ble") {
     } catch (e) {
       console.warn("Failed to parse KEY_PRESS:", e, line);
     }
+  }
+
+  // 2. Matrix-Diagnose (TEST_MATRIX 1): rohe Schalteränderung beider Hälften, die Seite steht in der Zeile
+  else if (line.startsWith("MATRIX_RAW:")) {
+    const evt = parseMatrixRawLine(line);
+    // Die Firmware sendet MATRIX_RAW nie über BLE: nur USB-Zeilen zählen
+    if (transport === "usb" && evt && matrixRawState.active && applyMatrixRaw(matrixRawState, evt)) renderMatrixRaw();
   }
 
   // 2. Reines Matrix-Ereignis (auch Tasten ohne Aktion): nur für den Matrix-Test

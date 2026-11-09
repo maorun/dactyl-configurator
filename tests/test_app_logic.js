@@ -34,6 +34,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
              createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, suggestCombos, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, buildHeatmapCsv, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
+             parseMatrixRawLine, createMatrixRawState, applyMatrixRaw, resetMatrixRawState,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
              COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
              SIDE_PROFILES,
@@ -1733,7 +1734,7 @@ test("Layout-Diff: nicht vorhandene Tasten zählen nicht, unvollständige Snapsh
 // handleSerialLine aus js/serial.js in einem eigenen Kontext mit Stubs für DOM, Anzeige und Verbindungen.
 // conn: Verbindungszustand (bleUp, bleSide, serialUp, serialSide), wie connectionState() in js/ble.js.
 function serialLineHarness(conn = {}) {
-  const calls = { capture: [], press: [], release: [], captured: [], rendered: 0, applied: 0, stats: [], practice: [], layers: [], tri: [], warns: [] };
+  const calls = { capture: [], press: [], release: [], captured: [], rendered: 0, rawRendered: 0, applied: 0, stats: [], practice: [], layers: [], tri: [], warns: [] };
   const s = {
     calls, console: { log() {}, warn(...a) { calls.warns.push(a.map(String).join(' ')); } },
     document: { getElementById: () => null },
@@ -1765,6 +1766,8 @@ function updateBleHostUI(slot) { calls.bleHost = slot; }
 function switchLayerUI(l) { calls.layers.push(l); }
 function renderMatrix() { calls.applied++; }
 function renderMatrixTest() { calls.rendered++; }
+const matrixRawState = createMatrixRawState();
+function renderMatrixRaw() { calls.rawRendered++; }
 function renderLayerButtons() {}
 const firmwareVersions = { noteDeviceInfo() {} };
 const deviceInfoByRole = {};
@@ -1788,10 +1791,14 @@ this.hostCaps = () => hostLedsState && hostLedsState.caps;
 this.dmRec = () => dmRecording; this.parse = Dactyl.parseDmRecLine; this.modes = () => modeState; this.forgetModes = forgetModeState;
 this.handle = handleSerialLine; this.settingOf = (side, k) => configs[side].settings[k]; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
 this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);
+this.rawState = () => ({ active: matrixRawState.active, R: [[...matrixRawState.sides.R.down], [...matrixRawState.sides.R.presses], matrixRawState.sides.R.total],
+                         L: [[...matrixRawState.sides.L.down], [...matrixRawState.sides.L.presses], matrixRawState.sides.L.total] });
+this.setRawActive = v => { matrixRawState.active = v; };
 this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
   // Arrays aus dem VM-Kontext haben einen anderen Prototyp: für deepStrictEqual in einfache Werte kopieren
   const plain = v => JSON.parse(JSON.stringify(v));
   return {
+    rawState: () => plain(s.rawState()), setRawActive: v => s.setRawActive(v),
     warns: calls.warns, handle: (...a) => s.handle(...a), settingOf: (side, k) => s.settingOf(side, k), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
     setTap: (...a) => s.setTap(...a), layerCounts: (side, l) => plain(s.layerCounts(side, l)), corrections: side => plain(s.corrections(side)), hostCaps: () => s.hostCaps(), dmRec: () => s.dmRec(), modes: () => plain(s.modes()), forgetModes: () => s.forgetModes(), parse: (...a) => s.parse(...a),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
@@ -9232,4 +9239,181 @@ test("Combo-Vorlage in der UI: Einfügen mit Undo, volle Liste ändert nichts", 
   assert.strictEqual(u.currentConfig.combos.length, 16);
   assert.strictEqual(u.calls.pending.length, pend);
   assert.strictEqual(u.calls.saved, saved);
+});
+
+// -----------------------------------------------------------------------------
+// Matrix-Diagnose und Löttester (TEST_MATRIX, MATRIX_RAW, js/diagnostics-ui.js)
+// -----------------------------------------------------------------------------
+test("parseMatrixRawLine: gültige Zeilen beider Hälften", () => {
+  assert.deepStrictEqual({ ...api.parseMatrixRawLine("MATRIX_RAW:R,2,3,1") }, { side: "R", r: 2, c: 3, down: true });
+  assert.deepStrictEqual({ ...api.parseMatrixRawLine("MATRIX_RAW:L,1,4,0") }, { side: "L", r: 1, c: 4, down: false });
+  assert.deepStrictEqual({ ...api.parseMatrixRawLine("MATRIX_RAW:R,5,6,1\r") }, { side: "R", r: 5, c: 6, down: true });
+});
+
+test("parseMatrixRawLine: ungültige Zeilen ergeben null", () => {
+  for (const bad of ["MATRIX_RAW:X,1,1,1", "MATRIX_RAW:R,6,0,1", "MATRIX_RAW:R,0,7,1", "MATRIX_RAW:R,1,1,2", "MATRIX_RAW:R,-1,1,1",
+                     "MATRIX_RAW:R,1,1", "MATRIX_RAW:R,1,1,1,1", "MATRIX_RAW: R,1,1,1", "MATRIX:{\"r\":1,\"c\":1,\"pressed\":1}", "", null, undefined, 5]) {
+    assert.strictEqual(api.parseMatrixRawLine(bad), null, String(bad));
+  }
+});
+
+test("applyMatrixRaw: Druck markiert den Schalter und zählt, Loslassen löscht die Markierung", () => {
+  const st = api.createMatrixRawState();
+  assert.strictEqual(api.applyMatrixRaw(st, { side: "R", r: 2, c: 3, down: true }), true);
+  assert.deepStrictEqual([...st.sides.R.down], ["2_3"]);
+  assert.strictEqual(st.sides.R.presses.get("2_3"), 1);
+  assert.strictEqual(api.applyMatrixRaw(st, { side: "R", r: 2, c: 3, down: false }), true);
+  assert.strictEqual(st.sides.R.down.size, 0);
+  assert.strictEqual(st.sides.R.presses.get("2_3"), 1);
+  api.applyMatrixRaw(st, { side: "R", r: 2, c: 3, down: true });
+  assert.strictEqual(st.sides.R.presses.get("2_3"), 2);
+  assert.strictEqual(st.sides.R.total, 2);
+});
+
+test("applyMatrixRaw: beide Hälften getrennt, Duplikate und nicht verlötete Schalter ändern nichts", () => {
+  const st = api.createMatrixRawState();
+  api.applyMatrixRaw(st, { side: "L", r: 1, c: 4, down: true });
+  api.applyMatrixRaw(st, { side: "R", r: 1, c: 4, down: true });
+  assert.strictEqual(st.sides.L.total, 1);
+  assert.strictEqual(st.sides.R.total, 1);
+  // doppelt gemeldeter Druck zählt nicht erneut
+  assert.strictEqual(api.applyMatrixRaw(st, { side: "L", r: 1, c: 4, down: true }), false);
+  assert.strictEqual(st.sides.L.total, 1);
+  // Loslassen ohne Druck
+  assert.strictEqual(api.applyMatrixRaw(st, { side: "L", r: 0, c: 0, down: false }), false);
+  // R4C5 existiert links nicht (R4C5 ist ein Config-Combo-Platz ohne Schalter), Spalte 6 in Fingerzeilen ebenfalls nicht
+  assert.strictEqual(api.applyMatrixRaw(st, { side: "R", r: 0, c: 6, down: true }), false);
+  assert.strictEqual(api.applyMatrixRaw(st, { side: "Q", r: 0, c: 0, down: true }), false);
+  assert.strictEqual(api.applyMatrixRaw(null, { side: "R", r: 0, c: 0, down: true }), false);
+});
+
+test("resetMatrixRawState leert Markierungen und Zähler", () => {
+  const st = api.createMatrixRawState();
+  st.active = true;
+  api.applyMatrixRaw(st, { side: "R", r: 0, c: 0, down: true });
+  api.resetMatrixRawState(st);
+  assert.strictEqual(st.sides.R.down.size, 0);
+  assert.strictEqual(st.sides.R.presses.size, 0);
+  assert.strictEqual(st.sides.R.total, 0);
+  assert.strictEqual(st.active, true);
+});
+
+test("handleSerialLine: MATRIX_RAW aktualisiert nur bei laufendem Test, nur per Zeile (kein Tastendruck, kein Matrix-Test)", () => {
+  const h = serialLineHarness();
+  h.handle("MATRIX_RAW:R,2,3,1", "R", "usb");
+  assert.strictEqual(h.rawState().R[2], 0, "ohne laufenden Test wird die Zeile verworfen");
+  h.setRawActive(true);
+  h.handle("MATRIX_RAW:R,2,3,1", "R", "usb");
+  h.handle("MATRIX_RAW:L,1,4,1", "R", "usb");   // die Seite steht in der Zeile, nicht im Absender
+  h.handle("MATRIX_RAW:L,1,4,0", "R", "usb");
+  const st = h.rawState();
+  assert.deepStrictEqual(st.R[0], ["2_3"]);
+  assert.strictEqual(st.R[2], 1);
+  assert.deepStrictEqual(st.L[0], []);
+  assert.deepStrictEqual(st.L[1], [["1_4", 1]]);
+  assert.strictEqual(h.calls.rawRendered, 3);
+  // Der Matrix-Test (grün) und die Tastenzähler bleiben unberührt
+  assert.deepStrictEqual(h.tested("R"), []);
+  assert.strictEqual(h.calls.rendered, 0);
+  assert.deepStrictEqual(h.calls.press, []);
+  // Ungültige Zeilen ändern nichts
+  h.handle("MATRIX_RAW:R,9,9,1", "R", "usb");
+  assert.strictEqual(h.calls.rawRendered, 3);
+});
+
+test("handleSerialLine: ERR zu TEST_MATRIX und MATRIX_TEST:OFF beenden den Test in der App", () => {
+  for (const line of ["ERR UNKNOWN TEST_MATRIX 1", "ERR FORBIDDEN TEST_MATRIX", "MATRIX_TEST:OFF"]) {
+    const h = serialLineHarness();
+    h.setRawActive(true);
+    h.handle(line, "R", "usb");
+    assert.strictEqual(h.rawState().active, false, line);
+    assert.strictEqual(h.calls.rawRendered, 1, line);
+  }
+  // Ohne laufenden Test ändert die Zeile nichts
+  const idle = serialLineHarness();
+  idle.handle("MATRIX_TEST:OFF", "R", "usb");
+  assert.strictEqual(idle.calls.rawRendered, 0);
+});
+
+test("handleSerialLine: MATRIX_RAW und MATRIX_TEST:OFF zählen nur über USB, nie über BLE", () => {
+  const h = serialLineHarness();
+  h.setRawActive(true);
+  h.handle("MATRIX_RAW:R,2,3,1", "R", "ble");
+  h.handle("MATRIX_TEST:OFF", "R", "ble");
+  assert.strictEqual(h.rawState().R[2], 0);
+  assert.strictEqual(h.rawState().active, true);
+  h.handle("MATRIX_RAW:R,2,3,1", "R", "usb");
+  assert.strictEqual(h.rawState().R[2], 1);
+});
+
+// diagnostics-ui.js mit Stubs: Start/Stopp sendet TEST_MATRIX 1/0 und braucht USB
+function diagnosticsHarness(serialUp = true) {
+  const sent = [];
+  const s = { sent, toasts: [], document: { getElementById: () => null }, conn: { serialUp } };
+  vm.createContext(s);
+  vm.runInContext(`${code}
+const SIDE_PROFILES_ = SIDE_PROFILES;
+function connectionState() { return conn; }
+function showToast(m) { toasts.push(m); }
+function sendSerialCommand(c) { sent.push(c); return Promise.resolve(true); }
+${read("js/diagnostics-ui.js")}
+this.state = matrixRawState; this.start = startMatrixRawTest; this.stop = stopMatrixRawTest;`, s);
+  return s;
+}
+
+asyncTests.push(["Matrix-Test starten sendet TEST_MATRIX 1, Stoppen sendet TEST_MATRIX 0", async () => {
+  const d = diagnosticsHarness();
+  assert.strictEqual(await d.start(), true);
+  assert.deepStrictEqual([...d.sent], ["TEST_MATRIX 1"]);
+  assert.strictEqual(d.state.active, true);
+  api.applyMatrixRaw(d.state, { side: "R", r: 0, c: 0, down: true });
+  await d.stop();
+  assert.deepStrictEqual([...d.sent], ["TEST_MATRIX 1", "TEST_MATRIX 0"]);
+  assert.strictEqual(d.state.active, false);
+  // ein zweites Stoppen sendet nichts mehr
+  await d.stop();
+  assert.strictEqual(d.sent.length, 2);
+}]);
+
+asyncTests.push(["Matrix-Test ohne USB startet nicht (nie über Bluetooth)", async () => {
+  const d = diagnosticsHarness(false);
+  assert.strictEqual(await d.start(), false);
+  assert.deepStrictEqual([...d.sent], []);
+  assert.strictEqual(d.state.active, false);
+  assert.strictEqual(d.toasts.length, 1);
+}]);
+
+asyncTests.push(["Matrix-Test: Trennen sendet TEST_MATRIX 0 vor dem Schließen, gezogenes Kabel sendet nichts", async () => {
+  const d = diagnosticsHarness();
+  await d.start();
+  await d.stop(true);   // wie disconnectSerialNow bei offenem Port
+  assert.deepStrictEqual([...d.sent], ["TEST_MATRIX 1", "TEST_MATRIX 0"]);
+  const unplugged = diagnosticsHarness();
+  await unplugged.start();
+  unplugged.conn.serialUp = false;   // Kabel gezogen: kein Schreibzugriff mehr
+  await unplugged.stop(true);
+  assert.strictEqual(unplugged.state.active, false);
+  assert.deepStrictEqual([...unplugged.sent], ["TEST_MATRIX 1"]);
+}]);
+
+asyncTests.push(["Matrix-Test: USB getrennt löst den Zustand ohne Befehl, Neustart leert die Zähler", async () => {
+  const d = diagnosticsHarness();
+  await d.start();
+  api.applyMatrixRaw(d.state, { side: "L", r: 0, c: 0, down: true });
+  await d.stop(false);
+  assert.strictEqual(d.state.active, false);
+  assert.deepStrictEqual([...d.sent], ["TEST_MATRIX 1"]);
+  await d.start();
+  assert.strictEqual(d.state.sides.L.total, 0);
+}]);
+
+test("index.html, Server und serial.js binden den Matrix-Test (Löttester) ein", () => {
+  const html = read("index.html");
+  for (const id of ["btnMatrixTest", "matrixRawHalves", "btnMatrixTestClear"]) assert.ok(html.includes(`id="${id}"`), id);
+  assert.ok(html.includes("Matrix-Test (Löttester)"));
+  assert.ok(html.indexOf("js/diagnostics-ui.js") > html.indexOf("js/serial.js") && html.indexOf("js/diagnostics-ui.js") < html.indexOf('src="app.js'));
+  assert.ok(read("server.py").includes('"diagnostics-ui"'));
+  assert.ok(read("app.js").includes("initDiagnosticsUI()"));
+  // serial.js stoppt den Test beim Trennen der USB-Verbindung
+  assert.ok(section("js/serial.js", "async function disconnectSerialNow", "// Serielle Schreibvorgänge").includes("await stopMatrixRawTest(true)"));
 });

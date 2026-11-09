@@ -102,7 +102,9 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_SENTENCE_CASE_TOGGLE = 30, // links -> Master: Satzanfang groß umschalten, ohne Werte
   SPLIT_OP_MOUSE_SPEED = 31,  // beide Richtungen: gehaltene Mauspräzisions-Tasten des Absenders (code Bit 0 = MOUSE_SLOW, Bit 1 = MOUSE_FAST), arg 0
   SPLIT_OP_CLEAR_STATE = 32,  // links -> Master: One-Shot-Modifier, Caps Word und Satzanfang groß beenden (CLEAR_STATE), ohne Werte
-  SPLIT_OP_COUNT = 33
+  SPLIT_OP_MATRIX_RAW = 33,   // links -> Master: Matrix-Test, Schalteränderung (splitKeyEventCode mit Ebene 0), nur USB-Serial am Master
+  SPLIT_OP_MATRIX_TEST = 34,  // nur Master -> links: Matrix-Test ein (code 1) oder aus (code 0), arg 0
+  SPLIT_OP_COUNT = 35
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -146,6 +148,7 @@ inline SplitHidEvent makeSplitMediaEvent(uint8_t op, uint32_t bits) {
 #define SPLIT_KEY_EVENT_ROWS 6
 #define SPLIT_KEY_EVENT_COLS 7
 #define SPLIT_KEY_EVENT_MASK 0x8777
+#define SPLIT_MATRIX_RAW_MASK 0x8077
 
 inline uint16_t splitKeyEventCode(uint8_t row, uint8_t col, bool pressed, uint8_t layer) {
   return (uint16_t)((pressed ? 0x8000 : 0) | ((layer & 7) << 8) | ((row & 7) << 4) | (col & 7));
@@ -219,6 +222,9 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
     case SPLIT_OP_KEY_EVENT:
       return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_KEY_EVENT_MASK) == 0 &&
              splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
+    case SPLIT_OP_MATRIX_RAW:   // wie KEY_EVENT, aber ohne Ebene (Bits 8..10 bleiben 0)
+      return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_MATRIX_RAW_MASK) == 0 &&
+             splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
     default:
       return false;
   }
@@ -245,6 +251,7 @@ inline bool parseSplitHidPacket(const uint8_t *srcMac, const uint8_t *data, int 
 #define SPLIT_ACTIVITY_INTERVAL_MS 10000
 
 // Prüft ein Paket an die linke Hälfte: nur vom Master, ACTIVITY, TAP_FLUSH, HOLD_RESOLVE, SLEEP oder MASTER_PRESS ohne Werte, ein
+// MATRIX_TEST (code 0/1),
 // HOLD_PENDING (code 0/1), ein Master-LAYER_STATE (arg < 0, der Master führt die Toggles), ein OSL (arg 0) oder ein
 // REPEAT_RUN (code 0/1/2, Nummer 1..127)
 inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, int len, SplitHidEvent &out) {
@@ -260,6 +267,7 @@ inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, i
             isValidSplitMasterLayerEvent(ev) ||
             (ev.op == SPLIT_OP_OSL && ev.arg == 0) ||
             (ev.op == SPLIT_OP_MOUSE_SPEED && ev.code <= 3 && ev.arg == 0) ||
+            (ev.op == SPLIT_OP_MATRIX_TEST && ev.code <= 1 && ev.arg == 0) ||
             (ev.op == SPLIT_OP_REPEAT_RUN && ev.code <= SPLIT_REPEAT_RUN_CODE_ALT_PRESS && ev.arg >= 1);
   if (!ok) return false;
   out = ev;
@@ -342,13 +350,14 @@ inline bool splitDisconnectedDeepSleepDue(SplitDisconnectedSleep &s, bool config
 // Scrollen hat keinen Zustand: ein doppelt zugestelltes Retry-Paket scrollte doppelt. Ein verlorener
 // Scrollschritt ist harmloser, deshalb wiederholt die linke Hälfte MOUSE_SCROLL nicht. Ein doppeltes
 // KEY_EVENT zählte in Heatmap und Statistik doppelt; ein verlorenes kostet nur eine Anzeige.
+// MATRIX_RAW zählt im Matrix-Test jeden Druck: ein Duplikat zählte doppelt, ein verlorenes Paket fehlt in der Anzeige.
 // MOUSE_MOVE bewegt den Zeiger bei jedem Paket: ein Duplikat sprang doppelt, ein verlorener Schritt fällt nicht auf.
 // CAPS_WORD_TOGGLE und SENTENCE_CASE_TOGGLE schalten um: ein Duplikat nähme das Umschalten zurück, ein verlorenes Paket tippt man neu.
 // CLEAR_STATE: ein verspätetes Duplikat löschte Caps Word oder Satzanfang groß, die der Nutzer danach wieder einschaltete.
 // MASTER_PRESS geht nur Master -> links und nie durch diese Warteschlange.
 inline bool splitEventRetryable(const SplitHidEvent &ev) {
   return ev.op != SPLIT_OP_MOUSE_SCROLL && ev.op != SPLIT_OP_MOUSE_MOVE && ev.op != SPLIT_OP_KEY_EVENT &&
-         ev.op != SPLIT_OP_CAPS_WORD_TOGGLE && ev.op != SPLIT_OP_SENTENCE_CASE_TOGGLE && ev.op != SPLIT_OP_CLEAR_STATE;
+         ev.op != SPLIT_OP_MATRIX_RAW && ev.op != SPLIT_OP_CAPS_WORD_TOGGLE && ev.op != SPLIT_OP_SENTENCE_CASE_TOGGLE && ev.op != SPLIT_OP_CLEAR_STATE;
 }
 
 // -----------------------------------------------------------------------------
@@ -2321,7 +2330,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
                              SplitRxAppliedFn onHoldResolve = nullptr,
                              unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS,
                              SplitRxAppliedFn onOsl = nullptr, SplitRxAppliedFn onMouseSpeed = nullptr,
-                             SplitRxAppliedFn onClearState = nullptr) {
+                             SplitRxAppliedFn onClearState = nullptr, SplitRxAppliedFn onMatrixRaw = nullptr) {
   SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -2341,6 +2350,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   SplitHidEvent speedEv = {};
   bool haveSpeed = false;
   uint8_t keyEvents = 0;
+  uint8_t matrixRawEvents = 0;
   while (splitRxPop(q, ev)) {
     splitNoteLeftRx(kbd.splitLeft, ev, nowMs);
     if (ev.op == SPLIT_OP_FW_VERSION || ev.op == SPLIT_OP_TAP_PENDING || ev.op == SPLIT_OP_HOLD_PENDING) continue;
@@ -2353,6 +2363,20 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
       continue;
     }
     if (ev.op == SPLIT_OP_REPEAT && (ev.code == 2 || ev.code == 3)) continue; // Notiz: splitNoteLeftRx hat sie schon übernommen
+    // MATRIX_RAW (Matrix-Test) wie KEY_EVENT: nur Diagnose, auch ohne Host, mit eigenem Budget je Aufruf
+    if (ev.op == SPLIT_OP_MATRIX_RAW) {
+      kbd.splitLeft.lastRxMs = nowMs;
+      kbd.splitLeft.linkUp = true;
+      if (rep.keyEvents < 255) rep.keyEvents++;
+      if (onMatrixRaw && matrixRawEvents < SPLIT_KEY_EVENTS_PER_RX) {
+        matrixRawEvents++;
+        onMatrixRaw(ev);
+      } else if (onMatrixRaw && rep.keyEventsDropped < 255) {
+        rep.keyEventsDropped++;   // eine Sammelzeile SPLIT_KEY_RX_DROPPED: die Anzeige des Tests kann Drücke verpassen
+        splitCountAdd(kbd.splitLeft.keyDropped, 1);
+      }
+      continue;
+    }
     if (ev.op == SPLIT_OP_KEY_EVENT) {
       kbd.splitLeft.lastRxMs = nowMs;
       kbd.splitLeft.linkUp = true;

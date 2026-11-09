@@ -200,6 +200,21 @@ bool queueKeyEventDiagnostic(SplitSendQueue &q, bool linkUp, const SplitHidEvent
   return false;
 }
 
+// Matrix-Test (TEST_MATRIX): eine Schalteränderung dieser Hälfte melden. Direkt per USB-Serial (usb), sonst als
+// SPLIT_OP_MATRIX_RAW an den Master (nur bei Link; höchstens die halbe Warteschlange wie jede Diagnose). Nie über BLE.
+// Rückgabe: true = ausgegeben oder eingereiht.
+template <class EmitFn>
+bool leftMatrixTestReport(bool testOn, bool usb, SplitSendQueue &q, bool linkUp, uint32_t &droppedCount,
+                          uint8_t row, uint8_t col, bool down, EmitFn emit) {
+  if (!testOn) return false;
+  if (usb) {
+    emit(row, col, down);
+    return true;
+  }
+  return queueKeyEventDiagnostic(q, linkUp, makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(row, col, down, 0)),
+                                 droppedCount);
+}
+
 // Lebenszeichen an den Master, einmal pro Intervall. counter zählt die Intervalle: bei 0 geht
 // SPLIT_OP_FW_VERSION raus (wie ein Diagnose-Ereignis, höchstens halbe Warteschlange, damit es auch beim Tippen
 // ankommt; sonst bleibt counter 0 bis zum nächsten Intervall), sonst HEARTBEAT nur bei leerer Warteschlange.
@@ -397,13 +412,13 @@ void restartGuardReset(EspNowRestartGuard &g) {
 }
 
 // Mit jedem Ergebnis aus queueOnSendResult aufrufen; op = Op des Pakets (queueHeadOp vor queueOnSendResult).
-// Ein verworfenes Diagnose-Paket (KEY_EVENT) zählt nicht: es wird nie wiederholt und ist kein HID-Verlust.
+// Ein verworfenes Diagnose-Paket (KEY_EVENT, MATRIX_RAW) zählt nicht: es wird nie wiederholt und ist kein HID-Verlust.
 void restartGuardOnOutcome(EspNowRestartGuard &g, SendOutcome outcome, unsigned long nowMs,
                            uint8_t op = SPLIT_OP_HEARTBEAT) {
   if (outcome == SEND_DELIVERED) {
     g.consecutiveDrops = 0;
     g.restartsWithoutDelivery = 0;
-  } else if (outcome == SEND_DROPPED && op != SPLIT_OP_KEY_EVENT) {
+  } else if (outcome == SEND_DROPPED && op != SPLIT_OP_KEY_EVENT && op != SPLIT_OP_MATRIX_RAW) {
     if (g.consecutiveDrops == 0) g.linkDownSinceMs = nowMs;
     if (g.consecutiveDrops < 255) g.consecutiveDrops++;
   }

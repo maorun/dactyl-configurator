@@ -4,11 +4,56 @@
  * Vor den Keymaps und vor DactylLogic.h einbinden.
  */
 #include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
 #include "DactylMatrixConstants.h"
 #include "DactylKeycodes.h" // KEY_*-Codes der Alternate-Repeat-Tabelle
 
 // Einschwingzeit des Matrix-Treibers in Mikrosekunden (Row/Col auf LOW treiben, Pegel stabilisieren)
 #define MATRIX_SETTLE_US 10
+
+// Matrix-Test (Löttester, TEST_MATRIX 1|0): nur im RAM, Standard aus. Er endet beim Deep Sleep, beim Wechsel des
+// Config Mode und bei einer getrennten BLE-Verbindung. matrixTestUsb = der Befehl kam per USB-Serial an dieser Hälfte;
+// dann schreibt die linke Hälfte MATRIX_RAW selbst auf Serial, sonst schickt sie es per ESP-NOW an den Master.
+// Ausgabe nur über USB-Serial, nie über BLE.
+inline volatile bool matrixTestMode = false;
+inline volatile bool matrixTestUsb = false;
+inline void matrixTestSet(bool on, bool viaUsb = false) {
+  // Reihenfolge: der Wi-Fi-Task (linke Hälfte) schreibt, loop() liest. Beim Einschalten zuerst den Weg, beim
+  // Ausschalten zuerst den Schalter, damit loop() nie "an" mit dem Weg des vorigen Laufs sieht.
+  if (on) {
+    matrixTestUsb = viaUsb;
+    matrixTestMode = true;
+  } else {
+    matrixTestMode = false;
+    matrixTestUsb = false;
+  }
+}
+// Takt für Pakete des Masters an die linke Hälfte (verirrtes "aus" und Auffrischen von "ein"): true = jetzt senden.
+// "aus" geht höchstens je MATRIX_TEST_STRAY_OFF_MS raus, wenn ein MATRIX_RAW bei ausgeschaltetem Test eintrifft.
+#define MATRIX_TEST_STRAY_OFF_MS 1000
+// Der Master wiederholt "ein" bei laufendem Test, solange der Link steht (verlorenes TEST_MATRIX 1): idempotent
+#define MATRIX_TEST_REFRESH_MS 2000
+inline bool matrixTestPaceDue(unsigned long &lastSentMs, bool &everSent, unsigned long nowMs,
+                                  unsigned long intervalMs = MATRIX_TEST_STRAY_OFF_MS) {
+  if (everSent && (unsigned long)(nowMs - lastSentMs) < intervalMs) return false;
+  everSent = true;
+  lastSentMs = nowMs;
+  return true;
+}
+// Auffrischen von "ein" an die linke Hälfte: nur bei laufendem Test und stehendem Link, alle MATRIX_TEST_REFRESH_MS.
+// everSent wird bei ausgeschaltetem Test zurückgesetzt, damit der nächste Test sofort sendet.
+inline bool matrixTestRefreshDue(bool testOn, bool linkUp, unsigned long &lastSentMs, bool &everSent, unsigned long nowMs) {
+  if (!testOn) {
+    everSent = false;
+    return false;
+  }
+  return linkUp && matrixTestPaceDue(lastSentMs, everSent, nowMs, MATRIX_TEST_REFRESH_MS);
+}
+// Zeile "MATRIX_RAW:<Seite>,<Zeile>,<Spalte>,<1|0>" (1 = gedrückt) ohne Zeilenende; Rückgabe wie snprintf
+inline int matrixRawFormat(char *buf, size_t size, char side, uint8_t row, uint8_t col, bool down) {
+  return snprintf(buf, size, "MATRIX_RAW:%c,%u,%u,%d", side, (unsigned)row, (unsigned)col, down ? 1 : 0);
+}
 
 // Layer Action Codes (Values >= 0x100)
 #define ACT_MO_BASE 0x100

@@ -90,6 +90,15 @@
         <button id="btnDiagRefresh" class="btn btn-outline btn-sm" title="Fragt die Werte der verbundenen Tastatur ab. Über Bluetooth nur im Config-Modus.">Diagnose abfragen</button>
         <button id="btnSupportReport" class="btn btn-outline btn-sm" title="Speichert Firmwarestände, Diagnose und Funkverbindung als JSON-Datei. Ohne Belegung, Makros und Tastendaten.">Diagnosebericht speichern</button>
         <ul class="diag-list" id="diagList"><li class="diag-empty">Noch keine Werte. Verbinde die Tastatur und klicke auf "Diagnose abfragen".</li></ul>
+        <!-- Matrix-Test (Löttester, TEST_MATRIX 1|0): MATRIX_RAW beider Hälften, nur per USB (js/diagnostics-ui.js) -->
+        <section class="matrix-raw" id="matrixRawSection">
+          <h4>Matrix-Test (Löttester)</h4>
+          <p class="form-hint">Verbinde die Tastatur per USB und starte den Test. Jede Schalteränderung beider Hälften leuchtet im Raster auf. Der Zähler zeigt die Drücke je Schalter. Der Test läuft nur über USB, nie über Bluetooth. Beim Stoppen oder Schließen des Panels endet er.</p>
+          <button id="btnMatrixTest" class="btn btn-outline btn-sm" type="button" aria-pressed="false">Test starten</button>
+          <button id="btnMatrixTestClear" class="btn btn-outline btn-sm" type="button">Zähler zurücksetzen</button>
+          <span class="matrix-raw-total" id="matrixRawTotal"></span>
+          <div class="matrix-raw-halves" id="matrixRawHalves"></div>
+        </section>
       </div>
     </details>
 
@@ -1258,7 +1267,7 @@
   <script src="js/side-routing.js?v=6"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=3"></script>
-  <script src="js/config-model.js?v=13"></script>
+  <script src="js/config-model.js?v=14"></script>
   <script src="js/editor.js?v=7"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/key-overrides-ui.js?v=2"></script>
@@ -1269,10 +1278,11 @@
   <script src="js/flash-log.js?v=1"></script>
   <script src="js/editor-events.js?v=8"></script>
   <script src="js/ble.js?v=2"></script>
-  <script src="js/serial.js?v=9"></script>
+  <script src="js/serial.js?v=10"></script>
   <script src="js/live-monitor.js?v=2"></script>
   <script src="js/heatmap.js?v=5"></script>
   <script src="js/matrix-test.js?v=1"></script>
+  <script src="js/diagnostics-ui.js?v=1"></script>
   <script src="js/layout-lint-ui.js?v=1"></script>
   <script src="js/layer-sheet-ui.js?v=1"></script>
   <script src="js/practice-ui.js?v=2"></script>

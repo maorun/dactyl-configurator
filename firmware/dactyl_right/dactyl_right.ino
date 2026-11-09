@@ -115,6 +115,7 @@ uint16_t tappingTermMs = 200;
 uint16_t quickTapMs = 0;
 uint16_t requirePriorIdleMs = 0;
 uint8_t chordalHold = 0;
+uint64_t chordalHoldExclusions = 0x0000000000000000ULL; // Bit (r * NUM_COLS + c): Taste von chordalHold ausgenommen (NVS "chordal_ex")
 uint8_t retroTap = 0;
 uint8_t numWordLayer = 1;
 uint8_t bootLayer = 0;

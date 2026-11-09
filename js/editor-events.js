@@ -299,6 +299,10 @@ function setupEventListeners() {
     selectKey(next.r, next.c, editSide, next.isThumb);
   });
 
+  // Chordal-Hold-Ausnahme: die Checkbox erscheint nur bei einer Halte-Aktion
+  const holdActionEl = document.getElementById("holdActionSelect");
+  if (holdActionEl) holdActionEl.addEventListener("change", () => updateChordalExVisibility());
+
   // Apply key inspector changes
   document.getElementById("btnApplyKey").addEventListener("click", async () => {
     if (!selectedKey) return;
@@ -354,6 +358,14 @@ function setupEventListeners() {
     const flavorValue = parseInt(document.getElementById("keyHoldFlavorSelect")?.value ?? "0", 10);
     if (flavorValue >= 1 && flavorValue <= HOLD_FLAVOR_MAX) newKey.holdFlavor = flavorValue;
     layer[r][c] = newKey;
+    // Chordal-Hold-Ausnahme: positionsbasiert in den Einstellungen; ohne Halte-Aktion entfällt sie
+    const chordalCheck = document.getElementById("keyChordalExCheckbox");
+    const oldChordalEx = chordalExNormalize(currentConfig.settings && currentConfig.settings.chordalHoldExclusions);
+    const wantsChordalEx = !!(chordalCheck && chordalCheck.checked) && keyToNumericActions(newKey).holdCode !== 0;
+    const newChordalEx = chordalExSet(oldChordalEx, r, c, wantsChordalEx);
+    if (newChordalEx !== oldChordalEx) {
+      currentConfig.settings = { ...(currentConfig.settings || {}), chordalHoldExclusions: newChordalEx };
+    }
     renderMatrix();
 
     const changeRecord = {
@@ -364,6 +376,8 @@ function setupEventListeners() {
       revert: () => {
         if (currentConfig.layers[targetLayer] && currentConfig.layers[targetLayer][r]) {
           currentConfig.layers[targetLayer][r][c] = oldKey;
+          const curChordalEx = chordalExNormalize(currentConfig.settings && currentConfig.settings.chordalHoldExclusions);
+          currentConfig.settings = { ...(currentConfig.settings || {}), chordalHoldExclusions: chordalExSet(curChordalEx, r, c, chordalExHas(oldChordalEx, r, c)) };
           // Mitangelegte Paare entfernen, solange sie am Ende stehen und keine andere Taste sie nutzt
           if (revertResolvedPairs(currentConfig.keyPairs, currentConfig.layers, firstAddedIdx, resolved.added.length, currentConfig.leaderSequences)) renderKeyPairs();
           renderMatrix();
@@ -753,6 +767,7 @@ function setupEventListeners() {
         mouseTimeoutMs: mouseTimeout,
         requirePriorIdleMs: priorIdle,
         chordalHold: chordalHold,
+        chordalHoldExclusions: chordalExNormalize(oldSettings.chordalHoldExclusions),
         retroTap: retroTap,
         numWordLayer: numWordLayer,
         bootLayer: bootLayer,

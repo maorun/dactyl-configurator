@@ -48,6 +48,7 @@ static uint16_t tappingTermMs = 200;
 static uint16_t quickTapMs = 0;
 static uint16_t requirePriorIdleMs = 0;
 static uint8_t chordalHold = 0;
+static uint64_t chordalHoldExclusions = 0;
 static uint8_t retroTap = 0;
 static uint8_t numWordLayer = 1;
 static uint8_t bootLayer = 0;
@@ -233,6 +234,7 @@ void resetState() {
   quickTapMs = 0;
   requirePriorIdleMs = 0;
   chordalHold = 0;
+  chordalHoldExclusions = 0;
   retroTap = 0;
   numWordLayer = 1;
   bootLayer = 0;
@@ -5342,6 +5344,83 @@ TEST(test_chordal_hold_same_half_resolves_tap) {
   keyState[2][2] = false; onMatrixKeyChange(2, 2, false, 1120);
   assert(bleKeyboard.pressedKeys.empty());
   assert(countPresses('a') == 1 && countPresses('b') == 1);
+}
+
+// chordalHoldExclusions: eine ausgenommene Mod-Tap-Taste bleibt bei einem Druck derselben Hälfte offen
+TEST(test_chordal_ex_exempt_key_stays_pending_and_resolves_hold) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0; // Hold on other key press: die zweite Taste entscheidet Halten
+  chordalHoldExclusions = chordalExBit(2, 1);
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+  assert(countPresses('a') == 0);                 // kein Tipp erzwungen
+  assert(countPresses(KEY_LEFT_CTRL) == 1);       // Halten nach holdTapMode
+  assert(countPresses('b') == 1);
+}
+
+TEST(test_chordal_ex_exempt_key_stays_pending_in_tap_preferred_mode) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 2;
+  chordalHoldExclusions = chordalExBit(2, 1);
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  resolvePendingTapHoldsAsTapSameHalf(2, 2, 1050);
+  assert(anyTapHoldPending());                    // ausgenommene Taste bleibt offen
+  assert(countPresses('a') == 0);
+}
+
+TEST(test_chordal_ex_non_exempt_key_still_resolves_tap) {
+  resetState();
+  chordalHold = 1;
+  holdTapMode = 0;
+  chordalHoldExclusions = chordalExBit(2, 2); // eine andere Taste ist ausgenommen
+  KEYMAP[0][2][1] = 'a';
+  HOLDMAP[0][2][1] = KEY_LEFT_CTRL;
+  KEYMAP[0][2][2] = 'b';
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true, 1000);
+  setMillis(1050);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true, 1050);
+  assert(countPresses('a') == 1);
+  assert(countPresses(KEY_LEFT_CTRL) == 0);
+  assert(!anyTapHoldPending());
+}
+
+TEST(test_chordal_ex_commands_persist_and_report) {
+  resetState();
+  handleConfigCommand("SET_CHORDAL_EX 6", false);
+  assert(mockChar.value == "OK SET_CHORDAL_EX");
+  assert(chordalHoldExclusions == 6);
+  assert(preferences.getBytesLength("chordal_ex") == 8);
+  handleConfigCommand("ADD_CHORDAL_EX 5 6", false);
+  assert(mockChar.value == "OK ADD_CHORDAL_EX");
+  assert(chordalHoldExclusions == (6 | chordalExBit(5, 6)));
+  handleConfigCommand("SET_CHORDAL_EX 40000000000", false); // Bit 42 liegt außerhalb der Matrix
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("SET_CHORDAL_EX xyz", false);
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  handleConfigCommand("ADD_CHORDAL_EX 6 0", false);
+  assert(mockChar.value.rfind("ERR ARGS", 0) == 0);
+  assert(chordalExLine().length() == 10 + 1 + 16);
+  assert(chordalExLine() == String("CHORDAL_EX:") + "0000020000000006");
+  uint64_t saved = chordalHoldExclusions;
+  chordalHoldExclusions = 0;
+  loadKeymapFromNVS();
+  assert(chordalHoldExclusions == saved);
+  handleConfigCommand("CLEAR_CHORDAL_EX", false);
+  assert(mockChar.value == "OK CLEAR_CHORDAL_EX");
+  assert(chordalHoldExclusions == 0);
 }
 
 // Retro Tap: Halten über den Tapping-Term ohne weiteren Tastendruck, Loslassen sendet den Tipp nach

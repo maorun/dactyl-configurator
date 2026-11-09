@@ -372,6 +372,7 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_RETRO_TAP ${clampSetting("retroTap", s.retroTap ?? 0)}`, ack: "SET_RETRO_TAP", optional: true },
     { cmd: `SET_NUM_WORD_LAYER ${clampSetting("numWordLayer", s.numWordLayer ?? 1)}`, ack: "SET_NUM_WORD_LAYER", optional: "args" },
     { cmd: `SET_BOOT_LAYER ${clampSetting("bootLayer", s.bootLayer ?? 0)}`, ack: "SET_BOOT_LAYER", optional: "args" },
+    { cmd: `SET_CHORDAL_EX ${chordalExNormalize(s.chordalHoldExclusions)}`, ack: "SET_CHORDAL_EX", optional: true },
     { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true },
     { cmd: "CLEAR_HOLD_FLAVORS", ack: "CLEAR_HOLD_FLAVORS", optional: "args", quietUnknown: true }
   ];
@@ -512,9 +513,9 @@ function captureDeviceSnapshotLine(line, side) {
   }
   if (read.stale) {
     if (isDone) read.finish(null);
-    return isDone || prefix === "LAYER_NAMES:" || !!MATRIX_DATA_FIELDS[prefix] || captureListLine(createDeviceSnapshot(), line);
+    return isDone || prefix === "LAYER_NAMES:" || !!MATRIX_DATA_FIELDS[prefix] || prefix === "CHORDAL_EX:" || captureListLine(createDeviceSnapshot(), line);
   }
-  if (captureListLine(read.snapshot, line)) return true;
+  if (captureChordalExLine(read.snapshot, line) || captureListLine(read.snapshot, line)) return true;
   if (prefix === "LAYER_NAMES:") {
     try {
       const names = JSON.parse(line.substring(12));
@@ -599,7 +600,8 @@ function showSyncDiffDialog(profile, diff, options = {}) {
   const altrepRows = lists.altrep || [];
   const listCount = lists.combos.length + lists.pairs.length + lists.overrides.length + lists.leader.length + altrepRows.length + lists.macros.length;
   const settingsRows = options.settingsRows || [];
-  const total = diff.keys.length + diff.names.length + listCount + settingsRows.length;
+  const chordalRows = diff.chordal || [];
+  const total = diff.keys.length + diff.names.length + chordalRows.length + listCount + settingsRows.length;
   const listsHint = lists.known ? ""
     : lists.state === "incomplete" ? " Combos, Tastenpaare und Makros kamen unvollständig an und sind nicht verglichen."
     : " Combos, Tastenpaare und Makros vergleicht die Firmware dieses Geräts nicht: Hälfte flashen.";
@@ -607,7 +609,7 @@ function showSyncDiffDialog(profile, diff, options = {}) {
   const what = lists.known ? "Tasten, Ebenen-Namen, Combos, Tastenpaare und Makros" : "Tasten und Ebenen-Namen";
   summary.textContent = total === 0
     ? `${what} der ${profile.label} sind auf dem Gerät gleich.${listsHint}`
-    : `${diff.keys.length} Taste(n), ${diff.names.length} Ebenen-Name(n)` +
+    : `${diff.keys.length} Taste(n), ${diff.names.length} Ebenen-Name(n)` + (chordalRows.length ? `, ${chordalRows.length} Chordal-Hold-Ausnahme(n)` : "") +
       (lists.known ? `, ${lists.combos.length} Combo(s), ${lists.pairs.length} Tastenpaar(e), ${lists.overrides.length} Überschreibung(en), ${lists.leader.length} Leader-Sequenz(en), ${altrepRows.length} Alt-Repeat-Paar(e) und ${lists.macros.length} Makro(s)` : "") +
       (settingsRows.length ? `, ${settingsRows.length} Einstellung(en)` : "") +
       ` der ${profile.label} ${loading ? "ändern sich beim Laden" : "ändern sich"}.` + listsHint;
@@ -637,6 +639,7 @@ function showSyncDiffDialog(profile, diff, options = {}) {
   };
   for (const row of settingsRows) addRow(row.where, row.device, row.local);
   for (const n of diff.names) addRow(`Name Ebene ${n.l}:`, n.device, n.local);
+  for (const row of chordalRows) addRow(row.where, row.device, row.local);
   for (const row of [...lists.combos, ...lists.pairs, ...lists.overrides, ...lists.leader, ...altrepRows, ...lists.macros]) addRow(`${row.where}:`, row.device, row.local);
   for (const k of diff.keys) addRow(`Ebene ${k.l} R${k.r}C${k.c}:`, describeKeyActions(k.device), describeKeyActions(k.local));
   list.style.display = total === 0 ? "none" : "";

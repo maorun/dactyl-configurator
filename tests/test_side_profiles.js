@@ -457,6 +457,19 @@ test("Rechte Standard-Config: Preset Deutsch QWERTZ, zwei Combos, Name des Profi
   assert.strictEqual(L.defaultConfig.settings.deviceName, L.deviceName);
 });
 
+test("chordalHoldExclusions: beide Hälften haben den Default und teilen kein Settings-Objekt", () => {
+  assert.strictEqual(R.defaultConfig.settings.chordalHoldExclusions, "0000000000000000");
+  assert.strictEqual(L.defaultConfig.settings.chordalHoldExclusions, "0000000000000000");
+  assert.notStrictEqual(R.defaultConfig.settings, L.defaultConfig.settings);
+  const before = L.defaultConfig.settings.chordalHoldExclusions;
+  R.defaultConfig.settings.chordalHoldExclusions = "0000000000000006";
+  try {
+    assert.strictEqual(L.defaultConfig.settings.chordalHoldExclusions, before);
+  } finally {
+    R.defaultConfig.settings.chordalHoldExclusions = "0000000000000000";
+  }
+});
+
 test("Zustand pro Hälfte: getrennte Configs und Änderungen, nur bekannte Felder", () => {
   const store = D.createSideStore(["R", "L"], side => ({ config: { side } }));
   assert.strictEqual(store.get("L").config.side, "L");

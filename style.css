@@ -1929,6 +1929,31 @@ body {
 .diag-empty { color: var(--text-muted); }
 .diag-flag { color: var(--warning); font-weight: 600; }
 
+/* Matrix-Test (Löttester, TEST_MATRIX) im Diagnose-Panel */
+.matrix-raw { margin-top: 1rem; }
+.matrix-raw h4 { margin: 0 0 0.4rem; }
+.matrix-raw-total { margin-left: 0.5rem; color: var(--text-muted); }
+.matrix-raw-halves { display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 0.75rem; }
+.matrix-raw-half h5 { margin: 0 0 0.4rem; font-size: 0.82rem; }
+.matrix-raw-grid {
+  display: grid;
+  grid-template-columns: 2rem repeat(7, 3.2rem);
+  gap: 4px;
+}
+.matrix-raw-cell {
+  font-family: monospace;
+  font-size: 0.68rem;
+  text-align: center;
+  padding: 0.35rem 0;
+  border-radius: 6px;
+  border: 1px solid var(--key-border);
+  background: var(--key-bg);
+  color: var(--text-muted);
+}
+.matrix-raw-cell.is-down { background: var(--success); border-color: #34d399; color: #fff; font-weight: 700; }
+.matrix-raw-cell.is-absent { border-style: dashed; opacity: 0.25; }
+.matrix-raw-count { display: block; font-size: 0.65rem; }
+
 /* Layout-Prüfung (Matrix-Tab und Layout-Diff) */
 .layout-lint {
   margin-bottom: 1rem;

@@ -88,6 +88,7 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_CLICK, 4),
     makeSplitHidEvent(SPLIT_OP_MOUSE_SCROLL, 0, -1),
     makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(5, 6, true, 7)),
+    makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(5, 6, true, 0)),
     makeSplitHidEvent(SPLIT_OP_ONE_SHOT_PRESS, 0x02),
     makeSplitHidEvent(SPLIT_OP_ONE_SHOT_RELEASE, 0xFF),
     makeSplitHidEvent(SPLIT_OP_CAPS_WORD_TOGGLE),
@@ -111,11 +112,12 @@ TEST(test_valid_event_per_op) {
     makeSplitMouseSpeedEvent(2),                       // MOUSE_FAST gehalten
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
-  // ACTIVITY, TAP_FLUSH, REPEAT_RUN, SLEEP und MASTER_PRESS sind die einzigen Ops nur der Rückrichtung. Jede dieser fünf
-  // fehlt, vier Ops stehen doppelt, KEY_PRESS und MOUSE_PRESS kommen zusätzlich mit arg 1 vor: SPLIT_OP_COUNT - 5 + 4 + 2.
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 5 + 4 + 2);  // CLEAR_STATE ist ein Op mehr, SPLIT_OP_COUNT zählt ihn mit
+  // ACTIVITY, TAP_FLUSH, REPEAT_RUN, SLEEP, MASTER_PRESS und MATRIX_TEST sind die einzigen Ops nur der Rückrichtung.
+  // Jede dieser sechs fehlt, vier Ops stehen doppelt, KEY_PRESS und MOUSE_PRESS kommen zusätzlich mit arg 1 vor:
+  // SPLIT_OP_COUNT - 6 + 4 + 2.
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 6 + 4 + 2);
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
-    if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP || op == SPLIT_OP_MASTER_PRESS) continue;
+    if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP || op == SPLIT_OP_MASTER_PRESS || op == SPLIT_OP_MATRIX_TEST) continue;
     bool seen = false;
     for (const SplitHidEvent &ev : ok) if (ev.op == op) seen = true;
     assert(seen); // jede Op links -> Master kommt vor: ein neuer Op-Wert ohne Eintrag fällt auf
@@ -180,6 +182,10 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_SLEEP),                    // nur Master -> links
     makeSplitHidEvent(SPLIT_OP_SLEEP, 1),
     makeSplitHidEvent(SPLIT_OP_SLEEP, 0, 1),
+    makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(1, 1, true, 3)),   // Matrix-Test trägt keine Ebene
+    makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(1, 1, true, 0), 1),
+    makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(6, 1, true, 0)),   // Zeile außerhalb
+    makeSplitHidEvent(SPLIT_OP_MATRIX_TEST, 1),                                 // nur Master -> links
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -2191,7 +2197,8 @@ TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
   assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25);
-  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_SENTENCE_CASE_TOGGLE == 30 && SPLIT_OP_COUNT == 33 && SPLIT_OP_MOUSE_SPEED == 31 && SPLIT_OP_CLEAR_STATE == 32);
+  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_SENTENCE_CASE_TOGGLE == 30 && SPLIT_OP_COUNT == 35 && SPLIT_OP_MOUSE_SPEED == 31 && SPLIT_OP_CLEAR_STATE == 32);
+  assert(SPLIT_OP_MATRIX_RAW == 33 && SPLIT_OP_MATRIX_TEST == 34);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -3821,6 +3828,71 @@ TEST(test_osl_packet_round_trip_and_validation) {
 // -----------------------------------------------------------------------------
 // Mauspräzision (SPLIT_OP_MOUSE_SPEED)
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Matrix-Test (SPLIT_OP_MATRIX_RAW links -> Master, SPLIT_OP_MATRIX_TEST Master -> links)
+// -----------------------------------------------------------------------------
+TEST(test_matrix_test_packet_validation_both_directions) {
+  SplitHidEvent out;
+  for (uint8_t on = 0; on <= 1; on++) {
+    SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_MATRIX_TEST, on);
+    assert(parseSplitMasterPacket(SPLIT_MASTER_MAC, reinterpret_cast<const uint8_t *>(&ev), 4, out));
+    assert(out.op == SPLIT_OP_MATRIX_TEST && out.code == on);
+  }
+  SplitHidEvent bad[] = {makeSplitHidEvent(SPLIT_OP_MATRIX_TEST, 2), makeSplitHidEvent(SPLIT_OP_MATRIX_TEST, 1, 1)};
+  for (const SplitHidEvent &ev : bad) assert(!parseSplitMasterPacket(SPLIT_MASTER_MAC, reinterpret_cast<const uint8_t *>(&ev), 4, out));
+  // Fremder Absender
+  SplitHidEvent ok = makeSplitHidEvent(SPLIT_OP_MATRIX_TEST, 1);
+  uint8_t other[6] = {1, 2, 3, 4, 5, 6};
+  assert(!parseSplitMasterPacket(other, reinterpret_cast<const uint8_t *>(&ok), 4, out));
+  // MATRIX_RAW kommt nur von links und wird nie wiederholt
+  SplitHidEvent raw = makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(2, 3, true, 0));
+  assert(parse(SPLIT_LEFT_MAC, raw, out) && out.code == raw.code);
+  assert(!parseSplitMasterPacket(SPLIT_MASTER_MAC, reinterpret_cast<const uint8_t *>(&raw), 4, out));
+  assert(!splitEventRetryable(raw) && !splitIsPressOp(SPLIT_OP_MATRIX_RAW));
+}
+
+static std::vector<uint16_t> matrixRawCodes;
+static void recordMatrixRaw(const SplitHidEvent &ev) { matrixRawCodes.push_back(ev.code); }
+
+TEST(test_process_rx_forwards_matrix_raw_without_hid_effect_and_without_host) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  matrixRawCodes.clear();
+  uint16_t down = splitKeyEventCode(1, 4, true, 0);
+  uint16_t up = splitKeyEventCode(1, 4, false, 0);
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, down));
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, up));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 300, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                     nullptr, SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, nullptr, recordMatrixRaw);
+  // Der Test läuft auch ohne Mac; keine HID-Wirkung, aber Aktivität
+  assert(rep.applied == 0 && rep.keyEvents == 2);
+  assert((matrixRawCodes == std::vector<uint16_t>{down, up}));
+  assert(k.log.empty() && k.splitLeft.linkUp && k.splitLeft.lastRxMs == 300);
+  // Ohne Callback bleibt es ein stummes Verwerfen
+  matrixRawCodes.clear();
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, down));
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 400, nullptr);
+  assert(rep.applied == 0 && matrixRawCodes.empty());
+}
+
+TEST(test_process_rx_matrix_raw_has_own_budget_and_counts_drops) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = false;
+  matrixRawCodes.clear();
+  keyEventCodes.clear();
+  // Ein Schwall KEY_EVENTs nimmt MATRIX_RAW das Budget nicht weg
+  for (int i = 0; i < SPLIT_KEY_EVENTS_PER_RX; i++) splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_KEY_EVENT, splitKeyEventCode(0, 0, true, 0)));
+  for (int i = 0; i < SPLIT_KEY_EVENTS_PER_RX + 2; i++) splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(0, 1, (i & 1) == 0, 0)));
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 100, nullptr, recordKeyEvent, nullptr, nullptr, nullptr,
+                                     nullptr, SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, nullptr, recordMatrixRaw);
+  assert(keyEventCodes.size() == (size_t)SPLIT_KEY_EVENTS_PER_RX);
+  assert(matrixRawCodes.size() == (size_t)SPLIT_KEY_EVENTS_PER_RX);
+  // Die zwei überzähligen Pakete sind gezählt und gemeldet, nicht still verloren
+  assert(rep.keyEventsDropped == 2 && k.splitLeft.keyDropped == 2);
+}
+
 TEST(test_mouse_speed_packet_round_trip_and_validation) {
   SplitHidEvent out;
   for (uint8_t mask = 0; mask <= 3; mask++) {

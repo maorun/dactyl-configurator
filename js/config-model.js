@@ -186,6 +186,53 @@ function parseMatrixLine(line) {
   return parsed;
 }
 
+// Matrix-Diagnose (TEST_MATRIX 1|0): MATRIX_RAW:<Seite>,<Zeile>,<Spalte>,<1|0> je Schalteränderung, nur über USB-Serial.
+// Rückgabe { side, r, c, down } oder null. Die Seite ist die Kennung eines registrierten Profils (R, L).
+function parseMatrixRawLine(line) {
+  if (typeof line !== "string") return null;
+  const m = /^MATRIX_RAW:([A-Z]),(\d+),(\d+),([01])$/.exec(line.trim());
+  if (!m || !Dactyl.SIDE_IDS.includes(m[1])) return null;
+  const r = Number(m[2]);
+  const c = Number(m[3]);
+  if (!isValidIndex(r, NUM_ROWS) || !isValidIndex(c, NUM_COLS)) return null;
+  return { side: m[1], r, c, down: m[4] === "1" };
+}
+
+// Zustand der Matrix-Diagnose: je Hälfte die gedrückten Schalter und die Zahl der Drücke je Schalter
+function createMatrixRawState(sideIds = Dactyl.SIDE_IDS) {
+  const state = { active: false, sides: {} };
+  for (const id of sideIds) state.sides[id] = { down: new Set(), presses: new Map(), total: 0 };
+  return state;
+}
+
+// Wendet ein MATRIX_RAW-Ereignis an. Rückgabe: true, wenn sich die Anzeige ändert. Ein Druck zählt nur beim Übergang
+// von losgelassen zu gedrückt; ein doppelt gemeldeter Druck, eine unbekannte Hälfte und ein nicht verlöteter Schalter
+// ändern nichts.
+function applyMatrixRaw(state, evt) {
+  if (!state || !evt || !state.sides[evt.side]) return false;
+  const profile = SIDE_PROFILES[evt.side];
+  if (!isWiredSwitch(evt.r, evt.c, profile)) return false;
+  const half = state.sides[evt.side];
+  const id = `${evt.r}_${evt.c}`;
+  if (evt.down) {
+    if (half.down.has(id)) return false;
+    half.down.add(id);
+    half.presses.set(id, (half.presses.get(id) || 0) + 1);
+    half.total++;
+    return true;
+  }
+  return half.down.delete(id);
+}
+
+// Zähler und gedrückte Schalter leeren (Test stoppt oder neu starten); der Schalter "active" bleibt
+function resetMatrixRawState(state) {
+  for (const half of Object.values(state.sides)) {
+    half.down.clear();
+    half.presses.clear();
+    half.total = 0;
+  }
+}
+
 // Tapping-Term-Assistent: wertet MATRIX:-Ereignisse { r, c, pressed, t } einer Hälfte aus (Scan-Zeit t in ms, 32 Bit).
 // Gültig ist nur ein vollständiges Paar Druck + Loslassen derselben Taste; ein Loslassen ohne Druck und ein Druck,
 // auf den ohne Loslassen ein zweiter Druck folgt, zählen als unvollständig (incomplete) und fließen nirgends ein.

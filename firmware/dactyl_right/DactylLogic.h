@@ -598,6 +598,37 @@ void keepAwakeTick(unsigned long now) {
 // enterDeepSleep() SPLIT_OP_SLEEP an die linke Hälfte. Der Zustand liegt nur im RAM; der Config Mode löscht ihn.
 bool deepSleepRequested = false;
 
+// Matrix-Test beenden (Config Mode, BLE-Trennung): läuft er, erfährt die App es über USB-Serial (MATRIX_TEST:OFF).
+// Schlaf und das Signal des Masters setzen nur das Flag zurück; dort ist die Serial-Verbindung ohnehin weg.
+// Rückgabe: true, wenn ein Test lief.
+bool matrixTestEnd() {
+  if (!matrixTestMode) return false;
+  matrixTestSet(false);
+  Serial.println("MATRIX_TEST:OFF");
+  return true;
+}
+
+// Aus einem Callback (BLE-Task): Test sofort beenden, die Meldung druckt loop() (matrixTestOffService). Zwei Tasks
+// auf Serial würden eine MATRIX_RAW-Zeile durchmischen.
+volatile bool matrixTestOffPending = false;
+void matrixTestEndDeferred() {
+  if (!matrixTestMode) return;
+  matrixTestSet(false);
+  matrixTestOffPending = true;
+}
+void matrixTestOffService() {
+  if (!matrixTestOffPending) return;
+  matrixTestOffPending = false;
+  Serial.println("MATRIX_TEST:OFF");
+}
+
+// Matrix-Test: eine Schalteränderung als MATRIX_RAW-Zeile auf USB-Serial (nie über BLE, kein sendConfigNotification)
+void matrixTestEmit(char side, uint8_t row, uint8_t col, bool down) {
+  char line[32];
+  matrixRawFormat(line, sizeof(line), side, row, col, down);
+  Serial.println(line);
+}
+
 bool isDeepSleepAction(uint16_t a) { return a == ACT_DEEP_SLEEP; }
 
 void deepSleepClear() { deepSleepRequested = false; }
@@ -5029,6 +5060,20 @@ void handleConfigCommand(String cmd, bool fromBle) {
       , true, (uint32_t)DIAG_SEND_QUEUE_MAX(), (uint32_t)DIAG_SEND_QUEUE_DROPPED()
 #endif
       ));
+  } else if (cmd == "TEST_MATRIX 1" || cmd == "TEST_MATRIX 0") {
+    // Matrix-Test nur über USB-Serial: MATRIX_RAW-Zeilen laufen nie über BLE
+    if (fromBle) {
+      sendConfigNotification("ERR FORBIDDEN TEST_MATRIX");
+    } else {
+      bool on = cmd.endsWith("1");
+      matrixTestSet(on, true);
+#ifdef MATRIX_TEST_FORWARD
+      MATRIX_TEST_FORWARD(on);   // Master: die linke Hälfte per ESP-NOW umschalten
+#endif
+      sendConfigNotification(on ? "OK TEST_MATRIX 1" : "OK TEST_MATRIX 0");
+    }
+  } else if (cmd.startsWith("TEST_MATRIX")) {
+    sendConfigNotification("ERR ARGS " + cmd);
   } else if (cmd == "RESET_CONFIG") {
     bool ok = preferences.begin("dactyl", false) && preferences.clear();
     preferences.end();

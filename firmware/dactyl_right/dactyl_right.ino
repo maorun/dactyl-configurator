@@ -69,6 +69,7 @@ public:
       return;
     }
     if (pServer->getConnectedCount() <= 1) {
+      matrixTestEndDeferred();   // Matrix-Test endet mit der getrennten Verbindung; loop() meldet es der App über USB
       DactylBleComposite::onDisconnect(pServer);
     }
   }
@@ -216,6 +217,7 @@ void enterConfigMode() {
   dynamicMacroReset();
   resetMouseMove();
   oslClearAll();
+  matrixTestEnd();
   deepSleepClear();   // Config Mode verwirft eine vorgemerkte Deep-sleep-Anforderung
   bleKeyboard.releaseAll();
   sendSplitLayerRelease();
@@ -364,6 +366,7 @@ void enterDeepSleep() {
   Serial.flush();
 
   sendConfigNotification("SLEEP_STARTING");
+  matrixTestSet(false);   // Matrix-Test endet mit dem Schlaf
   // Laufendes Makro beenden und seine Codes am Mac loslassen, bevor die Verbindung endet
   stopMacro(true);
   autoMouseStop();
@@ -546,6 +549,8 @@ int deviceInfoLeftLink(char *buf, size_t size);
 #define DEVICE_INFO_LEFT_LINK(buf, size) deviceInfoLeftLink(buf, size)
 // Repeat über beide Hälften (SPLIT_OP_REPEAT / SPLIT_OP_REPEAT_RUN): war links zuletzt, führt die linke Hälfte
 // die Wiederholung aus; eine aufgezeichnete rechte Aktion macht rechts wieder zur letzten Hälfte
+void forwardMatrixTest(bool on);
+#define MATRIX_TEST_FORWARD(on) forwardMatrixTest(on)
 bool masterRepeatRemotePress(uint8_t r, uint8_t c, bool alt);
 void masterRepeatRemoteRelease(uint8_t r, uint8_t c);
 #define REPEAT_REMOTE_PRESS(r, c, alt) masterRepeatRemotePress(r, c, alt)
@@ -579,6 +584,12 @@ int deviceInfoLeftLink(char *buf, size_t size) {
 }
 // Eigenes Tippen an die linke Hälfte melden (synchronisierte Inaktivitäts-Timer, DactylSplitHid.h)
 static bool splitActivityPeerReady = false;
+// TEST_MATRIX 1|0 an die linke Hälfte weitergeben (SPLIT_OP_MATRIX_TEST); ohne Link bleibt links aus
+void forwardMatrixTest(bool on) {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_MATRIX_TEST, on ? 1 : 0);
+  esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+}
 static SplitActivityThrottle splitActivity;
 static SplitDisconnectedSleep splitDisconnectedSleep = {};
 // Layer-Abgleich mit der linken Hälfte (SPLIT_OP_LAYER_STATE, DactylSplitHid.h)
@@ -738,6 +749,18 @@ static void onSplitApplied(const SplitHidEvent &ev) {
   Serial.printf("SPLIT_HID:{\"op\":%u,\"code\":%u,\"arg\":%d}\n", ev.op, ev.code, ev.arg);
 }
 
+// Matrix-Test: Schalteränderung der linken Hälfte als MATRIX_RAW:L,... (nur USB-Serial, nie über BLE)
+static void onSplitMatrixRaw(const SplitHidEvent &ev) {
+  if (!matrixTestMode) {
+    // Die linke Hälfte sendet weiter, obwohl der Test aus ist (verlorenes "aus", Neustart des Masters): erneut abschalten
+    static unsigned long lastOffMs = 0;
+    static bool offSent = false;
+    if (matrixTestPaceDue(lastOffMs, offSent, millis())) forwardMatrixTest(false);
+    return;
+  }
+  matrixTestEmit('L', splitKeyEventRow(ev.code), splitKeyEventCol(ev.code), splitKeyEventPressed(ev.code));
+}
+
 // Matrix-Position der linken Hälfte für den Live-Monitor der App (nur USB-Serial, nie über BLE)
 static void onSplitKeyEvent(const SplitHidEvent &ev) {
   // Auch eine linke Taste ohne HID-Druck (Mod-Tap-Halten, Ebene) zählt als letzter Tastendruck
@@ -874,9 +897,16 @@ void processSplitEvents(unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
   SplitRxReport rep = splitProcessRx(bleKeyboard, splitRxQueue, splitRxDroppedSeen, splitHostWasReady,
                                      hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer,
                                      onSplitBeforeLeftPress, onSplitRepeat, onSplitHoldResolve,
-                                     linkTimeoutMs, onSplitOsl, onSplitMouseSpeed, onSplitClearState);
+                                     linkTimeoutMs, onSplitOsl, onSplitMouseSpeed, onSplitClearState,
+                                     onSplitMatrixRaw);
   // Mac getrennt oder Config Mode: nichts bleibt vorgemerkt (auch die eigene Vormerkung)
   if (rep.hostLost) oslClearAll();
+  // Linke Hälfte gerade erreichbar (Start, Aufwachen) bei laufendem Matrix-Test: den Zustand erneut senden
+  if (!linkWasUp && bleKeyboard.splitLeft.linkUp && matrixTestMode) forwardMatrixTest(true);
+  // Dazu alle MATRIX_TEST_REFRESH_MS, solange der Test läuft und der Link steht (ein verlorenes "ein" heilt so)
+  static unsigned long matrixRefreshMs = 0;
+  static bool matrixRefreshSent = false;
+  if (matrixTestRefreshDue(matrixTestMode, bleKeyboard.splitLeft.linkUp, matrixRefreshMs, matrixRefreshSent, now)) forwardMatrixTest(true);
   // Linke Hälfte gerade erreichbar (Start, Aufwachen): sofort den Layer-Zustand des Masters senden
   // Linke Hälfte nicht erreichbar, aus oder im Deep Sleep: ihre gehaltenen MO-Ebenen verfallen
   if (splitLayerMasterAfterRx(splitLayerSync, splitRemoteLayers, linkWasUp, bleKeyboard.splitLeft.linkUp,
@@ -1061,6 +1091,7 @@ void setup() {
 }
 
 void loop() {
+  matrixTestOffService();
   hostLedsService(bleKeyboard.hostLeds);
   // oneShotTimeoutMs: unverbrauchte Vormerkungen (Modifier und Ebenen) verfallen, auch ohne Funk-Peer
   oneShotExpire(bleKeyboard.oneShot, millis(), oneShotTimeoutMs);
@@ -1112,6 +1143,7 @@ void loop() {
 
         if (isPressed != rawKeyState[r][c]) {
           rawKeyState[r][c] = isPressed;
+          if (matrixTestMode) matrixTestEmit('R', r, c, isPressed);
           splitNoteLocalKeyChange(splitActivity, millis(), lastActivityTime);
           exitStandby();
           if (isPressed) sendSplitMasterPress();

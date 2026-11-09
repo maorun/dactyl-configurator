@@ -230,6 +230,7 @@ TEST(test_scroll_is_not_retried) {
   // Alle anderen Ops bleiben wiederholbar (idempotent auf dem Master)
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
     bool expected = op != SPLIT_OP_MOUSE_SCROLL && op != SPLIT_OP_MOUSE_MOVE && op != SPLIT_OP_KEY_EVENT &&
+                    op != SPLIT_OP_MATRIX_RAW &&
                     op != SPLIT_OP_CAPS_WORD_TOGGLE && op != SPLIT_OP_SENTENCE_CASE_TOGGLE && op != SPLIT_OP_CLEAR_STATE;
     assert(splitEventRetryable(makeSplitHidEvent(op, 1)) == expected);
   }
@@ -771,6 +772,48 @@ TEST(test_left_loop_delay_stays_fast_while_queue_busy) {
   // Standby mit Paket in Warteschlange: 1 ms schnelles loop() für zügiges Senden / Retries
   queuePush(qSim, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'z'));
   assert(leftLoopDelayMs(true, qSim) == 1UL);
+}
+
+// Matrix-Test: MATRIX_RAW links -> Master (SPLIT_OP_MATRIX_RAW), direkte USB-Ausgabe und Weiterleitung
+TEST(test_matrix_test_report_routes_usb_or_split) {
+  SplitSendQueue q;
+  queueReset(q);
+  uint32_t dropped = 0;
+  std::vector<std::string> usb;
+  auto emit = [&](uint8_t r, uint8_t c, bool d) { usb.push_back(std::to_string(r) + "," + std::to_string(c) + "," + (d ? "1" : "0")); };
+  // Test aus: nichts geht raus
+  assert(!leftMatrixTestReport(false, true, q, true, dropped, 1, 4, true, emit));
+  assert(usb.empty() && q.count == 0);
+  // USB direkt an der linken Hälfte: Ausgabe, keine Funk-Pakete
+  assert(leftMatrixTestReport(true, true, q, true, dropped, 1, 4, false, emit));
+  assert(usb.size() == 1 && usb[0] == "1,4,0" && q.count == 0);
+  // Über den Master: Paket MATRIX_RAW mit Position und Zustand, ohne Ebene
+  assert(leftMatrixTestReport(true, false, q, true, dropped, 2, 3, true, emit));
+  assert(usb.size() == 1 && q.count == 1);
+  SplitHidEvent ev;
+  assert(queueNextToSend(q, 0, ev) && ev.op == SPLIT_OP_MATRIX_RAW && ev.arg == 0);
+  assert(splitKeyEventRow(ev.code) == 2 && splitKeyEventCol(ev.code) == 3 && splitKeyEventPressed(ev.code));
+  assert(splitKeyEventLayer(ev.code) == 0 && isValidSplitHidEvent(ev));
+  // Ohne Link geht nichts raus
+  queueReset(q);
+  assert(!leftMatrixTestReport(true, false, q, false, dropped, 2, 3, true, emit) && q.count == 0);
+  // Volle Diagnose-Hälfte: das Paket entfällt und zählt als verworfen
+  for (int i = 0; i < SPLIT_DIAG_QUEUE_LIMIT; i++) queuePush(q, makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a'));
+  assert(!leftMatrixTestReport(true, false, q, true, dropped, 0, 0, true, emit) && dropped == 1);
+}
+
+TEST(test_matrix_test_ops_are_appended_and_not_retried) {
+  assert(SPLIT_OP_MATRIX_RAW == 33 && SPLIT_OP_MATRIX_TEST == 34 && SPLIT_OP_COUNT == 35);
+  // Ein doppelt zugestelltes Paket zählte einen Druck doppelt: kein Retry
+  assert(!splitEventRetryable(makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(1, 1, true, 0))));
+}
+
+TEST(test_dropped_matrix_raw_is_no_hid_loss_for_restart_guard) {
+  EspNowRestartGuard g = {};
+  for (int i = 0; i < 20; i++) restartGuardOnOutcome(g, SEND_DROPPED, 1000 + i, SPLIT_OP_MATRIX_RAW);
+  assert(g.consecutiveDrops == 0);
+  restartGuardOnOutcome(g, SEND_DROPPED, 2000, SPLIT_OP_KEY_PRESS);
+  assert(g.consecutiveDrops == 1);
 }
 
 int main() {

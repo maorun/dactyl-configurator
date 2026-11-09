@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Matrix diagnostics and solder tester (`MATRIX_TEST_MODE`)
-
-- **Rank:** Feature model. Total 29/40 (typing 4, configuration 9, harmony 7, safety 9). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/dactyl_right.ino`, `firmware/dactyl_left/dactyl_left.ino`, `firmware/dactyl_right/DactylCommon.h`, `js/serial.js`, `js/diagnostics-ui.js`, `index.html`.
-- **Problem:** Hardware faults such as cold solder joints, damaged switches or diode shorts are difficult to isolate without external instruments.
-- **Goal:** Add a serial command `TEST_MATRIX 1|0`. In test mode, both halves stream switch changes as `MATRIX_RAW:<side>,<row>,<col>,<down>`. The app diagnostic panel highlights pressed switches on a physical switch grid for both halves.
-- **Acceptance test:** A firmware test enables test mode, simulates physical key press and release, and expects formatted `MATRIX_RAW:` lines; an app test parses the lines and updates switch highlight states.
-
 ### Chordal Hold per-key exclusion list (`chordalHoldExclusions`)
 
 - **Rank:** Feature model. Total 28/40 (typing 7, configuration 6, harmony 7, safety 8). Effort M. Estimate.

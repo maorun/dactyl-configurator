@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Layer Lock live status pill (`MODE_STATE`)
-
-- **Rank:** Feature model. Total 27/40 (typing 5, configuration 6, harmony 8, safety 8). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `js/serial.js`, `js/side-routing.js`, `index.html`.
-- **Problem:** When `ACT_LAYER_LOCK` is active, the app header shows no status pill, unlike `Caps Word`, `Num Word` and `Swap Hands`.
-- **Goal:** Add `ll` (layer lock active flag, 0 or 1) and `lli` (locked layer index, 0..7) to `MODE_STATE`. Show a status pill "Layer Lock (Ebene N)" in `#modeStatePills` while a layer is locked and remove it when layer lock is cleared.
-- **Acceptance test:** A firmware test locks layer 2 and expects `MODE_STATE` with `"ll":1,"lli":2`; an app test renders the status pill with the locked layer number.
-
 ### Quick-Tap Term per-key override (`QUICKTAPMAP`)
 
 - **Rank:** Feature model. Total 27/40 (typing 7, configuration 6, harmony 7, safety 7). Effort M. Estimate.

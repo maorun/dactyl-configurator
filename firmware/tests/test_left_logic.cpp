@@ -1,5 +1,7 @@
 #include <cassert>
 #include <iostream>
+#include <string>
+#include <vector>
 
 #include "../dactyl_right/DactylCommon.h"
 

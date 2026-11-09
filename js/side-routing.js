@@ -309,7 +309,8 @@
   const MODE_STATE_KEYS = ["cw", "nw", "sc", "sh", "ka"];
   const MODE_STATE_LABELS = { cw: "Caps Word", nw: "Num Word", sc: "Satzanfang", sh: "Swap Hands", ka: "Keep Awake" };
 
-  // MODE_STATE-Zeile {"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1}: aktive Modi des Masters.
+  // MODE_STATE-Zeile {"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1,"ll":0|1,"lli":0..7}: aktive Modi des Masters.
+  // ll und lli fehlen in Firmware vor Version 54: dann gilt Layer Lock als aus.
   // Rückgabe: Flags je Modus oder undefined bei einer fremden oder ungültigen Zeile.
   function parseModeStateLine(line, lineSide) {
     const D = root.Dactyl;
@@ -327,13 +328,20 @@
       if (!isFlag(raw[k])) return undefined;
       out[k] = raw[k] === 1;
     }
+    const llPresent = raw.ll !== undefined || raw.lli !== undefined;
+    if (llPresent && (!isFlag(raw.ll) || !Number.isInteger(raw.lli) || raw.lli < 0 || raw.lli > 7)) return undefined;
+    if (raw.ll === 1 && raw.lli < 1) return undefined;   // Ebene 0 rastet nie ein
+    out.ll = llPresent && raw.ll === 1;
+    out.lli = out.ll ? raw.lli : 0;
     return out;
   }
 
   // Aktive Modi als Liste {key, label}; null = keine Pill
   function describeModeState(modes) {
     if (!modes) return [];
-    return MODE_STATE_KEYS.filter(k => modes[k] === true).map(k => ({ key: k, label: MODE_STATE_LABELS[k] }));
+    const list = MODE_STATE_KEYS.filter(k => modes[k] === true).map(k => ({ key: k, label: MODE_STATE_LABELS[k] }));
+    if (modes.ll === true) list.push({ key: "ll", label: `Layer Lock (Ebene ${modes.lli | 0})` });
+    return list;
   }
 
   // Anzeige: Pill nur bei aktivem Caps Lock

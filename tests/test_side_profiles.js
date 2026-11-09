@@ -64,7 +64,10 @@ test("MODE_STATE: Parser nur für den Master, Anzeige und Firmware nur über USB
   const D = ctx.Dactyl;
   const plain = v => JSON.parse(JSON.stringify(v));
   const line = '{"cw":1,"nw":0,"sc":1,"sh":0,"ka":0}';
-  assert.deepStrictEqual(plain(D.parseModeStateLine("MODE_STATE:" + line, "R")), { cw: true, nw: false, sc: true, sh: false, ka: false });
+  assert.deepStrictEqual(plain(D.parseModeStateLine("MODE_STATE:" + line, "R")), { cw: true, nw: false, sc: true, sh: false, ka: false, ll: false, lli: 0 });
+  assert.deepStrictEqual(plain(D.parseModeStateLine('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":3}', "R")), { cw: false, nw: false, sc: false, sh: false, ka: false, ll: true, lli: 3 });
+  for (const bad of ['{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":8}', '{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":2,"lli":0}', '{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":0}']) assert.strictEqual(D.parseModeStateLine("MODE_STATE:" + bad, "R"), undefined, bad);
+  assert.deepStrictEqual(plain(D.describeModeState({ cw: false, ll: true, lli: 3 })).map(m => m.label), ["Layer Lock (Ebene 3)"]);
   assert.strictEqual(D.parseModeStateLine("MODE_STATE:" + line, "L"), undefined);
   for (const bad of ['{"cw":1}', '{"cw":1,"nw":0,"sc":1,"sh":0,"ka":2}', "kaputt", "null", ""]) assert.strictEqual(D.parseModeStateLine("MODE_STATE:" + bad, "R"), undefined, bad);
   assert.strictEqual(D.parseModeStateLine("HOST_LEDS:" + line, "R"), undefined);

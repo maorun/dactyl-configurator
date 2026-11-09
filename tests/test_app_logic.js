@@ -1788,7 +1788,7 @@ ${section("js/serial.js", "// LED-Zustand des Hosts:", "function switchLayerUI")
 this.setTap = (side, l, r, c, tap) => { configs[side].layers[l][r][c].tap = tap; };
 this.corrections = side => ({ ...stats[side].corrections });
 this.hostCaps = () => hostLedsState && hostLedsState.caps;
-this.dmRec = () => dmRecording; this.parse = Dactyl.parseDmRecLine; this.modes = () => modeState; this.forgetModes = forgetModeState;
+this.dmRec = () => dmRecording; this.parse = Dactyl.parseDmRecLine; this.modes = () => modeState; this.describeModes = () => Dactyl.describeModeState(modeState); this.forgetModes = forgetModeState;
 this.handle = handleSerialLine; this.settingOf = (side, k) => configs[side].settings[k]; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
 this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);
 this.rawState = () => ({ active: matrixRawState.active, R: [[...matrixRawState.sides.R.down], [...matrixRawState.sides.R.presses], matrixRawState.sides.R.total],
@@ -1800,7 +1800,7 @@ this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
   return {
     rawState: () => plain(s.rawState()), setRawActive: v => s.setRawActive(v),
     warns: calls.warns, handle: (...a) => s.handle(...a), settingOf: (side, k) => s.settingOf(side, k), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
-    setTap: (...a) => s.setTap(...a), layerCounts: (side, l) => plain(s.layerCounts(side, l)), corrections: side => plain(s.corrections(side)), hostCaps: () => s.hostCaps(), dmRec: () => s.dmRec(), modes: () => plain(s.modes()), forgetModes: () => s.forgetModes(), parse: (...a) => s.parse(...a),
+    setTap: (...a) => s.setTap(...a), layerCounts: (side, l) => plain(s.layerCounts(side, l)), corrections: side => plain(s.corrections(side)), hostCaps: () => s.hostCaps(), dmRec: () => s.dmRec(), modes: () => plain(s.modes()), describeModes: () => plain(s.describeModes()), forgetModes: () => s.forgetModes(), parse: (...a) => s.parse(...a),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
     set snapshotActive(v) { s.snapshotActive = v; },
     setLoadSide(v) { vm.runInContext("deviceLoadSide = " + JSON.stringify(v), s); },
@@ -3836,12 +3836,12 @@ test("serial.js: MODE_STATE zeigt die Modi nur vom Master über USB und endet mi
   const s = serialLineHarness();
   assert.strictEqual(s.modes(), null);
   s.handle('MODE_STATE:{"cw":1,"nw":0,"sc":0,"sh":0,"ka":1}', "R", "usb");
-  assert.deepStrictEqual(s.modes(), { cw: true, nw: false, sc: false, sh: false, ka: true });
+  assert.deepStrictEqual(s.modes(), { cw: true, nw: false, sc: false, sh: false, ka: true, ll: false, lli: 0 });
   // Linke Hälfte, BLE und ungültige Zeilen ändern den Stand nicht
   s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0}', "L", "usb");
   s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0}', "R", "ble");
   for (const bad of ['MODE_STATE:{"cw":2,"nw":0,"sc":0,"sh":0,"ka":0}', 'MODE_STATE:{"cw":1}', "MODE_STATE:kaputt", "MODE_STATE:null"]) s.handle(bad, "R", "usb");
-  assert.deepStrictEqual(s.modes(), { cw: true, nw: false, sc: false, sh: false, ka: true });
+  assert.deepStrictEqual(s.modes(), { cw: true, nw: false, sc: false, sh: false, ka: true, ll: false, lli: 0 });
   // Ohne USB zum Master gilt der Stand nicht mehr
   const gone = serialLineHarness({ serialUp: false, serialSide: null });
   gone.handle('MODE_STATE:{"cw":1,"nw":0,"sc":0,"sh":0,"ka":0}', "R", "usb");
@@ -3852,7 +3852,16 @@ test("serial.js: MODE_STATE zeigt die Modi nur vom Master über USB und endet mi
   kept.handle('MODE_STATE:{"cw":1,"nw":0,"sc":0,"sh":0,"ka":0}', "R", "usb");
   kept.forgetModes();
   assert.strictEqual(kept.modes().cw, true);
+  // Layer Lock: ll und lli, Pill mit Ebenennummer, Ende mit ll 0
+  s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":2}', "R", "usb");
+  assert.deepStrictEqual(s.modes(), { cw: false, nw: false, sc: false, sh: false, ka: false, ll: true, lli: 2 });
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(s.describeModes())), [{ key: "ll", label: "Layer Lock (Ebene 2)" }]);
+  s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":9}', "R", "usb");
+  assert.strictEqual(s.modes().lli, 2);
+  s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":0,"lli":0}', "R", "usb");
+  assert.deepStrictEqual(s.describeModes(), []);
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+  assert.ok(/id="pillLayerLock"[^>]*\bhidden\b/.test(html));
   assert.ok(/id="modeStatePills"[^>]*\bhidden\b/.test(html));
   for (const k of ["cw", "nw", "sc", "sh", "ka"]) assert.ok(new RegExp(`data-mode="${k}"[^>]*\\bhidden\\b`).test(html), k);
   for (const f of ["js/serial.js", "js/ble.js"]) assert.ok(fs.readFileSync(path.join(__dirname, "..", f), "utf8").includes("forgetModeState();"), f);

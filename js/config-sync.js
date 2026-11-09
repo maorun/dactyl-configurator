@@ -364,6 +364,8 @@ function buildSettingCommands(s, profile) {
     ...(profile.master ? [{ cmd: `SET_CAPS_LED ${clampSetting("capsLed", s.capsLed ?? 0)}`, ack: "SET_CAPS_LED", optional: true }] : []),
     { cmd: `SET_LEADER_TIMEOUT ${clampSetting("leaderTimeoutMs", s.leaderTimeoutMs ?? 1000)}`, ack: "SET_LEADER_TIMEOUT", optional: true },
     { cmd: `SET_LAYER_TIMEOUT ${clampSetting("layerTimeoutMs", s.layerTimeoutMs ?? 0)}`, ack: "SET_LAYER_TIMEOUT", optional: "args" },
+    { cmd: `SET_AUTO_MOUSE_LAYER ${clampSetting("autoMouseLayer", s.autoMouseLayer ?? 255)}`, ack: "SET_AUTO_MOUSE_LAYER", optional: "args" },
+    { cmd: `SET_MOUSE_TIMEOUT ${clampSetting("mouseTimeoutMs", s.mouseTimeoutMs ?? 500)}`, ack: "SET_MOUSE_TIMEOUT", optional: "args" },
     { cmd: `SET_ONESHOT_TIMEOUT ${clampSetting("oneShotTimeoutMs", s.oneShotTimeoutMs ?? 0)}`, ack: "SET_ONESHOT_TIMEOUT", optional: "args" },
     { cmd: `SET_AUTO_SHIFT ${clampSetting("autoShift", s.autoShift ?? 0)}`, ack: "SET_AUTO_SHIFT", optional: "args" },
     { cmd: `SET_AUTO_SHIFT_TERM ${clampSetting("autoShiftMs", s.autoShiftMs ?? 175)}`, ack: "SET_AUTO_SHIFT_TERM", optional: true },
@@ -493,10 +495,18 @@ function captureDeviceSnapshotLine(line, side) {
   const isDone = line.startsWith("CONFIG_SYNC_DONE");
   // Komplettes Laden: DEVICE_INFO zusätzlich in den Snapshot legen. Die Zeile geht weiter an den normalen Handler
   // (Firmwarestand, Split-Link, Einstellungen): false = nicht verbraucht.
+  if (read.withInfo && !read.stale && prefix === "AUTO_MOUSE:") {
+    // Die Zeile kommt vor DEVICE_INFO (BLE-Limit): ihre Felder aml und amt gehören zu info
+    try {
+      const am = JSON.parse(line.substring(prefix.length));
+      if (am && typeof am === "object" && !Array.isArray(am)) read.autoMouse = { aml: am.aml, amt: am.amt };
+    } catch (_) {}
+    return false;
+  }
   if (read.withInfo && !read.stale && prefix === "DEVICE_INFO:") {
     try {
       const info = JSON.parse(line.substring(prefix.length));
-      if (info && typeof info === "object" && !Array.isArray(info)) read.snapshot.info = info;
+      if (info && typeof info === "object" && !Array.isArray(info)) read.snapshot.info = { ...info, ...(read.autoMouse || {}) };
     } catch (_) {}
     return false;
   }

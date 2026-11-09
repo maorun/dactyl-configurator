@@ -79,6 +79,8 @@ static LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS];
 static uint16_t leaderTimeoutMs = 1000;
 static uint16_t oneShotTimeoutMs = 0;
 static uint16_t layerTimeoutMs = 0;
+static uint8_t autoMouseLayer = AUTO_MOUSE_LAYER_OFF;
+static uint16_t mouseTimeoutMs = MOUSE_TIMEOUT_DEFAULT_MS;
 static uint8_t numMacros = 0;
 static uint8_t macroLengths[MAX_MACROS] = {0};
 static bool userMacroRepeat[MAX_MACROS] = {false};
@@ -138,6 +140,10 @@ static void resetState() {
   for (int r = 0; r < NUM_ROWS; r++)
     for (int c = 0; c < NUM_COLS; c++) { repeatResolved[r][c] = 0; repeatRemote[r][c] = false; }
   isConfigMode = false;
+  autoMouseLayer = AUTO_MOUSE_LAYER_OFF;
+  mouseTimeoutMs = MOUSE_TIMEOUT_DEFAULT_MS;
+  autoMouseOn = false;
+  autoMouseLastMs = 0;
   setMillis(1000);
   // Gehaltene Eingaben des vorigen Tests vergessen; Master hat einmal bestätigt: Proxy meldet "verbunden".
   // Die Warteschlange erst danach leeren (onSendResult kann nach einem Zeitsprung RELEASE_ALL einreihen).
@@ -180,6 +186,25 @@ static void tap(uint8_t r, uint8_t c) {
   advanceMillis(20);
   keyState[r][c] = false;
   onMatrixKeyChange(r, c, false);
+}
+
+TEST(test_auto_mouse_on_left_half_activates_expires_and_reports_layer) {
+  KEYMAP[0][2][1] = ACT_MOUSE_LEFT;
+  tap(2, 1);                                    // ohne Einstellung bleibt die Ebene aus
+  assert(!autoMouseOn);
+  drain();
+  autoMouseLayer = 3;
+  mouseTimeoutMs = 200;
+  tap(2, 1);
+  assert(autoMouseOn && getActiveLayer() == 3);
+  assert((localMomentaryLayerMask() & (1u << 3)) != 0);   // die Ebene geht als MO-Ebene an den Master
+  autoMouseExpire(millis() + 100);
+  assert(autoMouseOn);
+  autoMouseExpire(millis() + 400);
+  assert(!autoMouseOn && getActiveLayer() == 0);
+  autoMouseNote(millis());
+  oslClearAll();                                // RELEASE_ALL, Link-Ausfall, Standby-Pfad
+  assert(!autoMouseOn);
 }
 
 TEST(test_plain_key_press_and_release) {

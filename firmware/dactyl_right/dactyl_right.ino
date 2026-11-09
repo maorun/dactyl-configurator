@@ -122,6 +122,8 @@ uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
 uint16_t oneShotTimeoutMs = 0;
 uint16_t layerTimeoutMs = 0;
+uint8_t autoMouseLayer = 255;
+uint16_t mouseTimeoutMs = 500;
 uint8_t holdTapMode = 0;
 uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
 uint8_t numTriLayers = 0;
@@ -349,6 +351,7 @@ void enterStandby() {
     keyLockReleaseAll();
     swapClearAll();
     keepAwakeStop();   // Standby beendet Keep-awake
+    autoMouseStop();
     setCpuFrequencyMhz(80);
     bleKeyboard.setStandbyMode(true);
     applySplitWakeWindow(true);
@@ -363,6 +366,7 @@ void enterDeepSleep() {
   sendConfigNotification("SLEEP_STARTING");
   // Laufendes Makro beenden und seine Codes am Mac loslassen, bevor die Verbindung endet
   stopMacro(true);
+  autoMouseStop();
   sendSplitLayerRelease();
   sendSplitSleep();
   delay(30);
@@ -838,6 +842,7 @@ static void onSplitOsl(const SplitHidEvent &ev) {
 
 // Mauspräzision der linken Hälfte (gehaltene MOUSE_SLOW / MOUSE_FAST); ohne Paket verfällt sie in effectiveMouseSpeed
 static void onSplitMouseSpeed(const SplitHidEvent &ev) {
+  if (ev.code != 0) autoMouseNote(millis());   // eine gehaltene Präzisionstaste der linken Hälfte ist Mausaktivität
   applyRemoteMouseSpeed((uint8_t)ev.code, millis());
 }
 
@@ -959,6 +964,8 @@ void sendSplitLayerStateIfDue(unsigned long refreshIntervalMs) {
 
 void setup() {
   bleKeyboard.setKeyOverrides(userKeyOverrides, &numKeyOverrides, getActiveLayer);
+  splitMouseActivityHook = autoMouseNote;   // Mausaktionen der linken Hälfte aktivieren die Auto-Mouse-Ebene
+  autoMouseRemoteHeldHook = []() { return bleKeyboard.splitLeft.mouse != 0; };   // ein Klick der linken Hälfte hält sie offen
   // RX-Puffer auf 4KB vergrößern für zuverlässige USB-Batch-Synchronisierung (SET_K x 336)
   Serial.setRxBufferSize(4096);
   Serial.begin(115200);
@@ -1059,6 +1066,7 @@ void loop() {
   oneShotExpire(bleKeyboard.oneShot, millis(), oneShotTimeoutMs);
   oslExpireLocal(millis());
   numWordExpire(millis());   // Num Word endet ohne Tastendruck nach NUM_WORD_IDLE_MS
+  autoMouseExpire(millis()); // Auto-Mouse-Ebene fällt nach mouseTimeoutMs ohne Mausaktion zurück
   keepAwakeTick(millis());   // Keep-awake: alle 60 s ein Mausschritt +1 / -1
   ttExpire(millis());         // beide TT-Tasten lange gehalten: tappingTermMs im NVS speichern
   // layerTimeoutMs: eingerastete TG-Ebenen fallen ohne Tastendruck beider Hälften zurück

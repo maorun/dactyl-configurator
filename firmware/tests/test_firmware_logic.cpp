@@ -56,6 +56,8 @@ static uint16_t autoShiftMs = 175;
 static uint16_t leaderTimeoutMs = 1000;
 static uint16_t oneShotTimeoutMs = 0;
 static uint16_t layerTimeoutMs = 0;
+static uint8_t autoMouseLayer = AUTO_MOUSE_LAYER_OFF;
+static uint16_t mouseTimeoutMs = MOUSE_TIMEOUT_DEFAULT_MS;
 static uint8_t holdTapMode = 0;
 static uint8_t triLayerRules[6] = {0, 0, 0, 0, 0, 0};
 static uint8_t capsLedEnabled = 0;
@@ -195,6 +197,11 @@ void resetState() {
   leaderTimeoutMs = 1000;
   oneShotTimeoutMs = 0;
   layerTimeoutMs = 0;
+  autoMouseLayer = AUTO_MOUSE_LAYER_OFF;
+  mouseTimeoutMs = MOUSE_TIMEOUT_DEFAULT_MS;
+  autoMouseOn = false;
+  autoMouseLastMs = 0;
+  autoMouseRemoteHeldHook = nullptr;
   layerLockedMask = 0;
   layerTimeoutSeenSeq = retroPressSeq;
   layerTimeoutSeenMask = 0;
@@ -11173,6 +11180,206 @@ TEST(test_tap_toggle_boundary_reset_and_tt0) {
   setMillis(3000); pressKey(5, 1, true); setMillis(3040); pressKey(5, 1, false);
   setMillis(3080); pressKey(5, 1, true); setMillis(3120); pressKey(5, 1, false);
   assert(!toggleLayers[1] && getActiveLayer() == 0);
+}
+
+// -----------------------------------------------------------------------------
+// Auto-Mouse-Ebene (autoMouseLayer, mouseTimeoutMs)
+// -----------------------------------------------------------------------------
+TEST(test_auto_mouse_move_activates_layer_and_times_out) {
+  resetState();
+  autoMouseLayer = 2;
+  mouseTimeoutMs = 500;
+  KEYMAP[0][2][1] = ACT_MOUSE_RIGHT_MOVE;
+  setMillis(1000);
+  assert(getActiveLayer() == 0);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  assert(autoMouseOn && getActiveLayer() == 2);
+  // gehaltene Bewegungstaste hält die Ebene offen, auch über mouseTimeoutMs hinaus
+  autoMouseExpire(1800);
+  assert(getActiveLayer() == 2);
+  autoMouseExpire(1900);                       // loop() läuft laufend: die Frist beginnt beim Loslassen
+  applyMatrixKeyChange(2, 1, false, 1900);
+  autoMouseExpire(2399);
+  assert(getActiveLayer() == 2);
+  autoMouseExpire(2400);
+  assert(!autoMouseOn && getActiveLayer() == 0);
+}
+
+TEST(test_auto_mouse_click_and_wheel_activate_layer) {
+  resetState();
+  autoMouseLayer = 3;
+  mouseTimeoutMs = 100;
+  KEYMAP[0][2][1] = ACT_MOUSE_LEFT;
+  KEYMAP[0][2][2] = ACT_MOUSE_WHEEL_DOWN;
+  KEYMAP[0][2][3] = ACT_MOUSE_WHEEL_LEFT;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  assert(autoMouseOn && getActiveLayer() == 3);
+  applyMatrixKeyChange(2, 1, false, 1010);
+  autoMouseExpire(1099);
+  assert(autoMouseOn);
+  autoMouseExpire(1100);
+  assert(!autoMouseOn);
+  setMillis(2000);
+  applyMatrixKeyChange(2, 2, true, 2000);
+  assert(autoMouseOn);
+  applyMatrixKeyChange(2, 2, false, 2010);
+  autoMouseStop();
+  setMillis(3000);
+  applyMatrixKeyChange(2, 3, true, 3000);   // Pan
+  assert(autoMouseOn && getActiveLayer() == 3);
+}
+
+TEST(test_auto_mouse_held_click_keeps_layer_and_release_uses_press_action) {
+  resetState();
+  autoMouseLayer = 2;
+  mouseTimeoutMs = 100;
+  KEYMAP[0][2][1] = ACT_MOUSE_LEFT;
+  KEYMAP[0][2][2] = 'a';
+  KEYMAP[2][2][2] = 'b';
+  setMillis(1000);
+  applyMatrixKeyChange(2, 2, true, 1000);       // 'a' auf Ebene 0 gedrückt
+  keyState[2][1] = true;                        // wie onMatrixKeyChange: keyState folgt dem Druck
+  applyMatrixKeyChange(2, 1, true, 1010);       // Klick aktiviert die Ebene
+  assert(autoMouseOn && getActiveLayer() == 2);
+  applyMatrixKeyChange(2, 2, false, 1020);      // das Loslassen nutzt die Aktion des Drucks
+  assert(!bleKeyboard.pressedKeys.empty() || !bleKeyboard.pressHistory.empty());
+  assert(std::find(bleKeyboard.pressHistory.begin(), bleKeyboard.pressHistory.end(), (uint8_t)'b') == bleKeyboard.pressHistory.end());
+  autoMouseExpire(2000);                        // gehaltener Klick (Ziehen) hält die Ebene über das Zeitlimit hinaus
+  assert(autoMouseOn);
+  keyState[2][1] = false;
+  applyMatrixKeyChange(2, 1, false, 2000);
+  autoMouseExpire(2050);
+  assert(autoMouseOn);
+  autoMouseExpire(2100);
+  assert(!autoMouseOn);
+}
+
+static bool testRemoteMouseHeld = false;
+static bool remoteMouseHeld() { return testRemoteMouseHeld; }
+
+TEST(test_auto_mouse_held_click_of_other_half_keeps_layer) {
+  resetState();
+  autoMouseLayer = 2;
+  mouseTimeoutMs = 100;
+  autoMouseRemoteHeldHook = remoteMouseHeld;
+  testRemoteMouseHeld = true;
+  autoMouseNote(1000);
+  autoMouseExpire(1500);                        // die andere Hälfte zieht mit gehaltenem Klick
+  assert(autoMouseOn);
+  testRemoteMouseHeld = false;
+  autoMouseExpire(1550);
+  assert(autoMouseOn);
+  autoMouseExpire(1600);
+  assert(!autoMouseOn);
+  autoMouseRemoteHeldHook = nullptr;
+}
+
+TEST(test_auto_mouse_held_speed_key_of_other_half_keeps_layer) {
+  resetState();
+  autoMouseLayer = 2;
+  mouseTimeoutMs = 100;
+  autoMouseNote(1000);
+  applyRemoteMouseSpeed(1, 1000);               // die andere Hälfte hält MOUSE_SLOW
+  autoMouseExpire(1500);
+  assert(autoMouseOn);
+  autoMouseExpire(2900);                        // letzte Auffrischung bei 2900
+  assert(autoMouseOn);
+  autoMouseExpire(1000 + MOUSE_SPEED_REMOTE_TIMEOUT_MS + 1);   // ohne Paket verfällt die Präzision: die Frist gilt wieder
+  assert(!autoMouseOn);
+}
+
+TEST(test_auto_mouse_disabled_never_activates) {
+  resetState();
+  KEYMAP[0][2][1] = ACT_MOUSE_UP;
+  setMillis(1000);
+  applyMatrixKeyChange(2, 1, true, 1000);
+  assert(autoMouseLayer == AUTO_MOUSE_LAYER_OFF && !autoMouseOn && getActiveLayer() == 0);
+  autoMouseLayer = 0;                          // Ebene 0 gilt nicht als Ziel
+  autoMouseNote(1000);
+  assert(!autoMouseOn);
+}
+
+TEST(test_auto_mouse_cleared_by_clear_state_release_all_and_config_mode) {
+  resetState();
+  autoMouseLayer = 1;
+  autoMouseNote(1000);
+  assert(autoMouseOn && getActiveLayer() == 1);
+  clearStatePress();
+  assert(!autoMouseOn && getActiveLayer() == 0);
+  autoMouseNote(1000);
+  oslClearAll();                               // RELEASE_ALL, Link-Ausfall, Host-Verlust, Config Mode
+  assert(!autoMouseOn);
+  autoMouseNote(1000);
+  resetMouseMove();                            // Config Mode und Host-Wechsel
+  assert(!autoMouseOn);
+  isConfigMode = true;
+  autoMouseNote(1000);
+  assert(!autoMouseOn);                        // im Config Mode aktiviert nichts die Ebene
+  isConfigMode = false;
+}
+
+TEST(test_auto_mouse_layer_goes_to_other_half_as_momentary_layer) {
+  resetState();
+  autoMouseLayer = 4;
+  assert((localMomentaryLayerMask() & (1u << 4)) == 0);
+  autoMouseNote(1000);
+  assert((localMomentaryLayerMask() & (1u << 4)) != 0);
+}
+
+TEST(test_set_auto_mouse_commands_args_nvs_and_info) {
+  resetState();
+  handleConfigCommand("SET_AUTO_MOUSE_LAYER 0", false);   // Ebene 0 wird gespeichert, wirkt aber nicht
+  assert(mockChar.value == "OK SET_AUTO_MOUSE_LAYER 0" && autoMouseLayer == 0);
+  autoMouseNote(1000);
+  assert(!autoMouseOn);
+  autoMouseLayer = AUTO_MOUSE_LAYER_OFF;
+  for (const char* bad : {"SET_AUTO_MOUSE_LAYER 05", "SET_AUTO_MOUSE_LAYER 8", "SET_AUTO_MOUSE_LAYER -1", "SET_AUTO_MOUSE_LAYER abc", "SET_AUTO_MOUSE_LAYER 254", "SET_AUTO_MOUSE_LAYER 12",
+                          "SET_MOUSE_TIMEOUT 99", "SET_MOUSE_TIMEOUT 2001", "SET_MOUSE_TIMEOUT abc", "SET_MOUSE_TIMEOUT -5", "SET_MOUSE_TIMEOUT 12345"}) {
+    handleConfigCommand(bad, false);
+    assert(mockChar.value == std::string("ERR ARGS ") + bad);
+  }
+  assert(autoMouseLayer == AUTO_MOUSE_LAYER_OFF && mouseTimeoutMs == MOUSE_TIMEOUT_DEFAULT_MS);
+  handleConfigCommand("SET_AUTO_MOUSE_LAYER 5", false);
+  assert(mockChar.value == "OK SET_AUTO_MOUSE_LAYER 5" && autoMouseLayer == 5);
+  handleConfigCommand("SET_MOUSE_TIMEOUT 750", false);
+  assert(mockChar.value == "OK SET_MOUSE_TIMEOUT 750" && mouseTimeoutMs == 750);
+  handleConfigCommand("SET_MOUSE_TIMEOUT 100", false);
+  handleConfigCommand("SET_MOUSE_TIMEOUT 2000", false);
+  assert(mouseTimeoutMs == 2000);
+  handleConfigCommand("SET_MOUSE_TIMEOUT 750", false);
+  // GET_INFO: eigene Zeile vor DEVICE_INFO, die DEVICE_INFO-Zeile bleibt unter dem BLE-Limit
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_INFO", false);
+  assert(mockChar.value.size() < 512);
+  bool seen = false;
+  for (const std::string &n : mockChar.notifications) if (n == "AUTO_MOUSE:{\"aml\":5,\"amt\":750}") seen = true;
+  assert(seen);
+  // NVS-Schlüssel am_layer / am_to
+  autoMouseLayer = AUTO_MOUSE_LAYER_OFF;
+  mouseTimeoutMs = MOUSE_TIMEOUT_DEFAULT_MS;
+  loadKeymapFromNVS();
+  assert(autoMouseLayer == 5 && mouseTimeoutMs == 750);
+  handleConfigCommand("SET_AUTO_MOUSE_LAYER 255", false);
+  assert(mockChar.value == "OK SET_AUTO_MOUSE_LAYER 255" && autoMouseLayer == AUTO_MOUSE_LAYER_OFF);
+  // ungültige NVS-Werte ändern nichts
+  preferences.begin("dactyl", false);
+  preferences.putUChar("am_layer", 9);
+  preferences.putUShort("am_to", 50);
+  preferences.end();
+  autoMouseLayer = 2;
+  mouseTimeoutMs = 400;
+  loadKeymapFromNVS();
+  assert(autoMouseLayer == 2 && mouseTimeoutMs == 400);
+}
+
+TEST(test_disabling_auto_mouse_layer_drops_active_layer) {
+  resetState();
+  autoMouseLayer = 2;
+  autoMouseNote(1000);
+  assert(getActiveLayer() == 2);
+  handleConfigCommand("SET_AUTO_MOUSE_LAYER 255", false);
+  assert(!autoMouseOn && getActiveLayer() == 0);
 }
 
 int main() {

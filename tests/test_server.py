@@ -1024,6 +1024,29 @@ class TestServerAndCodegen(unittest.TestCase):
             with open(os.path.join(base, ino), encoding="utf-8") as f:
                 self.assertIn("uint16_t oneShotTimeoutMs", f.read(), ino)
 
+    def test_auto_mouse_settings(self):
+        self.assertEqual(server.SETTINGS_RANGES["autoMouseLayer"], (0, 255, 255))
+        self.assertEqual(server.SETTINGS_RANGES["mouseTimeoutMs"], (100, 2000, 500))
+        default = server.generate_settings_cpp({})
+        self.assertIn("uint8_t autoMouseLayer = 255;", default)
+        self.assertIn("uint16_t mouseTimeoutMs = 500;", default)
+        for layer in (0, 3, 7, 255):
+            self.assertIn(f"uint8_t autoMouseLayer = {layer};", server.generate_settings_cpp({"autoMouseLayer": layer}))
+        for ms in (100, 750, 2000):
+            self.assertIn(f"uint16_t mouseTimeoutMs = {ms};", server.generate_settings_cpp({"mouseTimeoutMs": ms}))
+        for bad in (8, 100, 254, 256, -1, "x", True):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_settings_cpp({"autoMouseLayer": bad})
+        for bad in (0, 99, 2001, -1, "x", True):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.generate_settings_cpp({"mouseTimeoutMs": bad})
+        base = os.path.dirname(os.path.abspath(server.__file__))
+        for ino in ("firmware/dactyl_right/dactyl_right.ino", "firmware/dactyl_left/dactyl_left.ino"):
+            with open(os.path.join(base, ino), encoding="utf-8") as f:
+                src = f.read()
+            self.assertIn("uint8_t autoMouseLayer", src, ino)
+            self.assertIn("uint16_t mouseTimeoutMs", src, ino)
+
     def test_layer_timeout_setting(self):
         self.assertEqual(server.SETTINGS_RANGES["layerTimeoutMs"], (0, 60000, 0))
         self.assertIn("uint16_t layerTimeoutMs = 0;", server.generate_settings_cpp({}))

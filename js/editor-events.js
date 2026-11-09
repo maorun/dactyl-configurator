@@ -702,6 +702,8 @@ function setupEventListeners() {
       const leaderTimeout = clampSetting("leaderTimeoutMs", parseInt(document.getElementById("leaderTimeoutInput")?.value, 10));
       const oneShotTimeout = clampSetting("oneShotTimeoutMs", parseInt(document.getElementById("oneShotTimeoutInput")?.value, 10));
       const layerTimeout = clampSetting("layerTimeoutMs", parseInt(document.getElementById("layerTimeoutInput")?.value, 10));
+      const autoMouseLayer = clampSetting("autoMouseLayer", parseInt(document.getElementById("autoMouseLayerSelect")?.value, 10));
+      const mouseTimeout = clampSetting("mouseTimeoutMs", parseInt(document.getElementById("mouseTimeoutInput")?.value, 10));
       const priorIdle = clampSetting("requirePriorIdleMs", parseInt(document.getElementById("priorIdleInput")?.value, 10));
       const chordalHold = clampSetting("chordalHold", parseInt(document.getElementById("chordalHoldSelect")?.value, 10));
       const retroTap = clampSetting("retroTap", parseInt(document.getElementById("retroTapSelect")?.value, 10));
@@ -721,6 +723,8 @@ function setupEventListeners() {
       setVal("leaderTimeoutInput", leaderTimeout);
       setVal("oneShotTimeoutInput", oneShotTimeout);
       setVal("layerTimeoutInput", layerTimeout);
+      setVal("autoMouseLayerSelect", autoMouseLayer);
+      setVal("mouseTimeoutInput", mouseTimeout);
       setVal("priorIdleInput", priorIdle);
       setVal("chordalHoldSelect", chordalHold);
       setVal("retroTapSelect", retroTap);
@@ -745,6 +749,8 @@ function setupEventListeners() {
         leaderTimeoutMs: leaderTimeout,
         oneShotTimeoutMs: oneShotTimeout,
         layerTimeoutMs: layerTimeout,
+        autoMouseLayer: autoMouseLayer,
+        mouseTimeoutMs: mouseTimeout,
         requirePriorIdleMs: priorIdle,
         chordalHold: chordalHold,
         retroTap: retroTap,

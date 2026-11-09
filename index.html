@@ -872,6 +872,27 @@
         </div>
 
         <div class="form-group">
+          <label for="autoMouseLayerSelect">Auto-Mouse-Ebene:</label>
+          <select id="autoMouseLayerSelect" class="form-control">
+            <option value="255">Aus</option>
+            <option value="1">Ebene 1</option>
+            <option value="2">Ebene 2</option>
+            <option value="3">Ebene 3</option>
+            <option value="4">Ebene 4</option>
+            <option value="5">Ebene 5</option>
+            <option value="6">Ebene 6</option>
+            <option value="7">Ebene 7</option>
+          </select>
+          <small class="form-hint">Jede Mausaktion (Bewegung, Rad, Pan, Klick) schaltet diese Ebene vorübergehend ein. Gehaltene Bewegungs-, Rad- und Klick-Tasten halten sie offen.</small>
+        </div>
+
+        <div class="form-group">
+          <label for="mouseTimeoutInput">Auto-Mouse-Zeitlimit (Millisekunden, 100 bis 2000):</label>
+          <input type="number" id="mouseTimeoutInput" class="form-control" value="500" min="100" max="2000">
+          <small class="form-hint">Nach dieser Zeit ohne Mausaktion fällt die Auto-Mouse-Ebene zurück. Erfordert Firmware-Version 51 oder neuer.</small>
+        </div>
+
+        <div class="form-group">
           <label for="bootLayerSelect">Start-Ebene:</label>
           <select id="bootLayerSelect" class="form-control">
             <option value="0">Ebene 0 (Basis)</option>

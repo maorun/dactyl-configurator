@@ -88,6 +88,8 @@ uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
 uint16_t oneShotTimeoutMs = 0;
 uint16_t layerTimeoutMs = 0;
+uint8_t autoMouseLayer = 255;
+uint16_t mouseTimeoutMs = 500;
 uint8_t holdTapMode = 0;
 uint8_t triLayerRules[6] = { 0, 0, 0, 0, 0, 0 };
 uint8_t numTriLayers = 0;
@@ -227,6 +229,7 @@ void enterStandby() {
   if (!isStandby) {
     isStandby = true;
     swapClearAll();
+    autoMouseStop();
     applyLeftWakeWindow(true);
     Serial.println("[POWER] Inaktivität erreicht -> Standby aktiv (gedrosselter Matrix-Scan, CPU bleibt 240 MHz)");
   }
@@ -848,6 +851,7 @@ void loop() {
   // oneShotTimeoutMs: eine unverbrauchte One-Shot-Ebene verfällt (die Modifier führt der Master)
   oslExpireLocal(millis());
   numWordExpire(millis());   // Num Word endet ohne Tastendruck nach NUM_WORD_IDLE_MS
+  autoMouseExpire(millis()); // Auto-Mouse-Ebene fällt nach mouseTimeoutMs ohne Mausaktion zurück
   ttExpire(millis());         // beide TT-Tasten lange gehalten: tappingTermMs im NVS speichern
   // layerTimeoutMs: kein Ablauf links. Die Layer-Lock-Ebenen führt der Master (layerLockedMask); er löscht die TG-Ebenen
   // und meldet sie der linken Hälfte mit LAYER_STATE.

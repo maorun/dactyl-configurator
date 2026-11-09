@@ -199,6 +199,12 @@ struct KeyPair {
 #define ONE_SHOT_TIMEOUT_MIN_MS 500
 #define ONE_SHOT_TIMEOUT_MAX_MS 10000
 
+// Auto-Mouse-Ebene (autoMouseLayer): 0..7 = Ebene, 0xFF = aus. mouseTimeoutMs: Frist ohne Mausaktion, 100..2000 ms
+#define AUTO_MOUSE_LAYER_OFF 0xFF
+#define MOUSE_TIMEOUT_MIN_MS 100
+#define MOUSE_TIMEOUT_MAX_MS 2000
+#define MOUSE_TIMEOUT_DEFAULT_MS 500
+
 // Zeitlimit für per TG_n eingerastete Ebenen (layerTimeoutMs): 0 = aus, sonst 1000..60000 ms
 #define LAYER_TIMEOUT_MIN_MS 1000
 #define LAYER_TIMEOUT_MAX_MS 60000

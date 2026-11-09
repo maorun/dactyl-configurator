@@ -526,10 +526,13 @@ Rules for this file:
 
 ### Active mode pills (`MODE_STATE`)
 
-- The master prints `MODE_STATE:{"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1}` on USB serial only, never over BLE. The fields are Caps Word, Num Word, Sentence Case, Swap Hands (held, armed or locked) and Keep Awake.
+- The master prints `MODE_STATE:{"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1,"ll":0|1,"lli":0..7}` on USB serial only, never over BLE. The fields are Caps Word, Num Word, Sentence Case, Swap Hands (held, armed or locked), Keep Awake and Layer Lock. `ll` is `1` while `layerLockedMask` is not zero (bit `MODE_STATE_LL`, `0x20`). `lli` is the highest locked layer, or `0` when no layer is locked.
+- The line also changes when only `lli` changes. `applyLayerLock()` and `clearStatePress()` change `layerLockedMask`, and `modeStateService()` prints the new line in the next `loop()`.
+- Pill: the app shows "Layer Lock (Ebene N)" in `#pillLayerLock` while `ll` is `1`. It hides the pill when `ll` is `0` and on disconnect. Lines without `ll` and `lli` (firmware before version 54) show no pill.
+- `DACTYL_FW_VERSION` is 54. Flash both halves, because both halves share the version and the app reports a mismatch. An old app rejects no line, because it ignores the new fields.
 - `modeStateService()` (`DactylLogic.h`, called from `loop()`) prints one line for each change of the state. It prints no line at start while all modes are off.
 - `GET_INFO` over USB makes the next `loop()` print the line again, so an app that connects later sees the state. `GET_INFO` over BLE sets nothing and no notification carries the line (same rule as `HOST_LEDS` and `DM_REC`). The code exists only in the master (`DEVICE_INFO_HOST_LEDS_BITS`); the left half prints no line.
-- App: `Dactyl.parseModeStateLine` (`js/side-routing.js`) accepts the line only from the master and only with five flags `0` or `1`. `js/serial.js` shows one pill per active mode in `#modeStatePills` (`index.html`) and drops the state on disconnect (`forgetModeState`, also in `js/ble.js`) unless USB to the master stays up.
+- App: `Dactyl.parseModeStateLine` (`js/side-routing.js`) accepts the line only from the master and only with the five mode flags `0` or `1` (`ll` and `lli` are optional). `js/serial.js` shows one pill per active mode in `#modeStatePills` (`index.html`) and drops the state on disconnect (`forgetModeState`, also in `js/ble.js`) unless USB to the master stays up.
 
 ### Layer auto-return timeout (`layerTimeoutMs`)
 

@@ -3965,13 +3965,15 @@ bool saveQuickTapToNVS(uint16_t ms) {
 }
 
 #ifdef DEVICE_INFO_HOST_LEDS_BITS  // nur der Master
-// Aktive Modi (MODE_STATE): Bits cw, nw, sc, sh, ka (Caps Word, Num Word, Sentence Case, Swap Hands, Keep Awake).
+// Aktive Modi (MODE_STATE): Bits cw, nw, sc, sh, ka, ll (Caps Word, Num Word, Sentence Case, Swap Hands, Keep Awake,
+// Layer Lock). lli = höchste eingerastete Ebene (0 ohne Layer Lock).
 // Nur der Master meldet sie, nur auf USB-Serial (nie über BLE). modeStateReported -1 = beim nächsten Durchlauf melden.
 #define MODE_STATE_CW 0x01
 #define MODE_STATE_NW 0x02
 #define MODE_STATE_SC 0x04
 #define MODE_STATE_SH 0x08
 #define MODE_STATE_KA 0x10
+#define MODE_STATE_LL 0x20
 int16_t modeStateReported = 0;
 
 inline uint8_t modeStateBits() {
@@ -3981,20 +3983,31 @@ inline uint8_t modeStateBits() {
   if (bleKeyboard.oneShot.sentenceCase) b |= MODE_STATE_SC;
   if (swapActive()) b |= MODE_STATE_SH;
   if (keepAwakeActive) b |= MODE_STATE_KA;
+  if (layerLockedMask != 0) b |= MODE_STATE_LL;
   return b;
 }
 
-// Zeile "MODE_STATE:{...}", wenn sich der Stand seit der letzten Meldung geändert hat
+// Höchste gesetzte Ebene in layerLockedMask (0 ohne Layer Lock)
+inline uint8_t lockedLayerIndex() {
+  for (int l = 7; l > 0; l--) if (layerLockedMask & (1u << l)) return (uint8_t)l;
+  return 0;
+}
+
+// Zeile "MODE_STATE:{...}", wenn sich der Stand seit der letzten Meldung geändert hat. Sie ändert sich auch, wenn nur
+// die gesperrte Ebene wechselt: lli geht in den Vergleichswert ein.
 inline bool modeStateTakeLine(uint8_t bits, char *buf, size_t size) {
-  if (modeStateReported == (int16_t)bits) return false;
-  modeStateReported = (int16_t)bits;
-  snprintf(buf, size, "MODE_STATE:{\"cw\":%d,\"nw\":%d,\"sc\":%d,\"sh\":%d,\"ka\":%d}", (bits & MODE_STATE_CW) ? 1 : 0,
-           (bits & MODE_STATE_NW) ? 1 : 0, (bits & MODE_STATE_SC) ? 1 : 0, (bits & MODE_STATE_SH) ? 1 : 0, (bits & MODE_STATE_KA) ? 1 : 0);
+  const uint8_t lli = (bits & MODE_STATE_LL) ? lockedLayerIndex() : 0;
+  const int16_t key = (int16_t)(bits | (lli << 8));
+  if (modeStateReported == key) return false;
+  modeStateReported = key;
+  snprintf(buf, size, "MODE_STATE:{\"cw\":%d,\"nw\":%d,\"sc\":%d,\"sh\":%d,\"ka\":%d,\"ll\":%d,\"lli\":%d}",
+           (bits & MODE_STATE_CW) ? 1 : 0, (bits & MODE_STATE_NW) ? 1 : 0, (bits & MODE_STATE_SC) ? 1 : 0,
+           (bits & MODE_STATE_SH) ? 1 : 0, (bits & MODE_STATE_KA) ? 1 : 0, (bits & MODE_STATE_LL) ? 1 : 0, lli);
   return true;
 }
 
 inline void modeStateService() {
-  char line[72];
+  char line[96];
   if (modeStateTakeLine(modeStateBits(), line, sizeof(line))) Serial.println(line);
 }
 #endif

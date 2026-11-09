@@ -11125,23 +11125,64 @@ TEST(test_mode_state_reports_caps_word_and_keep_awake_on_serial) {
   bleKeyboard.capsWordToggle();
   modeStateService();
   modeStateService();
-  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0}") == 1);   // eine Zeile je Änderung
+  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0,\"ll\":0,\"lli\":0}") == 1);   // eine Zeile je Änderung
   keepAwakeToggleOn(1000);
   modeStateService();
-  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":1}") == 1);
+  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":1,\"ll\":0,\"lli\":0}") == 1);
   keepAwakeToggleOn(2000);
   bleKeyboard.capsWordToggle();
   modeStateService();
-  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0}");
+  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0,\"ll\":0,\"lli\":0}");
   // Sentence Case, Swap Hands und Num Word
   bleKeyboard.sentenceCaseToggle();
   swapLocked = true;
   numWordActive = true;
   modeStateService();
-  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":1,\"sc\":1,\"sh\":1,\"ka\":0}");
+  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":1,\"sc\":1,\"sh\":1,\"ka\":0,\"ll\":0,\"lli\":0}");
   numWordActive = false;
   swapClearAll();
   bleKeyboard.sentenceCaseToggle();
+}
+
+TEST(test_mode_state_reports_layer_lock_and_locked_layer_index) {
+  layerLockedMask = 0;
+  for (int i = 1; i < NUM_LAYERS; i++) toggleLayers[i] = false;
+  bleKeyboard.oneShot.capsWord = bleKeyboard.oneShot.sentenceCase = false;
+  modeStateReported = 0;
+  Serial.clear();
+  modeStateService();
+  assert(Serial.outputLines.empty());
+  momentaryLayers[2] = true;
+  applyLayerLock();                                  // Ebene 2 rastet ein
+  momentaryLayers[2] = false;
+  modeStateService();
+  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0,\"ll\":1,\"lli\":2}");
+  momentaryLayers[3] = true;
+  applyLayerLock();                                  // Ebene 3 kommt dazu: höchste Ebene zählt
+  momentaryLayers[3] = false;
+  modeStateService();
+  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0,\"ll\":1,\"lli\":3}");
+  applyLayerLock();                                  // ohne gehaltene Ebene: alle lösen
+  modeStateService();
+  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0,\"ll\":0,\"lli\":0}");
+  momentaryLayers[2] = true;
+  applyLayerLock();
+  momentaryLayers[2] = false;
+  modeStateService();
+  assert(Serial.outputLines.back().find("\"ll\":1,\"lli\":2") != std::string::npos);
+  clearStatePress();                                 // CLEAR_STATE löst Layer Lock
+  modeStateService();
+  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0,\"ll\":0,\"lli\":0}");
+  assert(layerLockedMask == 0 && DACTYL_FW_VERSION >= 54);
+  // Boot-Ebene gilt wie ein Lock und erscheint in der Zeile
+  uint8_t savedBoot = bootLayer;
+  bootLayer = 4;
+  applyBootLayer();
+  modeStateService();
+  assert(Serial.outputLines.back() == "MODE_STATE:{\"cw\":0,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0,\"ll\":1,\"lli\":4}");
+  clearStatePress();
+  modeStateService();
+  bootLayer = savedBoot;
 }
 
 TEST(test_mode_state_get_info_resends_on_usb_but_never_over_ble) {
@@ -11154,11 +11195,11 @@ TEST(test_mode_state_get_info_resends_on_usb_but_never_over_ble) {
   mockChar.notifications.clear();
   handleConfigCommand("GET_INFO", false);           // USB
   modeStateService();
-  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0}") == 1);
+  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0,\"ll\":0,\"lli\":0}") == 1);
   Serial.clear();
   handleConfigCommand("GET_INFO", true);            // BLE: keine neue Meldung
   modeStateService();
-  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0}") == 0);
+  assert(modeStateCount("MODE_STATE:{\"cw\":1,\"nw\":0,\"sc\":0,\"sh\":0,\"ka\":0,\"ll\":0,\"lli\":0}") == 0);
   for (const auto &n : mockChar.notifications) assert(n.find("MODE_STATE") == std::string::npos);
   assert(mockChar.value.find("MODE_STATE") == std::string::npos);
   bleKeyboard.oneShot.capsWord = bleKeyboard.oneShot.sentenceCase = false;

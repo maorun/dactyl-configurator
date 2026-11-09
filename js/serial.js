@@ -392,7 +392,11 @@ function updateModeStateUI() {
   if (!box) return;
   const active = Dactyl.describeModeState(modeState);
   box.hidden = active.length === 0;
-  for (const el of box.querySelectorAll("[data-mode]")) el.hidden = !active.some(m => m.key === el.dataset.mode);
+  for (const el of box.querySelectorAll("[data-mode]")) {
+    const m = active.find(a => a.key === el.dataset.mode);
+    el.hidden = !m;
+    if (m && el.dataset.mode === "ll") el.firstElementChild.textContent = m.label;
+  }
 }
 function forgetModeState() {
   if (Dactyl.splitLinkStaysValid(connectionState())) return;

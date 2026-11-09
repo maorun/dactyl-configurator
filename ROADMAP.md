@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Chordal Hold per-key exclusion list (`chordalHoldExclusions`)
-
-- **Rank:** Feature model. Total 28/40 (typing 7, configuration 6, harmony 7, safety 8). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylCommon.h`, `js/editor.js`, `js/config-sync.js`.
-- **Problem:** Global `chordalHold` prevents same-hand hold activation, which blocks intentional one-handed modifier combinations (e.g. thumb Control + index key).
-- **Goal:** Add a per-key exemption bitmask in NVS (`chordal_ex`). Keys on this list ignore opposite-hand checks and trigger their hold action on any overlapping key press.
-- **Acceptance test:** A firmware test presses an exempted thumb key and a same-hand finger key, expecting the hold modifier instead of two sequential taps.
-
 ### Layer Lock live status pill (`MODE_STATE`)
 
 - **Rank:** Feature model. Total 27/40 (typing 5, configuration 6, harmony 8, safety 8). Effort S. Estimate.

@@ -342,6 +342,13 @@
               <small class="form-hint">Überschreibt die Einstellung der Hälfte nur für diese Taste, zum Beispiel Permissive Hold für Home-Row-Tasten und sofortiges Halten für Daumentasten. Wirkt nur mit einer Halte- oder Doppel-Tipp-Aktion.</small>
             </div>
 
+            <div class="form-group" id="keyChordalExGroup" style="display: none;">
+              <label class="checkbox-label" for="keyChordalExCheckbox">
+                <input type="checkbox" id="keyChordalExCheckbox"> Chordal-Hold-Ausnahme
+              </label>
+              <small class="form-hint">Die Opposite-Hand-Regel (Chordal Hold) erzwingt für diese Taste keinen Tipp, wenn eine Taste derselben Hälfte folgt. Die Taste entscheidet nach der Hold-Tap-Variante. Gilt für alle Ebenen. Wirkt nur mit einer Halte-Aktion.</small>
+            </div>
+
             <div class="inspector-actions">
               <button id="btnApplyKey" class="btn btn-primary btn-sm">Änderung übernehmen</button>
             </div>

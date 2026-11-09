@@ -149,6 +149,16 @@ class TestServerAndCodegen(unittest.TestCase):
             server.generate_settings_cpp({"chordalHold": 2})
         with self.assertRaises(ValueError):
             server.generate_settings_cpp({"chordalHold": -1})
+        self.assertIn("uint64_t chordalHoldExclusions = 0x0000000000000000ULL;", server.generate_settings_cpp({}))
+        self.assertIn("uint64_t chordalHoldExclusions = 0x0000000000000006ULL;", server.generate_settings_cpp({"chordalHoldExclusions": "6"}))
+        self.assertIn("0x000003FFFFFFFFFFULL", server.generate_settings_cpp({"chordalHoldExclusions": "3FFFFFFFFFF"}))
+        self.assertEqual(server.validate_chordal_ex(None), 0)
+        self.assertEqual(server.validate_chordal_ex(""), 0)
+        for bad in ("40000000000", "xyz", 5, "00000000000000001", " 6", "6\n", ["6"], True):
+            with self.assertRaises(ValueError, msg=repr(bad)) as ctx:
+                server.generate_settings_cpp({"chordalHoldExclusions": bad})
+            if bad != "40000000000":
+                self.assertEqual(str(ctx.exception), "chordalHoldExclusions must be a hex string up to 16 characters")
         self.assertIn("uint8_t autoShift = 0;", server.generate_settings_cpp({}))
         self.assertIn("uint16_t autoShiftMs = 175;", server.generate_settings_cpp({}))
         out = server.generate_settings_cpp({"autoShift": 1, "autoShiftMs": 220})

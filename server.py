@@ -1031,6 +1031,18 @@ def validate_tri_layers(value):
     return rules
 
 
+def validate_chordal_ex(value):
+    """Chordal-Hold-Ausnahmen: Hex-String (1..16 Ziffern, Bit r * 7 + c) oder fehlend/None (= 0). Bits außerhalb der Matrix sind ungültig."""
+    if value is None or value == "":
+        return 0
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{1,16}", value):
+        raise ValueError("chordalHoldExclusions must be a hex string up to 16 characters")
+    mask = int(value, 16)
+    if mask >> (NUM_ROWS * NUM_COLS):
+        raise ValueError("Ungültige Chordal-Hold-Ausnahmen: Bits außerhalb der Matrix.")
+    return mask
+
+
 def generate_settings_cpp(settings, side="R"):
     if settings is None:
         settings = {}
@@ -1047,6 +1059,7 @@ def generate_settings_cpp(settings, side="R"):
         raise ValueError("Ungültiger Wert für autoMouseLayer: 0 bis 7 oder 255 (aus) erwartet.")
     if 0 < values["layerTimeoutMs"] < 1000:
         raise ValueError("Ungültiger Wert für layerTimeoutMs: 0 oder 1000 bis 60000 erwartet.")
+    chordal_ex = validate_chordal_ex(settings.get("chordalHoldExclusions"))
     tri_rules = validate_tri_layers(settings.get("triLayers"))
     tri_flat = [str(v) for rule in tri_rules for v in rule]
     tri_flat += ["0"] * (TRI_LAYER_MAX_RULES * 3 - len(tri_flat))
@@ -1059,6 +1072,7 @@ def generate_settings_cpp(settings, side="R"):
         f'uint16_t quickTapMs = {values["quickTapMs"]};',
         f'uint16_t requirePriorIdleMs = {values["requirePriorIdleMs"]};',
         f'uint8_t chordalHold = {values["chordalHold"]};',
+        f'uint64_t chordalHoldExclusions = 0x{chordal_ex:016X}ULL; // Bit (r * NUM_COLS + c): Taste von chordalHold ausgenommen (NVS "chordal_ex")',
         f'uint8_t retroTap = {values["retroTap"]};',
         f'uint8_t numWordLayer = {values["numWordLayer"]};',
         f'uint8_t bootLayer = {values["bootLayer"]};',

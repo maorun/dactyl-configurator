@@ -328,3 +328,13 @@ inline uint16_t altRepeatAction(uint16_t a) {
 inline bool isRepeatKeyAction(uint16_t a) { return a == ACT_REPEAT || a == ACT_ALT_REPEAT; }
 inline bool isBleHostAction(uint16_t a) { return a >= ACT_HOST_BASE && a < ACT_HOST_BASE + NUM_HOST_ACTIONS; }
 inline bool isDynamicMacroAction(uint16_t a) { return a == ACT_DM_REC || a == ACT_DM_PLAY; }
+
+// Chordal-Hold-Ausnahmen je Taste: Bit (r * NUM_COLS + c) gesetzt = die Taste ist von der Opposite-Hand-Regel
+// (chordalHold) ausgenommen. Die Matrix hat höchstens 64 Tasten (6 x 7 = 42).
+static_assert(NUM_ROWS * NUM_COLS <= 64, "chordalHoldExclusions braucht höchstens 64 Bit");
+inline uint64_t chordalExBit(int r, int c) { return (uint64_t)1 << (r * NUM_COLS + c); }
+inline bool chordalExIsExempt(uint64_t mask, int r, int c) {
+  return r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS && (mask & chordalExBit(r, c)) != 0;
+}
+// Nur Bits physischer Matrixpositionen bleiben erhalten (die Bits 42..63 sind immer 0)
+inline uint64_t chordalExValidMask() { return ((uint64_t)1 << (NUM_ROWS * NUM_COLS)) - 1; }

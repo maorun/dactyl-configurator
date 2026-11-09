@@ -26,7 +26,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, retroTap, numWordLayer, bootLayer, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, autoMouseLayer, mouseTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, chordalHoldExclusions, retroTap, numWordLayer, bootLayer, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, autoMouseLayer, mouseTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -2809,7 +2809,8 @@ uint8_t pendingDeferMode() {
 }
 
 // Opposite-Hand-Regel (chordalHold): Ein Druck (r, c) derselben Hälfte entscheidet offene Mod-Tap-Tasten sofort als Tipp.
-// Ausgenommen sind die Daumenreihe (gedrückte Taste und Mod-Tap-Taste), Layer-Tap mit MO_n und Tasten mit Doppel-Tipp-Aktion:
+// Ausgenommen sind die Daumenreihe (gedrückte Taste und Mod-Tap-Taste), Layer-Tap mit MO_n, Tasten mit Doppel-Tipp-Aktion
+// und Tasten in chordalHoldExclusions:
 // sie behalten die Entscheidung von holdTapMode. Ein Druck der anderen Hälfte läuft nicht hierüber (HOLD_RESOLVE).
 void resolvePendingTapHoldsAsTapSameHalf(uint8_t r, uint8_t c, unsigned long now) {
   if (!chordalHold || r >= CHORDAL_THUMB_ROW) return;
@@ -2824,6 +2825,8 @@ void resolvePendingTapHoldsAsTapSameHalf(uint8_t r, uint8_t c, unsigned long now
       if (pr == r && pc == c) continue;
       TapHoldKey &k = tapHold[pr][pc];
       if (!k.pending || tapHoldDtap[pr][pc] != 0 || k.tapAction == 0) continue;
+      // Von chordalHold ausgenommene Taste (chordalHoldExclusions): bleibt offen und entscheidet nach holdTapMode
+      if (chordalExIsExempt(chordalHoldExclusions, pr, pc)) continue;
       // Tapping-Term schon erreicht (Tick lief noch nicht): die Taste ist Hold, die Regel ändert das nicht
       if ((unsigned long)(now - k.pressTime) >= effectiveTapTerm(k.term)) continue;
       if ((k.holdAction >= ACT_MO_BASE && k.holdAction < ACT_MO_BASE + NUM_LAYERS) || isTapToggleAction(k.holdAction)) continue;
@@ -3459,6 +3462,11 @@ void loadKeymapFromNVS() {
     uint8_t ch = preferences.getUChar("chordal", 0);
     if (ch <= 1) chordalHold = ch;
   }
+  if (preferences.isKey("chordal_ex") && preferences.getBytesLength("chordal_ex") == sizeof(uint64_t)) {
+    uint64_t ex = 0;
+    preferences.getBytes("chordal_ex", &ex, sizeof(ex));
+    chordalHoldExclusions = ex & chordalExValidMask();
+  }
   if (preferences.isKey("retro_tap")) {
     uint8_t rt = preferences.getUChar("retro_tap", 0);
     if (rt <= 1) retroTap = rt;
@@ -3871,6 +3879,23 @@ bool saveChordalHoldToNVS(uint8_t on) {
   if (ok) chordalHold = on;
   Serial.printf("NVS: Chordal-Hold %s: %u\n", ok ? "gespeichert" : "FEHLER", on);
   return ok;
+}
+
+bool saveChordalExToNVS(uint64_t mask) {
+  mask &= chordalExValidMask();
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putBytes("chordal_ex", &mask, sizeof(mask)) == sizeof(mask);
+  preferences.end();
+  if (ok) chordalHoldExclusions = mask;
+  Serial.printf("NVS: Chordal-Ausnahmen %s: %08lX%08lX\n", ok ? "gespeichert" : "FEHLER", (unsigned long)(mask >> 32), (unsigned long)(mask & 0xFFFFFFFFUL));
+  return ok;
+}
+
+// "CHORDAL_EX:<16 Hex-Ziffern>": eigene Zeile, denn DEVICE_INFO hat kaum Reserve unter dem BLE-Limit (512 Byte)
+String chordalExLine() {
+  char buf[40];
+  snprintf(buf, sizeof(buf), "CHORDAL_EX:%08lX%08lX", (unsigned long)(chordalHoldExclusions >> 32), (unsigned long)(chordalHoldExclusions & 0xFFFFFFFFUL));
+  return String(buf);
 }
 
 bool saveAutoShiftToNVS(uint8_t on) {
@@ -4633,6 +4658,32 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_CHORDAL_EX ")) {
+    // "SET_CHORDAL_EX <hex>": ganze Ausnahme-Maske (1..16 Hex-Ziffern, Bit r * NUM_COLS + c); Bits außerhalb der Matrix sind ungültig
+    String arg = cmd.substring(15);
+    arg.trim();
+    bool valid = arg.length() >= 1 && arg.length() <= 16;
+    uint64_t mask = 0;
+    for (unsigned i = 0; valid && i < arg.length(); i++) {
+      char ch = arg.charAt(i);
+      int d = (ch >= '0' && ch <= '9') ? ch - '0' : (ch >= 'a' && ch <= 'f') ? ch - 'a' + 10 : (ch >= 'A' && ch <= 'F') ? ch - 'A' + 10 : -1;
+      if (d < 0) valid = false; else mask = (mask << 4) | (uint64_t)d;
+    }
+    if (valid && (mask & ~chordalExValidMask()) == 0) {
+      sendConfigNotification(saveChordalExToNVS(mask) ? "OK SET_CHORDAL_EX" : String("ERR NVS SET_CHORDAL_EX"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd.startsWith("ADD_CHORDAL_EX ")) {
+    int r, c;
+    char extra;
+    if (sscanf(cmd.c_str(), "ADD_CHORDAL_EX %d %d %c", &r, &c, &extra) == 2 && r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS) {
+      sendConfigNotification(saveChordalExToNVS(chordalHoldExclusions | chordalExBit(r, c)) ? "OK ADD_CHORDAL_EX" : String("ERR NVS ADD_CHORDAL_EX"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd == "CLEAR_CHORDAL_EX") {
+    sendConfigNotification(saveChordalExToNVS(0) ? "OK CLEAR_CHORDAL_EX" : String("ERR NVS CLEAR_CHORDAL_EX"));
   } else if (cmd.startsWith("SET_RETRO_TAP ")) {
     String arg = cmd.substring(14);
     arg.trim();
@@ -4992,6 +5043,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
         // Eigene Hold-Tap-Varianten je Taste (0 = holdTapMode der Hälfte); Firmware davor sendet keine FLAVOR_DATA-Zeile
         sendMatrixData("FLAVOR_DATA:", HOLDFLAVORMAP, l);
       }
+      // Chordal-Hold-Ausnahmen; Firmware davor sendet keine CHORDAL_EX-Zeile
+      sendConfigNotification(chordalExLine());
       sendCombosPairsMacros();
       sendConfigNotification("CONFIG_SYNC_DONE", true);
     }

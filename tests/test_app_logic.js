@@ -40,7 +40,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              SIDE_PROFILES,
              applyLayerOperation, swapLayersWithRefs, transparentLayer, isUndoBlocked, swapLayerKeys, mirrorLayerAcrossSides, swappedSelectionPosition, parseKeyDragPayload,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
-             applyMatrixData, MATRIX_DATA_FIELDS, normalizeKeyCell, keyTapTerm, keyHoldFlavor, HOLD_FLAVOR_MAX,
+             applyMatrixData, MATRIX_DATA_FIELDS, chordalExNormalize, chordalExHas, chordalExSet, chordalExList, captureChordalExLine, normalizeKeyCell, keyTapTerm, keyHoldFlavor, HOLD_FLAVOR_MAX,
              createDeviceSnapshot, captureListLine, buildConfigFromSnapshot, settingsFromDeviceInfo, deviceNameFromInfo, diffSettings, snapshotListsKnown, snapshotListsState, captureMatrixData, isDeviceSnapshotComplete, diffKeymap, staleLayoutState, describeKeyActions,
              DE_MAC_CHARS, charPairCode, charPairIndexFromCode, findKeyPairIndex, deMacCharForCode,
              resolveCharPairActions, keycodeOptionMatches, isKeyPairUsed, appendResolvedPairs, revertResolvedPairs,
@@ -2213,7 +2213,7 @@ function diffFlowHarness() {
   const cfg = api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R);
   const h = {
     NUM_LAYERS: 8, MATRIX_DATA_FIELDS: api.MATRIX_DATA_FIELDS, captureMatrixData: api.captureMatrixData,
-    diffSettings: api.diffSettings, isDeviceSnapshotComplete: api.isDeviceSnapshotComplete, createDeviceSnapshot: api.createDeviceSnapshot, captureListLine: api.captureListLine,
+    diffSettings: api.diffSettings, isDeviceSnapshotComplete: api.isDeviceSnapshotComplete, createDeviceSnapshot: api.createDeviceSnapshot, captureListLine: api.captureListLine, captureChordalExLine: api.captureChordalExLine,
     diffKeymap: api.diffKeymap, SIDE_PROFILES: api.SIDE_PROFILES, isAutoSyncing: false,
     isConnectingBle: false, side: "R", via: "usb", alsoBle: false, sendOk: true, confirmAnswer: false, dialogAnswer: null,
     Dactyl: { routeCommand: (side, conn) => conn.bleUp && conn.bleSide === side ? "ble"
@@ -3245,7 +3245,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|LAYER_TIMEOUT|AUTO_MOUSE_LAYER|MOUSE_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP|NUM_WORD_LAYER|BOOT_LAYER) |CLEAR_TAP_TERMS$|CLEAR_HOLD_FLAVORS$)/.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|CHORDAL_EX|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|LAYER_TIMEOUT|AUTO_MOUSE_LAYER|MOUSE_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP|NUM_WORD_LAYER|BOOT_LAYER) |CLEAR_TAP_TERMS$|CLEAR_HOLD_FLAVORS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -3305,7 +3305,7 @@ test("Tapping-Term je Taste: keyTapTerm, normalizeKeyCell, GET_CONFIG-Zeile und 
 });
 
 test("Sync: CLEAR_TAP_TERMS ist optional, hasKeyTapTerms erkennt eigene Werte", () => {
-  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText, keyTapTerm: api.keyTapTerm };
+  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText, chordalExNormalize: api.chordalExNormalize, keyTapTerm: api.keyTapTerm };
   vm.createContext(ctx);
   vm.runInContext(`${section("js/config-sync.js", "// Einstellungs-Befehle des vollen Syncs", "// One-Shot-Auto-Sync")}
     this.build = buildSettingCommands; this.has = hasKeyTapTerms;`, ctx);
@@ -3355,7 +3355,7 @@ test("Hold-Tap-Variante je Taste: keyHoldFlavor, normalizeKeyCell, GET_CONFIG-Ze
   assert.strictEqual(api.diffKeymap(cfg, snap, R).keys.length, 0);
 
   // Sync-Befehl: optional "args", still bei fehlender Firmware-Unterstützung, hasKeyHoldFlavors erkennt eigene Werte
-  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText, keyHoldFlavor: api.keyHoldFlavor, keyTapTerm: api.keyTapTerm };
+  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText, chordalExNormalize: api.chordalExNormalize, keyHoldFlavor: api.keyHoldFlavor, keyTapTerm: api.keyTapTerm };
   vm.createContext(ctx);
   vm.runInContext(`${section("js/config-sync.js", "// Einstellungs-Befehle des vollen Syncs", "// One-Shot-Auto-Sync")}
     this.build = buildSettingCommands; this.has = hasKeyHoldFlavors;`, ctx);
@@ -3397,7 +3397,7 @@ asyncTests.push(["Sync: eigene Hold-Tap-Varianten gehen als SET_KF nach den Tast
 }]);
 
 test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () => {
-  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText };
+  const ctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText, chordalExNormalize: api.chordalExNormalize };
   vm.createContext(ctx);
   vm.runInContext(`${section("js/config-sync.js", "// Einstellungs-Befehle des vollen Syncs", "// One-Shot-Auto-Sync")}
     this.count = countSyncSteps; this.build = buildSettingCommands;`, ctx);
@@ -3412,8 +3412,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 24);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_LAYER_TIMEOUT", "SET_AUTO_MOUSE_LAYER", "SET_MOUSE_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "SET_NUM_WORD_LAYER", "SET_BOOT_LAYER", "CLEAR_TAP_TERMS", "CLEAR_HOLD_FLAVORS"]);
+  assert.strictEqual(cmds.length, 25);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_LAYER_TIMEOUT", "SET_AUTO_MOUSE_LAYER", "SET_MOUSE_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "SET_NUM_WORD_LAYER", "SET_BOOT_LAYER", "SET_CHORDAL_EX", "CLEAR_TAP_TERMS", "CLEAR_HOLD_FLAVORS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
@@ -3431,7 +3431,7 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(cmds[11].cmd, "SET_CAPS_LED 0");
   assert.strictEqual(ctx.build({ capsLed: 1 }, R)[11].cmd, "SET_CAPS_LED 1");
   // Die linke Hälfte hat keinen Host: kein Befehl
-  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 23);
+  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 24);
   // Auto Shift: Modus 0..4, Zeitlimit 50..500 (Standard 175); beide Befehle sind optional (ältere Firmware)
   const asCmd = (c, a) => c.find(x => x.ack === a);
   assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 0");
@@ -9416,4 +9416,70 @@ test("index.html, Server und serial.js binden den Matrix-Test (Löttester) ein",
   assert.ok(read("app.js").includes("initDiagnosticsUI()"));
   // serial.js stoppt den Test beim Trennen der USB-Verbindung
   assert.ok(section("js/serial.js", "async function disconnectSerialNow", "// Serielle Schreibvorgänge").includes("await stopMatrixRawTest(true)"));
+});
+
+test("Chordal-Hold-Ausnahmen: Maske, Normalisierung, Config, GET_CONFIG-Zeile, Diff und Sync-Befehl", () => {
+  // Bit (r * 7 + c): R0C1 = 2, R5C6 = Bit 41
+  assert.strictEqual(api.chordalExNormalize(undefined), "0000000000000000");
+  assert.strictEqual(api.chordalExNormalize("zz"), "0000000000000000");
+  assert.strictEqual(api.chordalExNormalize("6"), "0000000000000006");
+  assert.strictEqual(api.chordalExNormalize("FFFFFFFFFFFFFFFF"), "000003FFFFFFFFFF", "Bits außerhalb der 42 Tasten entfallen");
+  assert.strictEqual(api.chordalExHas("2", 0, 1), true);
+  assert.strictEqual(api.chordalExHas("2", 0, 0), false);
+  assert.strictEqual(api.chordalExHas("2", 6, 0), false);
+  let mask = api.chordalExSet("0", 2, 3, true);
+  assert.strictEqual(mask, "0000000000020000"); // Bit 17 = 2 * 7 + 3
+  assert.strictEqual(api.chordalExHas(mask, 2, 3), true);
+  assert.strictEqual(api.chordalExSet(mask, 2, 3, false), "0000000000000000");
+  assert.strictEqual(api.chordalExSet(mask, 9, 9, true), mask, "Position außerhalb der Matrix ändert nichts");
+  assert.deepStrictEqual(Array.from(api.chordalExList(api.chordalExSet(api.chordalExSet("0", 0, 0, true), 5, 6, true))), ["R0C0", "R5C6"]);
+  // Config: normalizeConfig übernimmt die Maske und bereinigt ungültige Werte
+  const cfg = JSON.parse(JSON.stringify(api.normalizeConfig({ layers: [], settings: { chordalHoldExclusions: "6" } }, R)));
+  assert.strictEqual(cfg.settings.chordalHoldExclusions, "0000000000000006");
+  assert.strictEqual(api.normalizeConfig({ layers: [] }, R).settings.chordalHoldExclusions, "0000000000000000");
+  // GET_CONFIG-Zeile CHORDAL_EX
+  const snap = api.createDeviceSnapshot();
+  assert.strictEqual(snap.chordalEx, null);
+  assert.strictEqual(api.captureChordalExLine(snap, "CHORDAL_EX:0000000000000006"), true);
+  assert.strictEqual(snap.chordalEx, "0000000000000006");
+  assert.strictEqual(api.captureChordalExLine(snap, "CHORDAL_EX:nope"), true);
+  assert.strictEqual(snap.chordalEx, null, "ungültige Zeile: nicht vergleichen");
+  assert.strictEqual(api.captureChordalExLine(snap, "LAYER_NAMES:[]"), false);
+  // Diff: nur mit CHORDAL_EX vom Gerät; nur physische Tasten
+  const zero = Array.from({ length: 6 }, () => Array(7).fill(0));
+  const full = api.createDeviceSnapshot();
+  full.names = Array(8).fill("x");
+  for (const f of ["tap", "hold", "dtap"]) for (let l = 0; l < 8; l++) full[f][l] = zero.map(r => r.slice());
+  const local = JSON.parse(JSON.stringify(api.normalizeConfig({ layers: [], settings: { chordalHoldExclusions: "2" } }, R)));
+  local.layers = Array.from({ length: 8 }, () => api.transparentLayer());
+  assert.deepStrictEqual(Array.from(api.diffKeymap(local, full, R).chordal), [], "ohne CHORDAL_EX kein Vergleich");
+  full.chordalEx = "0000000000000000";
+  const diff = api.diffKeymap(local, full, R);
+  assert.strictEqual(diff.chordal.length, 1);
+  assert.strictEqual(diff.chordal[0].where, "Chordal-Hold-Ausnahme R0C1:");
+  assert.strictEqual(diff.chordal[0].device, "nein");
+  assert.strictEqual(diff.chordal[0].local, "ja");
+  full.chordalEx = "0000000000000002";
+  assert.strictEqual(api.diffKeymap(local, full, R).chordal.length, 0);
+  // Laden vom Gerät übernimmt die Ausnahmen
+  full.info = {};
+  full.counts = { combos: 0, pairs: 0, macros: 0, overrides: null, leader: null, altrep: null };
+  const built = api.buildConfigFromSnapshot(full, local, R);
+  assert.strictEqual(built.config.settings.chordalHoldExclusions, "0000000000000002");
+  // Voller Sync: SET_CHORDAL_EX nach SET_BOOT_LAYER, optional (ältere Firmware: ERR UNKNOWN)
+  const sctx = { NUM_LAYERS: 8, NUM_ROWS: 6, NUM_COLS: 7, clampSetting: api.clampSetting, normalizeTriLayers: api.normalizeTriLayers, sanitizeCommandText: api.sanitizeCommandText, chordalExNormalize: api.chordalExNormalize };
+  vm.createContext(sctx);
+  vm.runInContext(`${section("js/config-sync.js", "// Einstellungs-Befehle des vollen Syncs", "// One-Shot-Auto-Sync")}
+    this.build = buildSettingCommands;`, sctx);
+  const cmds = JSON.parse(JSON.stringify(sctx.build({ chordalHoldExclusions: "6" }, R)));
+  const idx = cmds.findIndex(c => c.ack === "SET_CHORDAL_EX");
+  assert.ok(idx > 0 && cmds[idx].optional === true);
+  assert.strictEqual(cmds[idx - 1].ack, "SET_BOOT_LAYER");
+  assert.strictEqual(cmds[idx].cmd, "SET_CHORDAL_EX 0000000000000006");
+  assert.strictEqual(cmds[idx + 1].ack, "CLEAR_TAP_TERMS");
+  assert.strictEqual(JSON.parse(JSON.stringify(sctx.build({}, R)))[idx].cmd, "SET_CHORDAL_EX 0000000000000000");
+  // Key-Inspector: Checkbox, Anzeige und Übernahme
+  assert.ok(read("index.html").includes('id="keyChordalExCheckbox"') && read("index.html").includes("Chordal-Hold-Ausnahme"));
+  assert.ok(read("js/editor.js").includes("chordalExHas(") && read("js/editor.js").includes("updateChordalExVisibility"));
+  assert.ok(read("js/editor-events.js").includes("chordalExSet(oldChordalEx"));
 });

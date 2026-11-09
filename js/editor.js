@@ -1479,8 +1479,20 @@ function updateInspector(r, c) {
   setOptionalActionSelect(document.getElementById("dtapActionSelect"), normalizeHoldCode(keyData.dtap));
   const termInput = document.getElementById("keyTapTermInput");
   if (termInput) termInput.value = Number.isInteger(keyData.tapTerm) && keyData.tapTerm > 0 ? keyData.tapTerm : "";
+  const chordalCheck = document.getElementById("keyChordalExCheckbox");
+  if (chordalCheck) chordalCheck.checked = chordalExHas(currentConfig.settings && currentConfig.settings.chordalHoldExclusions, r, c);
+  updateChordalExVisibility();
   const flavorSelect = document.getElementById("keyHoldFlavorSelect");
   if (flavorSelect) flavorSelect.value = String(Number.isInteger(keyData.holdFlavor) && keyData.holdFlavor >= 1 && keyData.holdFlavor <= HOLD_FLAVOR_MAX ? keyData.holdFlavor : 0);
+}
+
+// Die Checkbox "Chordal-Hold-Ausnahme" erscheint nur bei einer Mod-Tap-/Halte-Aktion der gewählten Taste
+function updateChordalExVisibility() {
+  const group = document.getElementById("keyChordalExGroup");
+  const holdSelect = document.getElementById("holdActionSelect");
+  if (!group || !holdSelect) return;
+  const hasHold = !!holdSelect.value && normalizeHoldCode(holdSelect.value) !== "NONE";
+  group.style.display = hasHold ? "" : "none";
 }
 
 // Setzt eine Halte- oder Doppel-Tipp-Auswahl. Ein unbekannter Code (z. B. aus einem Import) fällt nicht

@@ -533,6 +533,34 @@ function clampSetting(field, value) {
   return Math.min(hi, Math.max(lo, n));
 }
 
+// Chordal-Hold-Ausnahmen (Firmware chordalHoldExclusions): Bit (r * NUM_COLS + c) = Taste ausgenommen. Die Config hält die
+// Maske als 16-stelligen Hex-String (positionsbasiert, gilt für alle Ebenen); Bits außerhalb der Matrix entfallen.
+function chordalExNormalize(value) {
+  const text = typeof value === "string" ? value.trim() : "";
+  if (!/^[0-9a-fA-F]{1,16}$/.test(text)) return "0000000000000000";
+  const valid = (1n << BigInt(NUM_ROWS * NUM_COLS)) - 1n;
+  return (BigInt("0x" + text) & valid).toString(16).toUpperCase().padStart(16, "0");
+}
+
+function chordalExHas(value, r, c) {
+  if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= NUM_ROWS || c < 0 || c >= NUM_COLS) return false;
+  return (BigInt("0x" + chordalExNormalize(value)) >> BigInt(r * NUM_COLS + c) & 1n) === 1n;
+}
+
+function chordalExSet(value, r, c, on) {
+  if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= NUM_ROWS || c < 0 || c >= NUM_COLS) return chordalExNormalize(value);
+  const bit = 1n << BigInt(r * NUM_COLS + c);
+  const mask = BigInt("0x" + chordalExNormalize(value));
+  return (on ? mask | bit : mask & ~bit).toString(16).toUpperCase().padStart(16, "0");
+}
+
+// Positionen "R<r>C<c>" aller gesetzten Bits, für Diff-Texte
+function chordalExList(value) {
+  const out = [];
+  for (let r = 0; r < NUM_ROWS; r++) for (let c = 0; c < NUM_COLS; c++) if (chordalExHas(value, r, c)) out.push(`R${r}C${c}`);
+  return out;
+}
+
 function normalizeKeyCell(cell) {
   if (!cell || typeof cell !== "object") return { label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" };
   return {
@@ -1409,6 +1437,7 @@ function normalizeConfig(cfg, profile) {
     mouseTimeoutMs: clampSetting("mouseTimeoutMs", s.mouseTimeoutMs ?? 500),
     requirePriorIdleMs: clampSetting("requirePriorIdleMs", s.requirePriorIdleMs ?? 0),
     chordalHold: clampSetting("chordalHold", s.chordalHold ?? 0),
+    chordalHoldExclusions: chordalExNormalize(s.chordalHoldExclusions),
     retroTap: clampSetting("retroTap", s.retroTap ?? 0),
     numWordLayer: clampSetting("numWordLayer", s.numWordLayer ?? 1),
     bootLayer: clampSetting("bootLayer", s.bootLayer ?? 0),
@@ -1939,6 +1968,7 @@ function topCorrectedKeys(stats, limit = CORRECTION_TOP) {
 function createDeviceSnapshot() {
   return {
     names: null, tap: [], hold: [], dtap: [], term: [], flavor: [],
+    chordalEx: null, // CHORDAL_EX-Zeile (Firmware vor Stand 53 sendet keine): 16-stelliger Hex-String oder null
     counts: { combos: null, pairs: null, macros: null, overrides: null, leader: null, altrep: null }, combos: [], pairs: [], macros: [], overrides: [], leader: [], altrep: [], macroLens: [], macroRep: [], listsBroken: false,
     // DEVICE_INFO der Hälfte (nur beim Laden der kompletten Config gelesen), sonst null
     info: null
@@ -1949,6 +1979,15 @@ const COMBO_BEHAVIOR_CODES = { KEY_PRESS: 0, MODIFIER_HOLD: 1, LAYER_TOGGLE: 2 }
 
 const LIST_COUNT_MAX = { "COMBO_COUNT:": MAX_COMBOS, "PAIR_COUNT:": MAX_KEY_PAIRS, "MACRO_COUNT:": MAX_MACROS, "OVERRIDE_COUNT:": MAX_KEY_OVERRIDES, "LEADER_COUNT:": MAX_LEADER_SEQS, "ALTREP_COUNT:": MAX_ALT_REPEATS };
 const LIST_DATA_PREFIXES = ["COMBO_DATA:", "PAIR_DATA:", "MACRO_DATA:", "OVERRIDE_DATA:", "LEADER_DATA:", "ALTREP_DATA:"];
+
+// Übernimmt die Zeile "CHORDAL_EX:<hex>" in den Snapshot. Gibt true zurück, wenn die Zeile diese Art ist (auch bei
+// ungültigem Inhalt: verbraucht, der Wert bleibt dann null = nicht verglichen).
+function captureChordalExLine(snapshot, line) {
+  if (!line.startsWith("CHORDAL_EX:")) return false;
+  const body = line.substring(11).trim();
+  snapshot.chordalEx = /^[0-9a-fA-F]{1,16}$/.test(body) ? chordalExNormalize(body) : null;
+  return true;
+}
 
 // Übernimmt eine Zeile ..._COUNT: oder ..._DATA: in den Snapshot. Gibt true zurück, wenn die Zeile eine dieser
 // Arten ist (auch bei ungültigem Inhalt: verbraucht, der Snapshot gilt dann als unvollständig).
@@ -2173,7 +2212,20 @@ function diffKeymap(cfg, snapshot, profile) {
     const deviceName = sanitizeCommandText(snapshot.names[l], DEFAULT_LAYER_NAMES[l]);
     if (localName !== deviceName) names.push({ l, device: deviceName, local: localName });
   }
-  return { keys, names, lists: diffLists(cfg, snapshot) };
+  // Chordal-Hold-Ausnahmen: nur vergleichen, wenn das Gerät CHORDAL_EX meldet (Firmware vor Stand 53 nicht)
+  const chordal = [];
+  if (snapshot.chordalEx) {
+    const local = chordalExNormalize(cfg.settings && cfg.settings.chordalHoldExclusions);
+    for (let r = 0; r < NUM_ROWS; r++) {
+      for (let c = 0; c < NUM_COLS; c++) {
+        if (!isPhysicalKey(r, c, profile)) continue;
+        if (chordalExHas(snapshot.chordalEx, r, c) !== chordalExHas(local, r, c)) {
+          chordal.push({ where: `Chordal-Hold-Ausnahme R${r}C${c}:`, device: chordalExHas(snapshot.chordalEx, r, c) ? "ja" : "nein", local: chordalExHas(local, r, c) ? "ja" : "nein" });
+        }
+      }
+    }
+  }
+  return { keys, names, chordal, lists: diffLists(cfg, snapshot) };
 }
 
 // Banner "Gerät weicht ab" nach dem Verbinden: zeigt sich nur ohne vorgemerkte Änderung der Hälfte und bei
@@ -2184,7 +2236,7 @@ function staleLayoutState(cfg, snapshot, profile, pendingCount) {
   const lists = diff.lists || {};
   const listCount = ["combos", "pairs", "overrides", "leader", "altrep", "macros"]
     .reduce((n, key) => n + (lists[key] || []).length, 0);
-  const count = diff.keys.length + diff.names.length + listCount;
+  const count = diff.keys.length + diff.names.length + diff.chordal.length + listCount;
   return { show: count > 0, count };
 }
 
@@ -2321,6 +2373,8 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
     })),
     settings: settingsFromDeviceInfo(snapshot.info, baseCfg && baseCfg.settings)
   };
+  // Ohne CHORDAL_EX (Firmware vor Stand 53) bleiben die lokalen Ausnahmen
+  if (snapshot.chordalEx) cfg.settings.chordalHoldExclusions = snapshot.chordalEx;
   // Das Gerät speichert keine Combo-Namen: ein lokaler Combo mit gleichem Index und gleichen Werten behält Id und Namen
   const localCombos = (baseCfg && Array.isArray(baseCfg.combos)) ? baseCfg.combos : [];
   const localTuples = baseCfg ? localComboTuples(baseCfg) : [];

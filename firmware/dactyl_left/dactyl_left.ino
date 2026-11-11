@@ -37,6 +37,10 @@
 
 #include "../dactyl_right/DactylMatrixConstants.h"
 
+// DactylLogic.h definiert diese Funktionen erst nach ihrem ersten Aufruf in dieser Datei
+bool matrixTestEnd();
+void autoMouseStop();
+
 // Gespiegelte Config-Combo: innen oben (R0C5) + außen unten (R4C0) aus DactylMatrixConstants.h
 #define CONFIG_COMBO_R1 LEFT_CONFIG_COMBO_R1
 #define CONFIG_COMBO_C1 LEFT_CONFIG_COMBO_C1

@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Automated NVS layout corruption recovery and checksum (`nvsChecksum`)
-
-- **Rank:** Maintenance model. Total 26/40 (reach 7, safety 8, speed 6, unblocks 5). Effort M. Estimate.
-- **Area:** Firmware.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/dactyl_right.ino`.
-- **Problem:** Flash write interruptions can leave corrupted keymap blobs in NVS, causing erratic key behavior without diagnostic errors.
-- **Goal:** Store a CRC32 checksum alongside saved keymap data in NVS. If checksum validation fails on boot, safely fall back to compiled defaults and emit a diagnostic log.
-- **Acceptance test:** A firmware test writes corrupt bytes to the NVS keymap partition and verifies clean fallback to compiled defaults on startup.
-
 ### Keypress counter reset and export (`resetKeyPressStats`, `exportKeyPressStatsJson`)
 
 - **Rank:** Feature model. Total 26/40 (typing 4, configuration 8, harmony 7, safety 7). Effort S. Estimate.

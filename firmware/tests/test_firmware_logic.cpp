@@ -266,6 +266,7 @@ void resetState() {
   testDefaultsId = 0;
   Preferences::failWrites = false;
   Preferences::failBytesKey.clear();
+  Preferences::failRemoveKey.clear();
   Preferences::failUCharKey.clear();
   _mock_mutex_busy = false;
   bleKeyboard.connected = true;
@@ -1717,6 +1718,129 @@ TEST(test_new_nonzero_id_applies_once) {
   loadKeymapFromNVS();
   assert(KEYMAP[0][1][1] == 'y');
   assert(Preferences::uintStore["applied_id"] == 0xCAFE);
+}
+
+// -----------------------------------------------------------------------------
+// Test 26a2b: Prüfsumme "keymap_crc" erkennt beschädigte Keymap-Blobs und fällt auf die Defaults zurück
+// -----------------------------------------------------------------------------
+TEST(test_nvs_checksum_corrupt_keymap_falls_back_to_defaults) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  assert(preferences.isKey("keymap_crc"));
+  // Gültige Prüfsumme: die Nutzer-Belegung bleibt über den Neustart erhalten
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'b');
+
+  // Unterbrochene Schreibung: ein Byte im Blob kippt, die Länge bleibt gleich
+  Preferences::bytesStore["keymap"][10] ^= 0xFF;
+  Serial.clear();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'u');             // Firmware-Defaults
+  bool logged = false;
+  for (const auto& l : Serial.outputLines)
+    if (l.find("Checksumme ung") != std::string::npos) logged = true;
+  assert(logged);
+  // Defaults und Prüfsumme sind neu geschrieben: der nächste Start lädt ohne Warnung
+  Serial.clear();
+  loadKeymapFromNVS();
+  for (const auto& l : Serial.outputLines) assert(l.find("Checksumme ung") == std::string::npos);
+  assert(!storedLayoutChecksumInvalid());
+}
+
+TEST(test_nvs_checksum_corrupt_holdmap_and_missing_blob_fall_back) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  Preferences::bytesStore["holdmap"][3] ^= 0x01;
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'u');
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  Preferences::bytesStore.erase("dtapmap");   // fehlender Blob bei vorhandener Prüfsumme
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'u');
+  assert(preferences.isKey("dtapmap"));
+}
+
+TEST(test_nvs_checksum_failed_blob_write_drops_crc_and_keeps_layout) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);   // gültige Summe, Belegung 'b'
+  KEYMAP[0][1][1] = 'z';
+  Preferences::failBytesKey = "holdmap";
+  assert(!saveKeymapToNVS());
+  Preferences::failBytesKey.clear();
+  assert(!preferences.isKey("keymap_crc"));           // keine Summe der neuen RAM-Daten über alten Blobs
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'z');                     // Belegung bleibt, kein Zurücksetzen
+  assert(preferences.isKey("keymap_crc"));
+}
+
+TEST(test_nvs_checksum_corrupt_blob_with_nonzero_id_and_id_zero) {
+  resetState();
+  testDefaultsId = 0xBEEF;
+  KEYMAP[0][1][1] = 'x';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  Preferences::bytesStore["keymap"][7] ^= 0x40;
+  KEYMAP[0][1][1] = 'x';
+  loadKeymapFromNVS();                                // gleiche ID, beschädigter Blob: Defaults
+  assert(KEYMAP[0][1][1] == 'x');
+  assert(Preferences::uintStore["applied_id"] == 0xBEEF);
+  assert(!storedLayoutChecksumInvalid());
+  // ID 0 behält sonst die Belegung, die Summe hat aber Vorrang
+  testDefaultsId = 0;
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  Preferences::bytesStore["keymap"][7] ^= 0x40;
+  KEYMAP[0][1][1] = 'r';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'r');
+  assert(!Preferences::uintStore.count("applied_id"));
+}
+
+TEST(test_nvs_checksum_failed_crc_remove_reports_error) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  Preferences::failBytesKey = "holdmap";
+  Preferences::failRemoveKey = "keymap_crc";
+  assert(!saveKeymapToNVS());                         // alte Summe bleibt: Fehler wird gemeldet
+  Preferences::failBytesKey.clear();
+  Preferences::failRemoveKey.clear();
+}
+
+TEST(test_nvs_checksum_wrong_length_keymap_uses_defaults) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  Preferences::bytesStore["keymap"].pop_back();       // falsche Länge bei vorhandener Summe
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'u');
+  assert(preferences.getBytesLength("keymap") == sizeof(KEYMAP));
+  assert(!storedLayoutChecksumInvalid());
+}
+
+TEST(test_nvs_without_checksum_keeps_keymap_and_adds_crc) {
+  resetState();
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  handleConfigCommand("SET_KEY 0 1 1 98 0", false);
+  Preferences::uintStore.erase("keymap_crc"); // Firmware davor
+  KEYMAP[0][1][1] = 'u';
+  loadKeymapFromNVS();
+  assert(KEYMAP[0][1][1] == 'b');
+  assert(preferences.isKey("keymap_crc"));
 }
 
 // -----------------------------------------------------------------------------

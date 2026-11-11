@@ -3308,11 +3308,58 @@ bool writeQuickTapsToOpenNVS() {
   return preferences.putBytes("quickflv", QUICKTAPMAP, sizeof(QUICKTAPMAP)) == sizeof(QUICKTAPMAP);
 }
 
+// CRC32 (IEEE, reflektiert) über KEYMAP + HOLDMAP + DTAPMAP. Der NVS-Schlüssel "keymap_crc" hält die Summe
+// der zuletzt vollständig geschriebenen Belegung; eine abgebrochene oder beschädigte Schreibung fällt beim Start auf.
+uint32_t nvsCrc32Update(uint32_t crc, const uint8_t* data, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    crc ^= data[i];
+    for (int b = 0; b < 8; b++) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+  }
+  return crc;
+}
+
+uint32_t nvsLayoutCrcOfRam() {
+  uint32_t crc = 0xFFFFFFFFu;
+  crc = nvsCrc32Update(crc, (const uint8_t*)KEYMAP, sizeof(KEYMAP));
+  crc = nvsCrc32Update(crc, (const uint8_t*)HOLDMAP, sizeof(HOLDMAP));
+  crc = nvsCrc32Update(crc, (const uint8_t*)DTAPMAP, sizeof(DTAPMAP));
+  return ~crc;
+}
+
+bool writeLayoutCrcToOpenNVS() {
+  return preferences.putUInt("keymap_crc", nvsLayoutCrcOfRam()) == sizeof(uint32_t);
+}
+
+// Schreibt die Summe nur, wenn alle drei Blobs geschrieben wurden. Nach einem fehlgeschlagenen Schreiben passen
+// die alten Blobs nicht zur Summe der neuen RAM-Daten: der Schlüssel entfällt, damit der nächste Start die
+// gespeicherte Belegung behält (ungeprüft wie Firmware davor) statt sie zurückzusetzen.
+bool writeLayoutCrcOrDropOpenNVS(bool blobsOk) {
+  if (blobsOk) return writeLayoutCrcToOpenNVS();
+  return preferences.remove("keymap_crc");
+}
+
+// true, wenn "keymap_crc" existiert und die gespeicherten Blobs nicht dazu passen (fehlend, falsche Länge oder
+// andere Summe). Ohne "keymap_crc" (Firmware davor) gibt es nichts zu prüfen: false.
+bool storedLayoutChecksumInvalid() {
+  if (!preferences.isKey("keymap_crc")) return false;
+  const char* keys[3] = { "keymap", "holdmap", "dtapmap" };
+  const size_t sizes[3] = { sizeof(KEYMAP), sizeof(HOLDMAP), sizeof(DTAPMAP) };
+  uint32_t crc = 0xFFFFFFFFu;
+  uint8_t buf[sizeof(KEYMAP) > sizeof(HOLDMAP) ? sizeof(KEYMAP) : sizeof(HOLDMAP)];
+  for (int i = 0; i < 3; i++) {
+    if (!preferences.isKey(keys[i]) || preferences.getBytesLength(keys[i]) != sizes[i] || sizes[i] > sizeof(buf)) return true;
+    preferences.getBytes(keys[i], buf, sizes[i]);
+    crc = nvsCrc32Update(crc, buf, sizes[i]);
+  }
+  return ~crc != preferences.getUInt("keymap_crc", 0);
+}
+
 bool saveKeymapToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
   bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
   ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
   ok = (preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP)) && ok;
+  ok = writeLayoutCrcOrDropOpenNVS(ok) && ok;
   ok = writeTapTermsToOpenNVS() && ok;
   ok = writeHoldFlavorsToOpenNVS() && ok;
   ok = writeQuickTapsToOpenNVS() && ok;
@@ -3367,7 +3414,11 @@ void loadKeymapFromNVS() {
   // bei geänderten Repository-Defaults. Ohne "applied_id" (Firmware davor) gilt der alte Fingerprint-Vergleich
   // bzw. die fw_build-Migration (ID != 0).
   bool useDefaults = !hasKeymap;
-  if (hasKeymap && KEYMAP_DEFAULTS_ID != 0) {
+  if (hasKeymap && storedLayoutChecksumInvalid()) {
+    Serial.println("NVS: Checksumme ungültig! Verwende Firmware-Defaults.");
+    useDefaults = true;
+  }
+  if (!useDefaults && KEYMAP_DEFAULTS_ID != 0) {
     useDefaults = hasAppliedId ? appliedId != (uint32_t)KEYMAP_DEFAULTS_ID
                                : (hasStoredHash ? storedHash != defaultsHash : true);
   }
@@ -3378,6 +3429,7 @@ void loadKeymapFromNVS() {
     ok = (preferences.putBytes("holdmap", HOLDMAP, sizeof(HOLDMAP)) == sizeof(HOLDMAP)) && ok;
     ok = (preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP)) && ok;
     // Eigene Tapping-Terme gehören zur Belegung: gespeicherte durch die einkompilierten ersetzen
+    ok = writeLayoutCrcOrDropOpenNVS(ok) && ok;
     ok = writeTapTermsToOpenNVS() && ok;
     ok = writeHoldFlavorsToOpenNVS() && ok;
     ok = writeQuickTapsToOpenNVS() && ok;
@@ -3441,6 +3493,9 @@ void loadKeymapFromNVS() {
     if (hasDtapmap) {
       preferences.getBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP));
     }
+    // Firmware davor ohne Prüfsumme: die geladene Belegung gilt als gültig (ein früherer abgebrochener Schreibvorgang
+    // ist ohne Summe nicht erkennbar), Summe nachtragen
+    if (!preferences.isKey("keymap_crc") && holdmapOk && dtapmapOk) writeLayoutCrcToOpenNVS();
     // Eigene Tapping-Terme: fehlender Schlüssel = einkompilierte Werte; ungültige Werte zählen als 0
     if (preferences.isKey("tapterms") && preferences.getBytesLength("tapterms") == sizeof(TAPTERMMAP)) {
       preferences.getBytes("tapterms", TAPTERMMAP, sizeof(TAPTERMMAP));

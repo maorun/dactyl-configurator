@@ -333,6 +333,13 @@ function setupEventListeners() {
       showToast("Der Tapping-Term einer Taste muss eine ganze Zahl von 100 bis 500 ms sein, oder leer.");
       return;
     }
+    // Eigener Quick-Tap-Term: leer = Wert der Hälfte, 0 = aus, sonst 10..500 ms; alles andere wird abgelehnt
+    const quickRaw = (document.getElementById("keyQuickTapInput")?.value ?? "").trim();
+    const quickValue = quickRaw === "" ? null : Number(quickRaw);
+    if (quickRaw !== "" && !(Number.isInteger(quickValue) && (quickValue === 0 || (quickValue >= 10 && quickValue <= 500)))) {
+      showToast("Der Quick-Tap-Term einer Taste muss 0 (aus) oder eine ganze Zahl von 10 bis 500 ms sein, oder leer.");
+      return;
+    }
     // Option-Zeichen (CHAR_PAIR_<i>) als Tastenpaar auflösen: gleiches Paar wiederverwenden, sonst anhängen
     const resolved = resolveCharPairActions({
       tap: primarySelect.value,
@@ -357,6 +364,7 @@ function setupEventListeners() {
     if (termValue > 0) newKey.tapTerm = termValue;
     const flavorValue = parseInt(document.getElementById("keyHoldFlavorSelect")?.value ?? "0", 10);
     if (flavorValue >= 1 && flavorValue <= HOLD_FLAVOR_MAX) newKey.holdFlavor = flavorValue;
+    if (quickValue !== null) newKey.quickTap = quickValue;
     layer[r][c] = newKey;
     // Chordal-Hold-Ausnahme: positionsbasiert in den Einstellungen; ohne Halte-Aktion entfällt sie
     const chordalCheck = document.getElementById("keyChordalExCheckbox");

@@ -407,6 +407,20 @@ Rules for this file:
   - Split: the left half runs the same logic. The cross-half decision stays with the half mode: `splitDeferTakeResolveRequest` and `HOLD_RESOLVE` ignore the key flavor, so a press of the other half resolves an open key by the mode of the half. The key flavor acts for presses of the same half. `DACTYL_FW_VERSION` 46 added the commands and the NVS key: flash both halves.
   - Test: `test_hold_flavor_per_key_*` in `firmware/tests/test_firmware_logic.cpp` (half mode A, one key with mode B: only this key resolves with mode B), `test_holdflavor_codegen_and_range` in `tests/test_server.py`, "Hold-Tap-Variante je Taste" in `tests/test_app_logic.js`.
 
+### Quick-tap term per key (`QUICKTAPMAP`)
+
+- Each Mod-Tap key has an optional own quick-tap window (`QUICKTAPMAP`, per layer). `0` = `quickTapMs` of the half, `1` (`QUICK_TAP_KEY_OFF`) = quick tap off for this key, `10..500` = own window in ms. Example: off for `Space` and `Enter` so rapid double taps never become a held tap or a hold, and the half value for the letters.
+  - `resolveKeyQuickTap()` reads it with the same layer fallback as `resolveKeyTapTerm`. `effectiveQuickTap(value)` gives the window in ms (`0` = off). Never compare against `quickTapMs` directly in the quick-tap logic. A key with its own window works also when `quickTapMs` of the half is `0`.
+  - The window of a held quick tap is stored in `quickTapWin[r][c]`, so its release starts the next window with the same value.
+  - The value acts only with a hold action and without a double-tap action (as quick tap itself). `server.py` renders `0` for other keys.
+  - NVS key `quickflv` (blob of `QUICKTAPMAP`, written by `saveKeymapToNVS` / `SAVE_NVS`). Same rules as `holdflv`: it exists when at least one key has a value, or when the compiled-in defaults carry values and the user cleared them (zero blob). A stored value outside `0`, `1`, `10..500` counts as `0`.
+  - `keymapDefaultsFingerprint()` includes `QUICKTAPMAP` only when it has a value.
+  - Commands: `CLEAR_QUICK_TAPS` (RAM, `OK CLEAR_QUICK_TAPS`) and `SET_KQ <l> <r> <c> <v>` (RAM like `SET_K`: no `OK`, only `ERR ARGS`). `SAVE_NVS` persists them. `GET_CONFIG` sends one `QTAP_DATA:{"l":<layer>,"k":[[...]]}` line per layer after `FLAVOR_DATA:`.
+  - Config: `layers[l][r][c].quickTap` (`0` = off, `10..500` = ms, absent = half value). The firmware value for "off" is `1`; `keyQuickTap` (`js/keycodes.js`) and `cell_quick_tap` (`server.py`) convert. `server.py` (`generate_quicktap_cpp`, block `[[[START_QUICKTAPMAP]]]` in both sketches) rejects other values with HTTP 400; a template without the block stays valid.
+  - App: the inspector field `keyQuickTapInput` (`js/editor.js`, `js/editor-events.js`; empty = half value). The full sync sends `CLEAR_QUICK_TAPS` as the last setting command (`optional: "args"`, quiet while no key has a value) and a `SET_KQ` after each `SET_K` with a value. The layout diff compares the value when the device sends `QTAP_DATA`.
+  - Split: the left half runs the same logic. `DACTYL_FW_VERSION` 55 added the commands and the NVS key: flash both halves.
+  - Test: `test_quick_tap_per_key_*` in `firmware/tests/test_firmware_logic.cpp` (`Space` off and `A` with the half value: a double tap of `Space` never holds), `test_quicktap_codegen_and_range` in `tests/test_server.py`, "Quick-Tap je Taste" in `tests/test_app_logic.js`.
+
 ### Tap-Dance / Double-Tap (`DTAPMAP`)
 
 - Each key has an optional own tapping term (`TAPTERMMAP`, ms, `0` = the value of the half, otherwise 100..500). Examples: ring and little finger home row mods need a longer term than a thumb key.

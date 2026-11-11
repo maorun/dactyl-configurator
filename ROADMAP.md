@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Quick-Tap Term per-key override (`QUICKTAPMAP`)
-
-- **Rank:** Feature model. Total 27/40 (typing 7, configuration 6, harmony 7, safety 7). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylCommon.h`, `js/editor.js`, `js/config-sync.js`.
-- **Problem:** Fast typists want a 0 ms quick-tap term on Space and Enter to prevent unwanted hold triggers during rapid tapping, but standard quick-tap on letters.
-- **Goal:** Add per-key quick-tap term overrides in NVS (`quickflv`) and an option in the Key Inspector UI, matching `HOLDFLAVORMAP`.
-- **Acceptance test:** A firmware test configures quick-tap 0 ms on Space and 150 ms on A, verifying that double-tapping Space never triggers a hold action.
-
 ### Automated NVS layout corruption recovery and checksum (`nvsChecksum`)
 
 - **Rank:** Maintenance model. Total 26/40 (reach 7, safety 8, speed 6, unblocks 5). Effort M. Estimate.

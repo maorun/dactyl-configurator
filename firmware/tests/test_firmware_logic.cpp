@@ -2350,6 +2350,25 @@ TEST(test_get_config_sends_key_overrides) {
   assert(entries == MAX_KEY_OVERRIDES);
 }
 
+TEST(test_key_override_strict_flag_command_nvs_and_get_config) {
+  resetState();
+  handleConfigCommand("CLEAR_OVERRIDES", false);
+  handleConfigCommand("ADD_OVERRIDE 18 178 212", false);  // Shift strikt
+  assert(mockChar.value == "OK ADD_OVERRIDE 0");
+  assert(userKeyOverrides[0].mods == 18);
+  handleConfigCommand("ADD_OVERRIDE 16 178 212", false);  // strikt ohne Modifier
+  assert(mockChar.value == "ERR ARGS ADD_OVERRIDE 16 178 212");
+  handleConfigCommand("SAVE_OVERRIDES", false);
+  numKeyOverrides = 0;
+  loadKeymapFromNVS();
+  assert(numKeyOverrides == 1 && userKeyOverrides[0].mods == 18);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool data = false;
+  for (const auto& n : mockChar.notifications) if (n == "OVERRIDE_DATA:{\"o\":0,\"e\":[[18,178,212,255]]}") data = true;
+  assert(data);
+}
+
 TEST(test_key_override_layer_mask_command_and_nvs) {
   resetState();
   handleConfigCommand("CLEAR_OVERRIDES", false);

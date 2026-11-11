@@ -54,6 +54,8 @@ function addKeyOverrideFromUI() {
     key: document.getElementById("keyOverrideKeySelect").value,
     replacement: document.getElementById("keyOverrideReplacementSelect").value
   };
+  const strictBox = document.getElementById("keyOverrideStrict");
+  if (strictBox && strictBox.checked) override.strict = true;
   const layerMask = selectedOverrideLayerMask();
   if (layerMask === 0) {
     showToast("Bitte mindestens eine Ebene wählen.");
@@ -71,6 +73,7 @@ function addKeyOverrideFromUI() {
   }
   const entry = normalizeKeyOverride(override);
   currentConfig.keyOverrides.push(entry);
+  if (strictBox) strictBox.checked = false;
   const idx = currentConfig.keyOverrides.length - 1;
   renderKeyOverrides();
   // Die Layout-Prüfung (override-key-unmapped) hängt von der Liste ab und zeichnet sich mit der Matrix neu

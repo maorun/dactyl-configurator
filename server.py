@@ -804,6 +804,7 @@ def key_pair_member_cpp(code, field):
 
 # Modifier-Klassen einer Überschreibung (wie KEY_OVERRIDE_MOD_* in DactylKeyOverride.h)
 KEY_OVERRIDE_MODS = {"ctrl": 1, "shift": 2, "alt": 4, "gui": 8}
+KEY_OVERRIDE_STRICT = 16  # Bit 4 in mods: keine weiteren Modifier dürfen gehalten sein
 # Modifier-Codes 0x80..0x87 dürfen weder Taste noch Ersatz sein
 MODIFIER_CPP_NAMES = {
     "KEY_LEFT_CTRL", "KEY_LEFT_SHIFT", "KEY_LEFT_ALT", "KEY_LEFT_GUI",
@@ -841,7 +842,11 @@ def generate_key_overrides_cpp(overrides):
             raise ValueError("Ungültiger Eintrag einer Tasten-Überschreibung.")
         # layerMask: Bit i = die Überschreibung gilt auf Ebene i; fehlend = alle Ebenen
         mask = validate_combo_layer_mask(o.get("layerMask"))
-        entries.append(f"  {{ {key_override_mods_value(o.get('mods'))}, {key_override_member_cpp(o.get('key'), 'key')}, "
+        strict = o.get("strict")
+        if strict is not None and not isinstance(strict, bool):
+            raise ValueError("Tasten-Überschreibung: 'strict' muss true oder false sein.")
+        mods_value = key_override_mods_value(o.get('mods')) | (KEY_OVERRIDE_STRICT if strict else 0)
+        entries.append(f"  {{ {mods_value}, {key_override_member_cpp(o.get('key'), 'key')}, "
                        f"{key_override_member_cpp(o.get('replacement'), 'replacement')}, {mask} }}")
     lines = [
         "// [[[START_KEY_OVERRIDES]]]",

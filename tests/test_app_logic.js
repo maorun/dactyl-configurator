@@ -47,7 +47,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              removeKeyPairAt, KEYCODES, UMLAUT_LABELS, ONE_SHOT_LABELS, holdSublabel,
              planKeyPairDeletion,
              ACT_MACRO_BASE, MAX_MACROS, MAX_MACRO_STEPS, MACRO_MAX_PAUSE_MS, MACRO_STEP_TYPES, macroIndexFromCode,
-             MAX_KEY_OVERRIDES, KEY_OVERRIDE_MODS, isValidKeyOverride, isKeyOverrideMember, keyOverrideModsValue,
+             MAX_KEY_OVERRIDES, KEY_OVERRIDE_MODS, isValidKeyOverride, isKeyOverrideMember, keyOverrideModsValue, keyOverrideModsByte,
              normalizeKeyOverride, keyOverrideLayerMask, keyOverrideLabel, localOverrideTuples, describeOverrideTuple,
              MAX_ALT_REPEATS, isValidAltRepeat, hasDuplicateAltRepeat, normalizeAltRepeat, altRepeatsFromSameFingerPairs, localAltRepeatTuples, describeAltRepeatTuple,
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
@@ -1464,6 +1464,27 @@ test("Tasten-Überschreibungen: Prüfung, Normalisierung und Anzeige", () => {
   assert.strictEqual(api.keyOverrideModsValue(["shift"]), 2);
   assert.strictEqual(api.keyOverrideLabel(n, c => c), "Ctrl + Shift + Cmd + KEY_A → KEY_B");
   assert.strictEqual(api.MAX_KEY_OVERRIDES, 16);
+});
+
+test("Tasten-Überschreibung: strict wird geprüft, normalisiert, gesendet und vom Gerät gelesen", () => {
+  const base = { mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE" };
+  assert.ok(api.isValidKeyOverride({ ...base, strict: true }));
+  assert.ok(!api.isValidKeyOverride({ ...base, strict: "ja" }));
+  assert.strictEqual(api.normalizeKeyOverride({ ...base, strict: true }).strict, true);
+  assert.ok(!("strict" in api.normalizeKeyOverride({ ...base, strict: false })));
+  assert.strictEqual(api.keyOverrideModsByte({ ...base, strict: true }), 18);
+  assert.strictEqual(api.keyOverrideModsByte(base), 2);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(api.localOverrideTuples({ keyOverrides: [{ ...base, strict: true }] })[0])).slice(0, 1), [18]);
+  assert.ok(api.keyOverrideLabel({ ...base, strict: true }, c => c).includes("nur diese"));
+  assert.ok(api.describeOverrideTuple([18, 178, 212, 255]).includes("nur diese"));
+  // Gerätezeile: Strict-Bit gültig, Strict ohne Klasse ungültig
+  const ok = api.createDeviceSnapshot();
+  api.captureListLine(ok, "OVERRIDE_COUNT:1");
+  assert.ok(api.captureListLine(ok, 'OVERRIDE_DATA:{"o":0,"e":[[18,178,212,255]]}'));
+  const bad = api.createDeviceSnapshot();
+  api.captureListLine(bad, "OVERRIDE_COUNT:1");
+  assert.ok(api.captureListLine(bad, 'OVERRIDE_DATA:{"o":0,"e":[[16,178,212,255]]}'));
+  assert.strictEqual(api.snapshotListsState(bad), "incomplete");
 });
 
 test("Tasten-Überschreibungen: Ebenenmaske (Prüfung, Normalisierung, Anzeige)", () => {
@@ -3705,6 +3726,20 @@ asyncTests.push(["Sync: Überschreibungen gehen als CLEAR_OVERRIDES, ADD_OVERRID
     "ADD_OVERRIDE 2 178 212",  // Shift + Backspace -> Delete
     "ADD_OVERRIDE 5 97 98 1"   // Ctrl + Alt + a -> b, nur Ebene 0 (vierter Wert; ohne Maske entfällt er)
   ]);
+}]);
+
+asyncTests.push(["Sync: strikte Überschreibung geht mit Strict-Bit; alte Firmware (ERR ARGS) bricht den Sync nicht ab", async () => {
+  const strictCfg = w => { w.cfgRef.keyOverrides = [{ mods: ["shift"], key: "KEY_BACKSPACE", replacement: "KEY_DELETE", strict: true }]; };
+  const a = fullSyncHarness(okReply);
+  strictCfg(a.w);
+  await a.w.write();
+  assert.deepStrictEqual(a.sent.filter(c => c.startsWith("ADD_OVERRIDE ")), ["ADD_OVERRIDE 18 178 212"]);
+  // Firmware vor Stand 57 lehnt mods > 15 mit ERR ARGS ab: der Sync läuft weiter, der Hinweis erscheint
+  const old = fullSyncHarness(cmd => cmd.startsWith("ADD_OVERRIDE 18") ? `ERR ARGS ${cmd}` : okReply(cmd));
+  strictCfg(old.w);
+  await old.w.write();
+  assert.ok(old.sent.includes("SAVE_OVERRIDES") && old.sent.includes("SAVE_MACROS"));
+  assert.ok(old.toasts.some(t => t.includes("ADD_OVERRIDE") && t.includes("flashen")));
 }]);
 
 asyncTests.push(["Sync: Firmware ohne Überschreibungen überspringt die Phase mit Hinweis", async () => {
@@ -6208,6 +6243,14 @@ test("Combo- und Überschreibungstabelle setzen die Index-Attribute für den Spr
   // Die Layout-Prüfung folgt der Liste: Hinzufügen, Löschen und Rückgängig zeichnen die Matrix neu
   const ui = read("js/key-overrides-ui.js");
   assert.strictEqual((ui.match(/renderKeyOverrides\(\);\n\s*(\/\/[^\n]*\n\s*)?renderMatrix\(\);/g) || []).length, 4);
+});
+
+test("Überschreibungskarte: Strict-Feld wird gelesen und nach dem Hinzufügen zurückgesetzt", () => {
+  const ui = read("js/key-overrides-ui.js");
+  assert.ok(ui.includes('getElementById("keyOverrideStrict")'));
+  assert.ok(ui.includes("override.strict = true"));
+  assert.ok(ui.includes("strictBox.checked = false"));
+  assert.ok(read("index.html").includes('id="keyOverrideStrict"'));
 });
 
 test("Layout-Prüfung (Anzeige): Knopf \"Zum Eintrag\" wechselt die Hälfte, den Tab und hebt die Zeile hervor", () => {

@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Strict modifier matching in Key Overrides (`overrideStrictMods`)
-
-- **Rank:** Feature model. Total 25/40 (typing 6, configuration 6, harmony 6, safety 7). Effort M. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylKeyOverride.h`, `js/key-overrides-ui.js`.
-- **Problem:** Key overrides match even when unlisted modifiers are held (e.g. `Ctrl + Shift + Backspace`), triggering unwanted overrides on complex shortcuts.
-- **Goal:** Add an optional `strict` boolean flag to key override definitions. When set, the override only fires if no extra modifiers outside `mods` are pressed.
-- **Acceptance test:** A firmware test configures a strict `Shift + Backspace` override and verifies that `Ctrl + Shift + Backspace` does not activate the override.
-
 ### Firmware Git commit hash in GET_INFO (`fw_commit`)
 
 - **Rank:** Maintenance model. Total 23/40 (reach 7, safety 6, speed 5, unblocks 5). Effort S. Estimate.

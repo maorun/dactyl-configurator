@@ -616,6 +616,13 @@ class TestServerAndCodegen(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.validate_config({"layers": [[]], "keyOverrides": [{"mods": [], "key": "KEY_A", "replacement": "KEY_B"}]})
 
+    def test_key_overrides_strict_flag_sets_bit_4(self):
+        base = {"mods": ["shift"], "key": "KEY_BACKSPACE", "replacement": "KEY_DELETE"}
+        self.assertIn("{ 18, KEY_BACKSPACE, KEY_DELETE, 255 }", server.generate_key_overrides_cpp([dict(base, strict=True)]))
+        self.assertIn("{ 2, KEY_BACKSPACE, KEY_DELETE, 255 }", server.generate_key_overrides_cpp([dict(base, strict=False)]))
+        with self.assertRaises(ValueError):
+            server.generate_key_overrides_cpp([dict(base, strict="ja")])
+
     def test_key_overrides_render_only_on_the_master(self):
         with open(server.INO_FILE, encoding="utf-8") as f:
             content = f.read()

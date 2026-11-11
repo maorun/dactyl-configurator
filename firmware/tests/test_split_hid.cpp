@@ -3738,6 +3738,36 @@ TEST(test_override_layer_mask_selects_between_entries_and_default_is_all_layers)
   assert(!keyOverrideValid(2, 'a', 'b', 0) && !keyOverrideValid(2, 'a', 'b', 256) && keyOverrideValid(2, 'a', 'b', 1));
 }
 
+TEST(test_override_strict_ignores_extra_modifiers) {
+  KeyOverride loose[1] = { { KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE, KEY_DELETE } };
+  KeyOverride strict[1] = { { (uint8_t)(KEY_OVERRIDE_MOD_SHIFT | KEY_OVERRIDE_STRICT), KEY_BACKSPACE, KEY_DELETE } };
+  uint8_t shiftCtrl = KEY_OVERRIDE_MOD_SHIFT | KEY_OVERRIDE_MOD_CTRL;
+  assert(keyOverrideFind(loose, 1, shiftCtrl, KEY_BACKSPACE) != nullptr);
+  assert(keyOverrideFind(strict, 1, shiftCtrl, KEY_BACKSPACE) == nullptr);
+  assert(keyOverrideFind(strict, 1, KEY_OVERRIDE_MOD_SHIFT, KEY_BACKSPACE) != nullptr);
+  // Ein strenger Eintrag fällt auf den lockeren mit weniger Modifiern zurück, wenn zusätzliche gehalten sind
+  KeyOverride both[2] = { { (uint8_t)(KEY_OVERRIDE_MOD_SHIFT | KEY_OVERRIDE_STRICT), 'a', 'x' }, { KEY_OVERRIDE_MOD_CTRL, 'a', 'y' } };
+  assert(keyOverrideFind(both, 2, shiftCtrl, 'a')->replacement == 'y');
+  assert(keyOverrideValid(KEY_OVERRIDE_MOD_SHIFT | KEY_OVERRIDE_STRICT, 'a', 'b'));
+  assert(!keyOverrideValid(KEY_OVERRIDE_STRICT, 'a', 'b'));  // Strict ohne Modifier
+  assert(!keyOverrideValid(32 | 2, 'a', 'b'));
+}
+
+TEST(test_override_strict_key_path_ignores_extra_held_modifier) {
+  Kbd k;
+  ovrSetup(k, {{(uint8_t)(KEY_OVERRIDE_MOD_SHIFT | KEY_OVERRIDE_STRICT), KEY_BACKSPACE, KEY_DELETE}});
+  k.press((uint8_t)KEY_LEFT_SHIFT);
+  k.press((uint8_t)KEY_LEFT_CTRL);
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);
+  assert((k.log == Log{"P" + std::to_string(KEY_BACKSPACE)}));  // Strg zusätzlich gehalten: keine Überschreibung
+  k.release((uint8_t)KEY_BACKSPACE);
+  k.release((uint8_t)KEY_LEFT_CTRL);
+  k.log.clear();
+  k.press((uint8_t)KEY_BACKSPACE);                              // nur Shift gehalten: die strikte Überschreibung greift
+  assert((k.log == Log{"BEGIN", "R129", "P" + std::to_string(KEY_DELETE), "END"}));
+}
+
 TEST(test_override_validation) {
   assert(keyOverrideValid(2, KEY_BACKSPACE, KEY_DELETE));
   assert(!keyOverrideValid(0, 'a', 'b'));

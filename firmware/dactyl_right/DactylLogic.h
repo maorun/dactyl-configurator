@@ -5022,7 +5022,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
     numKeyOverrides = 0;
     sendConfigNotification("OK CLEAR_OVERRIDES");
   } else if (cmd.startsWith("ADD_OVERRIDE ")) {
-    // ADD_OVERRIDE <Modifier-Klassen 1..15> <Taste> <Ersatz> [<Ebenenmaske 1..255>]: Tasten 1..255, keine Modifier; wird als nächster Index angehängt
+    // ADD_OVERRIDE <Modifier-Klassen 1..15, +16 = strikt> <Taste> <Ersatz> [<Ebenenmaske 1..255>]: Tasten 1..255, keine Modifier; wird als nächster Index angehängt
     int mods, key, repl;
     char extra;
     int mask = KEY_OVERRIDE_ALL_LAYERS;

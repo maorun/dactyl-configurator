@@ -36,6 +36,11 @@
 #include "DactylMatrixConstants.h"
 #include "DactylCommon.h"
 
+// DactylLogic.h definiert diese Funktionen erst nach ihrem ersten Aufruf in dieser Datei
+bool matrixTestEnd();
+void matrixTestEndDeferred();
+void autoMouseStop();
+
 // Überlebt ESP.restart() im RTC-Slow-Memory, wird aber beim Kaltstart ignoriert
 RTC_NOINIT_ATTR uint32_t rtcConfigModeMagic;
 
@@ -999,7 +1004,7 @@ void sendSplitLayerStateIfDue(unsigned long refreshIntervalMs) {
 void setup() {
   bleKeyboard.setKeyOverrides(userKeyOverrides, &numKeyOverrides, getActiveLayer);
   splitMouseActivityHook = autoMouseNote;   // Mausaktionen der linken Hälfte aktivieren die Auto-Mouse-Ebene
-  autoMouseRemoteHeldHook = []() { return bleKeyboard.splitLeft.mouse != 0; };   // ein Klick der linken Hälfte hält sie offen
+  autoMouseRemoteHeldHook = []() { return bleKeyboard.splitLeft.set.mouse != 0; };   // ein Klick der linken Hälfte hält sie offen
   // RX-Puffer auf 4KB vergrößern für zuverlässige USB-Batch-Synchronisierung (SET_K x 336)
   Serial.setRxBufferSize(4096);
   Serial.begin(115200);

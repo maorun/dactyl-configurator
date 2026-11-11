@@ -1927,6 +1927,42 @@ function buildHeatmapCsv(heatmapData, config) {
   return [header.join(","), ...rows].join("\r\n") + "\r\n";
 }
 
+// Leere Statistik einer Hälfte (gleiches Profil): alle Zähler, Folgen und Korrekturen sind null
+function resetKeyPressStats(stats) {
+  return createTypingStats(null, stats && stats.profile);
+}
+
+// JSON der Anschlagzähler. heatmapData: [{ side, stats }]. "counts": ein Eintrag je Hälfte, Ebene, Zeile und Spalte
+// mit Zähler > 0; "totals": die Gesamtzähler je Taste (auch Anschläge ohne gültige Ebene). Nur Zähler, kein Text,
+// keine Zeit und keine Tastenfolge. Ungültige oder leere Eingabe gibt null zurück.
+function exportKeyPressStatsJson(heatmapData) {
+  if (!Array.isArray(heatmapData) || !heatmapData.length) return null;
+  const counts = [], totals = [];
+  const positive = n => Number.isSafeInteger(n) && n > 0;
+  const position = id => {
+    const m = /^(\d+)_(\d+)$/.exec(id);
+    if (!m) return null;
+    const r = Number(m[1]), c = Number(m[2]);
+    return isValidIndex(r, NUM_ROWS) && isValidIndex(c, NUM_COLS) ? { r, c } : null;
+  };
+  const sorted = map => Object.keys(map || {}).map(id => ({ id, pos: position(id) })).filter(e => e.pos)
+    .sort((a, b) => (a.pos.r - b.pos.r) || (a.pos.c - b.pos.c));
+  for (const entry of heatmapData) {
+    const stats = entry && entry.stats;
+    if (!entry || typeof entry.side !== "string" || !stats || typeof stats.counts !== "object" || stats.counts === null
+      || !Array.isArray(stats.layerCounts)) return null;
+    for (let l = 0; l < NUM_LAYERS; l++) {
+      for (const { id, pos } of sorted(stats.layerCounts[l])) {
+        if (positive(stats.layerCounts[l][id])) counts.push({ side: entry.side, layer: l, row: pos.r, col: pos.c, count: stats.layerCounts[l][id] });
+      }
+    }
+    for (const { id, pos } of sorted(stats.counts)) {
+      if (positive(stats.counts[id])) totals.push({ side: entry.side, row: pos.r, col: pos.c, count: stats.counts[id] });
+    }
+  }
+  return JSON.stringify({ format: "dactyl-keypress-stats", version: 1, counts, totals }, null, 2) + "\n";
+}
+
 // Rolle einer Aktion für recordKeyPress: Backspace, ohne Zeichen (keine Belegung, Modifier, Ebenen- und
 // One-Shot-Tasten) oder getippt
 function keyPressRole(tap) {

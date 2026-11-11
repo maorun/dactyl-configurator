@@ -239,6 +239,21 @@ function downloadHeatmapCsv() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// Lädt die Zähler beider Hälften als JSON herunter (nur Zähler, siehe exportKeyPressStatsJson)
+function downloadKeyPressStatsJson() {
+  const json = exportKeyPressStatsJson(Dactyl.SIDE_IDS.map(side => ({ side, stats: typingStatsFor(side) })));
+  if (!json || !JSON.parse(json).totals.length) {
+    showToast("Keine Anschläge gezählt: Es gibt nichts zu speichern.");
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dactyl_keypress_stats_${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function initHeatmapUI() {
   const toggle = document.getElementById("btnToggleHeatmap");
   const reset = document.getElementById("btnResetHeatmap");
@@ -262,6 +277,8 @@ function initHeatmapUI() {
   }
   const csvBtn = document.getElementById("btnHeatmapCsv");
   if (csvBtn) csvBtn.addEventListener("click", downloadHeatmapCsv);
+  const jsonBtn = document.getElementById("btnKeyPressJson");
+  if (jsonBtn) jsonBtn.addEventListener("click", downloadKeyPressStatsJson);
   if (toggle) {
     toggle.addEventListener("click", () => {
       heatmapEnabled = !heatmapEnabled;
@@ -275,7 +292,7 @@ function initHeatmapUI() {
       const profile = activeProfile();
       if (!confirm(`Tasten-Statistik (Heatmap & Anschläge) der ${profile.label} zurücksetzen?`)) return;
       ergonomicSwappedFor(editSide).clear();
-      sideStore.save(editSide, { typingStats: createTypingStats(null, profile) });
+      sideStore.save(editSide, { typingStats: resetKeyPressStats(typingStatsFor(editSide)) });
       if (heatmapSaveTimer) saveHeatmapNow();
       try { localStorage.removeItem(profile.heatmapStorageKey); } catch (e) {}
       updateTypingStatsUI();

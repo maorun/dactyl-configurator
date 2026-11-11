@@ -19,15 +19,6 @@ Rules for this file:
 
 ## Priority 2
 
-### Keypress counter reset and export (`resetKeyPressStats`, `exportKeyPressStatsJson`)
-
-- **Rank:** Feature model. Total 26/40 (typing 4, configuration 8, harmony 7, safety 7). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/diagnostics-ui.js`, `js/storage.js`, `index.html`.
-- **Problem:** Typing heatmap data accumulates indefinitely in `localStorage`. Users cannot reset counters between layout tests or export historical raw counts.
-- **Goal:** Add buttons "Zähler zurücksetzen" (with confirmation dialog) and "Statistik als JSON exportieren" in the diagnostics view.
-- **Acceptance test:** An app test simulates 50 key presses, exports valid JSON containing side/layer/row/col counts, resets the data and verifies all counts return to zero.
-
 ## Priority 3
 
 ### Strict modifier matching in Key Overrides (`overrideStrictMods`)

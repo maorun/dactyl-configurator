@@ -32,7 +32,7 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTriLayers, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
-             createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, suggestCombos, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, buildHeatmapCsv, WPM_WINDOW_MS, HEAT_LEVELS,
+             createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, suggestCombos, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, buildHeatmapCsv, exportKeyPressStatsJson, resetKeyPressStats, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              parseMatrixRawLine, createMatrixRawState, applyMatrixRaw, resetMatrixRawState,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
@@ -9106,6 +9106,36 @@ test("Heatmap-CSV: Kopfzeile, eine Zeile je gezählter Taste und genaue Zähler"
   assert.strictEqual(lines[1], "R,0,0,a,2,1,0,1,0,0,0,0,0,0");
   assert.strictEqual(lines[2], 'R,0,1,"Q""x,y",2,2,0,0,0,0,0,0,0,1');
   assert.strictEqual(s.total, 4); // 2 + 2 Zähler der Zeilen
+});
+
+test("Anschlagzähler: 50 Anschläge als JSON exportieren, zurücksetzen, alle Zähler null", () => {
+  const r = api.createTypingStats(null, R), l = api.createTypingStats(null, api.SIDE_PROFILES.L);
+  for (let i = 0; i < 30; i++) api.recordKeyPress(r, 2, 1, i * 100, i % 2 ? 0 : 3);
+  for (let i = 0; i < 20; i++) api.recordKeyPress(l, 1, 0, i * 100, 0);
+  const data = [{ side: "R", stats: r }, { side: "L", stats: l }];
+  const json = api.exportKeyPressStatsJson(data);
+  const doc = JSON.parse(json);
+  assert.ok(json.includes("\n  "), "formatiert");
+  assert.strictEqual(doc.counts.reduce((n, e) => n + e.count, 0), 50);
+  assert.deepStrictEqual(doc.counts.filter(e => e.side === "R"), [
+    { side: "R", layer: 0, row: 2, col: 1, count: 15 }, { side: "R", layer: 3, row: 2, col: 1, count: 15 }]);
+  assert.deepStrictEqual(doc.totals, [{ side: "R", row: 2, col: 1, count: 30 }, { side: "L", row: 1, col: 0, count: 20 }]);
+  assert.strictEqual(api.exportKeyPressStatsJson([]), null);
+  assert.strictEqual(api.exportKeyPressStatsJson(null), null);
+  const fresh = [r, l].map(s => api.resetKeyPressStats(s));
+  assert.ok(fresh.every(s => s.total === 0 && Object.keys(s.counts).length === 0 && s.layerCounts.every(c => Object.keys(c).length === 0)));
+  assert.strictEqual(fresh[0].profile, R);
+  const after = JSON.parse(api.exportKeyPressStatsJson([{ side: "R", stats: fresh[0] }, { side: "L", stats: fresh[1] }]));
+  assert.deepStrictEqual([after.counts, after.totals], [[], []]);
+  assert.strictEqual(JSON.stringify(api.serializeTypingStats(fresh[0])), JSON.stringify({ layers: {} }));
+  const html = read("index.html");
+  assert.ok(html.includes('id="btnKeyPressJson"') && html.includes("Statistik als JSON exportieren") && html.includes("Zähler zurücksetzen"));
+  assert.ok(html.includes("der bearbeiteten Hälfte nach Rückfrage zurücksetzen"));
+  const handler = section("js/heatmap.js", "if (reset) {", "// Ausstehende Zähler");
+  for (const part of ["confirm(", "resetKeyPressStats(typingStatsFor(editSide))", "localStorage.removeItem(profile.heatmapStorageKey)", "updateTypingStatsUI()", "applyHeatmap()"]) {
+    assert.ok(handler.includes(part), part);
+  }
+  assert.ok(read("js/heatmap.js").includes("exportKeyPressStatsJson("));
 });
 
 test("Heatmap-CSV: beide Hälften und Formel-Schutz im Label", () => {

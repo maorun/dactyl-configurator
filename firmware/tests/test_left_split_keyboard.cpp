@@ -34,6 +34,7 @@ static uint16_t HOLDMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t DTAPMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t TAPTERMMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t HOLDFLAVORMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+static uint16_t QUICKTAPMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static String layerNames[NUM_LAYERS] = {
   "Base", "Nav & Pfeile", "Symbole", "Numpad", "Function", "Media", "Shortcuts", "Custom"
 };

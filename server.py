@@ -102,6 +102,9 @@ NUM_LAYERS = int(MATRIX_CONSTANTS.get("NUM_LAYERS", 8))
 NUM_ROWS = int(MATRIX_CONSTANTS.get("NUM_ROWS", 6))
 HOLD_FLAVOR_MAX = 3  # eigene Hold-Tap-Variante: 0 = holdTapMode der Hälfte, 1..3 = Modus + 1 (HOLD_FLAVOR_MAX in DactylLogic.h)
 NUM_COLS = int(MATRIX_CONSTANTS.get("NUM_COLS", 7))
+QUICK_TAP_KEY_MIN_MS = 10  # eigener Quick-Tap-Term je Taste: 10..500 ms (QUICK_TAP_KEY_MIN_MS in DactylLogic.h); 0 = aus
+QUICK_TAP_KEY_MAX_MS = 500  # QUICK_TAP_MAX_MS in DactylLogic.h
+QUICK_TAP_KEY_OFF = 1  # Firmwarewert für "Quick-Tap aus" (QUICK_TAP_KEY_OFF in DactylLogic.h)
 
 
 def _parse_coord(k):
@@ -479,6 +482,23 @@ def cell_hold_flavor(cell, where="Taste"):
     return value
 
 
+def cell_quick_tap(cell, where="Taste"):
+    """Eigener Quick-Tap-Term einer Taste als Firmwarewert: 0 (quickTapMs der Hälfte), 1 (aus) oder 10..500 ms.
+    Im Konfig-Feld "quickTap" steht 0 für "aus" und 10..500 für ms; fehlt das Feld, gilt der Wert der Hälfte."""
+    if not isinstance(cell, dict) or "quickTap" not in cell:
+        return 0
+    value = cell["quickTap"]
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"Ungültiger Quick-Tap-Term für {where}: Ganzzahl erwartet.")
+    if value == 0:
+        return QUICK_TAP_KEY_OFF
+    if not (QUICK_TAP_KEY_MIN_MS <= value <= QUICK_TAP_KEY_MAX_MS):
+        raise ValueError(f"Quick-Tap-Term für {where} außerhalb von 0 (aus) oder {QUICK_TAP_KEY_MIN_MS}..{QUICK_TAP_KEY_MAX_MS}: {value}")
+    return value
+
+
 def cell_tap_term(cell, where="Taste"):
     """Eigener Tapping-Term einer Taste in ms: 0 (Wert der Hälfte) oder 100..500. Fehlt das Feld, gilt 0."""
     if not isinstance(cell, dict) or "tapTerm" not in cell:
@@ -540,6 +560,14 @@ def generate_dtapmap_cpp(layers):
 
 def generate_holdflavor_cpp(layers):
     return generate_matrix_cpp(layers, "HOLDFLAVORMAP", "HOLDFLAVORMAP", lambda cell: str(cell_hold_flavor(cell) if any(x != "NONE" for x in cell_actions(cell)[1:]) else 0))
+
+
+def generate_quicktap_cpp(layers):
+    # Wirkt nur mit Halte-Aktion ohne Doppel-Tipp-Aktion (wie in der Firmware); sonst 0
+    def value(cell):
+        _tap, hold, dtap = cell_actions(cell)
+        return str(cell_quick_tap(cell) if hold != "NONE" and dtap == "NONE" else 0)
+    return generate_matrix_cpp(layers, "QUICKTAPMAP", "QUICKTAPMAP", value)
 
 
 def generate_tapterm_cpp(layers):
@@ -1122,6 +1150,7 @@ def render_ino_content(content, config, defaults_id=None, side="R"):
     # Ältere Vorlagen ohne Block bleiben gültig (kein eigener Term)
     content = replace_marked_block(content, "TAPTERMMAP", generate_tapterm_cpp(layers))
     content = replace_marked_block(content, "HOLDFLAVORMAP", generate_holdflavor_cpp(layers))
+    content = replace_marked_block(content, "QUICKTAPMAP", generate_quicktap_cpp(layers))
     if defaults_id is not None:
         content = replace_marked_block(content, "DEFAULTS_ID", generate_defaults_id_cpp(defaults_id), required=True)
     if config.get("layerNames"):
@@ -1227,6 +1256,7 @@ def validate_config(config, side="R"):
                 # Linke Hälfte: fehlende Tasten tragen keine Aktion (die rechte Vorlage hat dort historisch Werte)
                 cell_tap_term(cell, f"R{r_idx}C{c_idx} in Ebene {l_idx}")
                 cell_hold_flavor(cell, f"R{r_idx}C{c_idx} in Ebene {l_idx}")
+                cell_quick_tap(cell, f"R{r_idx}C{c_idx} in Ebene {l_idx}")
                 if side == "L" and (r_idx, c_idx) in ABSENT_KEYS["L"] and any(a not in ("", "NONE", "0") for a in cell_actions(cell)):
                     raise ValueError(f"Taste R{r_idx}C{c_idx} existiert auf der linken Hälfte nicht (Ebene {l_idx}).")
                 if side == "L" and any(code_to_cpp(a) in DYNAMIC_MACRO_CPP for a in cell_actions(cell)):

@@ -130,11 +130,13 @@ async function writeConfigToESP32(options = {}) {
     // Eigene Hold-Tap-Varianten ebenso (CLEAR_HOLD_FLAVORS, SET_KF).
     let tapTermsKnown = false;
     let holdFlavorsKnown = false;
+    let quickTapsKnown = false;
     for (const { cmd, ack, optional, quietUnknown } of settingCommands) {
-      const hasOwn = ack === "CLEAR_HOLD_FLAVORS" ? hasKeyHoldFlavors(cfg.layers) : hasKeyTapTerms(cfg.layers);
+      const hasOwn = ack === "CLEAR_QUICK_TAPS" ? hasKeyQuickTaps(cfg.layers) : ack === "CLEAR_HOLD_FLAVORS" ? hasKeyHoldFlavors(cfg.layers) : hasKeyTapTerms(cfg.layers);
       const result = await sendConfirmed(cmd, ack, 3000, optional, !!quietUnknown && !hasOwn);
       if (ack === "CLEAR_TAP_TERMS") tapTermsKnown = result !== "unknown";
       if (ack === "CLEAR_HOLD_FLAVORS") holdFlavorsKnown = result !== "unknown";
+      if (ack === "CLEAR_QUICK_TAPS") quickTapsKnown = result !== "unknown";
       updateProgress();
     }
 
@@ -158,6 +160,8 @@ async function writeConfigToESP32(options = {}) {
           if (term && tapTermsKnown) await sendCmd(`SET_KT ${l} ${r} ${c} ${term}`);
           const flavor = keyHoldFlavor(row[c]);
           if (flavor && holdFlavorsKnown) await sendCmd(`SET_KF ${l} ${r} ${c} ${flavor}`);
+          const quickTap = keyQuickTap(row[c]);
+          if (quickTap && quickTapsKnown) await sendCmd(`SET_KQ ${l} ${r} ${c} ${quickTap}`);
         }
       }
     }
@@ -374,7 +378,8 @@ function buildSettingCommands(s, profile) {
     { cmd: `SET_BOOT_LAYER ${clampSetting("bootLayer", s.bootLayer ?? 0)}`, ack: "SET_BOOT_LAYER", optional: "args" },
     { cmd: `SET_CHORDAL_EX ${chordalExNormalize(s.chordalHoldExclusions)}`, ack: "SET_CHORDAL_EX", optional: true },
     { cmd: "CLEAR_TAP_TERMS", ack: "CLEAR_TAP_TERMS", optional: true, quietUnknown: true },
-    { cmd: "CLEAR_HOLD_FLAVORS", ack: "CLEAR_HOLD_FLAVORS", optional: "args", quietUnknown: true }
+    { cmd: "CLEAR_HOLD_FLAVORS", ack: "CLEAR_HOLD_FLAVORS", optional: "args", quietUnknown: true },
+    { cmd: "CLEAR_QUICK_TAPS", ack: "CLEAR_QUICK_TAPS", optional: "args", quietUnknown: true }
   ];
 }
 
@@ -386,6 +391,11 @@ function hasKeyTapTerms(layers) {
 // true, wenn mindestens eine Taste eine eigene Hold-Tap-Variante trägt
 function hasKeyHoldFlavors(layers) {
   return (layers || []).some(layer => (layer || []).some(row => (row || []).some(cell => keyHoldFlavor(cell) > 0)));
+}
+
+// true, wenn mindestens eine Taste einen eigenen Quick-Tap-Term trägt
+function hasKeyQuickTaps(layers) {
+  return (layers || []).some(layer => (layer || []).some(row => (row || []).some(cell => keyQuickTap(cell) > 0)));
 }
 
 // Argument von SET_TRI_LAYER: "a b target" je Regel, "-" ohne Regel

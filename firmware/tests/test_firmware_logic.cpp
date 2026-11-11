@@ -25,6 +25,7 @@ static uint16_t HOLDMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t DTAPMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t TAPTERMMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static uint16_t HOLDFLAVORMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
+static uint16_t QUICKTAPMAP[NUM_LAYERS][NUM_ROWS][NUM_COLS] = {{{0}}};
 static String layerNames[NUM_LAYERS] = {
   "Base", "Nav & Pfeile", "Symbole", "Numpad",
   "Function", "Media", "Shortcuts", "Custom"
@@ -186,7 +187,7 @@ void resetState() {
   }
   for (int l = 0; l < NUM_LAYERS; l++)
     for (int r = 0; r < NUM_ROWS; r++)
-      for (int c = 0; c < NUM_COLS; c++) { HOLDMAP[l][r][c] = 0; DTAPMAP[l][r][c] = 0; TAPTERMMAP[l][r][c] = 0; HOLDFLAVORMAP[l][r][c] = 0; }
+      for (int c = 0; c < NUM_COLS; c++) { HOLDMAP[l][r][c] = 0; DTAPMAP[l][r][c] = 0; TAPTERMMAP[l][r][c] = 0; HOLDFLAVORMAP[l][r][c] = 0; QUICKTAPMAP[l][r][c] = 0; }
   resetTapHold();
   resetMouseMove();
   resetDoubleTap();
@@ -244,6 +245,7 @@ void resetState() {
   autoShiftMs = 175;
   tapTermsCompiledIn = false;
   holdFlavorsCompiledIn = false;
+  quickTapsCompiledIn = false;
   holdTapMode = 0;
   numTriLayers = 0;
   memset(triLayerRules, 0, sizeof(triLayerRules));
@@ -5013,6 +5015,139 @@ TEST(test_hold_flavor_per_key_transparent_key_inherits_layer0_flavor) {
   assert(resolveKeyHoldFlavor(1, 2, 1) == 2);           // Ebene 1 leer: erbt von Ebene 0
   handleConfigCommand("SET_K 1 2 1 107", false);
   assert(resolveKeyHoldFlavor(1, 2, 1) == 0);
+}
+
+// Quick-Tap-Term je Taste (QUICKTAPMAP, SET_KQ): 0 = Wert der Hälfte, 1 = aus, 10..500 = eigener Wert in ms
+static void quickTapPerKeySetup() {
+  resetState();
+  quickTapMs = 150;
+  KEYMAP[0][2][1] = ' ';  HOLDMAP[0][2][1] = KEY_LEFT_SHIFT;   // Space / Shift
+  KEYMAP[0][2][2] = 'a';  HOLDMAP[0][2][2] = KEY_LEFT_CTRL;    // A / Ctrl
+}
+
+TEST(test_quick_tap_per_key_off_on_space_never_holds_on_double_tap) {
+  quickTapPerKeySetup();
+  handleConfigCommand("SET_KQ 0 2 1 1", false);   // Space: Quick-Tap aus
+  assert(QUICKTAPMAP[0][2][1] == 1 && QUICKTAPMAP[0][2][2] == 0);
+  tapKeyAt(2, 1, 1000, 1040);
+  assert(countPresses(' ') == 1);
+  setMillis(1100);                                // 60 ms nach dem Tipp: ohne Override wäre es ein gehaltener Tipp
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(countPresses(' ') == 1);                 // kein Quick-Tap: wartet auf die Entscheidung
+  assert(!quickTapHeld[2][1]);
+  setMillis(1140);
+  keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
+  processDeferredKeys(millis());
+  assert(countPresses(' ') == 2);                 // zweiter Tipp
+  assert(countPresses(KEY_LEFT_SHIFT) == 0);      // nie Hold
+  // A (150 ms der Hälfte) bleibt ein Quick-Tap
+  tapKeyAt(2, 2, 2000, 2040);
+  setMillis(2100);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true);
+  assert(countPresses('a') == 2 && quickTapHeld[2][2]);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false);
+}
+
+TEST(test_quick_tap_per_key_own_term_overrides_half_both_ways) {
+  quickTapPerKeySetup();
+  handleConfigCommand("SET_KQ 0 2 2 40", false);  // A: nur 40 ms
+  tapKeyAt(2, 2, 1000, 1040);
+  setMillis(1100);                                // 60 ms >= 40 ms
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true);
+  assert(!quickTapHeld[2][2] && countPresses('a') == 1);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false);
+  processDeferredKeys(millis());
+  // Hälfte aus (0), Taste mit eigenem Wert: Quick-Tap gilt für diese Taste
+  resetState();
+  KEYMAP[0][2][2] = 'a';  HOLDMAP[0][2][2] = KEY_LEFT_CTRL;
+  quickTapMs = 0;
+  handleConfigCommand("SET_KQ 0 2 2 200", false);
+  tapKeyAt(2, 2, 1000, 1040);
+  setMillis(1100);
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true);
+  assert(quickTapHeld[2][2] && countPresses('a') == 2);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false);
+  setMillis(1150);                                // Loslassen des gehaltenen Tipps startet das Fenster neu
+  keyState[2][2] = true; onMatrixKeyChange(2, 2, true);
+  assert(quickTapHeld[2][2]);
+  keyState[2][2] = false; onMatrixKeyChange(2, 2, false);
+}
+
+TEST(test_quick_tap_per_key_commands_and_nvs) {
+  resetState();
+  assert(isValidKeyQuickTap(0) && isValidKeyQuickTap(1) && isValidKeyQuickTap(10) && isValidKeyQuickTap(QUICK_TAP_MAX_MS));
+  assert(!isValidKeyQuickTap(2) && !isValidKeyQuickTap(9) && !isValidKeyQuickTap(QUICK_TAP_MAX_MS + 1) && !isValidKeyQuickTap(-1));
+  handleConfigCommand("SET_KQ 0 2 1 501", false);
+  assert(mockChar.value == "ERR ARGS SET_KQ 0 2 1 501");
+  handleConfigCommand("SET_KQ 8 2 1 1", false);
+  assert(mockChar.value == "ERR ARGS SET_KQ 8 2 1 1");
+  handleConfigCommand("SET_KQ 0 2 1 1 7", false);
+  assert(mockChar.value == "ERR ARGS SET_KQ 0 2 1 1 7");
+  assert(QUICKTAPMAP[0][2][1] == 0);
+  handleConfigCommand("SET_KQ 0 2 1 1", false);
+  handleConfigCommand("SET_KQ 1 3 4 120", false);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_CONFIG", false);
+  bool foundL0 = false, foundL1 = false;
+  for (const auto& n : mockChar.notifications) {
+    if (n.rfind("QTAP_DATA:{\"l\":0,", 0) == 0 && n.find("[0,1,0,0,0,0,0]") != std::string::npos) foundL0 = true;
+    if (n.rfind("QTAP_DATA:{\"l\":1,", 0) == 0 && n.find("[0,0,0,0,120,0,0]") != std::string::npos) foundL1 = true;
+  }
+  assert(foundL0 && foundL1);
+  handleConfigCommand("SAVE_NVS", false);
+  assert(preferences.getBytesLength("quickflv") == sizeof(QUICKTAPMAP));
+  memset(QUICKTAPMAP, 0, sizeof(QUICKTAPMAP));
+  loadKeymapFromNVS();
+  assert(QUICKTAPMAP[0][2][1] == 1 && QUICKTAPMAP[1][3][4] == 120);
+  handleConfigCommand("CLEAR_QUICK_TAPS", false);
+  assert(mockChar.value == "OK CLEAR_QUICK_TAPS");
+  handleConfigCommand("SAVE_NVS", false);
+  assert(!preferences.isKey("quickflv"));
+  // Fingerprint: leer = Fingerprint der Firmware davor
+  uint32_t base = keymapDefaultsFingerprint();
+  QUICKTAPMAP[0][2][1] = 1;
+  assert(keymapDefaultsFingerprint() != base);
+  QUICKTAPMAP[0][2][1] = 0;
+  assert(keymapDefaultsFingerprint() == base);
+  // Transparente Taste erbt den Wert von Ebene 0
+  handleConfigCommand("SET_K 0 2 1 97 128 0", false);
+  handleConfigCommand("SET_KQ 0 2 1 1", false);
+  assert(resolveKeyQuickTap(1, 2, 1) == 1);
+  handleConfigCommand("SET_K 1 2 1 107", false);
+  assert(resolveKeyQuickTap(1, 2, 1) == 0);
+}
+
+TEST(test_quick_tap_per_key_nvs_invalid_values_and_compiled_in_zero_blob) {
+  resetState();
+  // Ungültiger gespeicherter Wert zählt als 0 (2 und 9 liegen außerhalb von 0, 1, 10..500)
+  std::vector<uint8_t> raw(sizeof(QUICKTAPMAP), 0);
+  uint16_t bad = 9, bad2 = 2, good = 150;
+  memcpy(raw.data(), &bad, sizeof(bad));
+  memcpy(raw.data() + sizeof(uint16_t), &bad2, sizeof(bad2));
+  memcpy(raw.data() + 2 * sizeof(uint16_t), &good, sizeof(good));
+  handleConfigCommand("SAVE_NVS", false);       // gespeicherte Keymap: der Start lädt den NVS statt der Defaults
+  Preferences::bytesStore["quickflv"] = raw;
+  loadKeymapFromNVS();
+  assert(QUICKTAPMAP[0][0][0] == 0 && QUICKTAPMAP[0][0][1] == 0 && QUICKTAPMAP[0][0][2] == 150);
+
+  // Einkompilierter Wert, vom Nutzer gelöscht: Null-Blob statt fehlendem Schlüssel
+  resetState();
+  QUICKTAPMAP[0][2][1] = 1;
+  loadKeymapFromNVS();
+  assert(quickTapsCompiledIn);
+  handleConfigCommand("CLEAR_QUICK_TAPS", false);
+  handleConfigCommand("SAVE_NVS", false);
+  assert(preferences.isKey("quickflv"));
+  QUICKTAPMAP[0][2][1] = 1;
+  quickTapsCompiledIn = false;
+  loadKeymapFromNVS();
+  assert(QUICKTAPMAP[0][2][1] == 0 && !anyKeyQuickTap());
+
+  // Erster Start ohne Keymap schreibt die einkompilierten Werte in den NVS
+  resetState();
+  QUICKTAPMAP[0][2][1] = 150;
+  loadKeymapFromNVS();
+  assert(preferences.isKey("quickflv") && QUICKTAPMAP[0][2][1] == 150);
 }
 
 TEST(test_hold_tap_mode_permissive_hold) {

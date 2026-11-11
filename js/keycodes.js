@@ -635,9 +635,20 @@ function keyHoldFlavor(k) {
   return Number.isInteger(v) && v >= 1 && v <= HOLD_FLAVOR_MAX ? v : 0;
 }
 
+// Eigener Quick-Tap-Term einer Taste als Firmwarewert: 0 = Wert der Hälfte, 1 = aus, 10..500 = ms. Im Tastenfeld
+// quickTap steht 0 für "aus" und 10..500 für ms. Wirkt nur mit Halte-Aktion ohne Doppel-Tipp-Aktion (wie in der Firmware).
+const QUICK_TAP_KEY_OFF = 1;
+function keyQuickTap(k) {
+  const a = keyToNumericActions(k);
+  if (!a.holdCode || a.dtapCode || !a.tapCode) return 0;
+  const v = k && typeof k === "object" ? k.quickTap : undefined;
+  if (v === 0) return QUICK_TAP_KEY_OFF;
+  return Number.isInteger(v) && v >= 10 && v <= 500 ? v : 0;
+}
+
 // GET_CONFIG sendet pro Ebene LAYER_DATA (Tap), HOLD_DATA (Halten), DTAP_DATA (Doppel-Tipp) und
 // TERM_DATA (eigener Tapping-Term in ms) und FLAVOR_DATA (eigene Hold-Tap-Variante)
-const MATRIX_DATA_FIELDS = { "LAYER_DATA:": "tap", "HOLD_DATA:": "hold", "DTAP_DATA:": "dtap", "TERM_DATA:": "term", "FLAVOR_DATA:": "flavor" };
+const MATRIX_DATA_FIELDS = { "LAYER_DATA:": "tap", "HOLD_DATA:": "hold", "DTAP_DATA:": "dtap", "TERM_DATA:": "term", "FLAVOR_DATA:": "flavor", "QTAP_DATA:": "qtap" };
 
 // Übernimmt eine Matrix aus GET_CONFIG in layers. LAYER_DATA setzt die Taste neu (Halten und
 // Doppel-Tipp folgen danach), HOLD_DATA/DTAP_DATA setzen nur ihr Feld. Gerätedaten nur innerhalb der
@@ -662,6 +673,13 @@ function applyMatrixData(layers, field, data) {
         if (!layer[r][c]) layer[r][c] = { label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" };
         if (code >= 1 && code <= HOLD_FLAVOR_MAX) layer[r][c].holdFlavor = code;
         else delete layer[r][c].holdFlavor;
+        continue;
+      }
+      if (field === "qtap") {
+        if (!layer[r][c]) layer[r][c] = { label: "---", tap: "NONE", hold: "NONE", dtap: "NONE" };
+        if (code === QUICK_TAP_KEY_OFF) layer[r][c].quickTap = 0;
+        else if (code >= 10 && code <= 500) layer[r][c].quickTap = code;
+        else delete layer[r][c].quickTap;
         continue;
       }
       const def = findDefinitionByCode(code);

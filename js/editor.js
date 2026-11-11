@@ -1479,6 +1479,8 @@ function updateInspector(r, c) {
   setOptionalActionSelect(document.getElementById("dtapActionSelect"), normalizeHoldCode(keyData.dtap));
   const termInput = document.getElementById("keyTapTermInput");
   if (termInput) termInput.value = Number.isInteger(keyData.tapTerm) && keyData.tapTerm > 0 ? keyData.tapTerm : "";
+  const quickTapInput = document.getElementById("keyQuickTapInput");
+  if (quickTapInput) quickTapInput.value = Number.isInteger(keyData.quickTap) ? keyData.quickTap : "";
   const chordalCheck = document.getElementById("keyChordalExCheckbox");
   if (chordalCheck) chordalCheck.checked = chordalExHas(currentConfig.settings && currentConfig.settings.chordalHoldExclusions, r, c);
   updateChordalExVisibility();

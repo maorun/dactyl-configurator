@@ -13,7 +13,7 @@
  * Die einbindende Übersetzungseinheit muss VOR dem #include deklarieren:
  *   NUM_LAYERS, NUM_ROWS, NUM_COLS, MAX_COMBOS, CONFIG_MODE_MAGIC,
  *   KeyCombo, ComboRuntime, comboRuntime[], userCombos[], numCombos,
- *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], TAPTERMMAP[][][], HOLDFLAVORMAP[][][], layerNames[],
+ *   KEYMAP[][][], HOLDMAP[][][], DTAPMAP[][][], TAPTERMMAP[][][], HOLDFLAVORMAP[][][], QUICKTAPMAP[][][], layerNames[],
  *   MAX_KEY_PAIRS, ACT_KEY_PAIR_BASE, KeyPair, userKeyPairs[], numKeyPairs,
  *   nur Master (DACTYL_KEY_OVERRIDES): KeyOverride, userKeyOverrides[], numKeyOverrides (DactylKeyOverride.h),
  *   MAX_ALT_REPEATS, AltRepeatPair, userAltRepeats[], numAltRepeats (eigene Alternate-Repeat-Paare),
@@ -167,6 +167,10 @@ void processOtaTimeout() {
 // Quick-Tap-Term (Mod-Tap): 0 = aus; sonst gilt ein erneuter Druck derselben Mod-Tap-Taste innerhalb dieser Zeit
 // nach ihrem Tipp sofort als gehaltener Tipp (der Host wiederholt das Zeichen)
 #define QUICK_TAP_MAX_MS 500
+// Eigener Quick-Tap-Term je Taste (QUICKTAPMAP, je Ebene): 0 = quickTapMs der Hälfte, 1 = aus für diese Taste,
+// QUICK_TAP_KEY_MIN_MS..QUICK_TAP_MAX_MS = eigener Wert in ms
+#define QUICK_TAP_KEY_OFF 1
+#define QUICK_TAP_KEY_MIN_MS 10
 // Hold nur nach einer Tipp-Pause (requirePriorIdleMs): 0 = aus; sonst gilt eine Mod-Tap-Taste, die weniger als diese Zeit
 // nach dem letzten Tastendruck gedrückt wird, sofort als Tipp. Layer-Tap mit MO_n ist ausgenommen.
 #define PRIOR_IDLE_MAX_MS 500
@@ -893,6 +897,24 @@ uint8_t resolveKeyHoldFlavor(uint8_t layer, uint8_t r, uint8_t c) {
 // Gültiger Wert für HOLDFLAVORMAP: 0 (Wert der Hälfte) oder 1..HOLD_FLAVOR_MAX
 bool isValidKeyHoldFlavor(int f) {
   return f >= 0 && f <= HOLD_FLAVOR_MAX;
+}
+
+// Eigener Quick-Tap-Term der Taste auf der aktiven Ebene (0 = Wert der Hälfte, 1 = aus). Gleiche Auflösung wie
+// resolveKeyTapTerm: eine Taste ohne jede Aktion auf der Ebene erbt Aktionen und Wert von Ebene 0.
+uint16_t resolveKeyQuickTap(uint8_t layer, uint8_t r, uint8_t c) {
+  if (layer > 0 && KEYMAP[layer][r][c] == 0 && HOLDMAP[layer][r][c] == 0 && DTAPMAP[layer][r][c] == 0) layer = 0;
+  return QUICKTAPMAP[layer][r][c];
+}
+
+// Gültiger Wert für QUICKTAPMAP: 0 (Wert der Hälfte), 1 (aus) oder QUICK_TAP_KEY_MIN_MS..QUICK_TAP_MAX_MS
+bool isValidKeyQuickTap(int v) {
+  return v == 0 || v == QUICK_TAP_KEY_OFF || (v >= QUICK_TAP_KEY_MIN_MS && v <= QUICK_TAP_MAX_MS);
+}
+
+// Wirksames Quick-Tap-Fenster in ms (0 = aus): der eigene Wert der Taste, sonst quickTapMs der Hälfte
+static inline uint16_t effectiveQuickTap(uint16_t keyValue) {
+  if (keyValue == QUICK_TAP_KEY_OFF) return 0;
+  return keyValue != 0 ? keyValue : quickTapMs;
 }
 
 // Eine der beiden Tasten der physischen Config-Combo (rechts R0C0/R4C5, links R0C5/R4C0)
@@ -2447,6 +2469,7 @@ TapHoldKey tapHold[NUM_ROWS][NUM_COLS];
 bool quickTapValid[NUM_ROWS][NUM_COLS];
 unsigned long quickTapAt[NUM_ROWS][NUM_COLS];
 bool quickTapHeld[NUM_ROWS][NUM_COLS];   // Der laufende Druck gilt als gehaltener Tipp
+uint16_t quickTapWin[NUM_ROWS][NUM_COLS]; // Quick-Tap-Fenster (ms) der Taste beim Druck, für das Ende des gehaltenen Tipps
 // Hold nur nach einer Tipp-Pause: Zeitpunkt des letzten Tastendrucks einer der beiden Hälften
 bool priorKeyValid = false;
 unsigned long priorKeyAt = 0;
@@ -2515,6 +2538,7 @@ void resetTapHold() {
       quickTapValid[r][c] = false;
       quickTapAt[r][c] = 0;
       quickTapHeld[r][c] = false;
+      quickTapWin[r][c] = 0;
       autoShiftKeys[r][c] = { false, 0, 0, 0, 0 };
     }
   }
@@ -2894,7 +2918,7 @@ bool tapHoldOnRelease(uint8_t r, uint8_t c, unsigned long now, uint16_t dtapAct 
     }
     dispatchPress(r, c, k.tapAction, k.layer);
     dispatchRelease(r, c, k.tapAction);
-    if (quickTapMs > 0) {
+    if (effectiveQuickTap(resolveKeyQuickTap(k.layer, r, c)) > 0) {
       quickTapValid[r][c] = true;
       quickTapAt[r][c] = now;
     }
@@ -3018,14 +3042,16 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
     oslNoteKeyPress(tapAct, holdAct, dtapAct);
     // Quick-Tap: derselbe Mod-Tap-Druck kurz nach seinem Tipp gilt sofort als gehaltener Tipp.
     // Ein Druck einer anderen Taste verwirft den Merker (nur ein ununterbrochener Tipp-Druck zählt).
-    bool quickTap = quickTapMs > 0 && quickTapValid[r][c] && holdAct != 0 && dtapAct == 0 && tapAct != 0 &&
-                    (unsigned long)(now - quickTapAt[r][c]) < quickTapMs;
+    const uint16_t quickWin = effectiveQuickTap(resolveKeyQuickTap(layer, r, c));
+    bool quickTap = quickWin > 0 && quickTapValid[r][c] && holdAct != 0 && dtapAct == 0 && tapAct != 0 &&
+                    (unsigned long)(now - quickTapAt[r][c]) < quickWin;
     for (int qr = 0; qr < NUM_ROWS; qr++)
       for (int qc = 0; qc < NUM_COLS; qc++)
         if (qr != r || qc != c) quickTapValid[qr][qc] = false;
     quickTapValid[r][c] = false;
     if (quickTap) {
       quickTapHeld[r][c] = true;
+      quickTapWin[r][c] = quickWin;
       tapHoldDtap[r][c] = 0;
       dispatchPress(r, c, tapAct, layer);
       return;
@@ -3074,7 +3100,7 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
     if (quickTapHeld[r][c]) {
       // Gehaltener Quick-Tap endet: der nächste Druck kann wieder ein Quick-Tap sein
       quickTapHeld[r][c] = false;
-      if (quickTapMs > 0) { quickTapValid[r][c] = true; quickTapAt[r][c] = now; }
+      if (quickTapWin[r][c] > 0) { quickTapValid[r][c] = true; quickTapAt[r][c] = now; }
       dispatchRelease(r, c, pressedAction[r][c]);
     } else if (autoShiftKeys[r][c].pending) {
       // Loslassen: nach dem Zeitlimit das umgeschaltete Zeichen, sonst ein normaler Tipp
@@ -3261,6 +3287,27 @@ bool writeHoldFlavorsToOpenNVS() {
   return preferences.putBytes("holdflv", HOLDFLAVORMAP, sizeof(HOLDFLAVORMAP)) == sizeof(HOLDFLAVORMAP);
 }
 
+// true, wenn mindestens eine Taste einen eigenen Quick-Tap-Term hat
+bool anyKeyQuickTap() {
+  for (int l = 0; l < NUM_LAYERS; l++)
+    for (int r = 0; r < NUM_ROWS; r++)
+      for (int c = 0; c < NUM_COLS; c++)
+        if (QUICKTAPMAP[l][r][c] != 0) return true;
+  return false;
+}
+
+// true, wenn die einkompilierten Defaults eigene Quick-Tap-Terme tragen (wie tapTermsCompiledIn)
+bool quickTapsCompiledIn = false;
+
+// Schreibt QUICKTAPMAP als Blob "quickflv" in den geöffneten Namespace "dactyl" (Regeln wie writeHoldFlavorsToOpenNVS)
+bool writeQuickTapsToOpenNVS() {
+  if (!anyKeyQuickTap() && !quickTapsCompiledIn) {
+    if (preferences.isKey("quickflv")) preferences.remove("quickflv");
+    return true;
+  }
+  return preferences.putBytes("quickflv", QUICKTAPMAP, sizeof(QUICKTAPMAP)) == sizeof(QUICKTAPMAP);
+}
+
 bool saveKeymapToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
   bool ok = preferences.putBytes("keymap", KEYMAP, sizeof(KEYMAP)) == sizeof(KEYMAP);
@@ -3268,6 +3315,7 @@ bool saveKeymapToNVS() {
   ok = (preferences.putBytes("dtapmap", DTAPMAP, sizeof(DTAPMAP)) == sizeof(DTAPMAP)) && ok;
   ok = writeTapTermsToOpenNVS() && ok;
   ok = writeHoldFlavorsToOpenNVS() && ok;
+  ok = writeQuickTapsToOpenNVS() && ok;
   preferences.end();
   Serial.println(ok ? "NVS: Keymap gespeichert." : "NVS: FEHLER beim Speichern der Keymap!");
   return ok;
@@ -3288,10 +3336,10 @@ uint32_t keymapDefaultsFingerprint() {
     if (dtapBytes[i] != 0) { hasDtap = true; break; }
   }
   // TAPTERMMAP zählt wie DTAPMAP nur mit, wenn sie belegt ist (Fingerprint älterer Firmware bleibt gleich)
-  // HOLDFLAVORMAP ebenso
-  const uint8_t* parts[6] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, dtapBytes, (const uint8_t*)&id, (const uint8_t*)TAPTERMMAP, (const uint8_t*)HOLDFLAVORMAP };
-  const size_t sizes[6] = { sizeof(KEYMAP), sizeof(HOLDMAP), hasDtap ? sizeof(DTAPMAP) : 0, sizeof(id), anyKeyTapTerm() ? sizeof(TAPTERMMAP) : 0, anyKeyHoldFlavor() ? sizeof(HOLDFLAVORMAP) : 0 };
-  for (int p = 0; p < 6; p++) {
+  // HOLDFLAVORMAP und QUICKTAPMAP ebenso
+  const uint8_t* parts[7] = { (const uint8_t*)KEYMAP, (const uint8_t*)HOLDMAP, dtapBytes, (const uint8_t*)&id, (const uint8_t*)TAPTERMMAP, (const uint8_t*)HOLDFLAVORMAP, (const uint8_t*)QUICKTAPMAP };
+  const size_t sizes[7] = { sizeof(KEYMAP), sizeof(HOLDMAP), hasDtap ? sizeof(DTAPMAP) : 0, sizeof(id), anyKeyTapTerm() ? sizeof(TAPTERMMAP) : 0, anyKeyHoldFlavor() ? sizeof(HOLDFLAVORMAP) : 0, anyKeyQuickTap() ? sizeof(QUICKTAPMAP) : 0 };
+  for (int p = 0; p < 7; p++) {
     for (size_t i = 0; i < sizes[p]; i++) {
       h ^= parts[p][i];
       h *= 16777619u;
@@ -3303,6 +3351,7 @@ uint32_t keymapDefaultsFingerprint() {
 void loadKeymapFromNVS() {
   tapTermsCompiledIn = anyKeyTapTerm();
   holdFlavorsCompiledIn = anyKeyHoldFlavor();
+  quickTapsCompiledIn = anyKeyQuickTap();
   preferences.begin("dactyl", false);
   uint32_t defaultsHash = keymapDefaultsFingerprint();
   bool hasStoredHash = preferences.isKey("defaults_fp");
@@ -3331,6 +3380,7 @@ void loadKeymapFromNVS() {
     // Eigene Tapping-Terme gehören zur Belegung: gespeicherte durch die einkompilierten ersetzen
     ok = writeTapTermsToOpenNVS() && ok;
     ok = writeHoldFlavorsToOpenNVS() && ok;
+    ok = writeQuickTapsToOpenNVS() && ok;
     // Neue App-Belegung über einer gespeicherten Keymap: sie verweist auf die einkompilierten Tastenpaare (PAIR_n),
     // alte Paare aus dem NVS daher verwerfen. Ohne Keymap (erster Start) gibt es nichts zu ersetzen.
     if (hasKeymap) {
@@ -3406,6 +3456,14 @@ void loadKeymapFromNVS() {
         for (int r = 0; r < NUM_ROWS; r++)
           for (int c = 0; c < NUM_COLS; c++)
             if (!isValidKeyHoldFlavor(HOLDFLAVORMAP[l][r][c])) HOLDFLAVORMAP[l][r][c] = 0;
+    }
+    // Eigene Quick-Tap-Terme: ebenso; ungültige Werte zählen als 0
+    if (preferences.isKey("quickflv") && preferences.getBytesLength("quickflv") == sizeof(QUICKTAPMAP)) {
+      preferences.getBytes("quickflv", QUICKTAPMAP, sizeof(QUICKTAPMAP));
+      for (int l = 0; l < NUM_LAYERS; l++)
+        for (int r = 0; r < NUM_ROWS; r++)
+          for (int c = 0; c < NUM_COLS; c++)
+            if (!isValidKeyQuickTap(QUICKTAPMAP[l][r][c])) QUICKTAPMAP[l][r][c] = 0;
     }
   }
   for (int i = 0; i < NUM_LAYERS; i++) {
@@ -4567,6 +4625,21 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd == "CLEAR_QUICK_TAPS") {
+    // RAM: alle eigenen Quick-Tap-Terme löschen (der volle Sync sendet danach SET_KQ je Taste, SAVE_NVS speichert)
+    memset(QUICKTAPMAP, 0, sizeof(QUICKTAPMAP));
+    sendConfigNotification("OK CLEAR_QUICK_TAPS");
+  } else if (cmd.startsWith("SET_KQ ")) {
+    // "SET_KQ <l> <r> <c> <v>": eigener Quick-Tap-Term einer Taste (RAM, wie SET_K ohne OK; 0 = quickTapMs der
+    // Hälfte, 1 = aus, 10..500 = ms). SAVE_NVS schreibt ihn.
+    int l, r, c, v;
+    char extra;
+    if (sscanf(cmd.c_str(), "SET_KQ %d %d %d %d %c", &l, &r, &c, &v, &extra) == 4 &&
+        l >= 0 && l < NUM_LAYERS && r >= 0 && r < NUM_ROWS && c >= 0 && c < NUM_COLS && isValidKeyQuickTap(v)) {
+      QUICKTAPMAP[l][r][c] = (uint16_t)v;
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd == "SAVE_NVS") {
     sendConfigNotification(saveKeymapToNVS() ? "OK SAVE_NVS" : "ERR NVS SAVE_NVS");
   } else if (cmd.startsWith("SET_NAME ")) {
@@ -5055,6 +5128,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
         sendMatrixData("TERM_DATA:", TAPTERMMAP, l);
         // Eigene Hold-Tap-Varianten je Taste (0 = holdTapMode der Hälfte); Firmware davor sendet keine FLAVOR_DATA-Zeile
         sendMatrixData("FLAVOR_DATA:", HOLDFLAVORMAP, l);
+        // Eigene Quick-Tap-Terme je Taste (0 = Wert der Hälfte, 1 = aus); Firmware davor sendet keine QTAP_DATA-Zeile
+        sendMatrixData("QTAP_DATA:", QUICKTAPMAP, l);
       }
       // Chordal-Hold-Ausnahmen; Firmware davor sendet keine CHORDAL_EX-Zeile
       sendConfigNotification(chordalExLine());

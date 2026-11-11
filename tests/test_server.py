@@ -304,6 +304,42 @@ class TestServerAndCodegen(unittest.TestCase):
             with open(os.path.join(root, ino), encoding="utf-8") as f:
                 self.assertIn("// [[[START_HOLDFLAVORMAP]]]", f.read())
 
+    def test_quicktap_codegen_and_range(self):
+        layers = [[[{"tap": "KEY_J", "hold": "MOD_LCTRL", "quickTap": 0},      # aus -> Firmwarewert 1
+                    {"tap": "KEY_K", "hold": "MOD_LSHIFT", "quickTap": 150},
+                    {"tap": "KEY_L", "hold": "NONE", "quickTap": 150},          # ohne Halten ohne Wirkung
+                    {"tap": "KEY_M", "hold": "MOD_LSHIFT", "dtap": "KEY_ESC", "quickTap": 150},   # mit Doppel-Tipp ohne Wirkung
+                    {"tap": "KEY_N", "hold": "MOD_LSHIFT"},
+                    {"tap": "NONE", "hold": "MO_1", "quickTap": 150}]]]   # Hold ohne Tap wird zur Taste: ohne Wirkung
+        block = server.generate_quicktap_cpp(layers)
+        self.assertIn("uint16_t QUICKTAPMAP[NUM_LAYERS][6][7]", block)
+        self.assertIn("// [[[START_QUICKTAPMAP]]]", block)
+        first_row = block.split("{ ", 2)[1].split(" }")[0]
+        values = [v.strip() for v in first_row.split(",")]
+        self.assertEqual(values[:6], ["1", "150", "0", "0", "0", "0"])
+        content = ("// [[[START_KEYMAP]]]\n// [[[END_KEYMAP]]]\n// [[[START_HOLDMAP]]]\n// [[[END_HOLDMAP]]]\n"
+                   "// [[[START_DTAPMAP]]]\n// [[[END_DTAPMAP]]]\n// [[[START_QUICKTAPMAP]]]\nold\n// [[[END_QUICKTAPMAP]]]\n")
+        out = server.render_ino_content(content, {"layers": layers})
+        self.assertIn("150", out.split("START_QUICKTAPMAP")[1])
+        self.assertNotIn("old", out)
+        out = server.render_ino_content(content.split("// [[[START_QUICKTAPMAP]]]")[0], {"layers": layers})
+        self.assertNotIn("QUICKTAPMAP", out)
+        for bad in (1, 9, 501, -1, "100", 1.5, True):
+            with self.assertRaises(ValueError, msg=repr(bad)):
+                server.validate_config({"layers": [[[{"tap": "KEY_J", "hold": "KEY_B", "quickTap": bad}]]]})
+        for good in (0, 10, 150, 500, None):
+            server.validate_config({"layers": [[[{"tap": "KEY_J", "hold": "KEY_B", "quickTap": good}]]]})
+        # Die Grenzen folgen der Firmware
+        root = os.path.dirname(os.path.abspath(server.__file__))
+        with open(os.path.join(root, "firmware/dactyl_right/DactylLogic.h"), encoding="utf-8") as f:
+            src = f.read()
+        self.assertIn(f"#define QUICK_TAP_KEY_OFF {server.QUICK_TAP_KEY_OFF}", src)
+        self.assertIn(f"#define QUICK_TAP_KEY_MIN_MS {server.QUICK_TAP_KEY_MIN_MS}", src)
+        self.assertIn(f"#define QUICK_TAP_MAX_MS {server.QUICK_TAP_KEY_MAX_MS}", src)
+        for ino in ("firmware/dactyl_right/dactyl_right.ino", "firmware/dactyl_left/dactyl_left.ino"):
+            with open(os.path.join(root, ino), encoding="utf-8") as f:
+                self.assertIn("// [[[START_QUICKTAPMAP]]]", f.read())
+
     def test_dtapmap_codegen(self):
         layers = [[[{"tap": "KEY_J", "hold": "MOD_LCTRL", "dtap": "KEY_ESC"},
                     {"tap": "NONE", "hold": "NONE", "dtap": "KEY_TAB"},

@@ -571,7 +571,9 @@ function normalizeKeyCell(cell) {
     // Eigener Tapping-Term in ms (100..500); ohne gültigen Wert fehlt das Feld (= Wert der Hälfte)
     ...(Number.isInteger(cell.tapTerm) && cell.tapTerm >= 100 && cell.tapTerm <= 500 ? { tapTerm: cell.tapTerm } : {}),
     // Eigene Hold-Tap-Variante (1..3 = Modus + 1); ohne gültigen Wert fehlt das Feld (= holdTapMode der Hälfte)
-    ...(Number.isInteger(cell.holdFlavor) && cell.holdFlavor >= 1 && cell.holdFlavor <= HOLD_FLAVOR_MAX ? { holdFlavor: cell.holdFlavor } : {})
+    ...(Number.isInteger(cell.holdFlavor) && cell.holdFlavor >= 1 && cell.holdFlavor <= HOLD_FLAVOR_MAX ? { holdFlavor: cell.holdFlavor } : {}),
+    // Eigener Quick-Tap-Term: 0 = aus, 10..500 ms; ohne gültigen Wert fehlt das Feld (= quickTapMs der Hälfte)
+    ...(cell.quickTap === 0 || (Number.isInteger(cell.quickTap) && cell.quickTap >= 10 && cell.quickTap <= 500) ? { quickTap: cell.quickTap } : {})
   };
 }
 
@@ -1967,7 +1969,7 @@ function topCorrectedKeys(stats, limit = CORRECTION_TOP) {
 
 function createDeviceSnapshot() {
   return {
-    names: null, tap: [], hold: [], dtap: [], term: [], flavor: [],
+    names: null, tap: [], hold: [], dtap: [], term: [], flavor: [], qtap: [],
     chordalEx: null, // CHORDAL_EX-Zeile (Firmware vor Stand 53 sendet keine): 16-stelliger Hex-String oder null
     counts: { combos: null, pairs: null, macros: null, overrides: null, leader: null, altrep: null }, combos: [], pairs: [], macros: [], overrides: [], leader: [], altrep: [], macroLens: [], macroRep: [], listsBroken: false,
     // DEVICE_INFO der Hälfte (nur beim Laden der kompletten Config gelesen), sonst null
@@ -2152,7 +2154,7 @@ function describeMacroSteps(steps) {
 
 // Speichert eine Matrix aus GET_CONFIG als Zahlencodes. Gibt true zurück, wenn übernommen.
 function captureMatrixData(snapshot, field, data) {
-  if (!snapshot || !["tap", "hold", "dtap", "term", "flavor"].includes(field)) return false;
+  if (!snapshot || !["tap", "hold", "dtap", "term", "flavor", "qtap"].includes(field)) return false;
   if (!data || !isValidIndex(data.l, NUM_LAYERS) || !Array.isArray(data.k)) return false;
   const matrix = [];
   for (let r = 0; r < NUM_ROWS; r++) {
@@ -2202,8 +2204,13 @@ function diffKeymap(cfg, snapshot, profile) {
           local.holdFlavor = keyHoldFlavor((layer[r] || [])[c]);
           device.holdFlavor = device.holdCode || device.dtapCode ? (snapshot.flavor[l][r][c] || 0) : 0;
         }
+        // Eigener Quick-Tap-Term: ebenso nur mit QTAP_DATA; wirkt nur mit Halte-Aktion ohne Doppel-Tipp-Aktion
+        if (snapshot.qtap && snapshot.qtap[l]) {
+          local.quickTap = keyQuickTap((layer[r] || [])[c]);
+          device.quickTap = device.holdCode && !device.dtapCode ? (snapshot.qtap[l][r][c] || 0) : 0;
+        }
         if (local.tapCode !== device.tapCode || local.holdCode !== device.holdCode || local.dtapCode !== device.dtapCode ||
-            (local.tapTerm || 0) !== (device.tapTerm || 0) || (local.holdFlavor || 0) !== (device.holdFlavor || 0)) {
+            (local.tapTerm || 0) !== (device.tapTerm || 0) || (local.holdFlavor || 0) !== (device.holdFlavor || 0) || (local.quickTap || 0) !== (device.quickTap || 0)) {
           keys.push({ l, r, c, device, local });
         }
       }
@@ -2323,8 +2330,8 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
   const tapOf = code => findDefinitionByCode(code).tap;
   const layers = Array.from({ length: NUM_LAYERS }, () => transparentLayer());
   for (let l = 0; l < NUM_LAYERS; l++) {
-    for (const field of ["tap", "hold", "dtap", "term", "flavor"]) {
-      if ((field === "term" || field === "flavor") && !snapshot[field][l]) continue;
+    for (const field of ["tap", "hold", "dtap", "term", "flavor", "qtap"]) {
+      if ((field === "term" || field === "flavor" || field === "qtap") && !snapshot[field][l]) continue;
       applyMatrixData(layers, field, { l, k: snapshot[field][l] });
     }
   }
@@ -2408,6 +2415,7 @@ function describeKeyActions(actions) {
   if (actions.holdCode) text += ` · Halten: ${findDefinitionByCode(actions.holdCode).label}`;
   if (actions.dtapCode) text += ` · 2×: ${findDefinitionByCode(actions.dtapCode).label}`;
   if (actions.tapTerm) text += ` · Term: ${actions.tapTerm} ms`;
+  if (actions.quickTap) text += ` · Quick-Tap: ${actions.quickTap === QUICK_TAP_KEY_OFF ? "aus" : actions.quickTap + " ms"}`;
   if (actions.holdFlavor) text += ` · Variante: ${HOLD_FLAVOR_LABELS[actions.holdFlavor]}`;
   return text;
 }

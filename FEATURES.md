@@ -910,6 +910,18 @@ Rules for this file:
 
    - Provides `/api/backups?side=L|R` for automatic backups of a half in `config_backups/right` / `config_backups/left` of the data directory (local state, in `.gitignore`). `writeConfigToESP32` (`backupConfigOnServer`, `js/config-sync.js`) POSTs the config before its first command; `/api/save_and_flash` calls `create_backup(config, side, "flash")` before the flash. A failed backup only shows a hint or log line; the sync or flash continues. The app aborts the backup request after `BACKUP_TIMEOUT_MS` (3 s) and shows the hint once per failure streak. A backup is skipped when the newest backup has the same config, and a `sync` backup also when the newest backup is younger than `BACKUP_MIN_INTERVAL_S` (600 s; the live sync runs after each change). A `flash` backup ignores the interval. The server keeps the newest `MAX_BACKUPS` (20) per half. Files are `backup-<sequence>-<UTC stamp>.json`; the sequence number sets the order (a clock set back does not make a new backup look old) with `{ created, savedAt, reason, config }`; each config passes `validate_config` of that half. GET returns `{ backups: [{ id, savedAt, reason, config }], skipped }`, newest first; an invalid file is skipped and counted. The dialog "Profile" lists them under "Automatische Backups"; loading one is a snapshot pending change (`backup_load`, flags `pairs` and `macros`), like a profile.
 
+### NVS layout checksum (`keymap_crc`)
+
+   - `saveKeymapToNVS` and the default sync in `loadKeymapFromNVS` write the NVS key `keymap_crc`: a CRC32 (IEEE) over `KEYMAP`, `HOLDMAP` and `DTAPMAP` (`nvsLayoutCrcOfRam`). The sum is written last, after the blobs.
+   - At boot, `storedLayoutChecksumInvalid` reads the three stored blobs and compares their CRC32 with `keymap_crc`. A wrong sum, a missing blob or a wrong blob length counts as corrupt. The firmware prints `NVS: Checksumme ungültig! Verwende Firmware-Defaults.`, applies the compiled-in defaults (same path as a new default layout, including the removal of key pairs, macros and leader sequences) and writes a new sum.
+   - Exception to `KEYMAP_DEFAULTS_ID 0`: a repository flash keeps the NVS keymap only while its checksum is valid. A corrupt blob gets the compiled-in defaults, also with ID `0`.
+   - A write that fails for one of the three blobs removes `keymap_crc` instead of writing a sum of the new RAM data; the next boot keeps the stored layout unchecked and adds a new sum. The sum is written after the blobs: a power loss in that short window leaves a mismatch, and the next boot applies the defaults. Restore the layout with a profile or a BLE sync.
+   - A `keymap` blob with a wrong length counts as missing: the defaults apply without the checksum log line (as before this feature).
+   - Without `keymap_crc` (firmware before this feature) nothing is checked, also not a torn write from before: the stored keymap stays and the sum is added once both `holdmap` and `dtapmap` exist.
+   - The sum covers only the three main blobs. Tapping terms, hold flavors, quick-tap terms, pairs, macros and settings have no sum.
+   - A BLE edit goes through `SAVE_NVS` (`saveKeymapToNVS`), so it updates the sum. `DACTYL_FW_VERSION` is 56.
+   - Tests: `test_nvs_checksum_corrupt_keymap_falls_back_to_defaults`, `test_nvs_checksum_corrupt_holdmap_and_missing_blob_fall_back`, `test_nvs_without_checksum_keeps_keymap_and_adds_crc`.
+
 ### NVS backup during flash (`/api/nvs_backups`, `/api/nvs_restore`)
 
    - The NVS partition (`NVS_OFFSET` `0x9000`, `NVS_SIZE` 20 KB, `min_spiffs`) holds the keymap and the macOS BLE bond. A chip erase or a broken flash deletes it; macOS then rejects the reconnect until the user forgets and pairs the device again.

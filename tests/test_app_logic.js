@@ -1865,9 +1865,10 @@ const matrixRawState = createMatrixRawState();
 function renderMatrixRaw() { calls.rawRendered++; }
 function renderLayerButtons() {}
 const firmwareVersions = { noteDeviceInfo() {} };
-const deviceInfoByRole = {};
+const deviceInfoByRole = {}, gitHashByRole = {}, gitHashFresh = {};
 const splitLinkStatus = { noteDeviceInfo() {} };
 function updateFirmwareVersionUI() {}
+function updateDiagUI() {}
 function updateSplitLinkUI() {}
 function applyTriLayersToInputs(rules) { calls.tri.push(JSON.stringify(rules)); }
 function saveConfigToServer() {}
@@ -1884,7 +1885,7 @@ this.setTap = (side, l, r, c, tap) => { configs[side].layers[l][r][c].tap = tap;
 this.corrections = side => ({ ...stats[side].corrections });
 this.hostCaps = () => hostLedsState && hostLedsState.caps;
 this.dmRec = () => dmRecording; this.parse = Dactyl.parseDmRecLine; this.modes = () => modeState; this.describeModes = () => Dactyl.describeModeState(modeState); this.forgetModes = forgetModeState;
-this.handle = handleSerialLine; this.settingOf = (side, k) => configs[side].settings[k]; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
+this.gitHash = side => gitHashByRole[side]; this.handle = handleSerialLine; this.settingOf = (side, k) => configs[side].settings[k]; this.triOf = side => JSON.stringify(configs[side].settings.triLayers); this.tested = side => [...tests[side].tested];
 this.bounces = side => [...tests[side].bounces].map(([id, n]) => id + ':' + n);
 this.rawState = () => ({ active: matrixRawState.active, R: [[...matrixRawState.sides.R.down], [...matrixRawState.sides.R.presses], matrixRawState.sides.R.total],
                          L: [[...matrixRawState.sides.L.down], [...matrixRawState.sides.L.presses], matrixRawState.sides.L.total] });
@@ -1894,7 +1895,7 @@ this.layerCounts = (side, l) => ({ ...stats[side].layerCounts[l] });`, s);
   const plain = v => JSON.parse(JSON.stringify(v));
   return {
     rawState: () => plain(s.rawState()), setRawActive: v => s.setRawActive(v),
-    warns: calls.warns, handle: (...a) => s.handle(...a), settingOf: (side, k) => s.settingOf(side, k), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
+    warns: calls.warns, gitHash: side => s.gitHash(side), handle: (...a) => s.handle(...a), settingOf: (side, k) => s.settingOf(side, k), triOf: side => s.triOf(side), tested: side => plain(s.tested(side)), bounces: side => plain(s.bounces(side)),
     setTap: (...a) => s.setTap(...a), layerCounts: (side, l) => plain(s.layerCounts(side, l)), corrections: side => plain(s.corrections(side)), hostCaps: () => s.hostCaps(), dmRec: () => s.dmRec(), modes: () => plain(s.modes()), describeModes: () => plain(s.describeModes()), forgetModes: () => s.forgetModes(), parse: (...a) => s.parse(...a),
     calls: new Proxy(calls, { get: (o, k) => plain(o[k]) }),
     set snapshotActive(v) { s.snapshotActive = v; },
@@ -1986,6 +1987,27 @@ test("serial.js: DEVICE_INFO der nicht bearbeiteten Hälfte ändert die Tri-Laye
   s.handle(info("R"), "R", "usb");
   assert.deepStrictEqual(s.calls.tri, ['[{"a":1,"b":2,"target":3}]']);
   assert.strictEqual(s.triOf("R"), '[{"a":1,"b":2,"target":3}]');
+});
+
+test("serial.js: GIT_INFO gilt je Hälfte und nur bis zum nächsten DEVICE_INFO ohne frische Zeile", () => {
+  const s = serialLineHarness();
+  const git = h => `GIT_INFO:{"githash":"${h}"}`, info = side => `DEVICE_INFO:{"side":"${side}","fw":58}`;
+  s.handle(git("aaaaaaa"), "R", "usb");
+  s.handle(git("bbbbbbb-dirty"), "L", "usb");
+  assert.strictEqual(s.gitHash("R"), "aaaaaaa");
+  assert.strictEqual(s.gitHash("L"), "bbbbbbb-dirty");
+  // DEVICE_INFO einer Hälfte lässt den Hash der anderen und den eigenen frischen Hash stehen
+  s.handle(info("L"), "L", "usb");
+  s.handle(info("R"), "R", "usb");
+  assert.strictEqual(s.gitHash("R"), "aaaaaaa");
+  assert.strictEqual(s.gitHash("L"), "bbbbbbb-dirty");
+  // Firmware vor Stand 58 sendet keine GIT_INFO-Zeile: der alte Hash entfällt
+  s.handle(info("R"), "R", "usb");
+  assert.strictEqual(s.gitHash("R"), undefined);
+  assert.strictEqual(s.gitHash("L"), "bbbbbbb-dirty");
+  // Ungültige Zeile ändert nichts
+  s.handle('GIT_INFO:{"githash":"<b>"}', "L", "usb");
+  assert.strictEqual(s.gitHash("L"), "bbbbbbb-dirty");
 });
 
 test("serial.js: DEVICE_INFO ändert während des kompletten Ladens die lokalen Einstellungen nicht", () => {
@@ -9018,6 +9040,14 @@ function openComboModal(pair) { openedPair = pair; }`);
 });
 
 
+test("Diagnosebericht: githash wird übernommen und geprüft", () => {
+  const rep = h => JSON.parse(JSON.stringify(api.buildSupportReport({ now: 0, devices: { R: { githash: h } } }))).halves.R.githash;
+  assert.strictEqual(rep("1aefdf7"), "1aefdf7");
+  assert.strictEqual(rep("1aefdf7-dirty"), "1aefdf7-dirty");
+  assert.strictEqual(rep("<script>"), null);
+  assert.strictEqual(rep(undefined), null);
+});
+
 test("Diagnosebericht: enthält alle Felder aus den Beispieldaten", () => {
   const info = { side: "R", fw: 12, name: "Dactyl", standby_timeout: 5, sleep_timeout: 30, debounce_ms: 5, combo_timeout_ms: 50,
     tapping_term_ms: 200, hold_tap_mode: 1, quick_tap_ms: 120, pi: 100, chordal_hold: 1, rt: 1, nwl: 2, bl: 3, qt: 120, as: 1, at: 175, ld: 2, ot: 3, lt: 4,
@@ -9066,7 +9096,7 @@ test("Diagnosebericht: Keymap, Makros, Key Pairs, Combos und Tastendaten fehlen 
 test("Diagnosebericht: Button speichert die Datei, ohne Werte nur ein Hinweis", () => {
   const { w } = uiHarness(`${section("js/serial.js", "// Diagnosebericht als JSON-Datei", "function requestDiag")}
 var Dactyl = { SIDE_IDS: ["R", "L"] };
-var diagByRole = {}, deviceInfoByRole = {};
+var diagByRole = {}, deviceInfoByRole = {}, gitHashByRole = {};
 var saved = [];
 var Blob = function (parts) { this.text = parts.join(""); };
 var URL = { createObjectURL: b => { saved.push(b.text); return "blob:x"; }, revokeObjectURL() {} };

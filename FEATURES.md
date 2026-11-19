@@ -671,6 +671,14 @@ Rules for this file:
 - The master stores the value in `splitLeft.fw` (`splitNoteLeftRx`, also without a Mac connection, no HID effect, no activity). A new link clears it, because a flash of the left half takes longer than `SPLIT_LINK_TIMEOUT_MS`. `splitLeftFwStatus` returns the version, `0` (no link or detection window open) or `-1` (link for `SPLIT_FW_DETECT_MS` = 12 s without a version: old left firmware; longer than two version intervals, so one lost packet gives no false `-1`). The master's `DEVICE_INFO` contains it as `"left_fw"` (macro `DEVICE_INFO_LEFT_FW()`, only on the master) and prints each change on USB serial as `SPLIT_FW:{"fw":<n>}`.
 - The app (`Dactyl.createFirmwareVersions`, `Dactyl.parseSplitFwLine`, `js/side-routing.js`) keeps one value per half: `null` unknown, `0` firmware without the field `fw`, else the version. When both are known and differ, the header shows `#fwMismatchPill` "Beide Hälften flashen". A successful flash of a half clears its value until it reports again.
 
+### Firmware Git commit hash (`GIT_INFO`, `DACTYL_GIT_HASH`)
+
+- `scripts/generate-git-hash.sh` writes `firmware/dactyl_right/DactylGitHash.h` (`#define DACTYL_GIT_HASH "<7 hex digits>[-dirty]"`, not versioned, in `.gitignore`). `-dirty` marks changes to versioned files. Without a Git checkout (app bundle) the script leaves an existing file unchanged.
+- `DactylVersion.h` includes the file when it exists (`__has_include`) and otherwise defines `DACTYL_GIT_HASH "unknown"`. The left sketch uses the same header, so both halves report their own build.
+- `GET_INFO` sends the own line `GIT_INFO:{"githash":"<hash>"}` before `DEVICE_INFO` (like `AUTO_MOUSE:`): `DEVICE_INFO` has no byte reserve under the BLE limit (512). The line is allowed over BLE in keyboard mode, like `GET_INFO`; it holds no key data. Firmware version 58.
+- The hash is generated before each compile: `flash_firmware` and `compile_ota_firmware` (`generate_git_hash`, `server.py`), and `npm run build:app`. The CI compile has no generate step and reports `unknown`. The hash is the Git state of the checkout that compiles. A failed generation prints a warning and the firmware reports `unknown`.
+- The app (`Dactyl.parseGitInfoLine`, `js/side-routing.js`; `gitHashByRole`, `js/serial.js`) accepts only `<7..12 hex>[-dirty]` or `unknown`. The panel `#diagPanel` shows "Firmware-Commit <hash>" per half, and the support report has the field `githash` per half (`null` when unknown).
+
 ### Firmware diagnostics (`GET_DIAG`)
 
 - `GET_DIAG` (`handleConfigCommand`, `DactylLogic.h`) answers `DIAG:{"reset":"<reason>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n}` on both halves; the left half appends `,"sq_max":n,"sq_drop":n` (see below). It works over USB serial and over BLE in config mode. Over BLE in keyboard mode, the command is rejected with `ERR FORBIDDEN GET_DIAG` (uptime and heap values stay off the HID link).

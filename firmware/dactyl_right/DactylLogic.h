@@ -5221,6 +5221,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
     // Eigene Zeile vor DEVICE_INFO: die Zeile hat nur wenige Bytes Reserve unter dem BLE-Attributlimit (512)
     sendConfigNotification("BLE_HOST:" + String((int)bleHostSlot));
 #endif
+    // Git-Kurzhash des Builds in einer eigenen Zeile: DEVICE_INFO hat keine Reserve unter dem BLE-Limit
+    sendConfigNotification("GIT_INFO:{\"githash\":\"" DACTYL_GIT_HASH "\"}");
     // Auto-Mouse-Einstellung ebenfalls in einer eigenen Zeile: DEVICE_INFO hat im Worst Case nur 7 Byte Reserve
     {
       char amBuf[48];

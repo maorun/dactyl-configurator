@@ -685,6 +685,26 @@ test("Firmwarestand: ein erfolgreicher Flash vergisst den Stand der geflashten H
 
 const LINK_LINE = 'SPLIT_LINK:{"up":0,"ms":5000,"ever":1,"losses":2,"rx_dropped":3,"key_dropped":4}';
 
+test("Diagnose: GIT_INFO-Zeile liefert den Git-Kurzhash der Firmware", () => {
+  assert.strictEqual(D.parseGitInfoLine('GIT_INFO:{"githash":"1aefdf7"}'), "1aefdf7");
+  assert.strictEqual(D.parseGitInfoLine('GIT_INFO:{"githash":"1aefdf7-dirty"}'), "1aefdf7-dirty");
+  assert.strictEqual(D.parseGitInfoLine('GIT_INFO:{"githash":"unknown"}'), "unknown");
+  for (const bad of ['GIT_INFO:{"githash":"XYZ"}', 'GIT_INFO:{"githash":"<b>"}', 'GIT_INFO:{"githash":7}', 'GIT_INFO:{}', "GIT_INFO:nope", 'DIAG:{"githash":"1aefdf7"}']) {
+    assert.strictEqual(D.parseGitInfoLine(bad), undefined, bad);
+  }
+  const serial = fs.readFileSync(path.join(__dirname, "..", "js", "serial.js"), "utf8");
+  assert.ok(serial.includes('line.startsWith("GIT_INFO:")') && serial.includes("Firmware-Commit"), "Diagnosepanel zeigt den Commit nicht an");
+});
+
+test("Diagnose: der Git-Hash wird nach Flash und OTA verworfen und ohne frische GIT_INFO-Zeile nicht behalten", () => {
+  const serial = read("js/serial.js");
+  assert.ok(serial.includes("function forgetGitHash(side)") && serial.includes("delete gitHashByRole[side]"));
+  assert.ok(read("js/editor-events.js").includes("updateFirmwareVersionUI();\n      forgetGitHash(side);"), "Flash vergisst den Hash nicht");
+  assert.ok(read("js/ble.js").includes("updateFirmwareVersionUI();\n    forgetGitHash(side);"), "OTA vergisst den Hash nicht");
+  // DEVICE_INFO ohne vorherige GIT_INFO-Zeile (Firmware vor Stand 58) löscht den alten Hash
+  assert.ok(serial.includes("if (!gitHashFresh[lineSide]) delete gitHashByRole[lineSide];"));
+});
+
 test("Diagnose: DIAG-Zeile wird geprüft, Reset-Gründe außer Power-On, Deep-Sleep und Software sind markiert", () => {
   const line = reason => `DIAG:{"reset":"${reason}","uptime_s":3700,"heap_free":150000,"heap_min":120000,"loop_max_us":900}`;
   const ok = JSON.parse(JSON.stringify(D.parseDiagLine(line("task_wdt"))));

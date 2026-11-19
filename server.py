@@ -1946,6 +1946,7 @@ def flash_firmware(side="R", on_output=None):
     sketch = side_paths(side)["sketch"]
 
     # 1. Compile
+    generate_git_hash(status)
     compile_cmd = [
         arduino_cli, "compile",
         "--fqbn", FIRMWARE_FQBN,
@@ -2002,6 +2003,20 @@ def flash_firmware(side="R", on_output=None):
 
     return {"success": True, "port": port, "side": side, "nvsBackup": nvs_backup,
             "message": "Firmware erfolgreich kompiliert und geflasht!"}
+
+
+def generate_git_hash(status=None):
+    """Schreibt DactylGitHash.h (DACTYL_GIT_HASH) in den Sketch der rechten Hälfte, bevor kompiliert wird.
+    Ohne Skript oder Git-Checkout (App-Paket) bleibt eine vorhandene Datei, sonst meldet die Firmware "unknown"."""
+    script = os.path.join(DIRECTORY, "scripts", "generate-git-hash.sh")
+    if not os.path.isfile(script):
+        return
+    env = dict(os.environ, DACTYL_GIT_HASH_FILE=os.path.join(side_paths("R")["sketch"], "DactylGitHash.h"))
+    try:
+        subprocess.run(["bash", script], env=env, check=True, capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as err:
+        if status:
+            status("compile", f"⚠️ Git-Hash nicht erzeugt, die Firmware meldet \"unknown\": {err}")
 
 
 def read_firmware_version():
@@ -2112,6 +2127,7 @@ def compile_ota_firmware(side="R", on_output=None):
         if code != 0:
             return {"success": False, "stage": "sign", "error": f"OTA-Schlüsselerzeugung fehlgeschlagen: {out}"}
 
+    generate_git_hash(status)
     tmpdir = tempfile.mkdtemp(prefix=f"dactyl_ota_build_{side}_")
     try:
         compile_cmd = [

@@ -11729,6 +11729,23 @@ TEST(test_auto_mouse_layer_goes_to_other_half_as_momentary_layer) {
   assert((localMomentaryLayerMask() & (1u << 4)) != 0);
 }
 
+TEST(test_get_info_reports_git_hash_in_own_line) {
+  resetState();
+  // Ohne DactylGitHash.h gilt "unknown"; mit der Datei ein Kurzhash
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_INFO", false);
+  std::string expected = std::string("GIT_INFO:{\"githash\":\"") + DACTYL_GIT_HASH + "\"}";
+  size_t gitAt = mockChar.notifications.size(), infoAt = gitAt;
+  for (size_t i = 0; i < mockChar.notifications.size(); i++) {
+    if (mockChar.notifications[i] == expected) gitAt = i;
+    if (mockChar.notifications[i].rfind("DEVICE_INFO:", 0) == 0) infoAt = i;
+  }
+  assert(gitAt < mockChar.notifications.size());
+  assert(gitAt < infoAt);                      // eigene Zeile vor DEVICE_INFO
+  assert(mockChar.value.size() < 512);         // DEVICE_INFO bleibt unter dem BLE-Limit
+  assert(mockChar.value.find("githash") == std::string::npos);
+}
+
 TEST(test_set_auto_mouse_commands_args_nvs_and_info) {
   resetState();
   handleConfigCommand("SET_AUTO_MOUSE_LAYER 0", false);   // Ebene 0 wird gespeichert, wirkt aber nicht

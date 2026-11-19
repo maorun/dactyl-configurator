@@ -674,6 +674,7 @@ async function runBleOtaUpdate(side) {
 
     firmwareVersions.forget(side);
     updateFirmwareVersionUI();
+    forgetGitHash(side);
 
   } catch (err) {
     console.error("BLE OTA update error:", err);

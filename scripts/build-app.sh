@@ -34,6 +34,8 @@ cp "$REPO_DIR/main.js" "$REPO_DIR/package.json" "$REPO_DIR/server.py" \
 cp "$REPO_DIR"/js/*.js "$STAGE/js/"
 # Ohne den ESP-NOW-Schlüssel, OTA-Dateien und Temp-Reste: Schlüssel folgen getrennt mit 0600,
 # damit sie nie mit weiteren Rechten im Paket liegen
+# Git-Kurzhash der Firmware (GIT_INFO githash) vor dem Kopieren erzeugen
+bash "$REPO_DIR/scripts/generate-git-hash.sh"
 rsync -a --exclude 'DactylSplitKey.h*' --exclude 'DactylOtaKey.h*' "$REPO_DIR/firmware/dactyl_right" "$REPO_DIR/firmware/dactyl_left" "$STAGE/firmware/"
 # Der Schlüssel kommt mit, sonst kompiliert "Auf Dactyl flashen" nicht
 SPLIT_KEY="$REPO_DIR/firmware/dactyl_right/DactylSplitKey.h"

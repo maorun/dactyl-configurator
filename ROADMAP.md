@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Firmware Git commit hash in GET_INFO (`fw_commit`)
-
-- **Rank:** Maintenance model. Total 23/40 (reach 7, safety 6, speed 5, unblocks 5). Effort S. Estimate.
-- **Area:** Firmware, App, Tooling.
-- **Code:** `firmware/dactyl_right/dactyl_right.ino`, `firmware/dactyl_right/DactylVersion.h`, `server.py`, `js/serial.js`.
-- **Problem:** `DEVICE_INFO` outputs an integer firmware number (`fw: 49`). Maintainers cannot determine the exact Git commit of flashed boards.
-- **Goal:** Inject the Git short commit hash into `DactylVersion.h` during build and report `githash` in `DEVICE_INFO` and the diagnosis panel.
-- **Acceptance test:** Compiling firmware generates a valid commit macro; `GET_INFO` output contains `githash:"<hash>"`.
-
 ### Layer Lock timeout (`layerLockTimeoutMinutes`)
 
 - **Rank:** Feature model. Total 21/40 (typing 5, configuration 5, harmony 6, safety 5). Effort S. Estimate.

@@ -249,6 +249,8 @@ function updateFirmwareVersionUI() {
 
 // Diagnose (GET_DIAG): letzter Stand je Hälfte, Panel "Diagnose" in index.html
 const diagByRole = {};
+const gitHashFresh = {}; // GIT_INFO seit dem letzten DEVICE_INFO der Hälfte eingetroffen (ältere Firmware sendet sie nie)
+const gitHashByRole = {}; // Git-Kurzhash der Firmware je Hälfte (GIT_INFO), für Diagnosepanel und Bericht
 const deviceInfoByRole = {}; // letzte DEVICE_INFO je Hälfte mit Empfangszeit, nur für den Diagnosebericht
 function updateDiagUI() {
   const panel = document.getElementById("diagPanel");
@@ -257,11 +259,12 @@ function updateDiagUI() {
   if (!panel || !list || !summary) return;
   const sides = Dactyl.SIDE_IDS.filter(id => diagByRole[id]);
   if (!sides.length) return;
+  const hashText = id => (gitHashByRole[id] ? `Firmware-Commit ${gitHashByRole[id]}, ` : "");
   list.textContent = "";
   for (const id of sides) {
     const view = Dactyl.describeDiag(diagByRole[id]);
     const li = document.createElement("li");
-    li.textContent = `${SIDE_PROFILES[id].label}: Reset-Grund ${view.reset}, Laufzeit ${view.uptime}, ` +
+    li.textContent = `${SIDE_PROFILES[id].label}: ${hashText(id)}Reset-Grund ${view.reset}, Laufzeit ${view.uptime}, ` +
       `Heap frei ${view.heapFree} (Minimum ${view.heapMin}), längster loop() ${view.loopMax}` +
       (view.sendQueue ? `, Sendewarteschlange ${view.sendQueue}` : "") +
       ` (Stand ${new Date(diagByRole[id].at).toLocaleTimeString()})`;
@@ -281,9 +284,9 @@ function updateDiagUI() {
 function saveSupportReport() {
   const devices = {};
   for (const id of Dactyl.SIDE_IDS) {
-    if (deviceInfoByRole[id] || diagByRole[id]) devices[id] = {
+    if (deviceInfoByRole[id] || diagByRole[id] || gitHashByRole[id]) devices[id] = {
       info: deviceInfoByRole[id] && deviceInfoByRole[id].info, infoAt: deviceInfoByRole[id] && deviceInfoByRole[id].at,
-      diag: diagByRole[id], diagAt: diagByRole[id] && diagByRole[id].at
+      githash: gitHashByRole[id], diag: diagByRole[id], diagAt: diagByRole[id] && diagByRole[id].at
     };
   }
   if (!Object.keys(devices).length) {
@@ -297,6 +300,12 @@ function saveSupportReport() {
   a.download = `dactyl_diagnose_${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// Nach einem Flash meldet die Hälfte einen neuen Stand: den alten Hash verwerfen
+function forgetGitHash(side) {
+  delete gitHashByRole[side];
+  gitHashFresh[side] = false;
+  updateDiagUI();
 }
 function requestDiag() {
   const side = Dactyl.connectedSide(connectionState());
@@ -527,6 +536,9 @@ function handleSerialLine(line, side = null, transport = "ble") {
       const statusText = document.getElementById("statusText");
 
       deviceInfoByRole[lineSide] = { info, at: Date.now() };
+      // GIT_INFO kommt vor DEVICE_INFO: ohne frische Zeile (Firmware vor Stand 58) gilt ein früherer Hash nicht mehr
+      if (!gitHashFresh[lineSide]) delete gitHashByRole[lineSide];
+      gitHashFresh[lineSide] = false;
       firmwareVersions.noteDeviceInfo(lineSide, info);
       updateFirmwareVersionUI();
       // Nur USB hält den Stand aktuell (SPLIT_LINK); eine BLE-Momentaufnahme veraltete ohne Nachschub
@@ -689,6 +701,18 @@ function handleSerialLine(line, side = null, transport = "ble") {
       feedTimingAssistant(lineSide, evt);
       const marked = evt.pressed && markMatrixKeyTested(matrixTest, evt.r, evt.c);
       if ((marked || bounced) && isEditSide) renderMatrixTest();
+    }
+  }
+
+  // 2a. Git-Stand der Firmware (GIT_INFO, Antwort auf GET_INFO)
+  else if (line.startsWith("GIT_INFO:")) {
+    const githash = Dactyl.parseGitInfoLine(line);
+    if (githash) {
+      gitHashByRole[lineSide] = githash;
+      gitHashFresh[lineSide] = true;
+      updateDiagUI();
+    } else {
+      console.warn("Failed to parse GIT_INFO:", line);
     }
   }
 

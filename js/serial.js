@@ -97,6 +97,9 @@ async function disconnectSerialNow() {
   // Die Firmware erkennt den Verlust des USB-Hosts nicht selbst; der Test endet dann erst mit Schlaf, Config Mode oder Neustart.
   await stopMatrixRawTest(true);
   stopComboStagger();
+  // Gehaltene Tasten des schrittweisen Makro-Tests loslassen, solange der Port noch offen ist
+  // Höchstens 1 s warten: ein Schreibvorgang auf einen toten Port darf das Trennen nicht blockieren
+  await Promise.race([stopMacroDebug(true), new Promise(resolve => setTimeout(resolve, 1000))]);
   keepReading = false;
   if (serialReader) {
     try {
@@ -470,6 +473,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
       renderMatrixRaw();
       showToast(line === "MATRIX_TEST:OFF" ? "Matrix-Test von der Tastatur beendet." : "Die Firmware kennt den Matrix-Test nicht. Flashe beide Hälften (Firmware 52).");
     }
+    return;
+  }
+  // Die Firmware hat die gehaltenen Tasten des schrittweisen Makro-Tests nach 30 s selbst losgelassen
+  if (line === "DEBUG_MACRO_TIMEOUT") {
+    stopMacroDebug(false, "Schrittweise testen beendet: die Firmware hat die gehaltenen Tasten nach 30 s losgelassen.");
     return;
   }
   if (line.startsWith("ERR ")) {

@@ -9,6 +9,12 @@ let macroEditIndex = -1;
 let macroDraftSteps = [];
 // Hälfte des offenen Entwurfs (null = Editor geschlossen)
 let macroEditSide = null;
+// Schrittweiser Test über USB-Serial: next = Index des nächsten Schritts, current = zuletzt gesendeter (-1 = keiner),
+// signature = Entwurf beim Start (eine Änderung beendet den Test), busy = ein Schritt wartet auf die Bestätigung
+let macroDebug = null;
+// true, solange ein Schritt auf seine Bestätigung wartet, auch nach "Test beenden": ein neuer Test startet erst danach,
+// sonst löst die späte Antwort des alten Schritts die Bestätigung des neuen auf
+let macroDebugInFlight = false;
 
 function macroStepLabel(step) {
   if (step.type === "pause") return `${MACRO_STEP_LABELS.pause} ${step.ms} ms`;
@@ -81,10 +87,17 @@ function renderMacroDraftSteps() {
   const list = document.getElementById("macroStepsList");
   const count = document.getElementById("macroStepCount");
   if (!list) return;
+  // Eine Änderung des Entwurfs oder ein Hälftenwechsel beendet den Test sofort, damit keine Taste gehalten bleibt
+  if (macroDebug && (macroDebug.signature !== macroDebugSignature() || macroDebug.side !== editSide)) {
+    stopMacroDebug(true, "Schrittweise testen beendet: das Makro wurde geändert.");
+    return;
+  }
   list.innerHTML = "";
   macroDraftSteps.forEach((step, i) => {
     const li = document.createElement("li");
     li.className = "macro-step";
+    if (macroDebug && i === macroDebug.current) li.className += " macro-step-active";
+    if (macroDebug && i === macroDebug.next) li.className += " macro-step-next";
     const text = document.createElement("span");
     text.textContent = `${i + 1}. ${macroStepLabel(step)}`;
     li.appendChild(text);
@@ -135,6 +148,7 @@ function renderMacroDraftSteps() {
     });
     list.appendChild(li);
   });
+  updateMacroDebugUI();
   if (count) count.textContent = `${macroDraftSteps.length} / ${MAX_MACRO_STEPS} Schritte`;
   updateMacroTextPreview();
 }
@@ -226,11 +240,90 @@ function openMacroEditor(idx) {
 }
 
 function closeMacroEditor() {
+  stopMacroDebug(true);
   const editor = document.getElementById("macroEditor");
   if (editor) editor.style.display = "none";
   macroEditIndex = -1;
   macroEditSide = null;
   macroDraftSteps = [];
+}
+
+// -----------------------------------------------------------------------------
+// Schrittweise testen: ein Schritt pro Klick über USB-Serial (DEBUG_MACRO_STEP, js/config-model.js macroStepCommand)
+// -----------------------------------------------------------------------------
+function macroDebugSignature() {
+  return JSON.stringify(macroDraftSteps.map(normalizeMacroStep));
+}
+
+function updateMacroDebugUI() {
+  const btn = document.getElementById("btnMacroDebugStep");
+  const stop = document.getElementById("btnMacroDebugStop");
+  if (!btn || !stop) return;
+  btn.textContent = macroDebug ? `Nächster Schritt (${macroDebug.next + 1} / ${macroDraftSteps.length})` : "Schrittweise testen";
+  btn.disabled = !!(macroDebug && macroDebug.busy);
+  stop.style.display = macroDebug ? "" : "none";
+}
+
+// Beendet den Test und lässt gehaltene Tasten los (release = false: Port schon weg, nichts zu senden)
+// Rückgabe: Promise des Sendens, damit ein Trennen des Ports auf RELEASE wartet
+function stopMacroDebug(release = true, reason = "") {
+  if (!macroDebug) return Promise.resolve(false);
+  macroDebug = null;
+  const sent = release && connectionState().serialUp ? sendSerialCommand("DEBUG_MACRO_STEP RELEASE") : Promise.resolve(false);
+  if (reason) showToast(reason);
+  renderMacroDraftSteps();
+  return sent;
+}
+
+async function macroDebugStep() {
+  const state = connectionState();
+  if (macroDebugInFlight) return;
+  if (!macroDebug) {
+    if (!macroDraftSteps.length) { showToast("Ein Makro braucht mindestens einen Schritt."); return; }
+    if (!state.serialUp || state.serialSide !== macroEditSide) {
+      showToast("Schrittweise testen braucht eine USB-Verbindung zur Hälfte dieses Makros.");
+      return;
+    }
+    macroDebug = { next: 0, current: -1, busy: false, side: macroEditSide, signature: macroDebugSignature() };
+  }
+  if (macroDebug.busy) return;
+  if (!state.serialUp || state.serialSide !== macroDebug.side) {
+    stopMacroDebug(false, "Schrittweise testen beendet: keine USB-Verbindung.");
+    return;
+  }
+  if (macroDebug.signature !== macroDebugSignature()) {
+    stopMacroDebug(true, "Schrittweise testen beendet: das Makro wurde geändert.");
+    return;
+  }
+  const run = macroDebug;
+  const index = run.next;
+  const cmd = macroStepCommand(normalizeMacroStep(macroDraftSteps[index]));
+  run.busy = true;
+  macroDebugInFlight = true;
+  updateMacroDebugUI();
+  const ack = waitForAck("DEBUG_MACRO_STEP", 2500, run.side, true);
+  const sent = await sendSerialCommand(cmd);
+  if (!sent) resolveAcksForLine("ERR SEND DEBUG_MACRO_STEP", run.side);
+  const ok = await ack;
+  // Nach einer Zeitüberschreitung kann die Antwort noch kommen: neue Tests warten kurz, damit sie keine Bestätigung stehlen
+  if (ok === null) setTimeout(() => { macroDebugInFlight = false; }, 3000);
+  else macroDebugInFlight = false;
+  if (macroDebug !== run) return;
+  run.busy = false;
+  if (ok !== true) {
+    const hint = ok === "unknown" ? "Die Firmware kennt den Befehl nicht. Flashe die Hälfte (Firmware 61)."
+      : "Die Tastatur hat den Schritt nicht ausgeführt (Mac verbunden? Config-Modus aktiv?).";
+    stopMacroDebug(true, `Schrittweise testen beendet: ${hint}`);
+    return;
+  }
+  run.current = index;
+  run.next = index + 1;
+  // Nach dem letzten Schritt endet der Test: gehaltene Tasten werden losgelassen
+  if (run.next >= macroDraftSteps.length) {
+    stopMacroDebug(true, "Schrittweise testen abgeschlossen.");
+    return;
+  }
+  renderMacroDraftSteps();
 }
 
 // Snapshot-Änderung: Makros und Ebenen (beim Löschen) werden als Ganzes ersetzt und zurückgesetzt
@@ -428,6 +521,8 @@ function initMacrosUI() {
     if (file) importMacroFromFile(file);
     e.target.value = "";
   });
+  document.getElementById("btnMacroDebugStep").addEventListener("click", macroDebugStep);
+  document.getElementById("btnMacroDebugStop").addEventListener("click", () => stopMacroDebug(true));
   document.getElementById("btnSaveMacro").addEventListener("click", saveMacroFromUI);
   document.getElementById("btnCancelMacro").addEventListener("click", closeMacroEditor);
   updateMacroStepInputs();

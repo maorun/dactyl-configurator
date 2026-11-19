@@ -139,6 +139,14 @@ Rules for this file:
 - `DACTYL_FW_VERSION` 37. Flash both halves.
 - Tests: `test_firmware_logic.cpp` (`test_osl_expires_after_timeout_without_key`, `test_osl_never_expires_when_timeout_is_zero`, `test_osl_consumed_before_timeout_stays_consumed`, `test_osl_timeout_survives_millis_wrap`, `test_one_shot_timeout_nvs_rejects_invalid_values`, `test_one_shot_timeout_command_and_device_info`), `test_split_hid.cpp` (`test_one_shot_modifier_*`), `tests/test_app_logic.js`, `tests/test_server.py` (`test_one_shot_timeout_setting`).
 
+### Macro single-step test (`DEBUG_MACRO_STEP`)
+
+- The macro editor has a button "Schrittweise testen". Each click sends one step of the draft over USB serial; the app highlights the last sent step (`macro-step-active`) and the next one (`macro-step-next`). The button then shows "Nächster Schritt (n / total)"; "Test beenden" stops the test.
+- Command: `DEBUG_MACRO_STEP <type> <code> <ms>` (same triple as `ADD_MACRO_STEP`, built by `macroStepCommand`). `tap` presses and releases, `down` holds, `up` releases, `pause` sends nothing (the app waits for the next click). Answers: `OK DEBUG_MACRO_STEP ...`, `ERR ARGS`, `ERR NOHOST` (config mode or no BLE host), `ERR FORBIDDEN` (BLE). `DEBUG_MACRO_STEP RELEASE` stops a running macro and releases all keys (answer `OK DEBUG_MACRO_RELEASE`). A step during a running macro answers `ERR BUSY`.
+- A `tap` step presses and releases in one call; the macro engine releases a tap on a later tick (`MACRO_STEP_GAP_MS`). The test shows the order of the steps, not the timing between them. Held keys of `down` steps end after `DEBUG_MACRO_HOLD_MS` (30 s) without a new command, so a crashed app or a pulled cable leaves no stuck key. The firmware releases only the codes that `DEBUG_MACRO_STEP` holds (never keys that the user holds) and sends `DEBUG_MACRO_TIMEOUT`; the app then ends the test with a toast.
+- USB serial only, never BLE, like `TEST_MATRIX`: over BLE the command would type keys. Firmware 61 or newer. The test does not use the macro engine and does not change the macro in the NVS.
+- The test needs USB to the half of the edited macro. It ends (and sends `RELEASE`) after the last step, at "Test beenden", when the draft changes, when the editor closes, when USB disconnects, and when the half answers with an error. An older firmware answers `ERR UNKNOWN`; the app shows a flash hint.
+
 ### Dynamic macro (`ACT_DM_REC`, `ACT_DM_PLAY`, `ACT_DM_SAVE`)
 
 - `ACT_DM_REC` (`0x16C`, app name `DM_REC`, keycap label `DM Rec`) starts and stops the recording of one macro; `ACT_DM_PLAY` (`0x16D`, `DM_PLAY`, `DM Play`) plays it. A user who repeats an edit many times records it on the keyboard and needs neither the app nor a sync.

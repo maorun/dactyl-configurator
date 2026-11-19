@@ -54,7 +54,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
              computeTimingRecommendations, computeComboStaggerSuggestion, COMBO_STAGGER_GROUP_GAP_MS, COMBO_STAGGER_MIN_CHORDS, computePerKeyTimingSuggestions, applyPerKeyTimingSuggestions, revertPerKeyTimingSuggestions, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
-             isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
+             isValidMacroStep, isValidMacro, macroStepTuple, macroStepCommand, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
              macroSaveIndex, COMBO_PRESETS, LEADER_PRESETS, applyComboPreset, applyLeaderPreset, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isTapToggleCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isKeepAwakeCode, isDeepSleepCode, isClearStateCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
              deMacCharGroup, keycodeOptionTree, OPTIONAL_ACTION_PREFIX, filterOptionNodes, selectFilterHint,
@@ -9958,4 +9958,193 @@ test("Chordal-Hold-Ausnahmen: Maske, Normalisierung, Config, GET_CONFIG-Zeile, D
   assert.ok(read("index.html").includes('id="keyChordalExCheckbox"') && read("index.html").includes("Chordal-Hold-Ausnahme"));
   assert.ok(read("js/editor.js").includes("chordalExHas(") && read("js/editor.js").includes("updateChordalExVisibility"));
   assert.ok(read("js/editor-events.js").includes("chordalExSet(oldChordalEx"));
+});
+
+// -----------------------------------------------------------------------------
+// Makro-Editor: Schrittweise testen (DEBUG_MACRO_STEP über USB-Serial)
+// -----------------------------------------------------------------------------
+function macroDebugHarness(ackResult = true) {
+  const h = uiHarness(`
+var serialState = { serialUp: true, serialSide: "R" };
+function connectionState() { return serialState; }
+var serialSent = [];
+var ackWaiters = [];
+function waitForAck(prefix, ms, side, unknownOk) { return new Promise(res => ackWaiters.push({ prefix, side, unknownOk, res })); }
+function resolveAcksForLine(line) { const w = ackWaiters.shift(); if (w) w.res(false); }
+function sendSerialCommand(cmd) { serialSent.push(cmd); const w = ackWaiters.shift(); if (w) Promise.resolve().then(() => w.res(${JSON.stringify(ackResult)})); return Promise.resolve(true); }
+`);
+  vm.runInContext(`currentConfig.macros = [];`, h.w);
+  h.w.openMacroEditor(-1);
+  return h;
+}
+const macroDebugSteps = [
+  { type: "down", code: "KEY_LEFT_GUI" }, { type: "tap", code: "KEY_C" }, { type: "pause", ms: 100 },
+  { type: "tap", code: "KEY_V" }, { type: "up", code: "KEY_LEFT_GUI" }
+];
+const macroDebugCommands = [
+  "DEBUG_MACRO_STEP 2 131 0", "DEBUG_MACRO_STEP 1 99 0", "DEBUG_MACRO_STEP 4 0 100", "DEBUG_MACRO_STEP 1 118 0", "DEBUG_MACRO_STEP 3 131 0"
+];
+
+test("Makro schrittweise testen: jeder Schritt sendet seinen exakten Befehl und setzt den Zeiger", async () => {
+  const { w, dom, log } = macroDebugHarness();
+  vm.runInContext(`macroDraftSteps = ${JSON.stringify(macroDebugSteps)};`, w);
+  w.renderMacroDraftSteps();
+  const state = () => JSON.parse(vm.runInContext("JSON.stringify(macroDebug)", w));
+  assert.strictEqual(state(), null);
+  const sent = () => JSON.parse(vm.runInContext("JSON.stringify(serialSent)", w));
+  for (let i = 0; i < 5; i++) {
+    await w.macroDebugStep();
+    // Der letzte Schritt beendet den Test: danach folgt RELEASE
+    assert.deepStrictEqual(sent(), i < 4 ? macroDebugCommands.slice(0, i + 1) : [...macroDebugCommands, "DEBUG_MACRO_STEP RELEASE"]);
+    if (i < 4) {
+      const s = state();
+      assert.strictEqual(s.current, i);
+      assert.strictEqual(s.next, i + 1);
+      assert.ok(dom.document.getElementById("btnMacroDebugStep").textContent.includes(`${i + 2} / 5`));
+    }
+  }
+  // Nach dem letzten Schritt endet der Test und die Tasten werden losgelassen
+  assert.strictEqual(state(), null);
+  assert.strictEqual(sent().at(-1), "DEBUG_MACRO_STEP RELEASE");
+  assert.ok(log.toasts.at(-1).includes("abgeschlossen"));
+  assert.strictEqual(dom.document.getElementById("btnMacroDebugStep").textContent, "Schrittweise testen");
+});
+
+test("Makro schrittweise testen: Zeiger markiert die Listenzeilen, Abbruch lässt Tasten los", async () => {
+  const { w, dom } = macroDebugHarness();
+  vm.runInContext(`macroDraftSteps = ${JSON.stringify(macroDebugSteps)};`, w);
+  w.renderMacroDraftSteps();
+  await w.macroDebugStep();
+  await w.macroDebugStep();
+  const items = dom.document.getElementById("macroStepsList").children;
+  assert.deepStrictEqual(items.map(li => li.className.includes("macro-step-active")), [false, true, false, false, false]);
+  assert.deepStrictEqual(items.map(li => li.className.includes("macro-step-next")), [false, false, true, false, false]);
+  w.stopMacroDebug(true);
+  assert.strictEqual(vm.runInContext("macroDebug", w), null);
+  assert.strictEqual(vm.runInContext("serialSent.at(-1)", w), "DEBUG_MACRO_STEP RELEASE");
+  assert.ok(!dom.document.getElementById("macroStepsList").children.some(li => li.className.includes("macro-step-active")));
+});
+
+test("Makro schrittweise testen: ohne USB, bei Änderung des Entwurfs und bei Fehlerantwort endet der Test", async () => {
+  // Kein USB zur Hälfte des Makros: nichts wird gesendet
+  let h = macroDebugHarness();
+  vm.runInContext(`macroDraftSteps = ${JSON.stringify(macroDebugSteps)}; serialState = { serialUp: false, serialSide: null };`, h.w);
+  await h.w.macroDebugStep();
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(serialSent)", h.w)), []);
+  assert.strictEqual(vm.runInContext("macroDebug", h.w), null);
+  assert.ok(h.log.toasts.at(-1).includes("USB-Verbindung"));
+  // Falsche Hälfte
+  vm.runInContext(`serialState = { serialUp: true, serialSide: "L" };`, h.w);
+  await h.w.macroDebugStep();
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(serialSent)", h.w)), []);
+  // Entwurf ändert sich zwischen zwei Schritten
+  h = macroDebugHarness();
+  vm.runInContext(`macroDraftSteps = ${JSON.stringify(macroDebugSteps)};`, h.w);
+  await h.w.macroDebugStep();
+  vm.runInContext(`macroDraftSteps.pop();`, h.w);
+  await h.w.macroDebugStep();
+  assert.strictEqual(vm.runInContext("macroDebug", h.w), null);
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(serialSent)", h.w)), [macroDebugCommands[0], "DEBUG_MACRO_STEP RELEASE"]);
+  assert.ok(h.log.toasts.at(-1).includes("geändert"));
+  // Die Firmware lehnt den Schritt ab (z. B. kein Mac verbunden): Test endet
+  h = macroDebugHarness(false);
+  vm.runInContext(`macroDraftSteps = ${JSON.stringify(macroDebugSteps)};`, h.w);
+  await h.w.macroDebugStep();
+  assert.strictEqual(vm.runInContext("macroDebug", h.w), null);
+  assert.ok(h.log.toasts.at(-1).includes("nicht ausgeführt"));
+  // Ältere Firmware (ERR UNKNOWN)
+  h = macroDebugHarness("unknown");
+  vm.runInContext(`macroDraftSteps = ${JSON.stringify(macroDebugSteps)};`, h.w);
+  await h.w.macroDebugStep();
+  assert.ok(h.log.toasts.at(-1).includes("Firmware 61"));
+  // Editor schließen beendet den Test
+  h = macroDebugHarness();
+  vm.runInContext(`macroDraftSteps = ${JSON.stringify(macroDebugSteps)};`, h.w);
+  await h.w.macroDebugStep();
+  h.w.closeMacroEditor();
+  assert.strictEqual(vm.runInContext("macroDebug", h.w), null);
+  assert.strictEqual(vm.runInContext("serialSent.at(-1)", h.w), "DEBUG_MACRO_STEP RELEASE");
+  // stopMacroDebug liefert das Sende-Promise (die Trennung des Ports wartet darauf)
+  h = macroDebugHarness();
+  vm.runInContext(`macroDraftSteps = ${JSON.stringify(macroDebugSteps)};`, h.w);
+  await h.w.macroDebugStep();
+  const pending = h.w.stopMacroDebug(true);
+  assert.ok(pending && typeof pending.then === "function");
+  assert.strictEqual(await pending, true);
+});
+
+test("Makro schrittweise testen: Doppelklick, Sendefehler, Zeitüberschreitung, Bearbeiten und späte Antwort", async () => {
+  const steps = `macroDraftSteps = ${JSON.stringify(macroDebugSteps)};`;
+  // Zweiter Klick, solange ein Schritt wartet: nur ein Befehl
+  let h = macroDebugHarness();
+  vm.runInContext(steps, h.w);
+  const first = h.w.macroDebugStep();
+  const second = h.w.macroDebugStep();
+  await Promise.all([first, second]);
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(serialSent)", h.w)), [macroDebugCommands[0]]);
+  // Zeitüberschreitung (null): Test endet, RELEASE folgt
+  h = macroDebugHarness(null);
+  vm.runInContext(steps, h.w);
+  await h.w.macroDebugStep();
+  assert.strictEqual(vm.runInContext("macroDebug", h.w), null);
+  assert.strictEqual(vm.runInContext("serialSent.at(-1)", h.w), "DEBUG_MACRO_STEP RELEASE");
+  // Sendefehler: Test endet
+  h = macroDebugHarness();
+  vm.runInContext(`${steps} sendSerialCommand = function (cmd) { serialSent.push(cmd); return Promise.resolve(cmd.endsWith("RELEASE")); };`, h.w);
+  await h.w.macroDebugStep();
+  assert.strictEqual(vm.runInContext("macroDebug", h.w), null);
+  assert.ok(h.log.toasts.at(-1).includes("nicht ausgeführt"));
+  // Bearbeiten (hier: Schritt entfernen) beendet den Test sofort und lässt los
+  h = macroDebugHarness();
+  vm.runInContext(steps, h.w);
+  await h.w.macroDebugStep();
+  vm.runInContext("macroDraftSteps.pop();", h.w);
+  h.w.renderMacroDraftSteps();
+  assert.strictEqual(vm.runInContext("macroDebug", h.w), null);
+  assert.strictEqual(vm.runInContext("serialSent.at(-1)", h.w), "DEBUG_MACRO_STEP RELEASE");
+  assert.ok(h.log.toasts.at(-1).includes("geändert"));
+  // Nach einer Zeitüberschreitung bleibt der Schritt kurz gesperrt (späte Antwort), danach geht ein neuer Test
+  h = macroDebugHarness(null);
+  vm.runInContext(`${steps} var timers = []; setTimeout = (fn, ms) => { timers.push({ fn, ms }); return 0; };`, h.w);
+  await h.w.macroDebugStep();
+  assert.strictEqual(vm.runInContext("macroDebugInFlight", h.w), true);
+  await h.w.macroDebugStep();
+  assert.strictEqual(vm.runInContext("serialSent.filter(c => c.startsWith('DEBUG_MACRO_STEP 2')).length", h.w), 1);
+  vm.runInContext("timers.forEach(t => t.fn())", h.w);
+  assert.strictEqual(vm.runInContext("macroDebugInFlight", h.w), false);
+  // Ein Ablauf-Hinweis der Firmware beendet den Test ohne weiteren Befehl
+  h = macroDebugHarness();
+  vm.runInContext(steps, h.w);
+  await h.w.macroDebugStep();
+  const sentBefore = vm.runInContext("serialSent.length", h.w);
+  assert.ok(section("js/serial.js", "function handleSerialLine", "ERR UNKNOWN TEST_MATRIX").length > 0);
+  assert.ok(read("js/serial.js").includes('line === "DEBUG_MACRO_TIMEOUT"') && read("js/serial.js").includes("stopMacroDebug(false,"));
+  h.w.stopMacroDebug(false, "x");
+  assert.strictEqual(vm.runInContext("serialSent.length", h.w), sentBefore);
+  // Ein Schritt im Flug sperrt einen neuen Test, auch nach "Test beenden"
+  h = macroDebugHarness();
+  vm.runInContext(`${steps} sendSerialCommand = function (cmd) { serialSent.push(cmd); return Promise.resolve(true); };`, h.w);
+  const inFlight = h.w.macroDebugStep();
+  h.w.stopMacroDebug(false);
+  await h.w.macroDebugStep();
+  assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(serialSent)", h.w)), [macroDebugCommands[0]]);
+  vm.runInContext("resolveAcksForLine('x')", h.w);
+  await inFlight;
+  await h.w.macroDebugStep();
+  assert.strictEqual(vm.runInContext("serialSent.length", h.w), 2);
+});
+
+test("Makro schrittweise testen: Befehl, Button, Serial-Abbau und Firmware-Befehl passen zusammen", () => {
+  assert.strictEqual(api.macroStepCommand({ type: "tap", code: "KEY_C" }), "DEBUG_MACRO_STEP 1 99 0");
+  assert.strictEqual(api.macroStepCommand({ type: "pause", ms: 250 }), "DEBUG_MACRO_STEP 4 0 250");
+  assert.strictEqual(api.macroStepCommand({ type: "down", code: "MEDIA_PLAY_PAUSE" }), `DEBUG_MACRO_STEP 2 0 ${api.actionCodeToNumeric("MEDIA_PLAY_PAUSE")}`);
+  assert.ok(read("index.html").includes('id="btnMacroDebugStep"') && read("index.html").includes("Schrittweise testen"));
+  assert.ok(read("js/macros-ui.js").includes('"btnMacroDebugStep"') && read("js/macros-ui.js").includes('"btnMacroDebugStop"'));
+  assert.ok(read("index.html").includes('id="btnMacroDebugStop"'));
+  assert.ok(section("js/serial.js", "async function disconnectSerialNow", "keepReading = false;").includes("stopMacroDebug(true)") && section("js/serial.js", "async function disconnectSerialNow", "keepReading = false;").includes("Promise.race"));
+  // Die RELEASE-Antwort hat einen eigenen Namen und löst keine Schritt-Bestätigung auf
+  assert.ok(read("firmware/dactyl_right/DactylLogic.h").includes('"OK DEBUG_MACRO_RELEASE"'));
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  assert.ok(logic.includes('cmd.startsWith("DEBUG_MACRO_STEP ")') && logic.includes('"DEBUG_MACRO_STEP RELEASE"'));
+  assert.ok(Number(/DACTYL_FW_VERSION (\d+)/.exec(read("firmware/dactyl_right/DactylVersion.h"))[1]) >= 61);
 });

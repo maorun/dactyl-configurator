@@ -227,6 +227,7 @@ void resetState() {
   numMacros = 0;
   for (int i = 0; i < MAX_MACROS; i++) { macroLengths[i] = 0; userMacroRepeat[i] = false; }
   macroRun = {};
+  debugMacroHeldCount = 0;
   bleKeyboard.dynMacro = DynamicMacro();
   lastRepeatAction = 0;
   testRemoteTakesRepeat = false;
@@ -3479,6 +3480,95 @@ TEST(test_macro_plays_steps_without_blocking) {
   keyState[2][1] = false; onMatrixKeyChange(2, 1, false);
   runTicks(1200);
   assert(bleKeyboard.keyEvents == expected);
+}
+
+TEST(test_debug_macro_step_runs_one_step_over_usb_only) {
+  resetState();
+  // tap: drücken und loslassen; down hält; up lässt los; pause sendet nichts
+  handleConfigCommand("DEBUG_MACRO_STEP 1 99 0", false);
+  std::vector<int> expected = { 'c', -'c' };
+  assert(bleKeyboard.keyEvents == expected && mockChar.value == "OK DEBUG_MACRO_STEP 1 99 0");
+  handleConfigCommand("DEBUG_MACRO_STEP 2 131 0", false);
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 131);
+  handleConfigCommand("DEBUG_MACRO_STEP 3 131 0", false);
+  assert(bleKeyboard.pressedKeys.empty());
+  size_t before = bleKeyboard.keyEvents.size();
+  handleConfigCommand("DEBUG_MACRO_STEP 4 0 100", false);
+  assert(bleKeyboard.keyEvents.size() == before && mockChar.value == "OK DEBUG_MACRO_STEP 4 0 100");
+  // RELEASE lässt gehaltene Tasten los
+  handleConfigCommand("DEBUG_MACRO_STEP 2 131 0", false);
+  handleConfigCommand("DEBUG_MACRO_STEP RELEASE", false);
+  assert(bleKeyboard.pressedKeys.empty() && mockChar.value == "OK DEBUG_MACRO_RELEASE");
+  // Ungültige Schritte und BLE werden abgelehnt
+  before = bleKeyboard.keyEvents.size();
+  handleConfigCommand("DEBUG_MACRO_STEP 9 99 0", false);
+  assert(mockChar.value == "ERR ARGS DEBUG_MACRO_STEP 9 99 0");
+  handleConfigCommand("DEBUG_MACRO_STEP 1 99", false);
+  assert(mockChar.value == "ERR ARGS DEBUG_MACRO_STEP 1 99");
+  isConfigMode = true;
+  handleConfigCommand("DEBUG_MACRO_STEP 1 99 0", true);
+  assert(mockChar.value == "ERR FORBIDDEN DEBUG_MACRO_STEP");
+  handleConfigCommand("DEBUG_MACRO_STEP 1 99 0", false);
+  assert(mockChar.value == "ERR NOHOST DEBUG_MACRO_STEP");
+  assert(bleKeyboard.keyEvents.size() == before);
+  // RELEASE ist ebenfalls nur über USB erlaubt
+  handleConfigCommand("DEBUG_MACRO_STEP RELEASE", true);
+  assert(mockChar.value == "ERR FORBIDDEN DEBUG_MACRO_STEP");
+  isConfigMode = false;
+  // Läuft ein Makro, startet kein Schritt; RELEASE beendet das Makro
+  addCopyPasteMacro();
+  KEYMAP[0][2][1] = ACT_MACRO_BASE + 0;
+  setMillis(1000);
+  keyState[2][1] = true; onMatrixKeyChange(2, 1, true);
+  assert(macroRun.active);
+  handleConfigCommand("DEBUG_MACRO_STEP 1 99 0", false);
+  assert(mockChar.value == "ERR BUSY DEBUG_MACRO_STEP");
+  handleConfigCommand("DEBUG_MACRO_STEP RELEASE", false);
+  assert(!macroRun.active && bleKeyboard.pressedKeys.empty() && mockChar.value == "OK DEBUG_MACRO_RELEASE");
+}
+
+TEST(test_debug_macro_step_guards_and_hold_timeout) {
+  resetState();
+  // Zusätzliches Argument und fehlender Host
+  handleConfigCommand("DEBUG_MACRO_STEP 1 99 0 5", false);
+  assert(mockChar.value == "ERR ARGS DEBUG_MACRO_STEP 1 99 0 5");
+  bleKeyboard.connected = false;
+  handleConfigCommand("DEBUG_MACRO_STEP 1 99 0", false);
+  assert(mockChar.value == "ERR NOHOST DEBUG_MACRO_STEP" && bleKeyboard.keyEvents.empty());
+  bleKeyboard.connected = true;
+  // Pause im Config-Modus sendet nichts und antwortet OK
+  isConfigMode = true;
+  handleConfigCommand("DEBUG_MACRO_STEP 4 0 50", false);
+  assert(mockChar.value == "OK DEBUG_MACRO_STEP 4 0 50");
+  isConfigMode = false;
+  // Eine gehaltene Taste endet nach DEBUG_MACRO_HOLD_MS ohne weiteren Befehl; jeder Schritt startet die Frist neu
+  setMillis(1000);
+  handleConfigCommand("DEBUG_MACRO_STEP 2 131 0", false);
+  assert(bleKeyboard.pressedKeys.size() == 1);
+  setMillis(1000 + DEBUG_MACRO_HOLD_MS - 1);
+  debugMacroTick(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1);
+  handleConfigCommand("DEBUG_MACRO_STEP 4 0 50", false);
+  setMillis(1000 + DEBUG_MACRO_HOLD_MS + 100);
+  debugMacroTick(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1);
+  setMillis(1000 + 2 * DEBUG_MACRO_HOLD_MS);
+  debugMacroTick(millis());
+  assert(bleKeyboard.pressedKeys.empty() && debugMacroHeldCount == 0 && mockChar.value == "DEBUG_MACRO_TIMEOUT");
+  // Nach "up" gibt es nichts mehr zu lösen: eine vom Nutzer gehaltene Taste bleibt, die Frist meldet nichts
+  mockChar.value = "";
+  handleConfigCommand("DEBUG_MACRO_STEP 2 131 0", false);
+  handleConfigCommand("DEBUG_MACRO_STEP 3 131 0", false);
+  bleKeyboard.press((uint8_t)'x');                       // vom Nutzer gehalten
+  mockChar.value = "";
+  setMillis(millis() + 2 * DEBUG_MACRO_HOLD_MS);
+  debugMacroTick(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'x' && mockChar.value.empty());
+  // Nach "down" und Ablauf bleibt eine andere gehaltene Taste ebenfalls gedrückt
+  handleConfigCommand("DEBUG_MACRO_STEP 2 131 0", false);
+  setMillis(millis() + 2 * DEBUG_MACRO_HOLD_MS);
+  debugMacroTick(millis());
+  assert(bleKeyboard.pressedKeys.size() == 1 && bleKeyboard.pressedKeys[0] == 'x');
 }
 
 TEST(test_macro_releases_held_codes_at_end_and_ignores_restart) {

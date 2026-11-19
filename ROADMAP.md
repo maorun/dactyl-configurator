@@ -23,15 +23,6 @@ Rules for this file:
 
 ## Priority 4
 
-### Macro single-step execution and debugger in App (`debugMacroStep`)
-
-- **Rank:** Feature model. Total 19/40 (typing 3, configuration 6, harmony 5, safety 5). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/macros-ui.js`, `js/serial.js`, `index.html`.
-- **Problem:** Diagnosing modifier leaks or timing errors in complex macros requires full-speed execution against a host text editor.
-- **Goal:** Add a "Schrittweise testen" button in the macro editor to execute steps one at a time over USB serial while highlighting the active step in the UI.
-- **Acceptance test:** An app test runs single-step execution through a 5-step macro, verifying that each step sends its exact HID command and updates UI step pointers.
-
 ### Cross-half bilateral combos (`bilateralCombos`)
 
 - **Rank:** Feature model. Total 17/40 (typing 5, configuration 3, harmony 4, safety 5). Effort L. Estimate.

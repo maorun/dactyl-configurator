@@ -2062,6 +2062,14 @@ body {
   padding: 0.2rem 0;
 }
 
+.macro-step-active {
+  background: rgba(46, 160, 67, 0.2);
+}
+
+.macro-step-next {
+  outline: 1px dashed var(--accent, #58a6ff);
+}
+
 .macro-step span {
   flex: 1;
   min-width: 0;

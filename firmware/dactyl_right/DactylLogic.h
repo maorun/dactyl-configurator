@@ -1266,6 +1266,46 @@ bool startMacro(uint16_t action, unsigned long now, uint8_t r = MACRO_NO_KEY, ui
   return true;
 }
 
+bool saveMacrosToNVS();
+
+// DM_SAVE: schreibt den aufgenommenen Slot ausdrücklich in das Makro 0 im NVS (nie automatisch). Ein dort konfiguriertes
+// Makro geht verloren; die Zeile "DM_SAVE:{...}" meldet das nur über USB-Serial (nie über BLE, der Slot kann ein Passwort
+// enthalten). Ohne Aufnahme (leerer Slot, laufende Aufnahme, laufendes Makro) geschieht nichts.
+#ifdef DACTYL_DYNAMIC_MACRO
+bool dynamicMacroSave() {
+  DynamicMacro &dm = bleKeyboard.dynMacro;
+  if (dm.recording || dm.length == 0 || macroRun.active) return false;
+  const bool overwrote = numMacros > 0 && macroLengths[0] > 0;
+  // Altstand sichern: schlägt das Speichern fehl, bleibt das RAM-Makro 0 wie es war (kein Stand, den das NVS nicht hat)
+  const uint8_t oldNum = numMacros, oldLen = macroLengths[0];
+  const bool oldRepeat = userMacroRepeat[0];
+  // Ohne gespeicherte Liste gelten beim Start die einkompilierten Makros: ein Zurückschreiben wäre eine neue Überschreibung
+  bool hadStored = false;
+  if (preferences.begin("dactyl", true)) {
+    hadStored = preferences.isKey("num_macros");
+    preferences.end();
+  }
+  MacroStep oldSteps[MAX_MACRO_STEPS];
+  for (int j = 0; j < oldLen; j++) oldSteps[j] = userMacros[0][j];
+  macroLengths[0] = dm.length;
+  for (int j = 0; j < dm.length; j++) userMacros[0][j] = dm.steps[j];
+  userMacroRepeat[0] = false;  // ein gespeichertes Makro 0 läuft nie wiederholt; ein alter Wiederholen-Schalter entfällt
+  if (numMacros < 1) numMacros = 1;
+  const bool ok = saveMacrosToNVS();
+  if (!ok) {
+    numMacros = oldNum;
+    macroLengths[0] = oldLen;
+    for (int j = 0; j < oldLen; j++) userMacros[0][j] = oldSteps[j];
+    userMacroRepeat[0] = oldRepeat;
+    if (hadStored) saveMacrosToNVS();  // schreibt den Altstand zurück: saveMacrosToNVS entfernt num_macros zuerst
+  }
+  char line[80];
+  snprintf(line, sizeof(line), "DM_SAVE:{\"slot\":0,\"steps\":%d,\"overwrote\":%d,\"ok\":%d}", dm.length, overwrote ? 1 : 0, ok ? 1 : 0);
+  Serial.println(line);
+  return ok;
+}
+#endif
+
 // Dynamisches Makro (DM_REC, DM_PLAY): nur der Master hat den Slot. Auf der linken Hälfte tun beide Aktionen nichts.
 // DM_REC schaltet die Aufnahme um; DM_PLAY beendet eine laufende Aufnahme (ohne abzuspielen, damit das Abspielen
 // nicht in den Slot läuft) oder spielt den Slot ab. Während des Abspielens startet keine neue Aufnahme.
@@ -1276,6 +1316,8 @@ void dynamicMacroPress(uint16_t action, unsigned long now) {
   if (action == ACT_DM_REC) {
     if (dm.recording) dm.stopRecording();
     else if (!macroRun.active) dm.startRecording();  // ein laufendes Makro würde sonst mit aufgenommen
+  } else if (action == ACT_DM_SAVE) {
+    dynamicMacroSave();
   } else if (action == ACT_DM_PLAY) {
     if (dm.recording) {
       dm.stopRecording();
@@ -2082,7 +2124,7 @@ void dispatchPress(uint8_t r, uint8_t c, uint16_t action, uint8_t currentLayer) 
     }
 #endif
   } else if (isDynamicMacroAction(action)) {
-    const char* dmName = action == ACT_DM_REC ? "DM Rec" : "DM Play";
+    const char* dmName = action == ACT_DM_REC ? "DM Rec" : (action == ACT_DM_SAVE ? "DM Save" : "DM Play");
     char buf[128];
     snprintf(buf, sizeof(buf), "KEY_PRESS:{\"r\":%d,\"c\":%d,\"key\":\"%s\",\"code\":%d,\"layer\":%d}", r, c, dmName, action, currentLayer);
     sendConfigNotification(String(buf));

@@ -150,6 +150,8 @@ inline int matrixRawFormat(char *buf, size_t size, char side, uint8_t row, uint8
 // RAM-Slot (höchstens MAX_MACRO_STEPS Schritte), DM_PLAY spielt ihn mit der Makro-Engine ab (DactylDynamicMacro.h)
 #define ACT_DM_REC               0x16C
 #define ACT_DM_PLAY              0x16D
+// DM_SAVE (0x19B) schreibt den Slot in das Makro 0 im NVS und überschreibt ein dort konfiguriertes Makro
+#define ACT_DM_SAVE              0x19B
 // Leader-Taste: danach sammelt die Hälfte bis zu LEADER_MAX_KEYS Tasten (Zeitlimit leaderTimeoutMs je Taste); eine passende
 // Folge aus userLeaderSeqs[] führt ihre Aktion aus, ohne Treffer passiert nichts. Die Tasten der Folge senden nichts.
 #define ACT_LEADER               0x16E
@@ -330,7 +332,7 @@ inline uint16_t altRepeatAction(uint16_t a) {
 
 inline bool isRepeatKeyAction(uint16_t a) { return a == ACT_REPEAT || a == ACT_ALT_REPEAT; }
 inline bool isBleHostAction(uint16_t a) { return a >= ACT_HOST_BASE && a < ACT_HOST_BASE + NUM_HOST_ACTIONS; }
-inline bool isDynamicMacroAction(uint16_t a) { return a == ACT_DM_REC || a == ACT_DM_PLAY; }
+inline bool isDynamicMacroAction(uint16_t a) { return a == ACT_DM_REC || a == ACT_DM_PLAY || a == ACT_DM_SAVE; }
 
 // Chordal-Hold-Ausnahmen je Taste: Bit (r * NUM_COLS + c) gesetzt = die Taste ist von der Opposite-Hand-Regel
 // (chordalHold) ausgenommen. Die Matrix hat höchstens 64 Tasten (6 x 7 = 42).

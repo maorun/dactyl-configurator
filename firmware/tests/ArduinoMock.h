@@ -152,6 +152,7 @@ public:
   static std::string failUCharKey; // Simuliert einen fehlschlagenden putUChar für genau diesen Key
   static std::string failRemoveKey; // Simuliert ein fehlschlagendes remove für genau diesen Key
   static std::string failBytesKey; // Simuliert einen fehlschlagenden putBytes für genau diesen Key
+  static std::string failBytesKeyOnce; // Wie failBytesKey, aber nur der erste Aufruf schlägt fehl
 
   bool begin(const char*, bool) { return true; }
   void end() {}
@@ -199,6 +200,7 @@ public:
   }
 
   size_t putBytes(const char* key, const void* buf, size_t len) {
+    if (!failBytesKeyOnce.empty() && failBytesKeyOnce == key) { failBytesKeyOnce.clear(); return 0; }
     if (failWrites || failBytesKey == key) return 0;
     const uint8_t* p = (const uint8_t*)buf;
     bytesStore[key] = std::vector<uint8_t>(p, p + len);
@@ -222,6 +224,7 @@ std::map<std::string, std::vector<uint8_t>> Preferences::bytesStore;
 bool Preferences::failWrites = false;
 std::string Preferences::failUIntKey;
 std::string Preferences::failBytesKey;
+std::string Preferences::failBytesKeyOnce;
 std::string Preferences::failRemoveKey;
 std::string Preferences::failUCharKey;
 

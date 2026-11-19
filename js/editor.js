@@ -614,6 +614,7 @@ const ON_SCREEN_KEYBOARD_TABS = {
         { code: "ALT_REPEAT", label: "Alt Repeat", width: 2 },
         { code: "DM_REC", label: "Makro REC", width: 2 },
         { code: "DM_PLAY", label: "Makro PLAY", width: 2 },
+        { code: "DM_SAVE", label: "Makro SAVE", width: 2 },
         { code: "LEADER", label: "Leader", width: 2 },
         { code: "KEY_LOCK", label: "Key Lock", width: 2 },
         { code: "HOST_1", label: "Host 1", width: 2 },

@@ -1255,9 +1255,11 @@ class TestServerAndCodegen(unittest.TestCase):
             common = f.read()
         self.assertRegex(common, r"#define ACT_DM_REC\s+0x16C")
         self.assertRegex(common, r"#define ACT_DM_PLAY\s+0x16D")
+        self.assertRegex(common, r"#define ACT_DM_SAVE\s+0x19B")
+        self.assertEqual(server.code_to_cpp("DM_SAVE"), "ACT_DM_SAVE")
 
     def test_dynamic_macro_is_no_combo_action(self):
-        for action in ("DM_REC", "DM_PLAY"):
+        for action in ("DM_REC", "DM_PLAY", "DM_SAVE"):
             for behavior in ("KEY_PRESS", "MODIFIER_HOLD", "LAYER_TOGGLE"):
                 combo = {"key1": {"r": 2, "c": 1}, "key2": {"r": 2, "c": 2}, "behavior": behavior, "action": action}
                 with self.subTest(action=action, behavior=behavior), self.assertRaises(ValueError):
@@ -1268,6 +1270,7 @@ class TestServerAndCodegen(unittest.TestCase):
         layer[2] = list(layer[2])
         layer[2][1] = {"tap": "DM_REC", "hold": "NONE"}
         layer[2][2] = "DM_PLAY"
+        layer[2][3] = "DM_SAVE"
         server.validate_config({"layers": [layer]}, "R")
         with self.assertRaises(ValueError):
             server.validate_config({"layers": [layer]}, "L")
@@ -1278,6 +1281,12 @@ class TestServerAndCodegen(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.validate_config({"layers": [layer2]}, "L")
         server.validate_config({"layers": [layer2]}, "R")
+        layer3 = [[{"tap": "NONE"}] * 7 for _ in range(6)]
+        layer3[2] = list(layer3[2])
+        layer3[2][1] = {"tap": "DM_SAVE"}
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [layer3]}, "L")
+        server.validate_config({"layers": [layer3]}, "R")
 
     def test_macro_constants_match_firmware(self):
         with open(os.path.join(os.path.dirname(server.INO_FILE), "DactylCommon.h"), encoding="utf-8") as f:

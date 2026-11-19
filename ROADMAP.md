@@ -68,15 +68,6 @@ Rules for this file:
 - **Goal:** Allow combos that combine one key from the left half and one key from the right half (`side1`, `side2`). The master collects candidate key presses across the split link within `comboTimeoutMs` before resolving the combo action.
 - **Acceptance test:** A firmware test presses a key on the left half and a key on the right half within the combo window and expects the combined action.
 
-### BLE connection RSSI signal strength monitoring (`bleRssiMonitor`)
-
-- **Rank:** Feature model. Total 16/40 (typing 2, configuration 5, harmony 4, safety 5). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/dactyl_right.ino`, `js/serial.js`, `js/diagnostics-ui.js`.
-- **Problem:** BLE signal degradation causes missed key packets without indicating radio interference or distance issues.
-- **Goal:** Query the active BLE connection RSSI on the master half and emit `BLE_RSSI:<dBm>` over USB serial to show signal bars in the app.
-- **Acceptance test:** A firmware test queries BLE RSSI when connected and emits formatted `BLE_RSSI:` output to the serial console.
-
 ## Priority 5
 
 ### Macro loop and repeat step (`MACRO_STEP_REPEAT`)

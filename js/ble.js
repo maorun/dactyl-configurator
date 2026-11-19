@@ -400,6 +400,7 @@ function onBleDisconnected() {
   bleSide = null;
   forgetSplitLink();
   forgetHostLeds();
+  forgetBleRssi();
   forgetDmRec();
   forgetModeState();
   abortDeviceSnapshotReadIfDisconnected();

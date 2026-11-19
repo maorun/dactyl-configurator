@@ -111,3 +111,33 @@ function initDiagnosticsUI() {
   }
   renderMatrixRaw();
 }
+
+// =============================================================================
+// Signalstärke der Mac-Verbindung (BLE_RSSI:<dBm>): vier Balken im Diagnose-Panel
+// =============================================================================
+// Die Zeile kommt nur vom Master und nur über USB-Serial; endet die USB-Verbindung, gilt der Wert nicht mehr.
+let bleRssiDbm = null;
+
+function noteBleRssi(dbm) {
+  if (dbm === undefined) return;
+  bleRssiDbm = dbm;
+  renderBleRssi();
+}
+
+function forgetBleRssi() {
+  // Der Wert kommt nur über USB vom Master: er bleibt gültig, solange diese Verbindung besteht
+  if (Dactyl.splitLinkStaysValid(connectionState())) return;
+  bleRssiDbm = null;
+  renderBleRssi();
+}
+
+function renderBleRssi() {
+  const box = document.getElementById("bleRssiMeter");
+  const text = document.getElementById("bleRssiText");
+  if (!box || !text) return;
+  const view = Dactyl.describeBleRssi(bleRssiDbm);
+  box.title = view.title;
+  box.dataset.level = view.level;
+  box.querySelectorAll(".ble-rssi-bar").forEach((bar, i) => bar.classList.toggle("is-on", i < view.bars));
+  text.textContent = view.text;
+}

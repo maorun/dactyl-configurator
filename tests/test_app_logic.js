@@ -1829,7 +1829,7 @@ test("Layout-Diff: nicht vorhandene Tasten zählen nicht, unvollständige Snapsh
 // handleSerialLine aus js/serial.js in einem eigenen Kontext mit Stubs für DOM, Anzeige und Verbindungen.
 // conn: Verbindungszustand (bleUp, bleSide, serialUp, serialSide), wie connectionState() in js/ble.js.
 function serialLineHarness(conn = {}) {
-  const calls = { capture: [], press: [], release: [], captured: [], rendered: 0, rawRendered: 0, applied: 0, stats: [], practice: [], layers: [], tri: [], warns: [] };
+  const calls = { capture: [], press: [], release: [], captured: [], rendered: 0, rawRendered: 0, applied: 0, stats: [], practice: [], layers: [], tri: [], warns: [], rssi: null };
   const s = {
     calls, console: { log() {}, warn(...a) { calls.warns.push(a.map(String).join(' ')); } },
     document: { getElementById: () => null },
@@ -1870,6 +1870,7 @@ const splitLinkStatus = { noteDeviceInfo() {} };
 function updateFirmwareVersionUI() {}
 function updateDiagUI() {}
 function updateSplitLinkUI() {}
+function noteBleRssi(dbm) { calls.rssi = dbm; }
 function applyTriLayersToInputs(rules) { calls.tri.push(JSON.stringify(rules)); }
 function saveConfigToServer() {}
 function clearPendingSync() {}
@@ -2162,6 +2163,51 @@ test("Host-LEDs: Parser, Anzeige, Kopfzeile und Setting", () => {
   const body = fh.slice(fh.indexOf("function forgetHostLeds"), fh.indexOf("// Gedrückte SPLIT_KEY-Tasten"));
   assert.ok(body.includes("Dactyl.splitLinkStaysValid(connectionState())"));
   assert.ok(read("js/serial.js").slice(read("js/serial.js").indexOf("async function disconnectSerialNow")).includes("forgetHostLeds();"));
+});
+
+test("BLE_RSSI: Parser, Balken, Zeilenbehandlung und Diagnose-Panel", () => {
+  const ctx = { console };
+  vm.createContext(ctx);
+  vm.runInContext(`${read("js/matrix-constants.js")}\n${read("js/side-profiles.js")}\n${read("js/side-right.js")}\n${read("js/side-left.js")}\n${read("js/side-routing.js")}`, ctx);
+  const D = ctx.Dactyl || vm.runInContext("Dactyl", ctx);
+  assert.strictEqual(D.parseBleRssiLine("BLE_RSSI:-63", "R"), -63);
+  assert.strictEqual(D.parseBleRssiLine("BLE_RSSI:0", "R"), 0);
+  assert.strictEqual(D.parseBleRssiLine("BLE_RSSI:-63", "L"), undefined);   // nur der Master hat einen Host
+  assert.strictEqual(D.parseBleRssiLine("BLE_RSSI:127", "R"), undefined);   // Controller-Wert "nicht lesbar"
+  assert.strictEqual(D.parseBleRssiLine("BLE_RSSI:-128", "R"), undefined);
+  assert.strictEqual(D.parseBleRssiLine("BLE_RSSI:abc", "R"), undefined);
+  assert.strictEqual(D.parseBleRssiLine("BLE_RSSI:", "R"), undefined);
+  assert.strictEqual(D.parseBleRssiLine("BLE_RSSI:none", "R"), null);       // Verbindung beendet
+  assert.strictEqual(D.parseBleRssiLine("BLE_RSSI:none", "L"), undefined);
+  assert.strictEqual(D.parseBleRssiLine("HOST_LEDS:-63", "R"), undefined);
+  assert.strictEqual(D.describeBleRssi(-55).bars, 4);
+  assert.strictEqual(D.describeBleRssi(-60).bars, 4);
+  assert.strictEqual(D.describeBleRssi(-65).bars, 3);
+  assert.strictEqual(D.describeBleRssi(-75).bars, 2);
+  assert.strictEqual(D.describeBleRssi(-85).bars, 1);
+  assert.strictEqual(D.describeBleRssi(-95).bars, 0);
+  assert.strictEqual(D.describeBleRssi(-95).level, "weak");
+  assert.strictEqual(D.describeBleRssi(-65).level, "good");
+  assert.strictEqual(D.describeBleRssi(-75).level, "fair");
+  assert.strictEqual(D.describeBleRssi(null).level, "none");
+  assert.strictEqual(D.describeBleRssi(-63).text, "-63 dBm");
+  // Zeilenbehandlung: nur USB
+  const usb = serialLineHarness();
+  usb.handle("BLE_RSSI:-63", "R", "usb");
+  assert.strictEqual(usb.calls.rssi, -63);
+  usb.handle("BLE_RSSI:none", "R", "usb");
+  assert.strictEqual(usb.calls.rssi, null);   // "none" löscht den Wert
+  const ble = serialLineHarness();
+  ble.handle("BLE_RSSI:-63", "R", "ble");
+  assert.strictEqual(ble.calls.rssi, null);
+  // Diagnose-Panel: Balken im HTML, Zustand wird bei Trennung gelöscht
+  const html = read("index.html");
+  assert.ok(html.includes('id="bleRssiMeter"') && html.includes('id="bleRssiText"'));
+  assert.strictEqual((html.match(/class="ble-rssi-bar"/g) || []).length, 4);
+  const diag = read("js/diagnostics-ui.js");
+  assert.ok(diag.slice(diag.indexOf("function forgetBleRssi")).includes("Dactyl.splitLinkStaysValid(connectionState())"));
+  assert.ok(read("js/ble.js").slice(read("js/ble.js").indexOf("function onBleDisconnected")).includes("forgetBleRssi();"));
+  assert.ok(read("js/serial.js").slice(read("js/serial.js").indexOf("async function disconnectSerialNow")).includes("forgetBleRssi();"));
 });
 
 test("serial.js: SPLIT_KEY drückt und löst die Taste der linken Hälfte", () => {

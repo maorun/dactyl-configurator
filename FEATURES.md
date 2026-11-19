@@ -541,6 +541,14 @@ Rules for this file:
 - `GET_INFO` over BLE in keyboard mode omits `host_leds` and `caps_led` (a nearby BLE client reads only `GET_INFO`); USB and config mode include them. The left half answers `SET_CAPS_LED` with `ERR UNKNOWN`. A BLE disconnect keeps the pill while USB to the master stays up (`forgetHostLeds`).
 - Hardware check: GPIO 22 is not in the deep-sleep hold lists; check that the LED is off in deep sleep and that it follows Caps Lock again after the wakeup. Caps Lock on the Mac changes the pill and the LED (GPIO 22); the macOS Caps Lock key press must reach the master as an output report after a reconnect.
 
+### BLE signal strength (`DactylBleRssi.h`, `BLE_RSSI:`)
+
+- The master reads the RSSI of the Mac connection. `bleRssiService()` (`DactylLogic.h`, called in `loop()`) sends `esp_ble_gap_read_rssi()` for the stored peer address (`connTracker.peerBda`) every `BLE_RSSI_INTERVAL_MS` (2 s). The first request of a connection goes out at once. A failed request is tried again in the next `loop()`.
+- The result arrives as `ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT` in the BLE task. The GAP handler (`DactylBleComposite::onGapEvent`, set with `BLEDevice::setCustomGapHandler`) passes it to `bleRssiOnResult()`. The core only stores the value and a change counter. It rejects a failed status, the controller value `127` (not readable) and values outside `-127..20`.
+- `loop()` prints each new result as `BLE_RSSI:<dBm>` on USB serial only, never over BLE. It sends no request without a Mac connection or in config mode (`bleRssiLinkActive`). When the value stops being valid (connection ends, config mode starts, or the controller returns an unreadable result), it prints `BLE_RSSI:none` once, so the app drops the old reading. `bleRssiReset()` clears the state. A `pending` flag, set before the request, makes the core drop a result that belongs to no open request (late result of an old connection). `BleRssiState` has no lock: the BLE task writes `rssi`, `valid` and `seq`, `loop()` writes the rest.
+- The line carries no key data. The left half has no host and prints no line.
+- App: `parseBleRssiLine` and `describeBleRssi` (`js/side-routing.js`) map the value to 0..4 bars (`-60`, `-70`, `-80`, `-90` dBm). `renderBleRssi` (`js/diagnostics-ui.js`) shows them in the diagnostics panel (`#bleRssiMeter`). The value comes only over USB from the master. `BLE_RSSI:none` and `forgetBleRssi` clear it.
+
 ### Active mode pills (`MODE_STATE`)
 
 - The master prints `MODE_STATE:{"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1,"ll":0|1,"lli":0..7}` on USB serial only, never over BLE. The fields are Caps Word, Num Word, Sentence Case, Swap Hands (held, armed or locked), Keep Awake and Layer Lock. `ll` is `1` while `layerLockedMask` is not zero (bit `MODE_STATE_LL`, `0x20`). `lli` is the highest locked layer, or `0` when no layer is locked.

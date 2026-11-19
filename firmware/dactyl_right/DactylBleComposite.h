@@ -15,6 +15,7 @@
 
 #include "DactylHidDescriptor.h" // Report-IDs, Maus-Buttons & Composite-Report-Descriptor
 #include "DactylHostLeds.h"       // LED-Zustand des Hosts (Output-Report)
+#include "DactylBleRssi.h"         // RSSI der Mac-Verbindung (GAP-Event)
 
 #define BLE_HID_TX_POWER ESP_PWR_LVL_N0
 
@@ -60,10 +61,23 @@ protected:
 
   BleConnParamTracker connTracker;
 
+  static inline DactylBleComposite *rssiOwner = nullptr;
+  static void onGapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
+    if (event != ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT || !rssiOwner || !param) return;
+    bleRssiOnResult(rssiOwner->bleRssi, (int)param->read_rssi_cmpl.status, (int)param->read_rssi_cmpl.rssi);
+  }
+
   virtual void onStarted(BLEServer *pServer) {}
 
 public:
   HostLedsState hostLeds;  // zuletzt gemeldete LED-Bits des Hosts (onWrite)
+  BleRssiState bleRssi;    // RSSI der Mac-Verbindung (GAP-Event, BLE-Task)
+
+  // Fragt die RSSI des Mac ab; das Ergebnis kommt als ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT in onGapEvent()
+  static bool requestRssi() {
+    if (!rssiOwner || !rssiOwner->connected || !rssiOwner->connTracker.hasPeer) return false;
+    return esp_ble_gap_read_rssi(rssiOwner->connTracker.peerBda) == ESP_OK;
+  }
 
   DactylBleComposite(std::string name = "Dactyl Keyboard", std::string mfr = "Dactyl DIY", uint8_t batt = 100)
     : hid(nullptr)
@@ -96,6 +110,10 @@ public:
 
   void begin() {
     BLEDevice::init(String(deviceName.c_str()));
+    rssiOwner = this;
+    // BLEDevice kennt nur einen Custom-GAP-Handler: ein weiterer Aufruf würde diesen ersetzen. Neue GAP-Events hier
+    // in onGapEvent() behandeln, nicht mit einem zweiten setCustomGapHandler().
+    BLEDevice::setCustomGapHandler(onGapEvent);
     uint8_t hostAddr[6];
     bool hostAddrSet = false;
     if (hostSlot != 0) {

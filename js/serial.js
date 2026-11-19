@@ -130,6 +130,7 @@ async function disconnectSerialNow() {
   serialReader = null;
   forgetSplitLink();
   forgetHostLeds();
+  forgetBleRssi();
   forgetDmRec();
   forgetModeState();
   abortDeviceSnapshotReadIfDisconnected();
@@ -741,6 +742,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
   // 2a''. LED-Zustand des Hosts (Num/Caps/Scroll Lock), nur vom Master und nur über USB-Serial
   else if (line.startsWith("HOST_LEDS:")) {
     if (transport === "usb") noteHostLeds(Dactyl.parseHostLedsLine(line, lineSide));
+  }
+
+  // 2a-3. Signalstärke der Mac-Verbindung (BLE_RSSI:<dBm>), nur vom Master und nur über USB-Serial
+  else if (line.startsWith("BLE_RSSI:")) {
+    if (transport === "usb") noteBleRssi(Dactyl.parseBleRssiLine(line, lineSide));
   }
 
   // 2a-4. Aktive Modi (MODE_STATE), nur vom Master und nur über USB-Serial

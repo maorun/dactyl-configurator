@@ -93,6 +93,7 @@ uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
 uint16_t oneShotTimeoutMs = 0;
 uint16_t layerTimeoutMs = 0;
+uint8_t layerLockTimeoutMinutes = 0;
 uint8_t autoMouseLayer = 255;
 uint16_t mouseTimeoutMs = 500;
 uint8_t holdTapMode = 0;
@@ -866,6 +867,9 @@ void loop() {
   ttExpire(millis());         // beide TT-Tasten lange gehalten: tappingTermMs im NVS speichern
   // layerTimeoutMs: kein Ablauf links. Die Layer-Lock-Ebenen führt der Master (layerLockedMask); er löscht die TG-Ebenen
   // und meldet sie der linken Hälfte mit LAYER_STATE.
+  // layerLockTimeoutMinutes: jede Hälfte löst ihre eigenen LAYER_LOCK-Ebenen (layerLockedMask) und meldet sie mit LAYER_STATE.
+  // Tastendrücke des Masters kommen mit MASTER_PRESS (notePriorKeyPress).
+  layerLockTimeoutExpire(millis());
   // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende
   const uint32_t diagLoopStartUs = micros();
   static unsigned long lastHeartbeat = 0;

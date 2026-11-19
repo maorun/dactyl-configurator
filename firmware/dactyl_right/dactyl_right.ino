@@ -129,6 +129,7 @@ uint16_t autoShiftMs = 175;
 uint16_t leaderTimeoutMs = 1000;
 uint16_t oneShotTimeoutMs = 0;
 uint16_t layerTimeoutMs = 0;
+uint8_t layerLockTimeoutMinutes = 0;
 uint8_t autoMouseLayer = 255;
 uint16_t mouseTimeoutMs = 500;
 uint8_t holdTapMode = 0;
@@ -1111,6 +1112,8 @@ void loop() {
   ttExpire(millis());         // beide TT-Tasten lange gehalten: tappingTermMs im NVS speichern
   // layerTimeoutMs: eingerastete TG-Ebenen fallen ohne Tastendruck beider Hälften zurück
   layerTimeoutExpire(millis());
+  // layerLockTimeoutMinutes: eingerastete LAYER_LOCK-Ebenen lösen sich ohne Tastendruck beider Hälften
+  layerLockTimeoutExpire(millis());
   dynamicMacroService();
   modeStateService();
   // Diagnose (GET_DIAG): Dauer dieses Durchlaufs ohne das absichtliche delay() am Ende

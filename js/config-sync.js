@@ -368,6 +368,7 @@ function buildSettingCommands(s, profile) {
     ...(profile.master ? [{ cmd: `SET_CAPS_LED ${clampSetting("capsLed", s.capsLed ?? 0)}`, ack: "SET_CAPS_LED", optional: true }] : []),
     { cmd: `SET_LEADER_TIMEOUT ${clampSetting("leaderTimeoutMs", s.leaderTimeoutMs ?? 1000)}`, ack: "SET_LEADER_TIMEOUT", optional: true },
     { cmd: `SET_LAYER_TIMEOUT ${clampSetting("layerTimeoutMs", s.layerTimeoutMs ?? 0)}`, ack: "SET_LAYER_TIMEOUT", optional: "args" },
+    { cmd: `SET_LAYER_LOCK_TIMEOUT ${clampSetting("layerLockTimeoutMinutes", s.layerLockTimeoutMinutes ?? 0)}`, ack: "SET_LAYER_LOCK_TIMEOUT", optional: "args" },
     { cmd: `SET_AUTO_MOUSE_LAYER ${clampSetting("autoMouseLayer", s.autoMouseLayer ?? 255)}`, ack: "SET_AUTO_MOUSE_LAYER", optional: "args" },
     { cmd: `SET_MOUSE_TIMEOUT ${clampSetting("mouseTimeoutMs", s.mouseTimeoutMs ?? 500)}`, ack: "SET_MOUSE_TIMEOUT", optional: "args" },
     { cmd: `SET_ONESHOT_TIMEOUT ${clampSetting("oneShotTimeoutMs", s.oneShotTimeoutMs ?? 0)}`, ack: "SET_ONESHOT_TIMEOUT", optional: "args" },

@@ -516,6 +516,11 @@ function handleSerialLine(line, side = null, transport = "ble") {
         setField("autoMouseLayerSelect", layer);
         if (target) target.autoMouseLayer = layer;
       }
+      if (Number.isInteger(am.llt)) {
+        const min = clampSetting("layerLockTimeoutMinutes", am.llt);
+        setField("layerLockTimeoutInput", min);
+        if (target) target.layerLockTimeoutMinutes = min;
+      }
       if (Number.isInteger(am.amt)) {
         const ms = clampSetting("mouseTimeoutMs", am.amt);
         setField("mouseTimeoutInput", ms);

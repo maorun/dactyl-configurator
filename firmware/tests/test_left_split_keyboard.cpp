@@ -81,6 +81,7 @@ static LeaderSeq userLeaderSeqs[MAX_LEADER_SEQS];
 static uint16_t leaderTimeoutMs = 1000;
 static uint16_t oneShotTimeoutMs = 0;
 static uint16_t layerTimeoutMs = 0;
+static uint8_t layerLockTimeoutMinutes = 0;
 static uint8_t autoMouseLayer = AUTO_MOUSE_LAYER_OFF;
 static uint16_t mouseTimeoutMs = MOUSE_TIMEOUT_DEFAULT_MS;
 static uint8_t numMacros = 0;
@@ -794,6 +795,26 @@ TEST(test_layer_timeout_clear_reaches_the_layer_sync_of_the_master) {
   sent.clear();
   assert(splitLayerSendIfDue(sync, localMomentaryLayerMask(), toggleLayerMask(), true, 1001, false, send));
   assert(sent.size() == 1 && sent[0].op == SPLIT_OP_LAYER_STATE && splitLayerToggles(sent[0]) == 0);
+}
+
+TEST(test_left_layer_lock_timeout_clears_own_lock_and_reaches_the_master) {
+  layerLockTimeoutMinutes = 1;
+  toggleLayers[3] = true;
+  layerLockedMask = (1 << 3);
+  SplitLayerSync sync;
+  splitLayerReset(sync);
+  std::vector<SplitHidEvent> sent;
+  auto send = [&](const SplitHidEvent &ev) { sent.push_back(ev); return true; };
+  splitLayerSendIfDue(sync, localMomentaryLayerMask(), toggleLayerMask(), true, 0, true, send);
+  layerLockTimeoutExpire(0);
+  layerLockTimeoutExpire(59999);
+  assert(toggleLayerMask() == (1 << 3));
+  layerLockTimeoutExpire(60000);
+  assert(toggleLayerMask() == 0 && layerLockedMask == 0);
+  sent.clear();
+  assert(splitLayerSendIfDue(sync, localMomentaryLayerMask(), toggleLayerMask(), true, 60001, false, send));
+  assert(sent.size() == 1 && sent[0].op == SPLIT_OP_LAYER_STATE && splitLayerToggles(sent[0]) == 0);
+  layerLockTimeoutMinutes = 0;
 }
 
 TEST(test_left_layer_lock_reaches_master_through_layer_state) {

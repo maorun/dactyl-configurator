@@ -114,6 +114,15 @@
           <span class="matrix-raw-total" id="matrixRawTotal"></span>
           <div class="matrix-raw-halves" id="matrixRawHalves"></div>
         </section>
+        <!-- Combo-Stagger-Assistent: misst den Versatz zwischen Akkord-Tasten (js/diagnostics-ui.js) -->
+        <section class="combo-stagger" id="comboStaggerSection">
+          <h4>Combo-Zeitfenster messen</h4>
+          <p class="form-hint">Verbinde die Tastatur per USB, starte die Messung und drücke die Tasten deiner Combos mehrfach zusammen, jeweils mit Pause dazwischen. Der Vorschlag ist das 95. Perzentil der Abstände zwischen den Tasten eines Akkords.</p>
+          <button id="btnComboStagger" class="btn btn-outline btn-sm" type="button" aria-pressed="false">Messung starten</button>
+          <button id="btnComboStaggerApply" class="btn btn-outline btn-sm" type="button" disabled>Vorschlag eintragen</button>
+          <button id="btnComboStaggerReset" class="btn btn-outline btn-sm" type="button">Zurücksetzen</button>
+          <p id="comboStaggerStatus" class="form-hint"></p>
+        </section>
       </div>
     </details>
 

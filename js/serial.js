@@ -96,6 +96,7 @@ async function disconnectSerialNow() {
   // Der Port ist hier noch offen: die Firmware bekommt TEST_MATRIX 0. Bei gezogenem Kabel schlägt das Senden still fehl.
   // Die Firmware erkennt den Verlust des USB-Hosts nicht selbst; der Test endet dann erst mit Schlaf, Config Mode oder Neustart.
   await stopMatrixRawTest(true);
+  stopComboStagger();
   keepReading = false;
   if (serialReader) {
     try {
@@ -705,6 +706,7 @@ function handleSerialLine(line, side = null, transport = "ble") {
       // Ein geprellter Druck ist kein neuer Tastendruck: die Tastenaufnahme übergeht ihn
       if (!bounced) feedKeyCapture(lineSide, evt.r, evt.c, evt.pressed);
       feedTimingAssistant(lineSide, evt);
+      feedComboStagger(lineSide, evt, bounced, transport);
       const marked = evt.pressed && markMatrixKeyTested(matrixTest, evt.r, evt.c);
       if ((marked || bounced) && isEditSide) renderMatrixTest();
     }

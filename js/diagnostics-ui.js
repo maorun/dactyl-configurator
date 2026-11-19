@@ -106,10 +106,11 @@ function initDiagnosticsUI() {
   const panel = document.getElementById("diagPanel");
   if (panel) {
     panel.addEventListener("toggle", () => {
-      if (!panel.open) stopMatrixRawTest();
+      if (!panel.open) { stopMatrixRawTest(); stopComboStagger(); }
     });
   }
   renderMatrixRaw();
+  initComboStagger();
 }
 
 // =============================================================================
@@ -140,4 +141,109 @@ function renderBleRssi() {
   box.dataset.level = view.level;
   box.querySelectorAll(".ble-rssi-bar").forEach((bar, i) => bar.classList.toggle("is-on", i < view.bars));
   text.textContent = view.text;
+}
+
+// =============================================================================
+// Combo-Stagger-Assistent: misst die Spanne der Akkord-Tasten und schlägt comboTimeoutMs vor
+// =============================================================================
+// Die Druckzeiten kommen aus den MATRIX:-Zeilen (Scan-Zeit t der Firmware, nur USB) der bearbeiteten Hälfte. Die
+// Rechnung liegt DOM-frei in js/config-model.js (computeComboStaggerSuggestion). Übernehmen trägt nur das Eingabefeld
+// ein; gespeichert wird mit "Einstellungen in Config übernehmen".
+const COMBO_STAGGER_MAX_SAMPLES = 5000;
+const comboStagger = { recording: false, side: null, presses: [], result: null };
+
+// bounced = true: ein geprellter Druck ist kein Tastendruck des Akkords (siehe recordMatrixBounce)
+function feedComboStagger(side, evt, bounced = false, transport = "usb") {
+  // MATRIX: kommt nur über USB; eine BLE-Zeile zählt nicht
+  if (transport !== "usb") return;
+  if (!comboStagger.recording || !evt.pressed || evt.t === undefined) return;
+  if (side !== comboStagger.side) return;
+  // Die bearbeitete Hälfte hat gewechselt: die Messung gehört nicht mehr zur Ansicht
+  if (comboStagger.side !== editSide) { stopComboStagger(); return; }
+  if (bounced) return;
+  const presses = comboStagger.presses;
+  // Die Scan-Zeit springt zurück, wenn die Firmware neu gestartet ist: alte und neue Zeiten passen nicht zusammen
+  if (presses.length > 0 && evt.t < presses[presses.length - 1]) presses.length = 0;
+  presses.push(evt.t);
+  if (presses.length >= COMBO_STAGGER_MAX_SAMPLES) {
+    comboStagger.recording = false;
+    showToast("Die Combo-Messung ist voll und wurde beendet.");
+    renderComboStagger();
+    return;
+  }
+  // Während der Messung nur die Zahl zeigen; die Auswertung läuft beim Beenden (sonst Sortieren bei jedem Druck)
+  renderComboStaggerCount();
+}
+
+// Messung beenden (Schließen des Panels, Seitenwechsel, USB getrennt) und auswerten
+function stopComboStagger() {
+  comboStagger.recording = false;
+  renderComboStagger();
+}
+
+function renderComboStaggerCount() {
+  const status = document.getElementById("comboStaggerStatus");
+  if (status) status.textContent = `Messung läuft: ${comboStagger.presses.length} Drücke.`;
+}
+
+function renderComboStagger() {
+  const toggle = document.getElementById("btnComboStagger");
+  const apply = document.getElementById("btnComboStaggerApply");
+  const status = document.getElementById("comboStaggerStatus");
+  // Das Ergebnis hängt nicht vom DOM ab: applyComboStagger liest es auch ohne Panel
+  comboStagger.result = computeComboStaggerSuggestion(comboStagger.presses);
+  const r = comboStagger.result;
+  if (!toggle || !status) return;
+  toggle.textContent = comboStagger.recording ? "Messung beenden" : "Messung starten";
+  toggle.setAttribute("aria-pressed", comboStagger.recording ? "true" : "false");
+  if (apply) apply.disabled = comboStagger.recording || !r.enough;
+  if (comboStagger.recording) status.textContent = `Messung läuft: ${comboStagger.presses.length} Drücke.`;
+  else if (r.enough) status.textContent = `Vorschlag: ${r.comboTimeoutMs} ms (95. Perzentil der Spannen von ${r.chords} Akkorden).`;
+  else status.textContent = `Zu wenig Daten: ${r.chords} von ${COMBO_STAGGER_MIN_CHORDS} Akkorden. Drücke Tasten einer Hälfte zusammen, mit Pause dazwischen.`;
+}
+
+function toggleComboStagger() {
+  if (comboStagger.recording) {
+    comboStagger.recording = false;
+  } else {
+    if (!connectionState().serialUp) {
+      showToast("Die Combo-Messung braucht eine USB-Verbindung zur Tastatur.");
+      return;
+    }
+    // MATRIX: kommt von der verbundenen Hälfte: gehört sie nicht zur bearbeiteten, kommt kein Druck an
+    const wired = connectionState().serialSide;
+    if (wired && wired !== editSide) {
+      showToast("Die USB-Verbindung gehört zur anderen Hälfte. Wechsle die Hälfte oder verbinde die richtige.");
+      return;
+    }
+    // Jede Messung beginnt leer: Scan-Zeiten verschiedener Verbindungen passen nicht zusammen
+    comboStagger.presses = [];
+    comboStagger.side = editSide;
+    comboStagger.recording = true;
+  }
+  renderComboStagger();
+}
+
+// Trägt den Vorschlag in das Feld "Combo-Zeitfenster" ein. Rückgabe: true = eingetragen.
+function applyComboStagger() {
+  const r = comboStagger.result;
+  if (!r || !r.enough || comboStagger.recording) return false;
+  if (comboStagger.side !== editSide) {
+    showToast("Die Messung gehört zur anderen Hälfte. Starte sie neu.");
+    return false;
+  }
+  const input = document.getElementById("comboTimeoutInput");
+  if (input) input.value = String(r.comboTimeoutMs);
+  showToast(`Combo-Zeitfenster ${r.comboTimeoutMs} ms eingetragen. Mit "Einstellungen in Config übernehmen" speichern.`);
+  return true;
+}
+
+function initComboStagger() {
+  document.getElementById("btnComboStagger")?.addEventListener("click", toggleComboStagger);
+  document.getElementById("btnComboStaggerApply")?.addEventListener("click", applyComboStagger);
+  document.getElementById("btnComboStaggerReset")?.addEventListener("click", () => {
+    comboStagger.presses = [];
+    renderComboStagger();
+  });
+  renderComboStagger();
 }

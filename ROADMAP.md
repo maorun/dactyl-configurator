@@ -50,15 +50,6 @@ Rules for this file:
 - **Goal:** Add a "Schrittweise testen" button in the macro editor to execute steps one at a time over USB serial while highlighting the active step in the UI.
 - **Acceptance test:** An app test runs single-step execution through a 5-step macro, verifying that each step sends its exact HID command and updates UI step pointers.
 
-### Combo latency and stagger timing assistant (`comboStaggerAnalyzer`)
-
-- **Rank:** Feature model. Total 18/40 (typing 4, configuration 5, harmony 5, safety 4). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/diagnostics-ui.js`, `js/config-model.js`.
-- **Problem:** Setting `comboTimeoutMs` is guesswork without measuring the user's natural finger stagger between chorded keys.
-- **Goal:** Measure time intervals between consecutive keypresses during diagnostic test typing and suggest a personalized `comboTimeoutMs`.
-- **Acceptance test:** An app test feeds simulated chord keystroke timestamps and verifies a recommended timeout based on the 95th percentile delta.
-
 ### Cross-half bilateral combos (`bilateralCombos`)
 
 - **Rank:** Feature model. Total 17/40 (typing 5, configuration 3, harmony 4, safety 5). Effort L. Estimate.

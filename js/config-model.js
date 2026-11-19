@@ -333,6 +333,38 @@ function computeTimingRecommendations(samples) {
   return { enough: true, stats, settings };
 }
 
+// Combo-Stagger-Assistent: misst die Spanne eines Akkords und schlägt comboTimeoutMs vor.
+// Eingabe sind die Druck-Zeitstempel (ms). Drücke mit höchstens COMBO_STAGGER_GROUP_GAP_MS Abstand zum vorigen Druck
+// gehören zum selben Akkordversuch; der Abstand zweier Gruppen (Pause) zählt nicht. Die Firmware verlangt, dass alle
+// Tasten einer Combo paarweise im Fenster liegen: je Gruppe mit mindestens zwei Drücken zählt die Spanne vom ersten
+// bis zum letzten Druck. Eine Gruppe mit längerer Spanne als das Maximum von comboTimeoutMs ist eine Tipp-Rolle, kein
+// Akkord, und zählt nicht. Vorschlag = p95 dieser Spannen, geklemmt auf SETTINGS_RANGES.comboTimeoutMs.
+const COMBO_STAGGER_GROUP_GAP_MS = 120;
+const COMBO_STAGGER_MIN_CHORDS = 10;
+
+function computeComboStaggerSuggestion(timestamps) {
+  const times = (Array.isArray(timestamps) ? timestamps : []).filter(t => Number.isFinite(t)).sort((a, b) => a - b);
+  const spans = [];
+  let first = null;
+  let chordSize = 0;
+  for (let i = 1; i <= times.length; i++) {
+    const prev = times[i - 1];
+    if (first === null) { first = prev; chordSize = 0; }
+    chordSize++;
+    if (i === times.length || times[i] - prev > COMBO_STAGGER_GROUP_GAP_MS) {
+      // Zwei Drücke im selben Scan haben Spanne 0 und sind ein Akkord; ein einzelner Druck ist keiner
+      if (chordSize >= 2 && prev - first <= SETTINGS_RANGES.comboTimeoutMs[1]) spans.push(prev - first);
+      first = null;
+    }
+  }
+  const p95 = percentile(spans, 0.95);
+  const enough = spans.length >= COMBO_STAGGER_MIN_CHORDS;
+  return {
+    enough, chords: spans.length, p95,
+    comboTimeoutMs: enough ? clampSetting("comboTimeoutMs", Math.round(p95)) : null
+  };
+}
+
 // Eigener Tapping-Term je Mod-Tap- und Layer-Tap-Taste: p95 der Haltezeiten der Taste + TIMING_MARGIN_MS (geklemmt).
 // Aufgenommen wird die physische Taste ohne Ebene; der Vorschlag gilt für jede Ebene, in der die Taste eine Halte-
 // oder Doppel-Tipp-Aktion hat. Nur Tasten mit mindestens TIMING_MIN_KEY_HOLDS Tipps und einem Unterschied von

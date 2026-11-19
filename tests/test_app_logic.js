@@ -53,7 +53,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              MAX_ALT_REPEATS, isValidAltRepeat, hasDuplicateAltRepeat, normalizeAltRepeat, altRepeatsFromSameFingerPairs, localAltRepeatTuples, describeAltRepeatTuple,
              MAX_LEADER_SEQS, LEADER_MAX_KEYS, isLeaderCode, isLeaderKey, isLeaderAction, isValidLeaderSequence, normalizeLeaderSequence, hasDuplicateLeaderSequence,
              leaderSequenceLabel, localLeaderTuples, describeLeaderTuple, remapLeaderSequences, isLeaderActionUsed, leaderKeyNumbers,
-             computeTimingRecommendations, computePerKeyTimingSuggestions, applyPerKeyTimingSuggestions, revertPerKeyTimingSuggestions, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
+             computeTimingRecommendations, computeComboStaggerSuggestion, COMBO_STAGGER_GROUP_GAP_MS, COMBO_STAGGER_MIN_CHORDS, computePerKeyTimingSuggestions, applyPerKeyTimingSuggestions, revertPerKeyTimingSuggestions, percentile, createKeyCapture, keyCaptureStart, KEY_CAPTURE_HELD_MS, keyCaptureStop, keyCaptureFeed,
              isValidMacroStep, isValidMacro, macroStepTuple, normalizeMacroStep, textToMacroSteps, macroCommands, isMacroUsed, removeMacroAt,
              macroSaveIndex, COMBO_PRESETS, LEADER_PRESETS, applyComboPreset, applyLeaderPreset, MACRO_PRESETS, applyMacroPreset, buildMacroExport, parseMacroImport, restoreMacroAt, isOneShotOrCapsWordCode, isMouseMoveCode, isOslCode, isTapToggleCode, isDynamicMacroCode, isKeyLockCode, isSwapHandsCode, isNumWordCode, isTtCode, isKeepAwakeCode, isDeepSleepCode, isClearStateCode, isBleHostCode,
              MAX_LAYOUT_PROFILES, sanitizeLayoutProfileName, findLayoutProfileIndex, layoutProfileNameKey, upsertLayoutProfile, removeLayoutProfile,
@@ -1878,6 +1878,8 @@ function onTypingStatsChanged(side) { calls.stats.push(side); }
 function practiceHandleKeyPress(side, r, c, layer) { calls.practice.push([side, r, c, layer]); }
 function feedKeyCapture(side, r, c, pressed) { calls.capture.push(side + r + c + (pressed ? "+" : "-")); }
 function feedTimingAssistant(side, evt) { calls.timing = (calls.timing || 0) + 1; }
+function feedComboStagger(side, evt, bounced, transport) { calls.stagger = (calls.stagger || 0) + 1; calls.staggerBounced = bounced; }
+function stopComboStagger() { calls.staggerStop = (calls.staggerStop || 0) + 1; }
 function triggerVisualKeyPress(r, c, label, side) { calls.press.push(side + r + c); }
 function triggerVisualKeyRelease(r, c, side) { calls.release.push(side + r + c); }
 ${section("js/live-monitor.js", "// Rolle der gedrückten Taste", "function triggerVisualKeyPress")}
@@ -9691,6 +9693,187 @@ asyncTests.push(["Matrix-Test: USB getrennt löst den Zustand ohne Befehl, Neust
   await d.start();
   assert.strictEqual(d.state.sides.L.total, 0);
 }]);
+
+test("Combo-Stagger-Assistent: 95. Perzentil der Spannen innerhalb der Akkorde", () => {
+  // 20 Akkorde mit zwei Tasten, 1 s Pause dazwischen; Spanne 10..29 ms (je einmal) -> p95 = 10 + 19 * 0.95 = 28.05
+  const times = [];
+  for (let i = 0; i < 20; i++) times.push(i * 1000, i * 1000 + 10 + i);
+  const r = api.computeComboStaggerSuggestion(times);
+  assert.strictEqual(r.enough, true);
+  assert.strictEqual(r.chords, 20);
+  assert.strictEqual(r.comboTimeoutMs, 28);
+  assert.ok(Math.abs(r.p95 - 28.05) < 1e-9);
+  // Pausen zwischen den Akkorden zählen nicht, auch ein unsortierter Eingang liefert dasselbe
+  assert.strictEqual(api.computeComboStaggerSuggestion(times.slice().reverse()).comboTimeoutMs, 28);
+});
+
+test("Combo-Stagger-Assistent: Dreier-Akkorde zählen die Spanne vom ersten bis zum letzten Druck", () => {
+  // Die Firmware verlangt alle Tasten im Fenster ab dem ersten Druck: 15 und 25 ms Abstand ergeben 40 ms Spanne
+  const triple = [];
+  for (let i = 0; i < 10; i++) triple.push(i * 800, i * 800 + 15, i * 800 + 40);
+  const t = api.computeComboStaggerSuggestion(triple);
+  assert.strictEqual(t.chords, 10);
+  assert.strictEqual(t.comboTimeoutMs, 40);
+});
+
+test("Combo-Stagger-Assistent: Klemmung, Gruppengrenze, zu wenig Daten und ungültige Werte", () => {
+  // Sehr kleine Spanne: Untergrenze von comboTimeoutMs
+  const tiny = [];
+  for (let i = 0; i < 12; i++) tiny.push(i * 500, i * 500 + 2);
+  assert.strictEqual(api.computeComboStaggerSuggestion(tiny).comboTimeoutMs, api.SETTINGS_RANGES.comboTimeoutMs[0]);
+  // Abstand genau an der Gruppengrenze gehört noch zum Akkord, einer darüber nicht
+  const gap = api.COMBO_STAGGER_GROUP_GAP_MS;
+  assert.ok(gap <= api.SETTINGS_RANGES.comboTimeoutMs[1]);
+  const edge = [];
+  for (let i = 0; i < 12; i++) edge.push(i * 2000, i * 2000 + gap, i * 2000 + gap + gap + 1);
+  const e = api.computeComboStaggerSuggestion(edge);
+  assert.strictEqual(e.chords, 12);
+  assert.strictEqual(e.comboTimeoutMs, gap);
+  // Einzeldrücke ohne Partner sind kein Akkord
+  const single = [];
+  for (let i = 0; i < 30; i++) single.push(i * 1000);
+  assert.strictEqual(api.computeComboStaggerSuggestion(single).chords, 0);
+  // Zu wenig Akkorde: kein Vorschlag
+  const few = api.computeComboStaggerSuggestion([0, 20, 1000, 1030]);
+  assert.strictEqual(few.enough, false);
+  assert.strictEqual(few.comboTimeoutMs, null);
+  for (const bad of [undefined, null, [], [5], [NaN, "x", 1]]) assert.strictEqual(api.computeComboStaggerSuggestion(bad).enough, false);
+});
+
+// diagnostics-ui.js: Messung nimmt nur Drücke der gewählten Hälfte mit Scan-Zeit auf und trägt den Vorschlag ein
+function staggerHarness(serialUp = true) {
+  const input = { value: "40" };
+  const els = { comboTimeoutInput: input };
+  const s = { toasts: [], conn: { serialUp }, editSide: "R", document: { getElementById: id => els[id] || null } };
+  vm.createContext(s);
+  vm.runInContext(`${code}
+function connectionState() { return conn; }
+function showToast(m) { toasts.push(m); }
+${read("js/diagnostics-ui.js")}
+this.state = comboStagger; this.stop = stopComboStagger; this.feed = feedComboStagger; this.toggle = toggleComboStagger; this.apply = applyComboStagger;`, s);
+  return { s, input };
+}
+
+test("Combo-Stagger-Assistent: Messung, Filter und Übernehmen ins Feld", () => {
+  const { s, input } = staggerHarness();
+  assert.strictEqual(s.apply(), false);          // ohne Messung nichts zu übernehmen
+  s.toggle();
+  assert.strictEqual(s.state.recording, true);
+  for (let i = 0; i < 15; i++) {
+    s.feed("R", { r: 1, c: 0, pressed: true, t: i * 1000 });
+    s.feed("R", { r: 1, c: 1, pressed: true, t: i * 1000 + 30 });
+    s.feed("R", { r: 1, c: 1, pressed: false, t: i * 1000 + 90 });   // Loslassen zählt nicht
+    s.feed("L", { r: 1, c: 1, pressed: true, t: i * 1000 + 500 });   // andere Hälfte zählt nicht
+    s.feed("R", { r: 2, c: 2, pressed: true });                       // ohne Scan-Zeit zählt nicht
+  }
+  assert.strictEqual(s.state.presses.length, 30);
+  assert.strictEqual(s.apply(), false);          // während der Messung kein Übernehmen
+  s.toggle();
+  assert.strictEqual(s.state.recording, false);
+  assert.strictEqual(s.apply(), true);
+  assert.strictEqual(input.value, "30");
+  // Die Hälfte hat gewechselt: kein Übernehmen
+  input.value = "40";
+  s.editSide = "L";
+  assert.strictEqual(s.apply(), false);
+  assert.strictEqual(input.value, "40");
+});
+
+test("Combo-Stagger-Assistent: Spanne 0 zählt, Tipp-Rollen und Einzeldrücke nicht", () => {
+  // Zwei Drücke im selben Scan: Spanne 0 ist ein Akkord und senkt das 95. Perzentil nicht künstlich
+  const same = [];
+  for (let i = 0; i < 12; i++) same.push(i * 1000, i * 1000);
+  const z = api.computeComboStaggerSuggestion(same);
+  assert.strictEqual(z.chords, 12);
+  assert.strictEqual(z.comboTimeoutMs, api.SETTINGS_RANGES.comboTimeoutMs[0]);
+  // Schnelles Tippen (Abstand 100 ms, 8 Tasten) verkettet sich zu einer Gruppe über dem Maximum: kein Akkord
+  const roll = [];
+  for (let i = 0; i < 12; i++) for (let k = 0; k < 8; k++) roll.push(i * 5000 + k * 100);
+  assert.strictEqual(api.computeComboStaggerSuggestion(roll).chords, 0);
+});
+
+test("Combo-Stagger-Assistent: Start braucht die USB-Verbindung der bearbeiteten Hälfte", () => {
+  const { s } = staggerHarness();
+  s.conn.serialSide = "L";
+  s.toggle();
+  assert.strictEqual(s.state.recording, false);
+  assert.strictEqual(s.toasts.length, 1);
+  s.conn.serialSide = "R";
+  s.toggle();
+  assert.strictEqual(s.state.recording, true);
+});
+
+test("index.html: der Combo-Stagger-Abschnitt liegt im Diagnose-Panel, switchEditSide stoppt die Messung", () => {
+  const html = read("index.html");
+  const body = html.slice(html.indexOf('<div class="diag-body">'), html.indexOf("</details>", html.indexOf('id="diagPanel"')));
+  assert.ok(body.includes('id="comboStaggerSection"'));
+  assert.ok(body.trimEnd().endsWith("</div>"));
+  assert.strictEqual((body.match(/<div/g) || []).length, (body.match(/<\/div>/g) || []).length);
+  const editor = read("js/editor.js");
+  const fn = editor.slice(editor.indexOf("function switchEditSide"), editor.indexOf("editSide = side;", editor.indexOf("function switchEditSide")));
+  assert.ok(fn.includes("stopComboStagger();"));
+});
+
+test("Combo-Stagger-Assistent: BLE-Zeilen zählen nicht", () => {
+  const { s } = staggerHarness();
+  s.toggle();
+  s.feed("R", { r: 1, c: 0, pressed: true, t: 1000 }, false, "ble");
+  assert.strictEqual(s.state.presses.length, 0);
+  s.feed("R", { r: 1, c: 0, pressed: true, t: 1000 }, false, "usb");
+  assert.strictEqual(s.state.presses.length, 1);
+});
+
+test("Combo-Stagger-Assistent: geprellte Drücke zählen nicht", () => {
+  const { s } = staggerHarness();
+  s.toggle();
+  s.feed("R", { r: 1, c: 0, pressed: true, t: 1000 });
+  s.feed("R", { r: 1, c: 0, pressed: true, t: 1002 }, true);
+  assert.deepStrictEqual([...s.state.presses], [1000]);
+});
+
+test("Combo-Stagger-Assistent: ein Zeitsprung zurück (Neustart der Firmware) verwirft alte Drücke", () => {
+  const { s } = staggerHarness();
+  s.toggle();
+  s.feed("R", { r: 1, c: 0, pressed: true, t: 90000 });
+  s.feed("R", { r: 1, c: 1, pressed: true, t: 90030 });
+  s.feed("R", { r: 1, c: 0, pressed: true, t: 50 });
+  assert.deepStrictEqual([...s.state.presses], [50]);
+});
+
+test("Combo-Stagger-Assistent: Seitenwechsel, Stopp und Obergrenze beenden die Messung", () => {
+  const { s } = staggerHarness();
+  s.toggle();
+  s.feed("R", { r: 1, c: 0, pressed: true, t: 10 });
+  s.editSide = "L";
+  s.feed("R", { r: 1, c: 1, pressed: true, t: 40 });
+  assert.strictEqual(s.state.recording, false);
+  assert.strictEqual(s.state.presses.length, 1);
+  // stopComboStagger (USB getrennt, Panel geschlossen) beendet die Messung und wertet aus
+  s.editSide = "R";
+  s.toggle();
+  s.feed("R", { r: 1, c: 0, pressed: true, t: 10 });
+  s.stop();
+  assert.strictEqual(s.state.recording, false);
+  assert.strictEqual(s.state.result.enough, false);
+  // Obergrenze: die Messung endet bei 5000 Drücken und meldet es
+  s.toggle();
+  for (let i = 0; i < 5000; i++) s.feed("R", { r: 1, c: 0, pressed: true, t: i * 1000 });
+  assert.strictEqual(s.state.recording, false);
+  assert.strictEqual(s.state.presses.length, 5000);
+  assert.strictEqual(s.toasts.length, 1);
+});
+
+test("Combo-Stagger-Assistent: Start braucht USB; Panel, Server und serial.js binden ihn ein", () => {
+  const { s } = staggerHarness(false);
+  s.toggle();
+  assert.strictEqual(s.state.recording, false);
+  assert.strictEqual(s.toasts.length, 1);
+  const html = read("index.html");
+  for (const id of ["btnComboStagger", "btnComboStaggerApply", "btnComboStaggerReset", "comboStaggerStatus"]) assert.ok(html.includes(`id="${id}"`), id);
+  assert.ok(read("js/serial.js").includes("feedComboStagger(lineSide, evt, bounced, transport)"));
+  assert.ok(read("js/editor.js").includes("stopComboStagger();"));
+  assert.ok(read("js/diagnostics-ui.js").includes("initComboStagger();"));
+});
 
 test("index.html, Server und serial.js binden den Matrix-Test (Löttester) ein", () => {
   const html = read("index.html");

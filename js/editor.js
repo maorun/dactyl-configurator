@@ -963,6 +963,7 @@ function switchEditSide(side) {
     // Ein offener Makro-Entwurf und eine laufende Tastenaufnahme gehören zur bisherigen Hälfte
     closeMacroEditor();
     stopKeyCapture();
+    stopComboStagger();
     editSide = side;
     const state = sideStore.get(side);
     currentConfig = state.config;

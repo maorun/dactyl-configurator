@@ -1478,6 +1478,23 @@ bool macroRunStep(const MacroStep &st) {
   return false;
 }
 
+// DEBUG_MACRO_STEP: ein "down"-Schritt hält die Taste, bis RELEASE kommt. Bricht die App ab (Absturz, Kabel gezogen), gibt
+// die Firmware die Tasten nach DEBUG_MACRO_HOLD_MS ohne weiteren Befehl frei; jeder Schritt startet die Frist neu.
+#define DEBUG_MACRO_HOLD_MS 30000UL
+uint16_t debugMacroHeldCodes[MAX_MACRO_STEPS];
+uint8_t debugMacroHeldCount = 0;
+unsigned long debugMacroLastMs = 0;
+
+// Nach Ablauf lässt die Firmware nur die Codes los, die DEBUG_MACRO_STEP hält (nie Tasten, die der Nutzer hält), und meldet es
+void debugMacroTick(unsigned long now) {
+  if (debugMacroHeldCount == 0 || (unsigned long)(now - debugMacroLastMs) < DEBUG_MACRO_HOLD_MS) return;
+  if (!isConfigMode && bleKeyboard.isConnected()) {
+    while (debugMacroHeldCount > 0) macroReleaseCode(debugMacroHeldCodes[--debugMacroHeldCount]);
+  }
+  debugMacroHeldCount = 0;
+  sendConfigNotification("DEBUG_MACRO_TIMEOUT");
+}
+
 // -----------------------------------------------------------------------------
 // Mausbewegung (ACT_MOUSE_UP .. ACT_MOUSE_RIGHT_MOVE)
 // -----------------------------------------------------------------------------
@@ -3285,6 +3302,7 @@ void processDeferredKeys(unsigned long now) {
     }
   }
   macroTick(now);
+  debugMacroTick(now);
   mouseMoveTick(now);
   wheelHoldTick(now);
 }
@@ -5296,6 +5314,55 @@ void handleConfigCommand(String cmd, bool fromBle) {
       sendConfigNotification("OK ADD_MACRO_STEP " + String(idx) + " " + String(macroLengths[idx] - 1));
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
+    }
+  } else if (cmd == "DEBUG_MACRO_STEP RELEASE") {
+    // Schrittweise Makro-Prüfung der App (nur USB-Serial): lässt alle Tasten los, die DEBUG_MACRO_STEP hält
+    if (fromBle) {
+      sendConfigNotification("ERR FORBIDDEN DEBUG_MACRO_STEP");
+    } else {
+      stopMacro(false);
+      debugMacroHeldCount = 0;
+      if (!isConfigMode && bleKeyboard.isConnected()) bleKeyboard.releaseAll();
+      // Eigener Antwortname: die Bestätigung eines Schritts ("OK DEBUG_MACRO_STEP ...") bleibt eindeutig
+      sendConfigNotification("OK DEBUG_MACRO_RELEASE");
+    }
+  } else if (cmd.startsWith("DEBUG_MACRO_STEP ")) {
+    // DEBUG_MACRO_STEP <typ> <code> <ms>: führt genau einen Makro-Schritt sofort aus (tap, down, up; pause sendet nichts,
+    // die App wartet selbst). Nur USB-Serial, ohne Host oder im Config-Modus kein HID-Ereignis (ERR NOHOST).
+    int type, code, ms;
+    char extra;
+    if (fromBle) {
+      sendConfigNotification("ERR FORBIDDEN DEBUG_MACRO_STEP");
+    } else if (sscanf(cmd.c_str(), "DEBUG_MACRO_STEP %d %d %d %c", &type, &code, &ms, &extra) != 3 ||
+               !isValidMacroStep(type, code, ms)) {
+      sendConfigNotification("ERR ARGS " + cmd);
+    } else if (macroRun.active) {
+      sendConfigNotification("ERR BUSY DEBUG_MACRO_STEP");
+    } else if (type != MACRO_STEP_PAUSE && (isConfigMode || !bleKeyboard.isConnected())) {
+      sendConfigNotification("ERR NOHOST DEBUG_MACRO_STEP");
+    } else {
+      MacroStep st = { (uint8_t)type, (uint8_t)code, (uint16_t)ms };
+      uint16_t out = macroStepCode(st);
+      if (type == MACRO_STEP_TAP) {
+        macroPressCode(out);
+        macroReleaseCode(out);
+      } else if (type == MACRO_STEP_DOWN) {
+        macroPressCode(out);
+        bool tracked = false;
+        for (uint8_t i = 0; i < debugMacroHeldCount; i++) tracked = tracked || debugMacroHeldCodes[i] == out;
+        if (!tracked && debugMacroHeldCount < MAX_MACRO_STEPS) debugMacroHeldCodes[debugMacroHeldCount++] = out;
+      } else if (type == MACRO_STEP_UP) {
+        macroReleaseCode(out);
+        for (uint8_t i = 0; i < debugMacroHeldCount; i++) {
+          if (debugMacroHeldCodes[i] != out) continue;
+          for (uint8_t j = i + 1; j < debugMacroHeldCount; j++) debugMacroHeldCodes[j - 1] = debugMacroHeldCodes[j];
+          debugMacroHeldCount--;
+          break;
+        }
+      }
+      debugMacroLastMs = millis();
+      lastActivityTime = debugMacroLastMs;
+      sendConfigNotification("OK DEBUG_MACRO_STEP " + String(type) + " " + String(code) + " " + String(ms));
     }
   } else if (cmd == "SAVE_MACROS") {
     sendConfigNotification(saveMacrosToNVS() ? "OK SAVE_MACROS" : "ERR NVS SAVE_MACROS");

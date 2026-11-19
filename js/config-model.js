@@ -863,6 +863,11 @@ function macroStepTuple(step) {
   return isConsumerActionNumber(n) ? [MACRO_STEP_TYPES[step.type], 0, n] : [MACRO_STEP_TYPES[step.type], n, 0];
 }
 
+// USB-Befehl für einen einzelnen Schritt (schrittweiser Test im Makro-Editor): DEBUG_MACRO_STEP <typ> <code> <ms>
+function macroStepCommand(step) {
+  return `DEBUG_MACRO_STEP ${macroStepTuple(step).join(" ")}`;
+}
+
 // Der Aktionscode eines Triples aus dem Gerät (Umkehrung von macroStepTuple)
 function macroTupleActionNumber(st) {
   return st[1] === 0 ? st[2] : st[1];

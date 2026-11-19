@@ -5,7 +5,7 @@
  * Beide Hälften teilen den Wert; die App meldet "Beide Hälften flashen", wenn er abweicht.
  * Wertebereich 1..65535 (0 = unbekannt). Keine Arduino- oder ESP-IDF-Abhängigkeit.
  */
-#define DACTYL_FW_VERSION 60
+#define DACTYL_FW_VERSION 61
 
 /*
  * DACTYL_GIT_HASH — Git-Kurzhash des Builds (GIT_INFO "githash"). scripts/generate-git-hash.sh schreibt

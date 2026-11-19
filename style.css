@@ -2636,3 +2636,16 @@ body {
   gap: 8px;
   font-size: 12px;
 }
+
+.ble-rssi { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
+.ble-rssi-label { color: var(--text-muted); }
+.ble-rssi-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 16px; }
+.ble-rssi-bar { width: 4px; background: var(--text-muted); opacity: 0.35; }
+.ble-rssi-bar:nth-child(1) { height: 25%; }
+.ble-rssi-bar:nth-child(2) { height: 50%; }
+.ble-rssi-bar:nth-child(3) { height: 75%; }
+.ble-rssi-bar:nth-child(4) { height: 100%; }
+.ble-rssi-bar.is-on { opacity: 1; background: #2e9e5b; }
+.ble-rssi[data-level="fair"] .ble-rssi-bar.is-on { background: #d9a400; }
+.ble-rssi[data-level="weak"] .ble-rssi-bar.is-on { background: #d64545; }
+.ble-rssi-text { color: var(--text-muted); font-variant-numeric: tabular-nums; }

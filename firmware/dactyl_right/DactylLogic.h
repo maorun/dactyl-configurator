@@ -57,6 +57,7 @@
 // "left_fw".
 #include "DactylVersion.h"
 #include "DactylHostLeds.h"
+#include "DactylBleRssi.h"
 #include "DactylDebounce.h"
 #ifdef ARDUINO
 #include <Update.h>
@@ -4170,6 +4171,33 @@ inline void modeStateService() {
   if (modeStateTakeLine(modeStateBits(), line, sizeof(line))) Serial.println(line);
 }
 #endif
+
+// BLE-RSSI im Hauptdurchlauf: bei Mac-Verbindung alle BLE_RSSI_INTERVAL_MS eine Abfrage senden (das Ergebnis kommt
+// asynchron) und jedes neue Ergebnis als "BLE_RSSI:<dBm>" auf USB-Serial ausgeben (nie über BLE). Ohne Verbindung
+// oder im Config Mode kein Zugriff; der Zustand wird gelöscht und einmalig "BLE_RSSI:none" gemeldet, damit die App
+// den alten Wert nicht weiter zeigt.
+inline void bleRssiService(BleRssiState &st, bool connected, unsigned long now, bool (*request)()) {
+  if (!connected) {
+    if (st.valid || st.requested || st.pending) {
+      const bool hadValue = st.valid;
+      bleRssiReset(st);
+      if (hadValue) Serial.println("BLE_RSSI:none");
+    }
+    return;
+  }
+  if (bleRssiRequestDue(st, now)) {
+    // pending vor der Abfrage setzen: das GAP-Ergebnis kann im BLE-Task eintreffen, bevor request() zurückkehrt
+    st.pending = true;
+    if (request && request()) bleRssiRequestSent(st, now);
+    else st.pending = false;
+  }
+  if (st.noneDue) {
+    st.noneDue = false;
+    Serial.println("BLE_RSSI:none");
+  }
+  char line[32];
+  if (bleRssiTakeLine(st, line, sizeof(line))) Serial.println(line);
+}
 
 // Host-LEDs im Hauptdurchlauf: neue Zeile "HOST_LEDS:{...}" auf USB-Serial (nie über BLE) und Onboard-LED
 // (GPIO 22) nach Setting. Ohne Setting bleibt der Pin unberührt.

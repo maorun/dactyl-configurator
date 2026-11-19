@@ -97,6 +97,14 @@
         <button id="btnDiagRefresh" class="btn btn-outline btn-sm" title="Fragt die Werte der verbundenen Tastatur ab. Über Bluetooth nur im Config-Modus.">Diagnose abfragen</button>
         <button id="btnSupportReport" class="btn btn-outline btn-sm" title="Speichert Firmwarestände, Diagnose und Funkverbindung als JSON-Datei. Ohne Belegung, Makros und Tastendaten.">Diagnosebericht speichern</button>
         <ul class="diag-list" id="diagList"><li class="diag-empty">Noch keine Werte. Verbinde die Tastatur und klicke auf "Diagnose abfragen".</li></ul>
+        <!-- Signalstärke der Mac-Verbindung (BLE_RSSI:<dBm>), nur per USB vom Master (js/diagnostics-ui.js) -->
+        <div class="ble-rssi" id="bleRssiMeter" data-level="none">
+          <span class="ble-rssi-label">Bluetooth-Signal zum Mac</span>
+          <span class="ble-rssi-bars" aria-hidden="true">
+            <span class="ble-rssi-bar"></span><span class="ble-rssi-bar"></span><span class="ble-rssi-bar"></span><span class="ble-rssi-bar"></span>
+          </span>
+          <span class="ble-rssi-text" id="bleRssiText">Kein Wert</span>
+        </div>
         <!-- Matrix-Test (Löttester, TEST_MATRIX 1|0): MATRIX_RAW beider Hälften, nur per USB (js/diagnostics-ui.js) -->
         <section class="matrix-raw" id="matrixRawSection">
           <h4>Matrix-Test (Löttester)</h4>

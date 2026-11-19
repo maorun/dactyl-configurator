@@ -1103,6 +1103,7 @@ void setup() {
 void loop() {
   matrixTestOffService();
   hostLedsService(bleKeyboard.hostLeds);
+  bleRssiService(bleKeyboard.bleRssi, bleRssiLinkActive(isConfigMode, bleKeyboard.isConnected()), millis(), DactylBleComposite::requestRssi);
   // oneShotTimeoutMs: unverbrauchte Vormerkungen (Modifier und Ebenen) verfallen, auch ohne Funk-Peer
   oneShotExpire(bleKeyboard.oneShot, millis(), oneShotTimeoutMs);
   oslExpireLocal(millis());

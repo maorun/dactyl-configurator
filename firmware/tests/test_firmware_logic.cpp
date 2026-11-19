@@ -12,6 +12,7 @@
 
 #include "../dactyl_right/DactylCommon.h"
 #include "../dactyl_right/DactylHostLeds.h"
+#include "../dactyl_right/DactylBleRssi.h"
 
 #define CONFIG_MODE_MAGIC 0xDAC7CF60UL
 // Im Test änderbar, um einen Flash aus der App (ID != 0) zu simulieren
@@ -6827,6 +6828,169 @@ TEST(test_host_leds_ble_composite_wired_to_core) {
   assert(src.find("hostLedsOnReport(hostLeds, me->getData(), me->getLength());") != std::string::npos);
   assert(src.find("hostLedsReset(hostLeds);") != std::string::npos);
   assert(src.find("void onWrite(BLECharacteristic* me) override {}") == std::string::npos);
+}
+
+// =============================================================================
+// BLE-RSSI (BLE_RSSI:<dBm>) nur bei Mac-Verbindung, nur über USB-Serial
+// =============================================================================
+static BleRssiState testRssi;
+static int rssiRequests = 0;
+static bool fakeRssiRequest() { rssiRequests++; return true; }
+static bool failingRssiRequest() { rssiRequests++; return false; }
+
+TEST(test_ble_rssi_prints_line_when_connected) {
+  Serial.clear();
+  testRssi = BleRssiState();
+  rssiRequests = 0;
+  bleRssiService(testRssi, true, 1000, fakeRssiRequest);
+  assert(rssiRequests == 1);
+  assert(Serial.outputLines.empty());  // das Ergebnis steht noch aus
+  assert(bleRssiOnResult(testRssi, 0, -63));
+  assert(!bleRssiOnResult(testRssi, 0, -50));  // ohne offene Abfrage zählt ein Ergebnis nicht
+  bleRssiService(testRssi, true, 1100, fakeRssiRequest);
+  assert(rssiRequests == 1);  // Intervall noch nicht erreicht
+  assert(Serial.outputLines.size() == 1);
+  assert(Serial.outputLines[0] == "BLE_RSSI:-63");
+  bleRssiService(testRssi, true, 1200, fakeRssiRequest);
+  assert(Serial.outputLines.size() == 1);  // kein neues Ergebnis, keine neue Zeile
+  bleRssiService(testRssi, true, 1000 + BLE_RSSI_INTERVAL_MS, fakeRssiRequest);
+  assert(rssiRequests == 2);
+  assert(bleRssiOnResult(testRssi, 0, -63));  // gleicher Wert zählt als neues Ergebnis
+  bleRssiService(testRssi, true, 3100, fakeRssiRequest);
+  assert(Serial.outputLines.size() == 2);
+}
+
+TEST(test_ble_rssi_silent_without_connection) {
+  Serial.clear();
+  testRssi = BleRssiState();
+  rssiRequests = 0;
+  bleRssiService(testRssi, true, 1000, fakeRssiRequest);
+  bleRssiOnResult(testRssi, 0, -70);
+  bleRssiService(testRssi, true, 1001, fakeRssiRequest);
+  assert(Serial.outputLines.size() == 1);
+  // Verbindung weg: keine Abfrage, Zustand gelöscht, einmalig "none" damit die App den Wert verwirft
+  bleRssiService(testRssi, false, 5000, fakeRssiRequest);
+  assert(rssiRequests == 1 && !testRssi.valid && !testRssi.requested && !testRssi.pending);
+  assert(Serial.outputLines.size() == 2 && Serial.outputLines[1] == "BLE_RSSI:none");
+  bleRssiService(testRssi, false, 9000, fakeRssiRequest);
+  assert(Serial.outputLines.size() == 2 && rssiRequests == 1);  // "none" nur einmal
+  // Neue Verbindung fragt sofort ab, ein alter Wert erscheint nicht
+  bleRssiService(testRssi, true, 9100, fakeRssiRequest);
+  assert(rssiRequests == 2 && Serial.outputLines.size() == 2);
+}
+
+TEST(test_ble_rssi_rejects_unreadable_values) {
+  testRssi = BleRssiState();
+  testRssi.pending = true;
+  assert(!bleRssiOnResult(testRssi, 0, BLE_RSSI_UNREADABLE));
+  testRssi.pending = true;
+  assert(!bleRssiOnResult(testRssi, 1, -60));   // Controller meldet Fehler
+  testRssi.pending = true;
+  assert(!bleRssiOnResult(testRssi, 0, -128));
+  testRssi.pending = true;
+  assert(!bleRssiOnResult(testRssi, 0, 21));
+  assert(!testRssi.valid);
+  testRssi.pending = true;
+  assert(bleRssiOnResult(testRssi, 0, -127) && testRssi.rssi == -127);
+  testRssi.pending = true;
+  assert(bleRssiOnResult(testRssi, 0, 20) && testRssi.rssi == 20);
+}
+
+TEST(test_ble_rssi_failed_request_retries_next_loop) {
+  Serial.clear();
+  testRssi = BleRssiState();
+  rssiRequests = 0;
+  bleRssiService(testRssi, true, 1000, failingRssiRequest);
+  bleRssiService(testRssi, true, 1001, failingRssiRequest);
+  assert(rssiRequests == 2);  // kein Zeitstempel bei Fehlschlag: nächster Durchlauf versucht es erneut
+  assert(Serial.outputLines.empty());
+}
+
+TEST(test_ble_rssi_late_result_after_reset_is_ignored) {
+  Serial.clear();
+  testRssi = BleRssiState();
+  rssiRequests = 0;
+  bleRssiService(testRssi, true, 1000, fakeRssiRequest);   // Abfrage offen
+  bleRssiService(testRssi, false, 1100, fakeRssiRequest);  // Verbindung endet vor dem Ergebnis
+  assert(!bleRssiOnResult(testRssi, 0, -55));              // spätes Ergebnis der alten Verbindung
+  assert(!testRssi.valid);
+  bleRssiService(testRssi, true, 1200, fakeRssiRequest);
+  assert(Serial.outputLines.empty());                      // die neue Verbindung zeigt den alten Wert nicht
+}
+
+// Das GAP-Ergebnis trifft im BLE-Task ein, bevor request() zurückkehrt
+static bool instantRssiRequest() {
+  rssiRequests++;
+  bleRssiOnResult(testRssi, 0, -58);
+  return true;
+}
+
+TEST(test_ble_rssi_result_before_request_returns_is_kept) {
+  Serial.clear();
+  testRssi = BleRssiState();
+  rssiRequests = 0;
+  bleRssiService(testRssi, true, 1000, instantRssiRequest);
+  assert(testRssi.valid && testRssi.rssi == -58);
+  assert(!testRssi.pending);  // das Ergebnis hat die Abfrage abgeschlossen
+  assert(Serial.outputLines.size() == 1 && Serial.outputLines[0] == "BLE_RSSI:-58");
+}
+
+TEST(test_ble_rssi_failed_request_clears_pending) {
+  testRssi = BleRssiState();
+  bleRssiService(testRssi, true, 1000, failingRssiRequest);
+  assert(!testRssi.pending);
+  assert(!bleRssiOnResult(testRssi, 0, -50));  // keine offene Abfrage: Ergebnis zählt nicht
+}
+
+TEST(test_ble_rssi_unreadable_result_drops_old_value_once) {
+  Serial.clear();
+  testRssi = BleRssiState();
+  rssiRequests = 0;
+  bleRssiService(testRssi, true, 1000, fakeRssiRequest);
+  assert(bleRssiOnResult(testRssi, 0, -66));
+  bleRssiService(testRssi, true, 1100, fakeRssiRequest);
+  assert(Serial.outputLines.size() == 1 && Serial.outputLines[0] == "BLE_RSSI:-66");
+  // Nächste Abfrage liefert 127 (nicht lesbar): der alte Wert gilt nicht mehr
+  bleRssiService(testRssi, true, 1000 + BLE_RSSI_INTERVAL_MS, fakeRssiRequest);
+  assert(!bleRssiOnResult(testRssi, 0, BLE_RSSI_UNREADABLE));
+  assert(!testRssi.valid);
+  bleRssiService(testRssi, true, 3100, fakeRssiRequest);
+  assert(Serial.outputLines.size() == 2 && Serial.outputLines[1] == "BLE_RSSI:none");
+  // Weitere Fehlschläge melden "none" nicht erneut
+  bleRssiService(testRssi, true, 3000 + BLE_RSSI_INTERVAL_MS + 200, fakeRssiRequest);
+  assert(!bleRssiOnResult(testRssi, 1, -60));
+  bleRssiService(testRssi, true, 9000, fakeRssiRequest);
+  assert(Serial.outputLines.size() == 2);
+  // Ein lesbarer Wert danach erscheint wieder
+  bleRssiService(testRssi, true, 9000 + BLE_RSSI_INTERVAL_MS, fakeRssiRequest);
+  assert(bleRssiOnResult(testRssi, 0, -72));
+  bleRssiService(testRssi, true, 11100, fakeRssiRequest);
+  assert(Serial.outputLines.back() == "BLE_RSSI:-72");
+}
+
+TEST(test_ble_rssi_link_gate_excludes_config_mode) {
+  assert(bleRssiLinkActive(false, true));
+  assert(!bleRssiLinkActive(true, true));    // Config Mode: keine Abfrage
+  assert(!bleRssiLinkActive(false, false));  // kein Mac
+  assert(!bleRssiLinkActive(true, false));
+}
+
+TEST(test_ble_rssi_composite_wired_to_core) {
+  std::ifstream f(std::string(__FILE__).substr(0, std::string(__FILE__).rfind('/')) + "/../dactyl_right/DactylBleComposite.h");
+  std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  assert(src.find("esp_ble_gap_read_rssi(rssiOwner->connTracker.peerBda)") != std::string::npos);
+  assert(src.find("ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT") != std::string::npos);
+  assert(src.find("BLEDevice::setCustomGapHandler(onGapEvent);") != std::string::npos);
+  assert(src.find("bleRssiOnResult(rssiOwner->bleRssi") != std::string::npos);
+  std::ifstream g(std::string(__FILE__).substr(0, std::string(__FILE__).rfind('/')) + "/../dactyl_right/dactyl_right.ino");
+  std::string ino((std::istreambuf_iterator<char>(g)), std::istreambuf_iterator<char>());
+  assert(ino.find("bleRssiService(bleKeyboard.bleRssi, bleRssiLinkActive(isConfigMode, bleKeyboard.isConnected())") != std::string::npos);
+  // BLEDevice kennt nur einen Custom-GAP-Handler: nur diese eine Stelle darf ihn setzen
+  std::string::size_type pos = 0;
+  int handlerSets = 0;
+  while ((pos = src.find("BLEDevice::setCustomGapHandler(", pos)) != std::string::npos) { handlerSets++; pos++; }
+  assert(handlerSets == 1);
+  assert(ino.find("BLEDevice::setCustomGapHandler(") == std::string::npos);
 }
 
 // -----------------------------------------------------------------------------

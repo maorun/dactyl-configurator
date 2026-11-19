@@ -351,6 +351,27 @@
     return { capsOn: !!leds.caps, title: `LED-Zustand des Mac: ${on.length ? on.join(", ") : "alle aus"}` };
   }
 
+  // BLE_RSSI-Zeile ("BLE_RSSI:-63"): Signalstärke der Mac-Verbindung des Masters in dBm; nur der Master hat einen Host.
+  // Rückgabe die ganze Zahl, null für "none" (Verbindung beendet) oder undefined bei einer fremden oder ungültigen Zeile (Bereich -127..20).
+  function parseBleRssiLine(line, lineSide) {
+    const D = root.Dactyl;
+    if (typeof line !== "string" || !line.startsWith("BLE_RSSI:")) return undefined;
+    if (lineSide !== D.getMasterSide()) return undefined;
+    const text = line.substring(9).trim();
+    if (text === "none") return null;   // Verbindung beendet: kein Wert mehr
+    if (!/^-?\d{1,3}$/.test(text)) return undefined;
+    const dbm = parseInt(text, 10);
+    return dbm >= -127 && dbm <= 20 ? dbm : undefined;
+  }
+
+  // Anzeige: 0..4 Balken (>= -60 dBm 4, >= -70 3, >= -80 2, >= -90 1, sonst 0); ohne Wert "none"
+  function describeBleRssi(dbm) {
+    if (!Number.isInteger(dbm)) return { bars: 0, level: "none", text: "Kein Wert", title: "Keine Signalstärke der Mac-Verbindung bekannt. Sie kommt nur über USB vom Master." };
+    const bars = dbm >= -60 ? 4 : dbm >= -70 ? 3 : dbm >= -80 ? 2 : dbm >= -90 ? 1 : 0;
+    const level = bars >= 3 ? "good" : bars === 2 ? "fair" : "weak";
+    return { bars, level, text: `${dbm} dBm`, title: `Signalstärke der Mac-Verbindung: ${dbm} dBm (${bars} von 4 Balken)` };
+  }
+
   // USB schiebt jede Änderung des Links nach (SPLIT_LINK), BLE liefert nur den Schnappschuss von GET_INFO.
   // Der Stand bleibt nur gültig, solange USB zum Master besteht.
   function splitLinkStaysValid(conn) {
@@ -429,7 +450,7 @@
 
   root.Dactyl = Object.assign(root.Dactyl || {}, {
     parseDiagLine, parseGitInfoLine, describeDiag, summarizeDiag, NORMAL_RESET_REASONS,
-    parseSplitFwLine, createFirmwareVersions, parseHostLeds, parseHostLedsLine, parseDmRecLine, parseModeStateLine, describeModeState, describeHostLeds, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
+    parseSplitFwLine, createFirmwareVersions, parseHostLeds, parseHostLedsLine, parseBleRssiLine, describeBleRssi, parseDmRecLine, parseModeStateLine, describeModeState, describeHostLeds, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
     parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil
   });

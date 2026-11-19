@@ -3490,12 +3490,13 @@ function buildSupportReport({ appVersion = APP_VERSION, now = Date.now(), device
   };
   const halves = {};
   for (const side of Object.keys(devices)) {
-    const { info, diag, infoAt, diagAt } = devices[side] || {};
+    const { info, diag, infoAt, diagAt, githash } = devices[side] || {};
     const iso = ms => (Number.isFinite(ms) ? new Date(ms).toISOString() : null);
     const hasInfo = !!info && typeof info === "object";
     halves[side] = {
       side: hasInfo && (info.side === "R" || info.side === "L") ? info.side : null,
       device_info: { ...pick(info, SUPPORT_INFO_NUMBERS), config_mode: hasInfo && typeof info.config_mode === "boolean" ? info.config_mode : null },
+      githash: typeof githash === "string" && /^([0-9a-f]{7,12}(-dirty)?|unknown)$/.test(githash) ? githash : null,
       device_info_at: iso(infoAt),
       diag_at: iso(diagAt),
       left_fw: hasInfo ? num(info.left_fw) : null,

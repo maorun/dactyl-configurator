@@ -1805,6 +1805,7 @@ class TestServerAndCodegen(unittest.TestCase):
             repo = os.path.join(tmp, "repo")
             os.makedirs(os.path.join(repo, "scripts"))
             shutil.copy(os.path.join(root, "scripts", "build-app.sh"), os.path.join(repo, "scripts"))
+            shutil.copy(os.path.join(root, "scripts", "generate-git-hash.sh"), os.path.join(repo, "scripts"))
             for name in ("main.js", "package.json", "server.py", "index.html", "app.js", "style.css",
                          "default_config.json", "default_config_left.json"):
                 shutil.copy(os.path.join(root, name), repo)
@@ -3399,6 +3400,135 @@ class TestServerHttp(unittest.TestCase):
             server.save_config_atomic({"layers": []})
         with self.assertRaises(ValueError):
             server.save_config_atomic({"layers": [[]] * 9})
+
+class GitHashTests(unittest.TestCase):
+    ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+    def test_script_writes_valid_header(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "DactylGitHash.h")
+            subprocess.run(["bash", os.path.join(self.ROOT, "scripts", "generate-git-hash.sh")],
+                           env=dict(os.environ, DACTYL_GIT_HASH_FILE=out), check=True)
+            with open(out, encoding="utf-8") as f:
+                text = f.read()
+            self.assertRegex(text, r'(?m)^#define DACTYL_GIT_HASH "[0-9a-f]{7,12}(-dirty)?"$')
+
+    def _run_script(self, repo, out):
+        return subprocess.run(["bash", os.path.join(self.ROOT, "scripts", "generate-git-hash.sh")],
+                              env=dict(os.environ, DACTYL_GIT_HASH_FILE=out), capture_output=True, text=True, check=True,
+                              cwd=repo)
+
+    def test_script_ignores_rendered_ino_and_marks_other_changes_dirty(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(os.path.join(repo, "scripts"))
+            os.makedirs(os.path.join(repo, "firmware", "dactyl_right"))
+            shutil.copy(os.path.join(self.ROOT, "scripts", "generate-git-hash.sh"), os.path.join(repo, "scripts"))
+            ino = os.path.join(repo, "firmware", "dactyl_right", "dactyl_right.ino")
+            other = os.path.join(repo, "firmware", "dactyl_right", "DactylLogic.h")
+            for path in (ino, other):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("a\n")
+            # Wie im echten Repo: die erzeugte Datei ist ignoriert
+            with open(os.path.join(repo, ".gitignore"), "w", encoding="utf-8") as f:
+                f.write("firmware/dactyl_right/DactylGitHash.h*\n")
+            git = lambda *a: subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                            check=True, capture_output=True)
+            git("init", "-q")
+            git("add", ".")
+            git("commit", "-q", "-m", "x")
+            out = os.path.join(repo, "firmware", "dactyl_right", "DactylGitHash.h")
+            script = os.path.join(repo, "scripts", "generate-git-hash.sh")
+            run = lambda: subprocess.run(["bash", script], env=dict(os.environ, DACTYL_GIT_HASH_FILE=out), check=True)
+            read = lambda: open(out, encoding="utf-8").read()
+            # Gerenderte .ino (neue KEYMAP_DEFAULTS_ID beim Flash) ist kein "dirty"
+            with open(ino, "w", encoding="utf-8") as f:
+                f.write("rendered\n")
+            run()
+            self.assertNotIn("-dirty", read())
+            with open(other, "w", encoding="utf-8") as f:
+                f.write("changed\n")
+            run()
+            self.assertIn("-dirty", read())
+            # Eine neue, nicht ignorierte Quelldatei ist ebenfalls ein anderer Stand als der Commit
+            git("checkout", "--", ".")
+            run()
+            self.assertNotIn("-dirty", read())
+            with open(os.path.join(repo, "firmware", "dactyl_right", "New.h"), "w", encoding="utf-8") as f:
+                f.write("new\n")
+            run()
+            self.assertIn("-dirty", read())
+
+    def test_script_removes_stale_header_without_git_and_creates_directory(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "missing", "sub", "DactylGitHash.h")
+            nogit = os.path.join(tmp, "nogit")
+            os.makedirs(os.path.join(nogit, "scripts"))
+            shutil.copy(os.path.join(self.ROOT, "scripts", "generate-git-hash.sh"), os.path.join(nogit, "scripts"))
+            env = dict(os.environ, DACTYL_GIT_HASH_FILE=out, GIT_CEILING_DIRECTORIES=tmp)
+            # Kein Git-Checkout: eine veraltete Datei wird entfernt
+            os.makedirs(os.path.dirname(out))
+            with open(out, "w", encoding="utf-8") as f:
+                f.write('#define DACTYL_GIT_HASH "deadbee"\n')
+            subprocess.run(["bash", os.path.join(nogit, "scripts", "generate-git-hash.sh")], env=env, check=True)
+            self.assertFalse(os.path.exists(out))
+            # Fehlendes Zielverzeichnis wird angelegt (Skript im echten Checkout)
+            shutil.rmtree(os.path.dirname(out))
+            self._run_script(self.ROOT, out)
+            self.assertTrue(os.path.isfile(out))
+
+    def test_ota_compile_generates_hash_before_compile(self):
+        calls = []
+        old = (server.generate_git_hash, server.find_arduino_cli, server.run_cli)
+        server.generate_git_hash = lambda status=None: calls.append("hash")
+        server.find_arduino_cli = lambda: "/bin/arduino-cli"
+        def fake_run(cmd, timeout, cb=None):
+            calls.append(cmd[1])
+            return 1, "stop"
+        server.run_cli = fake_run
+        import tempfile
+        with tempfile.NamedTemporaryFile() as key:
+            old_key = os.environ.get("DACTYL_OTA_PRIV_KEY_FILE")
+            os.environ["DACTYL_OTA_PRIV_KEY_FILE"] = key.name
+            try:
+                server.compile_ota_firmware("R")
+            finally:
+                server.generate_git_hash, server.find_arduino_cli, server.run_cli = old
+                if old_key is None:
+                    os.environ.pop("DACTYL_OTA_PRIV_KEY_FILE", None)
+                else:
+                    os.environ["DACTYL_OTA_PRIV_KEY_FILE"] = old_key
+        self.assertEqual(calls[:2], ["hash", "compile"])
+
+    def test_version_header_exposes_macro_with_fallback(self):
+        with open(os.path.join(self.ROOT, "firmware", "dactyl_right", "DactylVersion.h"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn('#include "DactylGitHash.h"', text)
+        self.assertRegex(text, r'#define DACTYL_GIT_HASH "unknown"')
+
+    def test_hash_header_is_not_versioned(self):
+        with open(os.path.join(self.ROOT, ".gitignore"), encoding="utf-8") as f:
+            self.assertIn("firmware/dactyl_right/DactylGitHash.h*", [line.strip() for line in f])
+
+    def test_flash_generates_hash_before_compile(self):
+        calls = []
+        old = (server.generate_git_hash, server.find_arduino_cli, server.find_serial_port, server.run_cli)
+        server.generate_git_hash = lambda status=None: calls.append("hash")
+        server.find_arduino_cli = lambda: "/bin/arduino-cli"
+        server.find_serial_port = lambda side: "/dev/null"
+        def fake_run(cmd, timeout, cb=None):
+            calls.append(cmd[1])
+            return 1, "stop"
+        server.run_cli = fake_run
+        try:
+            server.flash_firmware("R")
+        finally:
+            server.generate_git_hash, server.find_arduino_cli, server.find_serial_port, server.run_cli = old
+        self.assertEqual(calls[:2], ["hash", "compile"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -375,6 +375,7 @@
 
   // Diagnose (GET_DIAG): DIAG:{"reset":"<Grund>","uptime_s":n,"heap_free":n,"heap_min":n,"loop_max_us":n[,"sq_max":n,"sq_drop":n]}
   // Reset-Gründe, die keine Störung zeigen (Firmware: resetReasonName in DactylLogic.h)
+  const GIT_HASH_RE = /^([0-9a-f]{7,12}(-dirty)?|unknown)$/;
   const NORMAL_RESET_REASONS = ["power_on", "deep_sleep", "software"];
   // Rückgabe: bereinigte Werte oder undefined (kein DIAG, ungültiges JSON, Feld fehlt oder falscher Typ)
   function parseDiagLine(line) {
@@ -391,6 +392,15 @@
     // Sendewarteschlange (nur die linke Hälfte); ältere Firmware oder der Master senden sie nicht
     if (isCount(raw.sq_max) && isCount(raw.sq_drop)) { out.sqMax = raw.sq_max; out.sqDrop = raw.sq_drop; }
     return out;
+  }
+
+  // GIT_INFO:{"githash":"<Kurzhash>[-dirty]"} (GET_INFO, eigene Zeile): Git-Stand der Firmware oder "unknown"; sonst undefined
+  function parseGitInfoLine(line) {
+    if (typeof line !== "string" || !line.startsWith("GIT_INFO:")) return undefined;
+    let raw;
+    try { raw = JSON.parse(line.substring(9)); } catch (_) { return undefined; }
+    if (!raw || typeof raw.githash !== "string" || !GIT_HASH_RE.test(raw.githash)) return undefined;
+    return raw.githash;
   }
 
   function formatUptime(s) {
@@ -418,7 +428,7 @@
   }
 
   root.Dactyl = Object.assign(root.Dactyl || {}, {
-    parseDiagLine, describeDiag, summarizeDiag, NORMAL_RESET_REASONS,
+    parseDiagLine, parseGitInfoLine, describeDiag, summarizeDiag, NORMAL_RESET_REASONS,
     parseSplitFwLine, createFirmwareVersions, parseHostLeds, parseHostLedsLine, parseDmRecLine, parseModeStateLine, describeModeState, describeHostLeds, parseSplitLinkLine, createSplitLinkStatus, describeSplitLink, splitLinkStaysValid,
     parseSplitKeyLine, createSplitKeyTracker, SPLIT_KEY_STALE_MS,
     connectedSide, routeCommand, usbDisconnectAckScope, createAckRegistry, retryUntil

@@ -15,3 +15,5 @@ firmware/dactyl_right/DactylSplitKey.h*
 # BLE OTA Signaturschlüssel und Header (scripts/generate-ota-key.py)
 .ota_signing_key.pem*
 firmware/dactyl_right/DactylOtaKey.h*
+# Git-Kurzhash der Firmware (scripts/generate-git-hash.sh)
+firmware/dactyl_right/DactylGitHash.h*

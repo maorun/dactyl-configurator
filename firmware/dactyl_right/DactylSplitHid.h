@@ -104,7 +104,9 @@ enum SplitHidOp : uint8_t {
   SPLIT_OP_CLEAR_STATE = 32,  // links -> Master: One-Shot-Modifier, Caps Word und Satzanfang groß beenden (CLEAR_STATE), ohne Werte
   SPLIT_OP_MATRIX_RAW = 33,   // links -> Master: Matrix-Test, Schalteränderung (splitKeyEventCode mit Ebene 0), nur USB-Serial am Master
   SPLIT_OP_MATRIX_TEST = 34,  // nur Master -> links: Matrix-Test ein (code 1) oder aus (code 0), arg 0
-  SPLIT_OP_COUNT = 35
+  SPLIT_OP_COMBO_KEY = 35,    // links -> Master: Taste einer Hälften-Combo gedrückt/losgelassen (splitKeyEventCode mit Ebene), ohne HID-Wirkung
+  SPLIT_OP_COMBO_CONSUMED = 36, // nur Master -> links: die Hälften-Combo mit dieser linken Taste (splitKeyEventCode) hat ausgelöst, ohne HID-Wirkung
+  SPLIT_OP_COUNT = 37
 };
 
 struct __attribute__((packed)) SplitHidEvent {
@@ -157,6 +159,27 @@ inline uint8_t splitKeyEventRow(uint16_t code) { return (uint8_t)((code >> 4) & 
 inline uint8_t splitKeyEventCol(uint16_t code) { return (uint8_t)(code & 7); }
 inline uint8_t splitKeyEventLayer(uint16_t code) { return (uint8_t)((code >> 8) & 7); }
 inline bool splitKeyEventPressed(uint16_t code) { return (code & 0x8000) != 0; }
+
+// Nur COMBO_KEY: Bit 11 = Auffrischung einer gehaltenen Taste, Bits 12..14 = Alter des Drucks in 100-ms-Schritten (7 = 700 ms oder mehr).
+// Ohne Bit 11 ist das Paket ein neuer Druck oder ein Loslassen. Der Master behält bei einer Auffrischung die Zeit des ersten Drucks.
+#define SPLIT_COMBO_KEY_REFRESH_BIT 0x0800
+#ifndef SPLIT_COMBO_KEY_AGE_MAX
+#define SPLIT_COMBO_KEY_AGE_MAX 7
+#endif
+#define SPLIT_COMBO_KEY_MASK (SPLIT_KEY_EVENT_MASK | 0x7800)
+inline uint16_t splitComboKeyCode(uint8_t row, uint8_t col, bool pressed, uint8_t layer, uint8_t refreshAge = 0) {
+  // refreshAge: 0 = neuer Druck, sonst 1 + Alter in 100 ms (1..8)
+  uint16_t code = splitKeyEventCode(row, col, pressed, layer);
+  if (pressed && refreshAge >= 1) {
+    uint8_t age = (uint8_t)(refreshAge - 1);
+    if (age > SPLIT_COMBO_KEY_AGE_MAX) age = SPLIT_COMBO_KEY_AGE_MAX;
+    code |= (uint16_t)(SPLIT_COMBO_KEY_REFRESH_BIT | (age << 12));
+  }
+  return code;
+}
+inline uint8_t splitComboKeyRefreshAge(uint16_t code) {  // 0 = kein Auffrischungspaket, sonst 1 + Alter in 100 ms
+  return (code & SPLIT_COMBO_KEY_REFRESH_BIT) ? (uint8_t)(1 + ((code >> 12) & 7)) : 0;
+}
 
 // Layer-Abgleich (Format und Ablauf im Abschnitt "Layer-Abgleich beider Hälften"): code Bits 0..7 =
 // gehaltene MO-Ebenen des Absenders, Bits 9..15 = eingerastete Ebenen 1..7. arg links: 0 = REPORT (nur MO,
@@ -222,6 +245,10 @@ inline bool isValidSplitHidEvent(const SplitHidEvent &ev) {
     case SPLIT_OP_KEY_EVENT:
       return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_KEY_EVENT_MASK) == 0 &&
              splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
+    case SPLIT_OP_COMBO_KEY:    // wie KEY_EVENT, dazu Auffrischung (Bit 11) und Alter (Bits 12..14), nur zusammen mit gedrückt
+      return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_COMBO_KEY_MASK) == 0 &&
+             ((ev.code & 0x7800) == 0 || ((ev.code & SPLIT_COMBO_KEY_REFRESH_BIT) && splitKeyEventPressed(ev.code))) &&
+             splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
     case SPLIT_OP_MATRIX_RAW:   // wie KEY_EVENT, aber ohne Ebene (Bits 8..10 bleiben 0)
       return ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_MATRIX_RAW_MASK) == 0 &&
              splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS;
@@ -268,6 +295,8 @@ inline bool parseSplitMasterPacket(const uint8_t *srcMac, const uint8_t *data, i
             (ev.op == SPLIT_OP_OSL && ev.arg == 0) ||
             (ev.op == SPLIT_OP_MOUSE_SPEED && ev.code <= 3 && ev.arg == 0) ||
             (ev.op == SPLIT_OP_MATRIX_TEST && ev.code <= 1 && ev.arg == 0) ||
+            (ev.op == SPLIT_OP_COMBO_CONSUMED && ev.arg == 0 && (ev.code & (uint16_t)~SPLIT_KEY_EVENT_MASK) == 0 &&
+             splitKeyEventRow(ev.code) < SPLIT_KEY_EVENT_ROWS && splitKeyEventCol(ev.code) < SPLIT_KEY_EVENT_COLS) ||
             (ev.op == SPLIT_OP_REPEAT_RUN && ev.code <= SPLIT_REPEAT_RUN_CODE_ALT_PRESS && ev.arg >= 1);
   if (!ok) return false;
   out = ev;
@@ -2330,7 +2359,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
                              SplitRxAppliedFn onHoldResolve = nullptr,
                              unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS,
                              SplitRxAppliedFn onOsl = nullptr, SplitRxAppliedFn onMouseSpeed = nullptr,
-                             SplitRxAppliedFn onClearState = nullptr, SplitRxAppliedFn onMatrixRaw = nullptr) {
+                             SplitRxAppliedFn onClearState = nullptr, SplitRxAppliedFn onMatrixRaw = nullptr,
+                             SplitRxAppliedFn onComboKey = nullptr) {
   SplitRxReport rep = {0, 0, 0, false, false, false};
   if (!hostReady && hostWasReady) {
     kbd.splitResetForHostLoss();
@@ -2354,6 +2384,15 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   while (splitRxPop(q, ev)) {
     splitNoteLeftRx(kbd.splitLeft, ev, nowMs);
     if (ev.op == SPLIT_OP_FW_VERSION || ev.op == SPLIT_OP_TAP_PENDING || ev.op == SPLIT_OP_HOLD_PENDING) continue;
+    // COMBO_KEY (Taste einer Hälften-Combo links): nur Zustand für die Combo-Auswertung, ohne HID-Wirkung und auch ohne Host.
+    // Wie KEY_EVENT hält es den Master wach (Tippen links), zählt aber nicht gegen das Diagnose-Budget.
+    if (ev.op == SPLIT_OP_COMBO_KEY) {
+      kbd.splitLeft.lastRxMs = nowMs;
+      kbd.splitLeft.linkUp = true;
+      if (rep.keyEvents < 255) rep.keyEvents++;
+      if (onComboKey) onComboKey(ev);
+      continue;
+    }
     // Links wartet mit einer Taste auf die Entscheidung unserer Mod-Tap-Tasten: sie als Halten entscheiden, dann
     // meldet der Master die neue Ebene und den Stand (onHoldResolve). Ohne Mac-Verbindung gibt es nichts zu entscheiden.
     if (ev.op == SPLIT_OP_HOLD_RESOLVE) {
@@ -2446,6 +2485,7 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
       continue;
     }
     if (ev.op == SPLIT_OP_RELEASE_ALL && onRepeat) onRepeat(ev);
+    if (ev.op == SPLIT_OP_RELEASE_ALL && onComboKey) onComboKey(ev);
     // RELEASE_ALL der linken Hälfte löscht auch ihre vorgemerkten One-Shot-Ebenen (dort gelöscht, hier das Spiegelbild)
     if (ev.op == SPLIT_OP_RELEASE_ALL) {
       haveOsl = false;   // ein älteres OSL-Paket derselben Runde darf das Löschen nicht aufheben
@@ -2475,6 +2515,8 @@ SplitRxReport splitProcessRx(Kbd &kbd, SplitRxQueue &q, uint32_t &droppedSeen, b
   // Link weg, Ring voll oder Mac getrennt: die vorgemerkten One-Shot-Ebenen der linken Hälfte gelten nicht mehr
   if (onOsl && (rep.linkLost || rep.overflow || rep.hostLost)) onOsl(makeSplitOslEvent(0, 0));
   if (onMouseSpeed && (rep.linkLost || rep.overflow || rep.hostLost)) onMouseSpeed(makeSplitMouseSpeedEvent(0));
+  // Link weg, Ring voll oder Mac getrennt: die gemeldeten linken Tasten der Hälften-Combos gelten nicht mehr (Loslassen verloren)
+  if (onComboKey && (rep.linkLost || rep.overflow || rep.hostLost)) onComboKey(makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
   return rep;
 }
 

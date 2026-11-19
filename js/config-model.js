@@ -76,6 +76,34 @@ function comboKeys(cb) {
   return third ? [cb.key1, cb.key2, third] : [cb.key1, cb.key2];
 }
 
+// Hälften-Combo: Taste 1 liegt auf side1, Taste 2 auf side2 (beide gesetzt, bekannt und verschieden), ohne dritte Taste
+function comboIsBilateral(cb) {
+  return !!cb && Dactyl.SIDE_IDS.includes(cb.side1) && Dactyl.SIDE_IDS.includes(cb.side2) && cb.side1 !== cb.side2 &&
+    !isValidComboKey(cb.key3);
+}
+
+// Hälfte der Taste i (0 = Taste 1, 1 = Taste 2, 2 = Taste 3) einer Combo; normale Combos liegen ganz auf fallbackSide
+function comboKeySide(cb, i, fallbackSide) {
+  if (!comboIsBilateral(cb)) return fallbackSide;
+  return i === 0 ? cb.side1 : cb.side2;
+}
+
+// Tasten der Combo, die auf der Hälfte side liegen (bei einer normalen Combo alle)
+function comboKeysOnSide(cb, side) {
+  return comboKeys(cb).filter((_, i) => comboKeySide(cb, i, side) === side);
+}
+
+// Reihenfolge wie in der Firmware: normale Combos zuerst, Hälften-Combos dahinter, je Gruppe in der alten Reihenfolge
+function orderedCombos(cfg) {
+  const list = Array.isArray(cfg && cfg.combos) ? cfg.combos : [];
+  return [...list.filter(cb => !comboIsBilateral(cb)), ...list.filter(comboIsBilateral)];
+}
+
+// Flag der Firmware für eine Hälfte: 1 = linke Hälfte (ohne HID-Dienst), 0 = Master
+function comboSideFlag(side) {
+  return SIDE_PROFILES[side] && !SIDE_PROFILES[side].master ? 1 : 0;
+}
+
 // Ebenen der Maske als aufsteigende Liste, z. B. 0b101 -> [0, 2]
 function comboMaskLayers(mask) {
   const out = [];
@@ -1128,6 +1156,12 @@ function validateConfigShape(cfg, profile) {
       if (cb.layerMask !== undefined && cb.layerMask !== null && !isValidComboLayerMask(cb.layerMask)) {
         throw new Error(`Combo ${i + 1} hat eine ungültige Ebenenmaske (1..${COMBO_ALL_LAYERS} erwartet).`);
       }
+      if ((cb.side1 !== undefined && cb.side1 !== null) || (cb.side2 !== undefined && cb.side2 !== null)) {
+        if (!Dactyl.SIDE_IDS.includes(cb.side1) || !Dactyl.SIDE_IDS.includes(cb.side2) || cb.side1 === cb.side2) {
+          throw new Error(`Combo ${i + 1}: side1 und side2 müssen zwei verschiedene Hälften nennen.`);
+        }
+        if (cb.key3 !== undefined && cb.key3 !== null) throw new Error(`Combo ${i + 1}: Eine Hälften-Combo hat keine dritte Taste.`);
+      }
       if (cb.key3 !== undefined && cb.key3 !== null) {
         if (!isValidComboKey(cb.key3)) throw new Error(`Combo ${i + 1} hat eine ungültige dritte Taste (key3).`);
         const same = k => k.r === cb.key3.r && k.c === cb.key3.c;
@@ -1431,9 +1465,12 @@ function normalizeConfig(cfg, profile) {
         // Eine ungültige Maske wird zu "alle Ebenen"; die Maske für alle Ebenen steht nicht in der Datei.
         // Eine ungültige oder doppelte dritte Taste und ein ungültiges Fenster entfallen (zwei Tasten, globales Fenster).
         .map(cb => {
-          const { layerMask, key3, windowMs, ...rest } = cb;
+          const { layerMask, key3, windowMs, side1, side2, ...rest } = cb;
           const out = isValidComboLayerMask(layerMask) && layerMask !== COMBO_ALL_LAYERS ? { ...rest, layerMask } : rest;
-          const distinct = isValidComboKey(key3) && !(key3.r === cb.key1.r && key3.c === cb.key1.c) &&
+          // Eine Hälften-Combo braucht zwei bekannte, verschiedene Hälften und hat keine dritte Taste; sonst entfallen die Felder
+          const bilateral = Dactyl.SIDE_IDS.includes(side1) && Dactyl.SIDE_IDS.includes(side2) && side1 !== side2;
+          if (bilateral) { out.side1 = side1; out.side2 = side2; }
+          const distinct = !bilateral && isValidComboKey(key3) && !(key3.r === cb.key1.r && key3.c === cb.key1.c) &&
             !(key3.r === cb.key2.r && key3.c === cb.key2.c);
           if (distinct) out.key3 = key3;
           if (isValidComboWindow(windowMs)) out.windowMs = windowMs;
@@ -2137,7 +2174,8 @@ function captureListLine(snapshot, line) {
     const list = snapshot[kind];
     if (count === null || data.o !== list.length || !Array.isArray(data.e) || list.length + data.e.length > count ||
         !data.e.every(e => isCombo ? (nums(e, 6, t => t[4] <= 2) || nums(e, 7, t => t[4] <= 2 && isValidComboLayerMask(t[6])) ||
-            nums(e, 10, t => t[4] <= 2 && isValidComboLayerMask(t[6]) && isDeviceComboThirdAndWindow(t)))
+            nums(e, 10, t => t[4] <= 2 && isValidComboLayerMask(t[6]) && isDeviceComboThirdAndWindow(t)) ||
+            nums(e, 12, t => t[4] <= 2 && isValidComboLayerMask(t[6]) && isDeviceComboThirdAndWindow(t) && t[10] <= 1 && t[11] <= 1 && t[10] !== t[11]))
           : isOverride ? (nums(e, 3, t => isDeviceOverrideMods(t[0])) || nums(e, 4, t => isDeviceOverrideMods(t[0]) && isValidComboLayerMask(t[3])))
           : isLeader ? nums(e, 5, isDeviceLeaderTuple) : isAltRepeat ? nums(e, 2, t => t[0] >= 1 && t[0] <= 0xFF && t[1] >= 1 && t[1] <= 0xFF) : nums(e, 2))) return fail();
     // Firmware vor der Ebenenmaske sendet 6 Werte je Combo (alle Ebenen), vor Stand 24 sieben (zwei Tasten, globales
@@ -2196,10 +2234,13 @@ function snapshotListsKnown(snapshot) {
 
 // Lokale Listen als Zahlen-Tupel, so wie die Firmware sie sendet
 function localComboTuples(cfg) {
-  return (cfg.combos || []).slice(0, MAX_COMBOS).map(cb => {
+  return orderedCombos(cfg).slice(0, MAX_COMBOS).map(cb => {
     const third = comboThirdKey(cb);
-    return [cb.key1.r, cb.key1.c, cb.key2.r, cb.key2.c, COMBO_BEHAVIOR_CODES[cb.behavior] ?? 0, actionCodeToNumeric(cb.action),
+    const tuple = [cb.key1.r, cb.key1.c, cb.key2.r, cb.key2.c, COMBO_BEHAVIOR_CODES[cb.behavior] ?? 0, actionCodeToNumeric(cb.action),
       comboLayerMask(cb), third ? third.r : COMBO_NO_KEY, third ? third.c : COMBO_NO_KEY, comboWindowMs(cb)];
+    // Hälften-Combo: zwei Werte mehr (Taste 1 links, Taste 2 links); normale Combos behalten zehn Werte
+    if (comboIsBilateral(cb)) tuple.push(comboSideFlag(cb.side1), comboSideFlag(cb.side2));
+    return tuple;
   });
 }
 
@@ -2240,7 +2281,11 @@ function describeComboTuple(t) {
   const layers = mask === COMBO_ALL_LAYERS ? "" : ` (${comboMaskLayers(mask).length === 1 ? "Ebene" : "Ebenen"} ${comboMaskLayers(mask).join(", ")})`;
   const third = t[7] !== undefined && t[7] !== COMBO_NO_KEY && t[8] !== COMBO_NO_KEY ? ` + R${t[7]}C${t[8]}` : "";
   const window = t[9] ? ` (Fenster ${t[9]} ms)` : "";
-  return `R${t[0]}C${t[1]} + R${t[2]}C${t[3]}${third} → ${findDefinitionByCode(t[5]).label}${behavior}${layers}${window}`;
+  // Hälften-Combo: die Hälfte jeder Taste (Wert 1 = links)
+  const half = v => (v ? "L" : "R");
+  const k1 = t.length === 12 ? `${half(t[10])}:R${t[0]}C${t[1]}` : `R${t[0]}C${t[1]}`;
+  const k2 = t.length === 12 ? `${half(t[11])}:R${t[2]}C${t[3]}` : `R${t[2]}C${t[3]}`;
+  return `${k1} + ${k2}${third} → ${findDefinitionByCode(t[5]).label}${behavior}${layers}${window}`;
 }
 
 function describePairTuple(t) {
@@ -2466,6 +2511,12 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
         actionLabel
       };
       if (t[6] !== COMBO_ALL_LAYERS) combo.layerMask = t[6];
+      if (t.length === 12) {
+        // Hälften-Combo: die Flags nennen die Hälfte je Taste; Namen und Beschriftung der anderen Hälfte kennt das Gerät nicht
+        const sideOf = v => Dactyl.SIDE_IDS.find(id => comboSideFlag(id) === v);
+        combo.side1 = sideOf(t[10]);
+        combo.side2 = sideOf(t[11]);
+      }
       return combo;
     }),
     keyPairs: snapshot.pairs.map(t => ({ first: tapOf(t[0]), second: tapOf(t[1]) })),
@@ -2496,7 +2547,7 @@ function buildConfigFromSnapshot(snapshot, baseCfg, profile) {
   // Ohne CHORDAL_EX (Firmware vor Stand 53) bleiben die lokalen Ausnahmen
   if (snapshot.chordalEx) cfg.settings.chordalHoldExclusions = snapshot.chordalEx;
   // Das Gerät speichert keine Combo-Namen: ein lokaler Combo mit gleichem Index und gleichen Werten behält Id und Namen
-  const localCombos = (baseCfg && Array.isArray(baseCfg.combos)) ? baseCfg.combos : [];
+  const localCombos = baseCfg ? orderedCombos(baseCfg) : [];
   const localTuples = baseCfg ? localComboTuples(baseCfg) : [];
   cfg.combos.forEach((cb, i) => {
     const local = localCombos[i];
@@ -2680,8 +2731,12 @@ function lintLayerAction(code) {
 
 // Eine Combo kann nur auslösen, wenn beide Tasten an der Hälfte existieren
 function lintComboCanFire(cb, profile) {
+  // Hälften-Combo: jede Taste muss an ihrer eigenen Hälfte verlötet sein, nicht an der Hälfte der Config
   return !!cb && typeof cb === "object" && !!cb.key1 && !!cb.key2 &&
-    comboKeys(cb).every(k => isWiredSwitch(k.r, k.c, profile));
+    comboKeys(cb).every((k, i) => {
+      const keySide = comboKeySide(cb, i, null);
+      return isWiredSwitch(k.r, k.c, keySide && SIDE_PROFILES[keySide] ? SIDE_PROFILES[keySide] : profile);
+    });
 }
 
 function lintLayerName(layers) {
@@ -2943,7 +2998,7 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
     combos.forEach((cb, i) => {
       // Nur Combos, die auslösen können: Koordinaten als Text ("2") oder fehlende Tasten sind keine Dopplung
       if (!lintComboCanFire(cb, profiles[side])) return;
-      const ids = comboKeys(cb).map(k => `${k.r}_${k.c}`).sort().join("|");
+      const ids = comboKeys(cb).map((k, ki) => `${comboKeySide(cb, ki, side)}${k.r}_${k.c}`).sort().join("|");
       const earlier = (seen.get(ids) || []).find(e => (e.mask & comboLayerMask(cb)) !== 0);
       if (earlier) {
         add("warn", side, "combo-duplicate", `Combo ${earlier.index + 1} und Combo ${i + 1} nutzen dieselben ${comboKeys(cb).length === 3 ? "drei" : "zwei"} Tasten. Beide lösen gleichzeitig aus.`,
@@ -2953,12 +3008,28 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
         seen.get(ids).push({ index: i, mask: comboLayerMask(cb) });
       }
     });
+    // Hälften-Combo ohne Gegenstück in der Config der anderen Hälfte: nur der Master löst sie aus, die andere Hälfte kennt ihre Taste
+    // nicht und sendet sie allein (Profil, Import oder Backup nur einer Hälfte)
+    combos.forEach((cb, i) => {
+      if (!comboIsBilateral(cb) || !lintComboCanFire(cb, profiles[side])) return;
+      const other = cb.side1 === side ? cb.side2 : cb.side1;
+      const otherCombos = configs[other] && Array.isArray(configs[other].combos) ? configs[other].combos : null;
+      if (!otherCombos || !profiles[other]) return;
+      const mirrored = otherCombos.some(o => comboIsBilateral(o) && o.side1 === cb.side1 && o.side2 === cb.side2 &&
+        o.key1.r === cb.key1.r && o.key1.c === cb.key1.c && o.key2.r === cb.key2.r && o.key2.c === cb.key2.c &&
+        comboLayerMask(o) === comboLayerMask(cb));
+      if (!mirrored) {
+        add("warn", side, "combo-bilateral-unmirrored",
+          `Combo ${i + 1} ist eine Hälften-Combo, steht aber nicht in der Config der anderen Hälfte. Die andere Taste wird allein gesendet.`,
+          { combo: i });
+      }
+    });
     // Eine Combo mit zwei Tasten, die in einer Combo mit drei Tasten enthalten ist, löst vorab aus: beide Combos feuern
     combos.forEach((three, j) => {
       if (!lintComboCanFire(three, profiles[side]) || comboKeys(three).length !== 3) return;
       const ids3 = comboKeys(three).map(k => `${k.r}_${k.c}`);
       combos.forEach((two, i) => {
-        if (i === j || !lintComboCanFire(two, profiles[side]) || comboKeys(two).length !== 2) return;
+        if (i === j || comboIsBilateral(two) || !lintComboCanFire(two, profiles[side]) || comboKeys(two).length !== 2) return;
         if ((comboLayerMask(two) & comboLayerMask(three)) === 0) return;
         if (!comboKeys(two).every(k => ids3.includes(`${k.r}_${k.c}`))) return;
         add("warn", side, "combo-subset",
@@ -2969,7 +3040,8 @@ function lintLayouts(configs, profiles, labelFor = code => code) {
     combos.forEach((cb, i) => {
       // Eine Taste, die es an der Hälfte nicht gibt, meldet schon "absent-key-action"; die Combo löst nie aus
       if (!lintComboCanFire(cb, profiles[side])) return;
-      for (const key of comboKeys(cb)) {
+      // Eine Taste der anderen Hälfte prüft die Config dieser Hälfte nicht (Hälften-Combo)
+      for (const key of comboKeysOnSide(cb, side)) {
         const layers = [];
         const holdLayers = [];
         for (let l = 0; l < NUM_LAYERS; l++) {

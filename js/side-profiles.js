@@ -112,9 +112,13 @@
     }
     if (Array.isArray(cfg.combos)) {
       cfg.combos.forEach((cb, i) => {
-        for (const key of [cb && cb.key1, cb && cb.key2, cb && cb.key3]) {
+        // Hälften-Combo: die Taste der anderen Hälfte gehört nicht zu dieser Config
+        const bilateral = !!cb && SIDE_IDS.includes(cb.side1) && SIDE_IDS.includes(cb.side2) && cb.side1 !== cb.side2;
+        const keys = [cb && cb.key1, cb && cb.key2, cb && cb.key3];
+        keys.forEach((key, ki) => {
+          if (bilateral && ki < 2 && (ki === 0 ? cb.side1 : cb.side2) !== profile.id) return;
           if (key && !isPhysicalKey(profile, key.r, key.c)) out.push(`Combo ${i + 1} (R${key.r}C${key.c})`);
-        }
+        });
       });
     }
     return out;

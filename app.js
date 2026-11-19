@@ -113,6 +113,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initKeyPairsUI();
   initKeyOverridesUI();
   initLeaderUI();
+  initCombosUI();
   initAltRepeatUI();
   initMacrosUI();
   initLayoutProfilesUI();

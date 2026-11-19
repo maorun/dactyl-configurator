@@ -106,7 +106,7 @@ async function writeConfigToESP32(options = {}) {
     const s = cfg.settings || {};
     const settingCommands = buildSettingCommands(s, profile);
     const totalLayers = Math.min(cfg.layers.length, NUM_LAYERS);
-    const combos = cfg.combos.slice(0, MAX_COMBOS);
+    const combos = orderedCombos(cfg).slice(0, MAX_COMBOS);
     const macros = (cfg.macros || []).slice(0, MAX_MACROS);
     const overrides = profile.master ? (cfg.keyOverrides || []).slice(0, MAX_KEY_OVERRIDES) : [];
     const leaderSeqs = (cfg.leaderSequences || []).slice(0, MAX_LEADER_SEQS);
@@ -185,7 +185,9 @@ async function writeConfigToESP32(options = {}) {
       // dann versteht auch Firmware vor Stand 24 den Befehl.
       const third = comboThirdKey(cb);
       const windowMs = comboWindowMs(cb);
-      const moreArg = third || windowMs ? ` ${mask} ${third ? third.r : COMBO_NO_KEY} ${third ? third.c : COMBO_NO_KEY} ${windowMs}` : "";
+      // Hälften-Combo: dazu je Taste die Hälfte (1 = links); nur sie bekommt die zwölf Werte
+      const sideArg = comboIsBilateral(cb) ? ` ${comboSideFlag(cb.side1)} ${comboSideFlag(cb.side2)}` : "";
+      const moreArg = third || windowMs || sideArg ? ` ${mask} ${third ? third.r : COMBO_NO_KEY} ${third ? third.c : COMBO_NO_KEY} ${windowMs}${sideArg}` : "";
       const maskArg = moreArg || (mask === COMBO_ALL_LAYERS ? "" : ` ${mask}`);
       await sendConfirmed(`ADD_COMBO ${cb.key1.r} ${cb.key1.c} ${cb.key2.r} ${cb.key2.c} ${bCode} ${actCode}${maskArg}`, "ADD_COMBO");
       updateProgress();

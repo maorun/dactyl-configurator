@@ -104,6 +104,13 @@ void sendConfigNotification(String msg, bool addDelay = false);
 static SplitTapPendingReporter tapPendingReporter = {};
 static void onDoubleTapFlushed();
 #define DOUBLE_TAP_FLUSHED() onDoubleTapFlushed()
+// Wie dactyl_left.ino: Hälften-Combos melden die linke Taste an den Master (SPLIT_OP_COMBO_KEY)
+#define DEVICE_IS_LEFT 1
+static void queueComboKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer, uint8_t refreshAge) {
+  if (isConfigMode || !bleKeyboard.isConnected()) return;
+  queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitComboKeyCode(r, c, pressed, layer, refreshAge)));
+}
+#define COMBO_REMOTE_KEY_SEND(r, c, pressed, layer, refreshAge) queueComboKey(r, c, pressed, layer, refreshAge)
 #include "../dactyl_right/DactylLogic.h"
 
 static void onDoubleTapFlushed() {
@@ -132,6 +139,9 @@ static void resetState() {
   resetDoubleTap();
   tapPendingReporter = {};
   numCombos = 0;
+  for (int r = 0; r < NUM_ROWS; r++) for (int c = 0; c < NUM_COLS; c++) comboRemoteSent[r][c] = false;
+  comboRemoteClear();
+  for (int i = 0; i < MAX_COMBOS; i++) { userCombos[i] = KeyCombo(); comboRuntime[i].active = false; comboRuntime[i].lastReleaseTime = 0; }
   numKeyPairs = 0;
   numLeaderSeqs = 0;
   leaderReset();
@@ -1288,6 +1298,165 @@ TEST(test_left_key_lock_without_master_arms_nothing) {
   assert(!bleKeyboard.isConnected());
   tap(0, 0);
   assert(drain().empty());
+}
+
+
+// Hälften-Combo auf der linken Hälfte: die Taste links wird dem Master gemeldet und bis zu seinem Treffer gehalten
+static void addLeftBilateralCombo() {
+  KEYMAP[0][2][1] = 'a';
+  comboTimeoutMs = 40;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 255 255 0 1 0", false);   // links R2C1 + rechts R2C2 -> Esc
+  assert(mockChar.value == "OK ADD_COMBO 0");
+}
+
+TEST(test_bilateral_combo_left_key_is_reported_to_the_master_and_buffered) {
+  addLeftBilateralCombo();
+  assert(comboContainsKey(0, 2, 1) && !comboContainsKey(0, 2, 2));
+  assert(isComboCandidateKey(2, 1));                          // gepuffert wie ein Kandidat einer normalen Combo
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && ev[0].op == SPLIT_OP_COMBO_KEY && isValidSplitHidEvent(ev[0]));
+  assert(splitKeyEventRow(ev[0].code) == 2 && splitKeyEventCol(ev[0].code) == 1 && splitKeyEventPressed(ev[0].code));
+  assert(!keySentToHost[2][1]);                               // 'a' geht nicht sofort raus
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  ev = drain();
+  // Ein schnelles Loslassen sendet die Einzeltaste und meldet das Loslassen der Combo-Taste
+  bool released = false;
+  for (const SplitHidEvent &e : ev) if (e.op == SPLIT_OP_COMBO_KEY && !splitKeyEventPressed(e.code)) released = true;
+  assert(released);
+  for (const SplitHidEvent &e : ev) assert(isValidSplitHidEvent(e));
+}
+
+TEST(test_bilateral_combo_consumed_by_the_master_suppresses_the_left_key) {
+  addLeftBilateralCombo();
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  drain();
+  comboRemoteConsumed(2, 1);                                 // der Master hat ausgelöst (SPLIT_OP_COMBO_CONSUMED)
+  assert(comboRuntime[0].active && keySentToHost[2][1]);
+  processDeferredKeys(millis() + 500);
+  assert(drain().empty());                                   // die Taste geht nie als Einzeltaste raus
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  std::vector<SplitHidEvent> ev = drain();
+  // Wie bei einer normalen Combo folgt das Loslassen der als gesendet markierten Taste (harmlos: der Master hält sie nicht);
+  // ein KEY_PRESS 'a' gibt es nie. Dazu das Loslassen der Combo-Taste an den Master.
+  bool comboReleased = false;
+  for (const SplitHidEvent &e : ev) {
+    assert(e.op != SPLIT_OP_KEY_PRESS);
+    if (e.op == SPLIT_OP_COMBO_KEY && !splitKeyEventPressed(e.code)) comboReleased = true;
+  }
+  assert(comboReleased);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);                           // die Combo endet mit der Taste
+}
+
+TEST(test_bilateral_combo_left_key_goes_out_alone_without_a_hit) {
+  addLeftBilateralCombo();
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  drain();
+  assert(comboBufferMs(2, 1) == 40 + 2 * COMBO_SPLIT_GRACE_MS);   // Fenster + Hinweg + Rückweg des Treffers
+  processDeferredKeys(millis() + 40 + 2 * COMBO_SPLIT_GRACE_MS - 1);
+  assert(drain().empty());                                   // der späte Treffer kann die Taste noch erreichen
+  processDeferredKeys(millis() + 40 + 2 * COMBO_SPLIT_GRACE_MS + 5);
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && ev[0].op == SPLIT_OP_KEY_PRESS && ev[0].code == 'a');
+}
+
+TEST(test_bilateral_combo_held_left_key_is_refreshed_after_the_master_cleared_it) {
+  addLeftBilateralCombo();
+  setMillis(1000);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  drain();
+  bleKeyboard.releaseAll();                                   // z. B. eine linke Combo löst aus: der Master löscht den Zustand
+  drain();
+  setMillis(1000 + COMBO_REMOTE_REFRESH_MS - 1);
+  checkUserCombos();
+  assert(drain().empty());                                    // noch nicht fällig
+  setMillis(1000 + COMBO_REMOTE_REFRESH_MS + 1);
+  checkUserCombos();
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && ev[0].op == SPLIT_OP_COMBO_KEY && splitKeyEventPressed(ev[0].code) && isValidSplitHidEvent(ev[0]));
+  // Nach dem Loslassen endet die Auffrischung
+  keyState[2][1] = false;
+  onMatrixKeyChange(2, 1, false);
+  drain();
+  setMillis(5000);
+  checkUserCombos();
+  assert(drain().empty());
+}
+
+TEST(test_bilateral_combo_refresh_packet_carries_the_age_of_the_held_key) {
+  addLeftBilateralCombo();
+  setMillis(1000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 1000;
+  onMatrixKeyChange(2, 1, true);
+  std::vector<SplitHidEvent> first = drain();
+  assert(first.size() == 1 && first[0].op == SPLIT_OP_COMBO_KEY && splitComboKeyRefreshAge(first[0].code) == 0);
+  setMillis(1000 + 5 * COMBO_REMOTE_REFRESH_MS + 1);          // 1 s gehalten, fünf Auffrischungen später
+  checkUserCombos();
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && ev[0].op == SPLIT_OP_COMBO_KEY && isValidSplitHidEvent(ev[0]));
+  assert(splitComboKeyRefreshAge(ev[0].code) == 1 + SPLIT_COMBO_KEY_AGE_MAX);   // auf 700 ms begrenzt
+}
+
+TEST(test_bilateral_combo_consumed_with_two_combos_on_one_left_key_marks_the_first_one) {
+  addLeftBilateralCombo();
+  numCombos = 2;
+  userCombos[1] = userCombos[0];
+  userCombos[1].r2 = 3;                                      // zweite Combo: dieselbe linke Taste, anderer rechter Partner
+  keyState[2][1] = true;
+  keyPressTime[2][1] = millis();
+  comboRemoteConsumed(2, 1);
+  assert(comboRuntime[0].active && !comboRuntime[1].active); // dokumentiertes Limit: nur die Taste ist bekannt
+}
+
+TEST(test_bilateral_combo_consumed_ignores_a_late_packet_for_a_new_press) {
+  addLeftBilateralCombo();
+  setMillis(1000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 1000;
+  setMillis(1000 + COMBO_WINDOW_MAX + COMBO_SPLIT_GRACE_MS + 50);   // das Paket kommt lange nach dem Druck
+  comboRemoteConsumed(2, 1);
+  assert(!comboRuntime[0].active && !keySentToHost[2][1]);
+  keyPressTime[2][1] = millis() - 10;                        // frischer Druck: der Treffer gilt
+  comboRemoteConsumed(2, 1);
+  assert(comboRuntime[0].active && keySentToHost[2][1]);
+}
+
+TEST(test_bilateral_combo_consumed_ignores_a_key_that_is_already_sent_or_released) {
+  addLeftBilateralCombo();
+  comboRemoteConsumed(2, 1);                                 // Taste nicht gedrückt
+  assert(!comboRuntime[0].active);
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  processDeferredKeys(millis() + 200);                       // ging schon als Einzeltaste raus
+  drain();
+  comboRemoteConsumed(2, 1);
+  assert(!comboRuntime[0].active);
+}
+
+TEST(test_bilateral_combo_left_reports_only_for_keys_of_a_bilateral_combo) {
+  addLeftBilateralCombo();
+  KEYMAP[0][3][3] = 'x';
+  keyState[3][3] = true;
+  onMatrixKeyChange(3, 3, true);
+  keyState[3][3] = false;
+  onMatrixKeyChange(3, 3, false);
+  for (const SplitHidEvent &e : drain()) assert(e.op != SPLIT_OP_COMBO_KEY);
+}
+
+TEST(test_bilateral_combo_left_without_link_reports_nothing) {
+  addLeftBilateralCombo();
+  isConfigMode = true;
+  keyState[2][1] = true;
+  onMatrixKeyChange(2, 1, true);
+  for (const SplitHidEvent &e : drain()) assert(e.op != SPLIT_OP_COMBO_KEY);
 }
 
 int main() {

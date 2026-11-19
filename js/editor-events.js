@@ -35,6 +35,8 @@ function applyComboPresetFromUI(presetKey) {
 window.deleteCombo = function(id) {
   const deletedCombo = currentConfig.combos ? currentConfig.combos.find(c => c.id === id) : null;
   currentConfig.combos = currentConfig.combos.filter(c => c.id !== id);
+  // Eine Hälften-Combo verschwindet auch auf der anderen Hälfte
+  const restoreMirror = deletedCombo ? removeBilateralMirror(deletedCombo) : null;
   renderCombosTable();
   renderMatrix();
   saveConfigToServer();
@@ -48,6 +50,7 @@ window.deleteCombo = function(id) {
         if (!currentConfig.combos.some(c => c.id === deletedCombo.id) && currentConfig.combos.length < MAX_COMBOS) {
           currentConfig.combos.push(deletedCombo);
         }
+        if (restoreMirror) restoreMirror();
         renderCombosTable();
         renderMatrix();
         saveConfigToServer();
@@ -435,6 +438,7 @@ function setupEventListeners() {
     }
     document.querySelectorAll(".combo-layer-check").forEach(cb => { cb.checked = true; });
     document.getElementById("comboWindowInput").value = "";
+    resetComboBilateralUI();
     clearSelectFilter("comboActionSelect");
     comboModal.style.display = "flex";
   };
@@ -481,8 +485,13 @@ function setupEventListeners() {
 
     // Leer = keine dritte Taste
     const k3Raw = document.getElementById("comboKey3Select").value;
-    const k3Val = k3Raw ? k3Raw.split(",") : null;
-    if (k1Val[0] === k2Val[0] && k1Val[1] === k2Val[1]) {
+    const k3Val = k3Raw && !comboBilateralChecked() ? k3Raw.split(",") : null;
+    const bilateral = comboBilateralChecked();
+    if (bilateral) {
+      const reason = bilateralComboBlockReason();
+      if (reason) { alert(reason); return; }
+    }
+    if (!bilateral && k1Val[0] === k2Val[0] && k1Val[1] === k2Val[1]) {
       alert("Taste 1 und Taste 2 dürfen nicht identisch sein!");
       return;
     }
@@ -574,7 +583,7 @@ function setupEventListeners() {
 
     const layer = currentConfig.layers[0];
     const lbl1 = (layer[r1] && layer[r1][c1]) ? layer[r1][c1].label : `R${r1}C${c1}`;
-    const lbl2 = (layer[r2] && layer[r2][c2]) ? layer[r2][c2].label : `R${r2}C${c2}`;
+    const lbl2 = bilateral ? comboKeyLabelOnSide(otherComboSide(), r2, c2) : ((layer[r2] && layer[r2][c2]) ? layer[r2][c2].label : `R${r2}C${c2}`);
     const r3 = k3Val ? parseInt(k3Val[0], 10) : null, c3 = k3Val ? parseInt(k3Val[1], 10) : null;
     const lbl3 = k3Val ? ((layer[r3] && layer[r3][c3]) ? layer[r3][c3].label : `R${r3}C${c3}`) : "";
 
@@ -590,9 +599,12 @@ function setupEventListeners() {
     // Die Maske für alle Ebenen steht nicht in der Datei (Standard); ebenso fehlen dritte Taste und Fenster, wenn nicht gesetzt
     if (layerMask !== COMBO_ALL_LAYERS) newCombo.layerMask = layerMask;
     if (k3Val) newCombo.key3 = { r: r3, c: c3, label: lbl3 };
+    if (bilateral) Object.assign(newCombo, bilateralComboFields());
     if (windowMs) newCombo.windowMs = windowMs;
 
     currentConfig.combos.push(newCombo);
+    // Hälften-Combo: dieselbe Combo steht auch in der Config der anderen Hälfte
+    const undoMirror = mirrorBilateralCombo(newCombo);
     stopKeyCapture();
     comboModal.style.display = "none";
     renderCombosTable();
@@ -605,6 +617,7 @@ function setupEventListeners() {
       description: newCombo.name,
       revert: () => {
         currentConfig.combos = currentConfig.combos.filter(c => c.id !== newCombo.id);
+        if (undoMirror) undoMirror();
         renderCombosTable();
         renderMatrix();
         saveConfigToServer();

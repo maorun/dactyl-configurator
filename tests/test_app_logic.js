@@ -37,7 +37,7 @@ this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTr
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              parseMatrixRawLine, createMatrixRawState, applyMatrixRaw, resetMatrixRawState,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
-             COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples,
+             COMBO_ALL_LAYERS, comboKeys, comboWindowMs, comboThirdKey, comboLayerMask, comboMaskLayers, comboAppliesOnLayer, isValidComboLayerMask, describeComboTuple, localComboTuples, comboIsBilateral, comboKeySide, comboKeysOnSide, orderedCombos, comboSideFlag,
              SIDE_PROFILES,
              applyLayerOperation, swapLayersWithRefs, transparentLayer, isUndoBlocked, swapLayerKeys, mirrorLayerAcrossSides, swappedSelectionPosition, parseKeyDragPayload,
              ACT_KEY_PAIR_BASE, MAX_KEY_PAIRS, pairIndexFromCode, isKeyPairMember, isStandardKeyOrModifier, keyPairLabel,
@@ -86,6 +86,79 @@ function test(name, fn) {
   passed++;
   console.log(`[       OK ] ${name}`);
 }
+test("Hälften-Combo: Erkennung, Hälfte je Taste, Reihenfolge und Normalisierung", () => {
+  const k = (r, c) => ({ r, c, label: `R${r}C${c}` });
+  const normal = { id: "n", key1: k(2, 1), key2: k(2, 2), behavior: "KEY_PRESS", action: "KEY_ESC" };
+  const bi = { id: "b", key1: k(2, 1), key2: k(2, 2), side1: "L", side2: "R", behavior: "KEY_PRESS", action: "KEY_ESC" };
+  assert.strictEqual(api.comboIsBilateral(normal), false);
+  assert.strictEqual(api.comboIsBilateral(bi), true);
+  assert.strictEqual(api.comboIsBilateral({ ...bi, side2: "L" }), false);
+  assert.strictEqual(api.comboIsBilateral({ ...bi, key3: k(2, 3) }), false);
+  assert.strictEqual(api.comboKeySide(bi, 0, "R"), "L");
+  assert.strictEqual(api.comboKeySide(bi, 1, "L"), "R");
+  assert.strictEqual(api.comboKeySide(normal, 1, "L"), "L");
+  assert.strictEqual(api.comboKeysOnSide(bi, "L").length, 1);
+  assert.strictEqual(api.comboKeysOnSide(normal, "L").length, 2);
+  // Normale Combos zuerst, Hälften-Combos dahinter, je Gruppe in alter Reihenfolge
+  const ids = api.orderedCombos({ combos: [bi, normal, { ...normal, id: "n2" }] }).map(c => c.id);
+  assert.deepStrictEqual([...ids], ["n", "n2", "b"]);
+  // normalizeConfig behält nur gültige, verschiedene Hälften und streicht key3
+  const n = api.normalizeConfig({ layers: [[]], combos: [bi, { ...bi, id: "x", side2: "L" }, { ...bi, id: "y", side1: undefined }, { ...bi, id: "z", key3: k(2, 3) }] }, R);
+  assert.deepStrictEqual(n.combos.map(c => [c.id, c.side1, c.side2, !!c.key3]), [["b", "L", "R", false], ["x", undefined, undefined, false], ["y", undefined, undefined, false], ["z", "L", "R", false]]);
+  assert.throws(() => api.validateConfigShape({ layers: [[]], combos: [{ ...bi, side2: "L" }] }), /side1/);
+  assert.throws(() => api.validateConfigShape({ layers: [[]], combos: [{ ...bi, key3: k(2, 3) }] }), /dritte Taste/);
+  api.validateConfigShape({ layers: [[]], combos: [bi] });
+});
+
+test("Hälften-Combo: Geräte-Tupel mit zwölf Werten, normale Combos behalten zehn", () => {
+  const k = (r, c) => ({ r, c, label: `R${r}C${c}` });
+  const normal = { id: "n", key1: k(2, 1), key2: k(2, 2), behavior: "KEY_PRESS", action: "KEY_ESC" };
+  const bi = { id: "b", key1: k(2, 1), key2: k(2, 3), side1: "L", side2: "R", behavior: "KEY_PRESS", action: "KEY_ESC", windowMs: 60 };
+  const tuples = api.localComboTuples({ combos: [bi, normal] }).map(t => [...t]);
+  assert.strictEqual(tuples[0].length, 10);
+  assert.deepStrictEqual(tuples[1].slice(10), [1, 0]);
+  assert.strictEqual(tuples[1].length, 12);
+  assert.ok(api.describeComboTuple(tuples[1]).startsWith("L:R2C1 + R:R2C3"));
+  // Gerät sendet zwölf Werte: der Eintrag wird übernommen, ein gleiches Flag auf beiden Tasten abgelehnt
+  const snap = api.createDeviceSnapshot();
+  assert.ok(api.captureListLine(snap, "COMBO_COUNT:1"));
+  assert.ok(api.captureListLine(snap, "COMBO_DATA:" + JSON.stringify({ o: 0, e: [tuples[1]] })));
+  assert.deepStrictEqual(Array.from(snap.combos[0]), tuples[1]);
+  const bad = api.createDeviceSnapshot();
+  api.captureListLine(bad, "COMBO_COUNT:1");
+  api.captureListLine(bad, "COMBO_DATA:" + JSON.stringify({ o: 0, e: [[...tuples[1].slice(0, 10), 1, 1]] }));
+  assert.strictEqual(bad.listsBroken, true);
+  assert.ok(read("js/config-sync.js").includes("comboSideFlag(cb.side1)"));
+});
+
+test("Hälften-Combo: Layout-Check meldet keine fehlende Taste der anderen Hälfte", () => {
+  const k = (r, c) => ({ r, c, label: `R${r}C${c}` });
+  // R4C0 existiert links, nicht rechts; R4C5 rechts, nicht links
+  const bi = { id: "b", key1: k(4, 0), key2: k(4, 5), side1: "L", side2: "R", behavior: "KEY_PRESS", action: "KEY_ESC" };
+  const layer = Array.from({ length: 6 }, () => Array.from({ length: 7 }, () => ({ tap: "KEY_A", hold: "NONE", dtap: "NONE" })));
+  const cfg = { layers: [layer], layerNames: [], combos: [bi] };
+  const hits = api.lintLayouts({ L: cfg, R: cfg }, api.SIDE_PROFILES).filter(f => f.code === "combo-hold-cancelled" || f.code === "combo-duplicate");
+  // Die Taste der anderen Hälfte wird in der Config dieser Hälfte nicht geprüft: je Hälfte genau eine Meldung
+  assert.strictEqual(hits.length, 0);
+});
+
+test("Hälften-Combo: Layout-Check warnt, wenn das Gegenstück in der anderen Hälfte fehlt", () => {
+  const k = (r, c) => ({ r, c, label: `R${r}C${c}` });
+  const bi = { id: "b", key1: k(2, 1), key2: k(2, 2), side1: "L", side2: "R", behavior: "KEY_PRESS", action: "KEY_ESC" };
+  const mk = combos => { const c = lintCfg(); c.combos = combos; return c; };
+  const warn = f => lintCodes(f, "combo-bilateral-unmirrored").map(x => x.side).sort();
+  // Nur die linke Hälfte kennt die Combo: die Warnung gilt der linken Hälfte
+  assert.deepStrictEqual(warn(lintBoth(mk([]), mk([bi]))), ["L"]);
+  // Beide Hälften führen sie: keine Warnung
+  assert.deepStrictEqual(warn(lintBoth(mk([bi]), mk([bi]))), []);
+  // Anderes Tastenpaar oder andere Ebenenmaske zählt nicht als Gegenstück
+  assert.deepStrictEqual(warn(lintBoth(mk([{ ...bi, key2: k(2, 3) }]), mk([bi]))), ["L", "R"]);
+  assert.deepStrictEqual(warn(lintBoth(mk([{ ...bi, layerMask: 2 }]), mk([bi]))), ["L", "R"]);
+  // Eine normale Combo löst keine Warnung aus
+  const normal = { id: "n", key1: k(2, 1), key2: k(2, 2), behavior: "KEY_PRESS", action: "KEY_ESC" };
+  assert.deepStrictEqual(warn(lintBoth(mk([normal]), mk([]))), []);
+});
+
 // Async-Tests laufen am Ende nacheinander; ein Fehler beendet den Lauf mit Exit-Code 1
 const asyncTests = [];
 
@@ -5131,6 +5204,7 @@ function applyKeyHarness() {
 function togglePendingChangesDrawer() {} function discardAllPendingChanges() {} function populateComboKeyDropdowns() {}
 function renderPendingSyncUI() {} function setPendingFor() {} function setupActionSearch() {}
 function writeConfigWithDiff() {} function saveAndFlashToDactyl() {} function readConfigFromESP32() {}
+${read("js/combos-ui.js")}
 ${read("js/editor-events.js")}`);
   const { w, dom } = h;
   // Selects: options/selectedIndex für das Label der Taste
@@ -5168,6 +5242,7 @@ function togglePendingChangesDrawer() {} function discardAllPendingChanges() {} 
 function renderPendingSyncUI() {} function setPendingFor() {} function setupActionSearch() {}
 function writeConfigWithDiff() {} function saveAndFlashToDactyl() {} function readConfigFromESP32() {}
 function selectKey(r, c, side, isThumb) { selectedKey = { r, c, side, isThumb }; selected.push([r, c, side, isThumb]); }
+${read("js/combos-ui.js")}
 ${read("js/editor-events.js")}`);
   const { w } = h;
   w.document.addEventListener = (type, fn) => type === "keydown" && docListeners.push(fn);
@@ -10146,5 +10221,5 @@ test("Makro schrittweise testen: Befehl, Button, Serial-Abbau und Firmware-Befeh
   assert.ok(read("firmware/dactyl_right/DactylLogic.h").includes('"OK DEBUG_MACRO_RELEASE"'));
   const logic = read("firmware/dactyl_right/DactylLogic.h");
   assert.ok(logic.includes('cmd.startsWith("DEBUG_MACRO_STEP ")') && logic.includes('"DEBUG_MACRO_STEP RELEASE"'));
-  assert.ok(Number(/DACTYL_FW_VERSION (\d+)/.exec(read("firmware/dactyl_right/DactylVersion.h"))[1]) >= 61);
+  assert.ok(Number(/DACTYL_FW_VERSION (\d+)/.exec(read("firmware/dactyl_right/DactylVersion.h"))[1]) >= 62);
 });

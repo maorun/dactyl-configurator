@@ -3547,6 +3547,41 @@ class GitHashTests(unittest.TestCase):
             server.generate_git_hash, server.find_arduino_cli, server.find_serial_port, server.run_cli = old
         self.assertEqual(calls[:2], ["hash", "compile"])
 
+    def test_bilateral_combos(self):
+        base = {"behavior": "KEY_PRESS", "action": "KEY_ESC"}
+        normal = dict(base, key1={"r": 2, "c": 1}, key2={"r": 2, "c": 2})
+        bilateral = dict(base, key1={"r": 2, "c": 1}, key2={"r": 2, "c": 2}, side1="L", side2="R", windowMs=60)
+        out = server.generate_combos_cpp([bilateral, normal])
+        # Normale Combos stehen vor den Hälften-Combos; Flags: Bit 0 = Taste 1 links, Bit 1 = Taste 2 links
+        lines = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("{ 2")]
+        self.assertEqual(lines[0], "{ 2, 1, 2, 2, 0, KEY_ESC },")
+        self.assertEqual(lines[1], "{ 2, 1, 2, 2, 0, KEY_ESC, 255, 255, 255, 60, 1 }")
+        swapped = dict(bilateral, side1="R", side2="L")
+        self.assertIn("255, 255, 60, 2 }", server.generate_combos_cpp([swapped]))
+        # Eine normale Combo rendert wie bisher
+        self.assertIn("{ 2, 1, 2, 2, 0, KEY_ESC }", server.generate_combos_cpp([normal]))
+        for bad in (dict(bilateral, side2=None), dict(bilateral, side2="L"), dict(bilateral, side1="X"),
+                    dict(bilateral, key3={"r": 2, "c": 3})):
+            with self.assertRaises(ValueError):
+                server.generate_combos_cpp([bad])
+
+    def test_bilateral_combo_keys_checked_per_own_side(self):
+        # R4C5 fehlt links, R4C0 fehlt rechts: jede Taste zählt nur an ihrer eigenen Hälfte
+        base = {"behavior": "KEY_PRESS", "action": "KEY_ESC"}
+        on_right = {"r": 4, "c": 5}   # rechts vorhanden
+        on_left = {"r": 4, "c": 0}    # links vorhanden
+        ok = dict(base, key1=on_left, key2=on_right, side1="L", side2="R")
+        server.validate_config({"layers": [[]], "combos": [ok]}, "L")
+        server.validate_config({"layers": [[]], "combos": [ok]}, "R")
+        wrong = dict(base, key1=on_right, key2=on_left, side1="L", side2="R")
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "combos": [wrong]}, "L")
+        with self.assertRaises(ValueError):
+            server.validate_config({"layers": [[]], "combos": [wrong]}, "R")
+
+    def test_combo_ui_module_is_served(self):
+        self.assertIn("/js/combos-ui.js", server.STATIC_ALLOWLIST)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,15 +23,6 @@ Rules for this file:
 
 ## Priority 4
 
-### Cross-half bilateral combos (`bilateralCombos`)
-
-- **Rank:** Feature model. Total 17/40 (typing 5, configuration 3, harmony 4, safety 5). Effort L. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylSplitHid.h`, `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylCommon.h`, `js/combos-ui.js`.
-- **Problem:** Combos only execute when all pressed keys reside on the same keyboard half.
-- **Goal:** Allow combos that combine one key from the left half and one key from the right half (`side1`, `side2`). The master collects candidate key presses across the split link within `comboTimeoutMs` before resolving the combo action.
-- **Acceptance test:** A firmware test presses a key on the left half and a key on the right half within the combo window and expects the combined action.
-
 ## Priority 5
 
 ### Macro loop and repeat step (`MACRO_STEP_REPEAT`)

@@ -290,8 +290,14 @@ uint8_t getActiveLayer() {
 // die aktive Ebene. Der Wert bleibt vom Druck bis zum Ende der Loslass-Behandlung stehen, damit eine Ebene, die
 // zwischen Druck und Loslassen wechselt, die Puffer-Entscheidung (gesendet oder Combo-Kandidat) nicht ändert.
 #define COMBO_NVS_VERSION       2
+// Version 3: der Blob enthält mindestens eine Hälften-Combo. Ältere Firmware lehnt ihn ab (Version unbekannt) und liest die Combo nie
+// als normale Combo auf den falschen Tasten; ohne Hälften-Combo bleibt Version 2.
+#define COMBO_NVS_VERSION_SIDE  3
 #define COMBO_NVS_RECORD_BYTES  12
 #define COMBO_NVS_LEGACY_BYTES  8
+// Hälften-Combo im NVS: Byte 8 (r3) = COMBO_NVS_SIDE_MARK (liegt außerhalb der Matrix, ältere Firmware liest "keine dritte Taste"),
+// Byte 9 (c3) = sideFlags. Die Satzlänge bleibt 12.
+#define COMBO_NVS_SIDE_MARK     0xFE
 
 // Ein Druck, der in deferredQueue wartet, hat noch keinen Eintrag: er wird beim Abspielen mit der dann aktiven
 // Ebene aufgelöst (wie seine Tastenbelegung), bis dahin gilt die aktive Ebene.
@@ -312,10 +318,98 @@ bool comboHasThirdKey(uint8_t i) {
   return userCombos[i].r3 != COMBO_NO_KEY && userCombos[i].c3 != COMBO_NO_KEY;
 }
 
-// true, wenn (r, c) eine der Tasten der Combo i ist (zwei oder drei Tasten)
-bool comboContainsKey(uint8_t i, uint8_t r, uint8_t c) {
+// Hälften-Combo (sideFlags != 0): Taste 1 und Taste 2 liegen auf verschiedenen Hälften. Der Master löst sie aus; die
+// linke Hälfte meldet ihre Taste (SPLIT_OP_COMBO_KEY) und erfährt den Treffer mit SPLIT_OP_COMBO_CONSUMED.
+#ifndef DEVICE_IS_LEFT
+#define DEVICE_IS_LEFT 0
+#endif
+// Zusätzliche Wartezeit eines Kandidaten einer Hälften-Combo: die Pakete brauchen einige ms, bevor der Treffer die linke Hälfte erreicht
+#define COMBO_SPLIT_GRACE_MS 20
+// Meldung der linken Taste an den Master (links: SPLIT_OP_COMBO_KEY) und des Treffers an die linke Hälfte (Master: SPLIT_OP_COMBO_CONSUMED)
+#ifndef COMBO_REMOTE_KEY_SEND
+#define COMBO_REMOTE_KEY_SEND(r, c, pressed, layer, refreshAge)
+#endif
+#ifndef COMBO_REMOTE_CONSUMED_SEND
+#define COMBO_REMOTE_CONSUMED_SEND(r, c)
+#endif
+
+bool comboIsBilateral(uint8_t i) {
+  return userCombos[i].sideFlags == COMBO_SIDE_KEY1_LEFT || userCombos[i].sideFlags == COMBO_SIDE_KEY2_LEFT;
+}
+
+// Anzahl der Tasten der Combo i (2 oder 3)
+uint8_t comboKeyCount(uint8_t i) {
+  return comboHasThirdKey(i) ? 3 : 2;
+}
+
+uint8_t comboKeyRow(uint8_t i, uint8_t k) {
   const KeyCombo &cb = userCombos[i];
-  return (cb.r1 == r && cb.c1 == c) || (cb.r2 == r && cb.c2 == c) || (comboHasThirdKey(i) && cb.r3 == r && cb.c3 == c);
+  return k == 0 ? cb.r1 : (k == 1 ? cb.r2 : cb.r3);
+}
+
+uint8_t comboKeyCol(uint8_t i, uint8_t k) {
+  const KeyCombo &cb = userCombos[i];
+  return k == 0 ? cb.c1 : (k == 1 ? cb.c2 : cb.c3);
+}
+
+// true, wenn Taste k (0 = Taste 1, 1 = Taste 2, 2 = Taste 3) der Combo i an dieser Hälfte liegt
+bool comboKeyIsLocal(uint8_t i, uint8_t k) {
+  if (!comboIsBilateral(i)) return true;
+  if (k > 1) return false;
+  bool left = (userCombos[i].sideFlags & (k == 0 ? COMBO_SIDE_KEY1_LEFT : COMBO_SIDE_KEY2_LEFT)) != 0;
+  return left == (DEVICE_IS_LEFT != 0);
+}
+
+// Linke Tasten einer Hälften-Combo, die der Master gemeldet hat (SPLIT_OP_COMBO_KEY): gedrückt, Ebene + 1 beim Druck
+// und Empfangszeit. Nur der Master füllt sie. Ein Linkverlust oder RELEASE_ALL der linken Hälfte löscht sie.
+bool remoteComboDown[NUM_ROWS][NUM_COLS] = {};
+uint8_t remoteComboLayer1[NUM_ROWS][NUM_COLS] = {};
+unsigned long remoteComboTime[NUM_ROWS][NUM_COLS] = {};
+
+void comboRemoteClear() {
+  memset(remoteComboDown, 0, sizeof(remoteComboDown));
+  memset(remoteComboLayer1, 0, sizeof(remoteComboLayer1));
+  memset(remoteComboTime, 0, sizeof(remoteComboTime));
+}
+
+// refreshAge: 0 = neuer Druck, sonst Auffrischung einer gehaltenen Taste (1 + Alter in 100 ms, splitComboKeyRefreshAge).
+// Eine Auffrischung ändert die Zeit einer gehaltenen Taste nie. Hat der Master den Zustand gelöscht, stempelt sie mit dem
+// gemeldeten Alter zurück: eine lange gehaltene Taste (zum Beispiel Shift) bildet so nie eine Combo.
+void comboRemoteKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer, unsigned long now, uint8_t refreshAge = 0) {
+  if (r >= NUM_ROWS || c >= NUM_COLS) return;
+  if (pressed && refreshAge >= 1) {
+    if (!remoteComboDown[r][c]) remoteComboTime[r][c] = now - (unsigned long)(refreshAge - 1) * 100UL - (refreshAge - 1 >= SPLIT_COMBO_KEY_AGE_MAX ? COMBO_WINDOW_MAX : 0);
+    remoteComboDown[r][c] = true;
+    remoteComboLayer1[r][c] = (uint8_t)((layer & 7) + 1);
+  } else if (pressed) {
+    // Ein Retry-Duplikat eines gehaltenen Drucks ändert die Zeit nicht. Ein Druck, der nach mehr als COMBO_WINDOW_MAX folgt,
+    // ist ein neuer Druck (das Loslassen ging verloren): er stempelt neu, sonst fiele die Combo nie ins Fenster.
+    if (!remoteComboDown[r][c] || (unsigned long)(now - remoteComboTime[r][c]) > COMBO_WINDOW_MAX) remoteComboTime[r][c] = now;
+    remoteComboDown[r][c] = true;
+    remoteComboLayer1[r][c] = (uint8_t)((layer & 7) + 1);
+  } else {
+    remoteComboDown[r][c] = false;
+    remoteComboLayer1[r][c] = 0;
+  }
+}
+
+// true, wenn Taste k der Combo i gedrückt ist (lokal: Matrix, andere Hälfte: gemeldeter Zustand)
+bool comboKeyPressed(uint8_t i, uint8_t k) {
+  uint8_t r = comboKeyRow(i, k), c = comboKeyCol(i, k);
+  return comboKeyIsLocal(i, k) ? keyState[r][c] : remoteComboDown[r][c];
+}
+
+unsigned long comboKeyTime(uint8_t i, uint8_t k) {
+  uint8_t r = comboKeyRow(i, k), c = comboKeyCol(i, k);
+  return comboKeyIsLocal(i, k) ? keyPressTime[r][c] : remoteComboTime[r][c];
+}
+
+// true, wenn (r, c) eine Taste dieser Hälfte in der Combo i ist (zwei oder drei Tasten; eine Taste der anderen Hälfte nie)
+bool comboContainsKey(uint8_t i, uint8_t r, uint8_t c) {
+  for (uint8_t k = 0; k < comboKeyCount(i); k++) {
+    if (comboKeyIsLocal(i, k) && comboKeyRow(i, k) == r && comboKeyCol(i, k) == c) return true;
+  }
+  return false;
 }
 
 // Zeitfenster der Combo i in ms: eigenes Fenster oder das globale comboTimeoutMs (windowMs = 0)
@@ -324,12 +418,17 @@ unsigned long comboWindowMs(uint8_t i) {
 }
 
 // Wartezeit, bis eine gepufferte Taste (r, c) als Einzeltaste ausgeht: das größte Fenster der Combos, die auf der
-// Ebene des Drucks gelten und die Taste enthalten. Ohne solche Combo gilt comboTimeoutMs.
+// Ebene des Drucks gelten und die Taste enthalten. Ohne solche Combo gilt comboTimeoutMs. Eine Hälften-Combo wartet
+// zusätzlich COMBO_SPLIT_GRACE_MS (Laufzeit der Pakete zwischen den Hälften), links zweimal (Hin- und Rückweg des Treffers).
 unsigned long comboBufferMs(uint8_t r, uint8_t c) {
   uint8_t layer = comboLayerForKey(r, c);
   unsigned long ms = 0;
   for (uint8_t i = 0; i < numCombos; i++) {
-    if (comboContainsKey(i, r, c) && comboAppliesOnLayer(i, layer) && comboWindowMs(i) > ms) ms = comboWindowMs(i);
+    if (comboContainsKey(i, r, c) && comboAppliesOnLayer(i, layer)) {
+      // Links zusätzlich der Rückweg des Treffers: ein Treffer am Fensterende erreicht die linke Taste erst nach COMBO_CONSUMED
+      unsigned long w = comboWindowMs(i) + (comboIsBilateral(i) ? COMBO_SPLIT_GRACE_MS * (DEVICE_IS_LEFT ? 2 : 1) : 0);
+      if (w > ms) ms = w;
+    }
   }
   return ms ? ms : comboTimeoutMs;
 }
@@ -341,26 +440,71 @@ static inline bool comboTimesWithin(unsigned long t1, unsigned long t2, unsigned
 
 // true, wenn alle Tasten der Combo i gedrückt sind und paarweise im Fenster der Combo gedrückt wurden
 bool comboKeysInWindow(uint8_t i) {
-  const KeyCombo &cb = userCombos[i];
-  unsigned long w = comboWindowMs(i);
-  unsigned long t1 = keyPressTime[cb.r1][cb.c1], t2 = keyPressTime[cb.r2][cb.c2];
+  // Der Master stempelt die linke Taste bei Ankunft: die Laufzeit der Pakete zählt zum Fenster einer Hälften-Combo
+  unsigned long w = comboWindowMs(i) + (comboIsBilateral(i) ? COMBO_SPLIT_GRACE_MS : 0);
+  unsigned long t1 = comboKeyTime(i, 0), t2 = comboKeyTime(i, 1);
   if (!comboTimesWithin(t1, t2, w)) return false;
   if (!comboHasThirdKey(i)) return true;
-  unsigned long t3 = keyPressTime[cb.r3][cb.c3];
+  unsigned long t3 = comboKeyTime(i, 2);
   return comboTimesWithin(t1, t3, w) && comboTimesWithin(t2, t3, w);
 }
 
-// true, wenn alle Tasten der Combo i gerade gedrückt sind
+// true, wenn alle Tasten der Combo i gerade gedrückt sind (bei einer Hälften-Combo auch die gemeldete Taste der anderen Hälfte)
 bool comboAllPressed(uint8_t i) {
-  const KeyCombo &cb = userCombos[i];
-  return keyState[cb.r1][cb.c1] && keyState[cb.r2][cb.c2] && (!comboHasThirdKey(i) || keyState[cb.r3][cb.c3]);
+  for (uint8_t k = 0; k < comboKeyCount(i); k++) {
+    if (!comboKeyPressed(i, k)) return false;
+  }
+  return true;
+}
+
+// true, wenn alle Tasten der Combo i an dieser Hälfte gedrückt sind (die linke Hälfte kennt die Taste des Masters nicht)
+bool comboLocalPressed(uint8_t i) {
+  for (uint8_t k = 0; k < comboKeyCount(i); k++) {
+    if (comboKeyIsLocal(i, k) && !keyState[comboKeyRow(i, k)][comboKeyCol(i, k)]) return false;
+  }
+  return true;
+}
+
+// Linke Hälfte: die Taste (r, c) ist Teil einer Hälften-Combo und wurde dem Master gemeldet (Druck gesendet, Loslassen offen)
+bool comboRemoteSent[NUM_ROWS][NUM_COLS] = {};
+unsigned long comboRemoteRefreshAt[NUM_ROWS][NUM_COLS] = {};   // letzte Meldung einer gehaltenen Taste (comboRemoteRefresh)
+
+// true, wenn (r, c) eine lokale Taste einer Hälften-Combo ist, die auf der Ebene des Drucks gilt (layer < 8) bzw. auf irgendeiner (layer = 0xFF)
+bool comboIsBilateralKey(uint8_t r, uint8_t c, uint8_t layer) {
+  for (uint8_t i = 0; i < numCombos; i++) {
+    if (comboIsBilateral(i) && comboContainsKey(i, r, c) && (layer == 0xFF || comboAppliesOnLayer(i, layer))) return true;
+  }
+  return false;
+}
+
+// Die linke Hälfte meldet Druck und Loslassen einer Taste, die zu einer Hälften-Combo gehört (der Master hat die Taste der anderen
+// Seite nie gesehen). Der Master wertet beide Hälften aus. Ohne Combo auf der Ebene des Drucks sendet die Hälfte nichts.
+void comboRemoteNoteKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer) {
+  if (!DEVICE_IS_LEFT) return;
+  if (pressed) {
+    if (!comboIsBilateralKey(r, c, layer)) return;
+    comboRemoteSent[r][c] = true;
+    comboRemoteRefreshAt[r][c] = millis();
+    COMBO_REMOTE_KEY_SEND(r, c, true, layer, 0);
+  } else if (comboRemoteSent[r][c]) {
+    comboRemoteSent[r][c] = false;
+    COMBO_REMOTE_KEY_SEND(r, c, false, 0, 0);
+  }
+}
+
+// Ebene des Drucks der Taste k der Combo i (gemeldete Ebene bei einer Taste der anderen Hälfte)
+uint8_t comboKeyLayerOf(uint8_t i, uint8_t k) {
+  uint8_t r = comboKeyRow(i, k), c = comboKeyCol(i, k);
+  if (comboKeyIsLocal(i, k)) return comboLayerForKey(r, c);
+  return remoteComboLayer1[r][c] > 0 ? (uint8_t)(remoteComboLayer1[r][c] - 1) : 0;
 }
 
 // true, wenn alle Tasten der Combo i auf einer Ebene der Maske gedrückt wurden: nur dann wurden sie gepuffert
 bool comboOnMaskLayers(uint8_t i) {
-  const KeyCombo &cb = userCombos[i];
-  return comboAppliesOnLayer(i, comboLayerForKey(cb.r1, cb.c1)) && comboAppliesOnLayer(i, comboLayerForKey(cb.r2, cb.c2)) &&
-         (!comboHasThirdKey(i) || comboAppliesOnLayer(i, comboLayerForKey(cb.r3, cb.c3)));
+  for (uint8_t k = 0; k < comboKeyCount(i); k++) {
+    if (!comboAppliesOnLayer(i, comboKeyLayerOf(i, k))) return false;
+  }
+  return true;
 }
 
 // Eigene MO-Ebenen und eingerastete Ebenen als Bitmaske für den Layer-Abgleich
@@ -3104,6 +3248,7 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
     resolvePendingTapHoldsAsHold(r, c, true);
     uint8_t layer = getActiveLayer();
     comboPressLayer1[r][c] = (uint8_t)(layer + 1);
+    comboRemoteNoteKey(r, c, true, layer);   // Hälften-Combo: die linke Hälfte meldet dem Master den Druck
     if (isSecondTap) {
       d.waiting = false;
       d.active = true;
@@ -3211,6 +3356,7 @@ void applyMatrixKeyChangeImpl(uint8_t r, uint8_t c, bool isPressed, unsigned lon
     // damit der echte Anschlag-Zeitstempel für den Grace-Period-Check erhalten bleibt!
     keyPressTime[r][c] = 0;
     comboPressLayer1[r][c] = 0;
+    comboRemoteNoteKey(r, c, false, 0);
   }
 }
 
@@ -3900,6 +4046,7 @@ void loadKeymapFromNVS() {
             userCombos[i].r3 = COMBO_NO_KEY;
             userCombos[i].c3 = COMBO_NO_KEY;
             userCombos[i].windowMs = 0;
+            userCombos[i].sideFlags = 0;
           }
           loaded = true;
           Serial.printf("NVS: %d Combos geladen.\n", numCombos);
@@ -3913,7 +4060,8 @@ void loadKeymapFromNVS() {
         size_t sz = preferences.getBytesLength("combos_v2");
         size_t blobCount = sz >= 2 ? (sz - 2) / COMBO_NVS_RECORD_BYTES : 0;
         if (sz >= 2 + COMBO_NVS_RECORD_BYTES && (sz - 2) % COMBO_NVS_RECORD_BYTES == 0 && blobCount <= MAX_COMBOS &&
-            preferences.getBytes("combos_v2", buf, sz) == sz && buf[0] == COMBO_NVS_VERSION && buf[1] == COMBO_NVS_RECORD_BYTES) {
+            preferences.getBytes("combos_v2", buf, sz) == sz && (buf[0] == COMBO_NVS_VERSION || buf[0] == COMBO_NVS_VERSION_SIDE) &&
+            buf[1] == COMBO_NVS_RECORD_BYTES) {
           numCombos = (uint8_t)blobCount;
           for (int i = 0; i < (int)blobCount; i++) {
             const uint8_t *rec = buf + 2 + i * COMBO_NVS_RECORD_BYTES;
@@ -3925,10 +4073,13 @@ void loadKeymapFromNVS() {
             userCombos[i].action = (uint16_t)(rec[5] | (rec[6] << 8));
             userCombos[i].layerMask = rec[7] ? rec[7] : COMBO_ALL_LAYERS;
             // Dritte Taste: gültig nur als Paar innerhalb der Matrix, sonst keine. Fenster 0 = comboTimeoutMs.
-            bool thirdOk = rec[8] < NUM_ROWS && rec[9] < NUM_COLS &&
+            // Hälften-Combo: Byte 8 = COMBO_NVS_SIDE_MARK, Byte 9 = sideFlags (genau eine Taste links); sie hat keine dritte Taste
+            bool sideOk = buf[0] == COMBO_NVS_VERSION_SIDE && rec[8] == COMBO_NVS_SIDE_MARK && (rec[9] == COMBO_SIDE_KEY1_LEFT || rec[9] == COMBO_SIDE_KEY2_LEFT);
+            bool thirdOk = !sideOk && rec[8] < NUM_ROWS && rec[9] < NUM_COLS &&
                            !(rec[8] == rec[0] && rec[9] == rec[1]) && !(rec[8] == rec[2] && rec[9] == rec[3]);
             userCombos[i].r3 = thirdOk ? rec[8] : COMBO_NO_KEY;
             userCombos[i].c3 = thirdOk ? rec[9] : COMBO_NO_KEY;
+            userCombos[i].sideFlags = sideOk ? rec[9] : 0;
             uint16_t w = (uint16_t)(rec[10] | (rec[11] << 8));
             userCombos[i].windowMs = (w >= COMBO_WINDOW_MIN && w <= COMBO_WINDOW_MAX) ? w : 0;
           }
@@ -4306,7 +4457,7 @@ bool saveHoldTapModeToNVS(uint8_t mode) {
 // NVS-Format der Combos ("combos_v2"): 2 Bytes Kopf (COMBO_NVS_VERSION, COMBO_NVS_RECORD_BYTES), danach je Combo ein
 // Satz fester Länge:
 //   0 r1, 1 c1, 2 r2, 3 c2, 4 behavior, 5..6 action (little endian), 7 layerMask (Bit i = Ebene i),
-//   8 r3, 9 c3 (dritte Taste, 0xFF = keine), 10..11 eigenes Fenster in ms (little endian, 0 = comboTimeoutMs)
+//   8 r3, 9 c3 (dritte Taste, 0xFF = keine; Hälften-Combo: 8 = COMBO_NVS_SIDE_MARK, 9 = sideFlags), 10..11 eigenes Fenster in ms (little endian, 0 = comboTimeoutMs)
 // Das alte Format ("combos_data") hat 8 Bytes je Combo (Padding vor action) und bleibt lesbar (Ebenenmaske = alle Ebenen).
 bool saveCombosToNVS() {
   if (!preferences.begin("dactyl", false)) return false;
@@ -4315,6 +4466,7 @@ bool saveCombosToNVS() {
     uint8_t buf[2 + MAX_COMBOS * COMBO_NVS_RECORD_BYTES];
     size_t len = 2 + (size_t)numCombos * COMBO_NVS_RECORD_BYTES;
     buf[0] = COMBO_NVS_VERSION;
+    for (int i = 0; i < numCombos; i++) if (comboIsBilateral(i)) buf[0] = COMBO_NVS_VERSION_SIDE;
     buf[1] = COMBO_NVS_RECORD_BYTES;
     for (int i = 0; i < numCombos; i++) {
       uint8_t *rec = buf + 2 + i * COMBO_NVS_RECORD_BYTES;
@@ -4326,8 +4478,8 @@ bool saveCombosToNVS() {
       rec[5] = (uint8_t)(userCombos[i].action & 0xFF);
       rec[6] = (uint8_t)(userCombos[i].action >> 8);
       rec[7] = userCombos[i].layerMask;
-      rec[8] = userCombos[i].r3;
-      rec[9] = userCombos[i].c3;
+      rec[8] = comboIsBilateral(i) ? COMBO_NVS_SIDE_MARK : userCombos[i].r3;
+      rec[9] = comboIsBilateral(i) ? userCombos[i].sideFlags : userCombos[i].c3;
       rec[10] = (uint8_t)(userCombos[i].windowMs & 0xFF);
       rec[11] = (uint8_t)(userCombos[i].windowMs >> 8);
     }
@@ -4531,7 +4683,9 @@ void sendCombosPairsMacros() {
       const KeyCombo &cb = userCombos[i];
       out += String(i > o ? "," : "") + "[" + cb.r1 + "," + cb.c1 + "," + cb.r2 + "," + cb.c2 + "," + cb.behavior + "," + cb.action + "," + cb.layerMask;
       // Dritte Taste und Fenster nur bei einer Combo, die sie nutzt: alle anderen Einträge bleiben bei sieben Werten
-      if (comboHasThirdKey(i) || cb.windowMs) out += String(",") + cb.r3 + "," + cb.c3 + "," + cb.windowMs;
+      if (comboHasThirdKey(i) || cb.windowMs || comboIsBilateral(i)) out += String(",") + cb.r3 + "," + cb.c3 + "," + cb.windowMs;
+      // Hälften-Combo: dazu je Taste die Hälfte (1 = links), nur dann zwölf Werte
+      if (comboIsBilateral(i)) out += String(",") + ((cb.sideFlags & COMBO_SIDE_KEY1_LEFT) ? 1 : 0) + "," + ((cb.sideFlags & COMBO_SIDE_KEY2_LEFT) ? 1 : 0);
       out += "]";
     }
     sendConfigNotification(out + "]}", true);
@@ -5075,15 +5229,16 @@ void handleConfigCommand(String cmd, bool fromBle) {
   } else if (cmd.startsWith("ADD_COMBO ")) {
     int r1, c1, r2, c2, beh, act;
     int mask = COMBO_ALL_LAYERS;
-    int r3 = COMBO_NO_KEY, c3 = COMBO_NO_KEY, windowMs = 0;
+    int r3 = COMBO_NO_KEY, c3 = COMBO_NO_KEY, windowMs = 0, sideFlags = 0;
     // Sechs Werte sind Pflicht. Danach folgen optional: Ebenenmaske (1..255), dritte Taste (r3 c3, beide 255 = keine)
-    // und Fenster in ms (0 oder COMBO_WINDOW_MIN..COMBO_WINDOW_MAX, 0 = comboTimeoutMs). Erlaubt sind 0, 1, 3 oder 4 Zusatzwerte; ohne Maske
+    // und Fenster in ms (0 oder COMBO_WINDOW_MIN..COMBO_WINDOW_MAX, 0 = comboTimeoutMs). Dahinter für eine Hälften-Combo zwei Werte
+    // (Taste 1 links, Taste 2 links, je 0/1, genau eine Taste links, keine dritte Taste). Erlaubt sind 0, 1, 3, 4 oder 6 Zusatzwerte; ohne Maske
     // gilt die Combo auf allen Ebenen. Jeder weitere oder nicht numerische Rest ist ein Fehler.
     int consumed = -1;
     bool parsed = sscanf(cmd.c_str(), "ADD_COMBO %d %d %d %d %d %d%n", &r1, &c1, &r2, &c2, &beh, &act, &consumed) == 6 &&
                   consumed > 0;
     if (parsed) {
-      long extra[4];
+      long extra[6];
       int nExtra = 0;
       const char *rest = cmd.c_str() + consumed;
       while (parsed) {
@@ -5091,12 +5246,12 @@ void handleConfigCommand(String cmd, bool fromBle) {
         if (*rest == '\0') break;
         char *end = nullptr;
         long v = strtol(rest, &end, 10);
-        parsed = end != rest && end && (*end == ' ' || *end == '\0') && nExtra < 4 && v >= 0 && v <= 0xFFFF;
+        parsed = end != rest && end && (*end == ' ' || *end == '\0') && nExtra < 6 && v >= 0 && v <= 0xFFFF;
         if (!parsed) break;
         extra[nExtra++] = v;
         rest = end;
       }
-      parsed = parsed && (nExtra <= 1 || nExtra >= 3);
+      parsed = parsed && (nExtra <= 1 || nExtra == 3 || nExtra == 4 || nExtra == 6);
       if (parsed && nExtra >= 1) {
         parsed = extra[0] >= 1 && extra[0] <= 0xFF;
         mask = (int)extra[0];
@@ -5108,9 +5263,14 @@ void handleConfigCommand(String cmd, bool fromBle) {
         bool inMatrix = r3 < NUM_ROWS && c3 < NUM_COLS;
         parsed = none || (inMatrix && !(r3 == r1 && c3 == c1) && !(r3 == r2 && c3 == c2));
       }
-      if (parsed && nExtra == 4) {
+      if (parsed && nExtra >= 4) {
         windowMs = (int)extra[3];
         parsed = windowMs == 0 || (windowMs >= COMBO_WINDOW_MIN && windowMs <= COMBO_WINDOW_MAX);
+      }
+      if (parsed && nExtra == 6) {
+        bool k1Left = extra[4] == 1, k2Left = extra[5] == 1;
+        parsed = extra[4] <= 1 && extra[5] <= 1 && k1Left != k2Left && r3 == COMBO_NO_KEY && c3 == COMBO_NO_KEY;
+        sideFlags = (k1Left ? COMBO_SIDE_KEY1_LEFT : 0) | (k2Left ? COMBO_SIDE_KEY2_LEFT : 0);
       }
     }
     if (parsed &&
@@ -5130,6 +5290,7 @@ void handleConfigCommand(String cmd, bool fromBle) {
       userCombos[numCombos].r3 = (uint8_t)r3;
       userCombos[numCombos].c3 = (uint8_t)c3;
       userCombos[numCombos].windowMs = (uint16_t)windowMs;
+      userCombos[numCombos].sideFlags = (uint8_t)sideFlags;
       comboRuntime[numCombos].active = false;
       comboRuntime[numCombos].lastReleaseTime = 0;
       numCombos++;
@@ -5523,17 +5684,62 @@ bool isComboCandidateKey(uint8_t r, uint8_t c) {
   return false;
 }
 
+// Linke Hälfte: eine gehaltene Taste einer Hälften-Combo alle COMBO_REMOTE_REFRESH_MS erneut melden. Der Master löscht den Zustand bei
+// RELEASE_ALL (auch bei dem RELEASE_ALL einer linken Combo oder eines Makros); ohne Auffrischung löste der rechte Partner dann nie aus.
+#define COMBO_REMOTE_REFRESH_MS 200
+void comboRemoteRefresh(unsigned long now) {
+  if (!DEVICE_IS_LEFT) return;
+  for (int r = 0; r < NUM_ROWS; r++) {
+    for (int c = 0; c < NUM_COLS; c++) {
+      if (!comboRemoteSent[r][c]) continue;
+      if (!keyState[r][c]) { comboRemoteSent[r][c] = false; continue; }
+      if ((unsigned long)(now - comboRemoteRefreshAt[r][c]) < COMBO_REMOTE_REFRESH_MS) continue;
+      comboRemoteRefreshAt[r][c] = now;
+      unsigned long heldMs = (unsigned long)(now - keyPressTime[r][c]);
+      uint8_t ageSteps = heldMs >= 100UL * SPLIT_COMBO_KEY_AGE_MAX ? SPLIT_COMBO_KEY_AGE_MAX : (uint8_t)(heldMs / 100UL);
+      COMBO_REMOTE_KEY_SEND(r, c, true, comboLayerForKey(r, c), (uint8_t)(1 + ageSteps));
+    }
+  }
+}
+
+// Linke Hälfte: der Master hat die Hälften-Combo mit der linken Taste (r, c) ausgelöst. Die Taste ist verbraucht wie bei einer
+// Combo dieser Hälfte. Eine Taste, die schon als Einzeltaste ging oder losgelassen ist, bleibt unberührt.
+void comboRemoteConsumed(uint8_t r, uint8_t c) {
+  if (!DEVICE_IS_LEFT || r >= NUM_ROWS || c >= NUM_COLS) return;
+  if (!keyState[r][c] || keySentToHost[r][c]) return;
+  // Ein Treffer gilt nur für einen frischen Druck: ein spät zugestelltes Paket trifft keinen neuen Druck derselben Taste
+  if ((unsigned long)(millis() - keyPressTime[r][c]) > COMBO_WINDOW_MAX + COMBO_SPLIT_GRACE_MS) return;
+  for (uint8_t i = 0; i < numCombos; i++) {
+    if (!comboIsBilateral(i) || !comboContainsKey(i, r, c) || comboRuntime[i].active) continue;
+    if (!comboAppliesOnLayer(i, comboLayerForKey(r, c))) continue;
+    comboRuntime[i].active = true;
+    cancelTapHoldForCombo(r, c);
+    keySentToHost[r][c] = true;
+    mouseMoveStop(r, c);
+    wheelHoldStop(r, c);
+    return;
+  }
+}
+
 void checkUserCombos() {
   unsigned long now = millis();
+  comboRemoteRefresh(now);
   for (uint8_t i = 0; i < numCombos; i++) {
-    uint8_t r1 = userCombos[i].r1;
-    uint8_t c1 = userCombos[i].c1;
-    uint8_t r2 = userCombos[i].r2;
-    uint8_t c2 = userCombos[i].c2;
+    // Erste Taste dieser Hälfte (Repeat-Aktion als Tipp dieser Taste); eine Hälften-Combo hat genau eine lokale Taste
+    uint8_t r1 = 0, c1 = 0;
+    for (uint8_t k = 0; k < comboKeyCount(i); k++) {
+      if (comboKeyIsLocal(i, k)) { r1 = comboKeyRow(i, k); c1 = comboKeyCol(i, k); break; }
+    }
 
     bool bothPressed = comboAllPressed(i);
-    if (bothPressed && !comboRuntime[i].active && !leaderConsumed[r1][c1] && !leaderConsumed[r2][c2] &&
-        !(comboHasThirdKey(i) && leaderConsumed[userCombos[i].r3][userCombos[i].c3])) {
+    // Die linke Hälfte löst eine Hälften-Combo nie selbst aus (bothPressed ist dort immer false): sie erfährt den Treffer
+    // mit COMBO_CONSUMED (comboRemoteConsumed). Ihre Combo bleibt aktiv, solange die eigene Taste gehalten wird.
+    bool held = (DEVICE_IS_LEFT && comboIsBilateral(i)) ? comboLocalPressed(i) : bothPressed;
+    bool leaderBlocked = false;
+    for (uint8_t k = 0; k < comboKeyCount(i); k++) {
+      if (comboKeyIsLocal(i, k) && leaderConsumed[comboKeyRow(i, k)][comboKeyCol(i, k)]) leaderBlocked = true;
+    }
+    if (bothPressed && !comboRuntime[i].active && !leaderBlocked) {
       // Alle Tasten müssen innerhalb des Fensters der Combo (windowMs oder comboTimeoutMs) gedrückt worden sein!
       // Wenn eine Taste schon lange gehalten wurde und man dann schnell tippt, ist es KEINE Combo!
       bool inWindow = comboKeysInWindow(i);
@@ -5542,27 +5748,25 @@ void checkUserCombos() {
 
       if (inWindow && onMaskLayers) {
         comboRuntime[i].active = true;
-        // Die Combo verbraucht beide Tasten: deren Mod-Tap-Entscheidung darf nicht mehr greifen
-        cancelTapHoldForCombo(r1, c1);
-        cancelTapHoldForCombo(r2, c2);
-        if (comboHasThirdKey(i)) cancelTapHoldForCombo(userCombos[i].r3, userCombos[i].c3);
+        // Die Combo verbraucht ihre Tasten dieser Hälfte: deren Mod-Tap-Entscheidung darf nicht mehr greifen.
         // Beide Tasten als an Host gesendet markieren, damit lingernde Tasten nach dem Chord
         // nicht nach Ablauf der 300ms Grace Period versehentlich als Einzeltaste nachfeuern!
-        keySentToHost[r1][c1] = true;
-        keySentToHost[r2][c2] = true;
-        mouseMoveStop(r1, c1);
-        mouseMoveStop(r2, c2);
-        wheelHoldStop(r1, c1);
-        wheelHoldStop(r2, c2);
-        if (comboHasThirdKey(i)) {
-          keySentToHost[userCombos[i].r3][userCombos[i].c3] = true;
-          mouseMoveStop(userCombos[i].r3, userCombos[i].c3);
-          wheelHoldStop(userCombos[i].r3, userCombos[i].c3);
+        for (uint8_t k = 0; k < comboKeyCount(i); k++) {
+          if (!comboKeyIsLocal(i, k)) {
+            // Taste der linken Hälfte: der Master meldet ihr den Treffer; sie verbraucht ihre Taste selbst
+            COMBO_REMOTE_CONSUMED_SEND(comboKeyRow(i, k), comboKeyCol(i, k));
+            continue;
+          }
+          uint8_t kr = comboKeyRow(i, k), kc = comboKeyCol(i, k);
+          cancelTapHoldForCombo(kr, kc);
+          keySentToHost[kr][kc] = true;
+          mouseMoveStop(kr, kc);
+          wheelHoldStop(kr, kc);
         }
 
         // Sofort Einzeltasten auf Mac loslassen, damit der Combo-Chord die Einzeltasten überschreibt.
         // releaseAll() löst auch die Codes eines laufenden Makros; das Makro endet hier.
-        stopMacro(false);
+      stopMacro(false);
         if (!isConfigMode && bleKeyboard.isConnected()) {
           bleKeyboard.releaseAll();
         }
@@ -5622,10 +5826,11 @@ void checkUserCombos() {
           sendConfigNotification("COMBO_TRIGGER:{\"idx\":" + String(i) + ",\"act\":" + String(act) + "}");
         }
       }
-    } else if (!bothPressed && comboRuntime[i].active) {
+    } else if (!held && comboRuntime[i].active) {
       comboRuntime[i].active = false;
       comboRuntime[i].lastReleaseTime = now;
-      if (userCombos[i].behavior == 1) { // MODIFIER_HOLD
+      // Die linke Hälfte hat eine Hälften-Combo nie gedrückt: den Halt löst der Master
+      if (userCombos[i].behavior == 1 && !(DEVICE_IS_LEFT && comboIsBilateral(i))) { // MODIFIER_HOLD
         uint16_t act = userCombos[i].action;
         if (!isConfigMode && bleKeyboard.isConnected()) {
           if (act >= 0x130 && act <= 0x132) {

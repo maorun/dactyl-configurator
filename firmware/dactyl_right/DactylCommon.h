@@ -212,6 +212,8 @@ inline uint8_t tapToggleLayer(uint16_t a) { return (uint8_t)(a - ACT_TT_BASE); }
 #define COMBO_NO_KEY     0xFF
 #define COMBO_WINDOW_MIN 10
 #define COMBO_WINDOW_MAX 500
+// Größtes Alter in 100-ms-Schritten, das eine COMBO_KEY-Auffrischung meldet (DactylSplitHid.h, splitComboKeyCode)
+#define SPLIT_COMBO_KEY_AGE_MAX 7
 struct KeyCombo {
   uint8_t r1, c1;
   uint8_t r2, c2;
@@ -220,7 +222,12 @@ struct KeyCombo {
   uint8_t layerMask = COMBO_ALL_LAYERS;
   uint8_t r3 = COMBO_NO_KEY, c3 = COMBO_NO_KEY;
   uint16_t windowMs = 0;
+  // Hälften-Combo: 0 = normale Combo (alle Tasten auf der eigenen Hälfte). 1 = Taste 1 liegt links, Taste 2 rechts;
+  // 2 = Taste 1 rechts, Taste 2 links. Der Master löst sie aus; beide Hälften speichern sie (siehe FEATURES.md).
+  uint8_t sideFlags = 0;
 };
+#define COMBO_SIDE_KEY1_LEFT 1
+#define COMBO_SIDE_KEY2_LEFT 2
 
 // Separater flüchtiger Runtime-Zustand für Tasten-Chording
 struct ComboRuntime {

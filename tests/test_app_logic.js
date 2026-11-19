@@ -3362,7 +3362,7 @@ asyncTests.push(["Sync: Schrittzahl passt zu den gesendeten Schritten", async ()
   assert.strictEqual(progress[0], 2);
   assert.strictEqual(progress.at(-1), 0);
   const steps = progress.slice(1, -1);
-  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|CHORDAL_EX|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|LAYER_TIMEOUT|AUTO_MOUSE_LAYER|MOUSE_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP|NUM_WORD_LAYER|BOOT_LAYER) |CLEAR_TAP_TERMS$|CLEAR_HOLD_FLAVORS$|CLEAR_QUICK_TAPS$)/.test(c)).length;
+  const settings = sent.filter(c => /^(SET_(STANDBY|SLEEP|DEV_NAME|DEBOUNCE|COMBO_TIMEOUT|TAPPING_TERM|HOLD_MODE|QUICK_TAP|PRIOR_IDLE|CHORDAL_HOLD|CHORDAL_EX|TRI_LAYER|CAPS_LED|LEADER_TIMEOUT|LAYER_TIMEOUT|LAYER_LOCK_TIMEOUT|AUTO_MOUSE_LAYER|MOUSE_TIMEOUT|ONESHOT_TIMEOUT|AUTO_SHIFT|AUTO_SHIFT_TERM|RETRO_TAP|NUM_WORD_LAYER|BOOT_LAYER) |CLEAR_TAP_TERMS$|CLEAR_HOLD_FLAVORS$|CLEAR_QUICK_TAPS$)/.test(c)).length;
   const names = sent.filter(c => c.startsWith("SET_NAME ")).length;
   const keys = sent.filter(c => c.startsWith("SET_K ")).length;
   const combos = sent.filter(c => c.startsWith("ADD_COMBO ")).length;
@@ -3570,8 +3570,8 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(ctx.count(6, 8, 0, 0, 0) - ctx.count(6, 8, 0), 1);
   assert.strictEqual(ctx.count(6, 8, 0, 0, 3) - ctx.count(6, 8, 0, 0, 0), 3);
   const cmds = ctx.build({}, R);
-  assert.strictEqual(cmds.length, 26);
-  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_LAYER_TIMEOUT", "SET_AUTO_MOUSE_LAYER", "SET_MOUSE_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "SET_NUM_WORD_LAYER", "SET_BOOT_LAYER", "SET_CHORDAL_EX", "CLEAR_TAP_TERMS", "CLEAR_HOLD_FLAVORS", "CLEAR_QUICK_TAPS"]);
+  assert.strictEqual(cmds.length, 27);
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(cmds.filter(c => c.optional).map(c => c.ack))), ["SET_TAPPING_TERM", "SET_HOLD_MODE", "SET_QUICK_TAP", "SET_PRIOR_IDLE", "SET_CHORDAL_HOLD", "SET_TRI_LAYER", "SET_CAPS_LED", "SET_LEADER_TIMEOUT", "SET_LAYER_TIMEOUT", "SET_LAYER_LOCK_TIMEOUT", "SET_AUTO_MOUSE_LAYER", "SET_MOUSE_TIMEOUT", "SET_ONESHOT_TIMEOUT", "SET_AUTO_SHIFT", "SET_AUTO_SHIFT_TERM", "SET_RETRO_TAP", "SET_NUM_WORD_LAYER", "SET_BOOT_LAYER", "SET_CHORDAL_EX", "CLEAR_TAP_TERMS", "CLEAR_HOLD_FLAVORS", "CLEAR_QUICK_TAPS"]);
   assert.strictEqual(cmds[7].cmd, "SET_QUICK_TAP 0");
   assert.strictEqual(ctx.build({ quickTapMs: 120 }, R)[7].cmd, "SET_QUICK_TAP 120");
   assert.strictEqual(ctx.build({ quickTapMs: 900 }, R)[7].cmd, "SET_QUICK_TAP 500");
@@ -3589,7 +3589,7 @@ test("Sync: countSyncSteps zählt jeden Einstellungs-Befehl und jede Combo", () 
   assert.strictEqual(cmds[11].cmd, "SET_CAPS_LED 0");
   assert.strictEqual(ctx.build({ capsLed: 1 }, R)[11].cmd, "SET_CAPS_LED 1");
   // Die linke Hälfte hat keinen Host: kein Befehl
-  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 25);
+  assert.strictEqual(ctx.build({ capsLed: 1 }, L).length, 26);
   // Auto Shift: Modus 0..4, Zeitlimit 50..500 (Standard 175); beide Befehle sind optional (ältere Firmware)
   const asCmd = (c, a) => c.find(x => x.ack === a);
   assert.strictEqual(asCmd(cmds, "SET_AUTO_SHIFT").cmd, "SET_AUTO_SHIFT 0");
@@ -8303,6 +8303,18 @@ test("Leader: Combos lehnen die Leader-Taste ab, die Wartezeit wird begrenzt", (
   assert.strictEqual(api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R).settings.leaderTimeoutMs, 1000);
   assert.strictEqual(api.settingsFromDeviceInfo({ leader_timeout_ms: 750 }, {}).leaderTimeoutMs, 750);
   assert.strictEqual(api.settingsFromDeviceInfo({ ld: 800 }, {}).leaderTimeoutMs, 800);
+});
+
+test("Einstellung layerLockTimeoutMinutes: Bereich, Normalisierung, Befehl und AUTO_MOUSE-Feld llt", () => {
+  assert.strictEqual(api.clampSetting("layerLockTimeoutMinutes", 0), 0);
+  assert.strictEqual(api.clampSetting("layerLockTimeoutMinutes", 61), 60);
+  assert.strictEqual(api.clampSetting("layerLockTimeoutMinutes", "x"), 0);
+  assert.strictEqual(api.normalizeConfig(JSON.parse(JSON.stringify(R.defaultConfig)), R).settings.layerLockTimeoutMinutes, 0);
+  assert.strictEqual(api.settingsFromDeviceInfo({ llt: 12 }, {}).layerLockTimeoutMinutes, 12);
+  const serial = read("js/serial.js");
+  assert.ok(serial.includes("am.llt") && serial.includes("layerLockTimeoutInput"));
+  assert.ok(read("js/config-sync.js").includes('SET_LAYER_LOCK_TIMEOUT ${clampSetting("layerLockTimeoutMinutes"'));
+  assert.ok(read("index.html").includes('id="layerLockTimeoutInput"') && read("js/editor-events.js").includes("layerLockTimeoutMinutes: layerLockTimeout"));
 });
 
 test("Einstellung layerTimeoutMs: Bereich, Normalisierung und DEVICE_INFO-Feld lt", () => {

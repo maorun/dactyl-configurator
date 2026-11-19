@@ -1101,6 +1101,15 @@ class TestServerAndCodegen(unittest.TestCase):
             self.assertIn("uint16_t mouseTimeoutMs", src, ino)
 
     def test_layer_timeout_setting(self):
+        self.assertEqual(server.SETTINGS_RANGES["layerLockTimeoutMinutes"], (0, 60, 0))
+        self.assertIn("uint8_t layerLockTimeoutMinutes = 0;", server.generate_settings_cpp({}))
+        self.assertIn("uint8_t layerLockTimeoutMinutes = 60;", server.generate_settings_cpp({"layerLockTimeoutMinutes": 60}))
+        for bad in (-1, 61, "x"):
+            with self.assertRaises(ValueError):
+                server.generate_settings_cpp({"layerLockTimeoutMinutes": bad})
+        for ino in ("firmware/dactyl_right/dactyl_right.ino", "firmware/dactyl_left/dactyl_left.ino"):
+            with open(ino) as f:
+                self.assertIn("uint8_t layerLockTimeoutMinutes", f.read(), ino)
         self.assertEqual(server.SETTINGS_RANGES["layerTimeoutMs"], (0, 60000, 0))
         self.assertIn("uint16_t layerTimeoutMs = 0;", server.generate_settings_cpp({}))
         self.assertIn("uint16_t layerTimeoutMs = 5000;", server.generate_settings_cpp({"layerTimeoutMs": 5000}))

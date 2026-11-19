@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Layer Lock timeout (`layerLockTimeoutMinutes`)
-
-- **Rank:** Feature model. Total 21/40 (typing 5, configuration 5, harmony 6, safety 5). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `firmware/dactyl_right/DactylCommon.h`, `js/settings-ui.js`.
-- **Problem:** Leaving a layer locked via `ACT_LAYER_LOCK` prevents normal typing if the user forgets to unlock it before returning to the computer.
-- **Goal:** Add setting `layerLockTimeoutMinutes` (0 = disabled, 1..60 min). If no keys are pressed for the specified interval, layer lock releases automatically.
-- **Acceptance test:** A firmware test activates layer lock, advances time past `layerLockTimeoutMinutes` without key presses, and expects layer 0 restored.
-
 ### Dynamic macro persistent slot save (`ACT_DM_SAVE`)
 
 - **Rank:** Feature model. Total 21/40 (typing 5, configuration 5, harmony 6, safety 5). Effort M. Estimate.

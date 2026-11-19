@@ -724,6 +724,7 @@ function setupEventListeners() {
       const leaderTimeout = clampSetting("leaderTimeoutMs", parseInt(document.getElementById("leaderTimeoutInput")?.value, 10));
       const oneShotTimeout = clampSetting("oneShotTimeoutMs", parseInt(document.getElementById("oneShotTimeoutInput")?.value, 10));
       const layerTimeout = clampSetting("layerTimeoutMs", parseInt(document.getElementById("layerTimeoutInput")?.value, 10));
+      const layerLockTimeout = clampSetting("layerLockTimeoutMinutes", parseInt(document.getElementById("layerLockTimeoutInput")?.value, 10));
       const autoMouseLayer = clampSetting("autoMouseLayer", parseInt(document.getElementById("autoMouseLayerSelect")?.value, 10));
       const mouseTimeout = clampSetting("mouseTimeoutMs", parseInt(document.getElementById("mouseTimeoutInput")?.value, 10));
       const priorIdle = clampSetting("requirePriorIdleMs", parseInt(document.getElementById("priorIdleInput")?.value, 10));
@@ -745,6 +746,7 @@ function setupEventListeners() {
       setVal("leaderTimeoutInput", leaderTimeout);
       setVal("oneShotTimeoutInput", oneShotTimeout);
       setVal("layerTimeoutInput", layerTimeout);
+      setVal("layerLockTimeoutInput", layerLockTimeout);
       setVal("autoMouseLayerSelect", autoMouseLayer);
       setVal("mouseTimeoutInput", mouseTimeout);
       setVal("priorIdleInput", priorIdle);
@@ -771,6 +773,7 @@ function setupEventListeners() {
         leaderTimeoutMs: leaderTimeout,
         oneShotTimeoutMs: oneShotTimeout,
         layerTimeoutMs: layerTimeout,
+        layerLockTimeoutMinutes: layerLockTimeout,
         autoMouseLayer: autoMouseLayer,
         mouseTimeoutMs: mouseTimeout,
         requirePriorIdleMs: priorIdle,

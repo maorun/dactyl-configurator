@@ -105,6 +105,17 @@ test("Einstellung autoShift: beide Sketche deklarieren sie, DactylLogic.h kennt 
   assert.ok(server.includes('uint8_t autoShift = {values["autoShift"]};') && server.includes('uint16_t autoShiftMs = {values["autoShiftMs"]};'), "server.py rendert Auto Shift nicht");
 });
 
+test("Einstellung layerLockTimeoutMinutes: beide Sketche deklarieren sie und rufen den Ablauf in loop() auf", () => {
+  for (const name of ["firmware/dactyl_right/dactyl_right.ino", "firmware/dactyl_left/dactyl_left.ino"]) {
+    assert.ok(/^uint8_t layerLockTimeoutMinutes = 0;$/m.test(read(name)), `${name}: layerLockTimeoutMinutes fehlt im Sketch`);
+  }
+  for (const name of ["firmware/dactyl_right/dactyl_right.ino", "firmware/dactyl_left/dactyl_left.ino"]) {
+    assert.ok(read(name).includes("layerLockTimeoutExpire(millis());"), `${name}: layerLockTimeoutExpire fehlt in loop()`);
+  }
+  const logic = read("firmware/dactyl_right/DactylLogic.h");
+  assert.ok(logic.includes('cmd.startsWith("SET_LAYER_LOCK_TIMEOUT ")') && logic.includes('"ll_to_min"') && logic.includes('\\"llt\\":%u'), "Befehl, NVS-Schlüssel oder llt-Feld fehlt");
+});
+
 test("Einstellung layerTimeoutMs: beide Sketche deklarieren sie und rufen den Ablauf in loop() auf", () => {
   for (const [name, src] of [["dactyl_right.ino", read("firmware/dactyl_right/dactyl_right.ino")], ["dactyl_left.ino", read("firmware/dactyl_left/dactyl_left.ino")]]) {
     assert.ok(/^uint16_t layerTimeoutMs = 0;$/m.test(src), `${name}: layerTimeoutMs fehlt im Sketch`);
@@ -138,7 +149,7 @@ test("Einstellung autoMouseLayer/mouseTimeoutMs: beide Sketche deklarieren sie, 
   const logic = read("firmware/dactyl_right/DactylLogic.h");
   assert.ok(logic.includes('cmd.startsWith("SET_AUTO_MOUSE_LAYER ")') && logic.includes('"am_layer"'), "Befehl oder NVS-Schlüssel am_layer fehlt");
   assert.ok(logic.includes('cmd.startsWith("SET_MOUSE_TIMEOUT ")') && logic.includes('"am_to"'), "Befehl oder NVS-Schlüssel am_to fehlt");
-  assert.ok(logic.includes('AUTO_MOUSE:{\\"aml\\":%u,\\"amt\\":%u}'), "AUTO_MOUSE-Zeile fehlt (DEVICE_INFO hat keine Reserve)");
+  assert.ok(logic.includes('AUTO_MOUSE:{\\"aml\\":%u,\\"amt\\":%u,\\"llt\\":%u}'), "AUTO_MOUSE-Zeile fehlt (DEVICE_INFO hat keine Reserve)");
   assert.ok(read("server.py").includes('uint8_t autoMouseLayer = {values["autoMouseLayer"]};') && read("server.py").includes('uint16_t mouseTimeoutMs = {values["mouseTimeoutMs"]};'), "server.py rendert die Einstellungen nicht");
 });
 

@@ -26,7 +26,7 @@
  *   configMutex, preferences, pConfigCharacteristic, bleKeyboard,
  *   triLayerRules[6], numTriLayers (Tri-Layer-Regeln, Settings-Block),
  *   capsLedEnabled (Setting: Onboard-LED zeigt Caps Lock; nur der Master wertet es aus),
- *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, chordalHoldExclusions, retroTap, numWordLayer, bootLayer, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, autoMouseLayer, mouseTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
+ *   deviceName, debounceMs, comboTimeoutMs, tappingTermMs, quickTapMs, requirePriorIdleMs, chordalHold, chordalHoldExclusions, retroTap, numWordLayer, bootLayer, autoShift, autoShiftMs, oneShotTimeoutMs, layerTimeoutMs, layerLockTimeoutMinutes, autoMouseLayer, mouseTimeoutMs, standbyTimeoutMinutes, deepSleepTimeoutMinutes,
  *   void handleConfigCommand(String, bool = false);
  *   void sendConfigNotification(String, bool = false);
  */
@@ -375,12 +375,16 @@ uint8_t toggleLayerMask() {
   return m;
 }
 
+uint8_t layerLockedMask = 0;   // von LAYER_LOCK eingerastete Ebenen (Bit n = Ebene n): layerTimeoutMs lässt sie stehen
+
 // Layer-Zustand der anderen Hälfte übernehmen: ihre MO-Ebenen, mit setToggles auch die TG-Ebenen.
 // Meldet einen Wechsel der aktiven Ebene als LAYER-Zeile (die App folgt ihr). Liefert true bei Wechsel.
 bool applyRemoteLayerState(uint8_t momentary, bool setToggles, uint8_t toggles) {
   uint8_t before = getActiveLayer();
   remoteMomentaryLayers = momentary;
   if (setToggles) {
+    uint8_t changed = (uint8_t)(toggleLayerMask() ^ (toggles & 0xFE));
+    layerLockedMask &= (uint8_t)~changed;   // die andere Hälfte hat die Ebene gewechselt: ein eigener Lock gilt nicht mehr
     for (int l = 1; l < NUM_LAYERS && l < 8; l++) toggleLayers[l] = (toggles >> l) & 1;
   }
   uint8_t after = getActiveLayer();
@@ -1721,7 +1725,6 @@ void repeatStopAt(uint8_t r, uint8_t c) {
 // Layer lock (ACT_LAYER_LOCK): die höchste gehaltene MO-Ebene (lokal oder von der anderen Hälfte) wird zur
 // TG-Ebene; ist sie schon eingerastet, löst der Druck sie. Ohne gehaltene MO-Ebene löst der Druck alle
 // eingerasteten Ebenen. Gibt die neue aktive Ebene zurück. Die TG-Ebenen gleicht der Layer-Abgleich ab.
-uint8_t layerLockedMask = 0;   // von LAYER_LOCK eingerastete Ebenen (Bit n = Ebene n): layerTimeoutMs lässt sie stehen
 uint8_t applyLayerLock() {
   int held = 0;
   for (int l = NUM_LAYERS - 1; l > 0; l--) {
@@ -2508,6 +2511,33 @@ void layerTimeoutExpire(unsigned long now) {
   layerTimeoutSeenMask = 0;
   uint8_t after = getActiveLayer();
   if (after != before) Serial.printf("LAYER: TIMEOUT -> Layer %d\n", after);
+}
+
+// layerLockTimeoutMinutes (0 = aus): ohne Tastendruck beider Hälften für diese Zeit löst sich jede von LAYER_LOCK
+// eingerastete Ebene der eigenen Hälfte (jede Hälfte führt ihre Locks selbst). Die Start-Ebene (bootLayer) bleibt. Ein Tastendruck (retroPressSeq), eine gehaltene Taste oder eine
+// Änderung der eingerasteten Ebenen startet die Frist neu. Aufruf in loop() mit millis().
+uint32_t layerLockSeenSeq = 0;
+uint8_t layerLockSeenMask = 0;
+unsigned long layerLockStampMs = 0;
+void layerLockTimeoutExpire(unsigned long now) {
+  layerLockedMask &= toggleLayerMask();   // eine gelöste Ebene ist nicht mehr eingerastet
+  uint8_t mask = layerLockedMask;
+  if (bootLayer > 0 && bootLayer < 8) mask &= (uint8_t)~(1u << bootLayer);
+  bool keyHeld = false;
+  for (int r = 0; r < NUM_ROWS && !keyHeld; r++) for (int c = 0; c < NUM_COLS; c++) if (keyState[r][c]) { keyHeld = true; break; }
+  if (keyHeld || retroPressSeq != layerLockSeenSeq || mask != layerLockSeenMask) {
+    layerLockSeenSeq = retroPressSeq;
+    layerLockSeenMask = mask;
+    layerLockStampMs = now;
+    return;
+  }
+  if (layerLockTimeoutMinutes == 0 || mask == 0 || (unsigned long)(now - layerLockStampMs) < (unsigned long)layerLockTimeoutMinutes * 60000UL) return;
+  uint8_t before = getActiveLayer();
+  for (int l = 1; l < NUM_LAYERS && l < 8; l++) if (mask & (1u << l)) toggleLayers[l] = false;
+  layerLockedMask &= (uint8_t)~mask;
+  layerLockSeenMask = 0;
+  uint8_t after = getActiveLayer();
+  if (after != before) Serial.printf("LAYER: LOCK_TIMEOUT -> Layer %d\n", after);
 }
 
 // true, wenn ein Druck zur Zeit now weniger als requirePriorIdleMs nach dem letzten Tastendruck liegt.
@@ -3567,6 +3597,10 @@ void loadKeymapFromNVS() {
     uint16_t lt = preferences.getUShort("layer_to", 0);
     if (lt == 0 || (lt >= LAYER_TIMEOUT_MIN_MS && lt <= LAYER_TIMEOUT_MAX_MS)) layerTimeoutMs = lt;
   }
+  if (preferences.isKey("ll_to_min")) {
+    uint8_t ll = preferences.getUChar("ll_to_min", 0);
+    if (ll <= LAYER_LOCK_TIMEOUT_MAX_MIN) layerLockTimeoutMinutes = ll;
+  }
   if (preferences.isKey("prior_idle")) {
     uint16_t pi = preferences.getUShort("prior_idle", 0);
     if (pi <= PRIOR_IDLE_MAX_MS) requirePriorIdleMs = pi;
@@ -4053,6 +4087,18 @@ bool saveOneShotTimeoutToNVS(uint16_t ms) {
   preferences.end();
   if (ok) oneShotTimeoutMs = ms;
   Serial.printf("NVS: One-Shot-Zeitlimit %s: %u ms\n", ok ? "gespeichert" : "FEHLER", ms);
+  return ok;
+}
+
+bool saveLayerLockTimeoutToNVS(uint8_t minutes) {
+  if (!preferences.begin("dactyl", false)) return false;
+  bool ok = preferences.putUChar("ll_to_min", minutes) > 0;
+  preferences.end();
+  if (ok) {
+    layerLockTimeoutMinutes = minutes;
+    layerLockSeenMask = 0xFF;   // erzwingt einen neuen Stempel: die Frist zählt ab der Änderung, nicht ab dem letzten Druck
+  }
+  Serial.printf("NVS: Layer-Lock-Zeitlimit %s: %u min\n", ok ? "gespeichert" : "FEHLER", minutes);
   return ok;
 }
 
@@ -5128,6 +5174,17 @@ void handleConfigCommand(String cmd, bool fromBle) {
     } else {
       sendConfigNotification("ERR ARGS " + cmd);
     }
+  } else if (cmd.startsWith("SET_LAYER_LOCK_TIMEOUT ")) {
+    String arg = cmd.substring(23);
+    arg.trim();
+    int ll = arg.toInt();
+    bool digits = arg.length() > 0 && arg.length() <= 2;
+    for (unsigned i = 0; digits && i < arg.length(); i++) digits = arg.charAt(i) >= '0' && arg.charAt(i) <= '9';
+    if (digits && ll >= 0 && ll <= LAYER_LOCK_TIMEOUT_MAX_MIN) {
+      sendConfigNotification(saveLayerLockTimeoutToNVS((uint8_t)ll) ? "OK SET_LAYER_LOCK_TIMEOUT " + String(ll) : String("ERR NVS SET_LAYER_LOCK_TIMEOUT"));
+    } else {
+      sendConfigNotification("ERR ARGS " + cmd);
+    }
   } else if (cmd == "CLEAR_MACROS") {
     stopMacro(true);
     numMacros = 0;
@@ -5225,8 +5282,8 @@ void handleConfigCommand(String cmd, bool fromBle) {
     sendConfigNotification("GIT_INFO:{\"githash\":\"" DACTYL_GIT_HASH "\"}");
     // Auto-Mouse-Einstellung ebenfalls in einer eigenen Zeile: DEVICE_INFO hat im Worst Case nur 7 Byte Reserve
     {
-      char amBuf[48];
-      snprintf(amBuf, sizeof(amBuf), "AUTO_MOUSE:{\"aml\":%u,\"amt\":%u}", (unsigned)autoMouseLayer, (unsigned)mouseTimeoutMs);
+      char amBuf[64];
+      snprintf(amBuf, sizeof(amBuf), "AUTO_MOUSE:{\"aml\":%u,\"amt\":%u,\"llt\":%u}", (unsigned)autoMouseLayer, (unsigned)mouseTimeoutMs, (unsigned)layerLockTimeoutMinutes);
       sendConfigNotification(String(amBuf));
     }
     char buf[768];

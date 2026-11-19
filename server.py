@@ -419,6 +419,7 @@ SETTINGS_RANGES = {
     "leaderTimeoutMs": (100, 5000, 1000),
     "oneShotTimeoutMs": (0, 10000, 0),  # 0 = aus, sonst 500..10000
     "layerTimeoutMs": (0, 60000, 0),  # 0 = aus, sonst 1000..60000
+    "layerLockTimeoutMinutes": (0, 60, 0),  # 0 = aus, sonst 1..60 min
     "autoMouseLayer": (0, 255, 255),  # 0..7 = Ebene, 255 = aus
     "mouseTimeoutMs": (100, 2000, 500),
     "requirePriorIdleMs": (0, 500, 0),
@@ -1114,6 +1115,7 @@ def generate_settings_cpp(settings, side="R"):
         f'uint16_t leaderTimeoutMs = {values["leaderTimeoutMs"]};',
         f'uint16_t oneShotTimeoutMs = {values["oneShotTimeoutMs"]};',
         f'uint16_t layerTimeoutMs = {values["layerTimeoutMs"]};',
+        f'uint8_t layerLockTimeoutMinutes = {values["layerLockTimeoutMinutes"]};',
         f'uint8_t autoMouseLayer = {values["autoMouseLayer"]};',
         f'uint16_t mouseTimeoutMs = {values["mouseTimeoutMs"]};',
         f'uint8_t holdTapMode = {values["holdTapMode"]};',

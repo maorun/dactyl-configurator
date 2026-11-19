@@ -58,6 +58,7 @@ static uint16_t autoShiftMs = 175;
 static uint16_t leaderTimeoutMs = 1000;
 static uint16_t oneShotTimeoutMs = 0;
 static uint16_t layerTimeoutMs = 0;
+static uint8_t layerLockTimeoutMinutes = 0;
 static uint8_t autoMouseLayer = AUTO_MOUSE_LAYER_OFF;
 static uint16_t mouseTimeoutMs = MOUSE_TIMEOUT_DEFAULT_MS;
 static uint8_t holdTapMode = 0;
@@ -203,6 +204,10 @@ void resetState() {
   leaderTimeoutMs = 1000;
   oneShotTimeoutMs = 0;
   layerTimeoutMs = 0;
+  layerLockTimeoutMinutes = 0;
+  layerLockSeenSeq = 0;
+  layerLockSeenMask = 0;
+  layerLockStampMs = 0;
   autoMouseLayer = AUTO_MOUSE_LAYER_OFF;
   mouseTimeoutMs = MOUSE_TIMEOUT_DEFAULT_MS;
   autoMouseOn = false;
@@ -9137,6 +9142,134 @@ TEST(test_layer_timeout_command_nvs_and_device_info) {
   assert(layerTimeoutMs == 7000);
 }
 
+TEST(test_layer_lock_timeout_releases_locked_layer_after_idle_minutes) {
+  resetState();
+  layerLockTimeoutMinutes = 2;
+  KEYMAP[0][5][0] = ACT_MO_3;
+  KEYMAP[3][5][1] = ACT_LAYER_LOCK;
+  pressKey(5, 0, true);
+  pressKey(5, 1, true);
+  pressKey(5, 1, false);
+  pressKey(5, 0, false);
+  assert(toggleLayers[3] && layerLockedMask == (1 << 3) && getActiveLayer() == 3);
+  layerLockTimeoutExpire(1000);                   // stempelt
+  layerLockTimeoutExpire(1000 + 119999);
+  assert(getActiveLayer() == 3);
+  layerLockTimeoutExpire(1000 + 120000);
+  assert(getActiveLayer() == 0 && layerLockedMask == 0 && toggleLayerMask() == 0);
+}
+
+TEST(test_layer_lock_timeout_restarts_on_key_press_and_ignores_tg_and_boot_layer) {
+  resetState();
+  layerLockTimeoutMinutes = 1;
+  layerLockedMask = (1 << 2);
+  toggleLayers[2] = true;
+  layerLockTimeoutExpire(0);
+  notePriorKeyPress(50000);                       // Druck einer Hälfte
+  layerLockTimeoutExpire(50000);                  // stempelt neu
+  layerLockTimeoutExpire(109999);
+  assert(getActiveLayer() == 2);
+  layerLockTimeoutExpire(110000);
+  assert(getActiveLayer() == 0);
+  resetState();                                   // aus: bleibt stehen
+  layerLockedMask = (1 << 2);
+  toggleLayers[2] = true;
+  layerLockTimeoutExpire(0);
+  layerLockTimeoutExpire(9000000);
+  assert(getActiveLayer() == 2);
+  resetState();                                   // reine TG-Ebene und Start-Ebene bleiben
+  layerLockTimeoutMinutes = 1;
+  bootLayer = 4;
+  applyBootLayer();
+  toggleLayers[2] = true;
+  layerLockTimeoutExpire(0);
+  layerLockTimeoutExpire(9000000);
+  assert(toggleLayers[2] && toggleLayers[4]);
+  bootLayer = 0;
+}
+
+TEST(test_layer_lock_timeout_command_nvs_and_info_line) {
+  resetState();
+  handleConfigCommand("SET_LAYER_LOCK_TIMEOUT 15", false);
+  assert(mockChar.value == "OK SET_LAYER_LOCK_TIMEOUT 15" && layerLockTimeoutMinutes == 15);
+  mockChar.notifications.clear();
+  handleConfigCommand("GET_INFO", false);
+  bool seenLlt = false;
+  for (const std::string &n : mockChar.notifications) if (n == "AUTO_MOUSE:{\"aml\":255,\"amt\":500,\"llt\":15}") seenLlt = true;
+  assert(seenLlt);
+  layerLockTimeoutMinutes = 0;
+  loadKeymapFromNVS();
+  assert(layerLockTimeoutMinutes == 15);
+  handleConfigCommand("SET_LAYER_LOCK_TIMEOUT 60", false);
+  assert(layerLockTimeoutMinutes == 60);
+  handleConfigCommand("SET_LAYER_LOCK_TIMEOUT 0", false);
+  assert(mockChar.value == "OK SET_LAYER_LOCK_TIMEOUT 0" && layerLockTimeoutMinutes == 0);
+  handleConfigCommand("SET_LAYER_LOCK_TIMEOUT 30", false);
+  const char *bad[] = { "SET_LAYER_LOCK_TIMEOUT 61", "SET_LAYER_LOCK_TIMEOUT x", "SET_LAYER_LOCK_TIMEOUT -1", "SET_LAYER_LOCK_TIMEOUT 123" };
+  for (const char *b : bad) {
+    handleConfigCommand(b, false);
+    assert(mockChar.value.rfind("ERR ARGS", 0) == 0 && layerLockTimeoutMinutes == 30);
+  }
+  Preferences::uintStore["ll_to_min"] = 61;       // ungültig im NVS
+  loadKeymapFromNVS();
+  assert(layerLockTimeoutMinutes == 30);
+}
+
+TEST(test_layer_lock_timeout_boundary_60_minutes_and_restamp_on_setting_change) {
+  resetState();
+  layerLockTimeoutMinutes = 60;
+  layerLockedMask = (1 << 2);
+  toggleLayers[2] = true;
+  layerLockTimeoutExpire(0);
+  layerLockTimeoutExpire(3599999UL);
+  assert(getActiveLayer() == 2);
+  layerLockTimeoutExpire(3600000UL);
+  assert(getActiveLayer() == 0);
+  resetState();                                   // Einschalten nach langer Ruhe löst nichts sofort
+  layerLockedMask = (1 << 2);
+  toggleLayers[2] = true;
+  layerLockTimeoutExpire(0);
+  layerLockTimeoutExpire(9000000);
+  handleConfigCommand("SET_LAYER_LOCK_TIMEOUT 1", false);
+  layerLockTimeoutExpire(9000100);                // stempelt neu
+  layerLockTimeoutExpire(9000100 + 59999);
+  assert(getActiveLayer() == 2);
+  layerLockTimeoutExpire(9000100 + 60000);
+  assert(getActiveLayer() == 0);
+}
+
+TEST(test_layer_lock_timeout_ignores_a_mirrored_toggle_and_drops_a_replaced_lock) {
+  resetState();
+  layerLockTimeoutMinutes = 1;
+  applyRemoteLayerState(0, true, (uint8_t)(1 << 3));   // die andere Hälfte rastet Ebene 3 ein: kein eigener Lock
+  assert(toggleLayers[3] && layerLockedMask == 0);
+  layerLockTimeoutExpire(0);
+  layerLockTimeoutExpire(9000000);
+  assert(toggleLayers[3]);                              // kein Ablauf für fremde Locks
+  resetState();
+  layerLockTimeoutMinutes = 1;
+  toggleLayers[2] = true;
+  layerLockedMask = (1 << 2);                           // eigener Lock
+  applyRemoteLayerState(0, true, 0);                    // die andere Hälfte löst und rastet neu ein (aus, dann an)
+  applyRemoteLayerState(0, true, (uint8_t)(1 << 2));
+  assert(toggleLayers[2] && layerLockedMask == 0);      // der alte Lock-Bit ist weg
+  layerLockTimeoutExpire(0);
+  layerLockTimeoutExpire(9000000);
+  assert(toggleLayers[2]);
+}
+
+TEST(test_layer_lock_timeout_clear_state_resets_the_mask) {
+  resetState();
+  layerLockTimeoutMinutes = 1;
+  layerLockedMask = (1 << 2);
+  toggleLayers[2] = true;
+  layerLockTimeoutExpire(0);
+  clearStatePress();
+  assert(layerLockedMask == 0 && getActiveLayer() == 0);
+  layerLockTimeoutExpire(100000);                 // nichts mehr einzurasten: kein Absturz, keine Wirkung
+  assert(getActiveLayer() == 0);
+}
+
 TEST(test_one_shot_timeout_nvs_rejects_invalid_values) {
   resetState();
   oneShotTimeoutMs = 1500;
@@ -11772,7 +11905,7 @@ TEST(test_set_auto_mouse_commands_args_nvs_and_info) {
   handleConfigCommand("GET_INFO", false);
   assert(mockChar.value.size() < 512);
   bool seen = false;
-  for (const std::string &n : mockChar.notifications) if (n == "AUTO_MOUSE:{\"aml\":5,\"amt\":750}") seen = true;
+  for (const std::string &n : mockChar.notifications) if (n == "AUTO_MOUSE:{\"aml\":5,\"amt\":750,\"llt\":0}") seen = true;
   assert(seen);
   // NVS-Schlüssel am_layer / am_to
   autoMouseLayer = AUTO_MOUSE_LAYER_OFF;

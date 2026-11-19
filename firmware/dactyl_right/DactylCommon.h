@@ -254,6 +254,9 @@ struct KeyPair {
 #define LAYER_TIMEOUT_MIN_MS 1000
 #define LAYER_TIMEOUT_MAX_MS 60000
 
+// Zeitlimit für per LAYER_LOCK eingerastete Ebenen (layerLockTimeoutMinutes): 0 = aus, sonst 1..60 min
+#define LAYER_LOCK_TIMEOUT_MAX_MIN 60
+
 // Leader-Folge (exakt 6 Bytes, NVS-Format): keys = Tastencodes 1..255 ohne Modifier, ungenutzte Plätze 0 (die belegten
 // stehen vorn); action = Tastencode 1..255 ohne Modifier, Tastenpaar (ACT_KEY_PAIR_BASE + n) oder Makro (ACT_MACRO_BASE + n)
 struct LeaderSeq {

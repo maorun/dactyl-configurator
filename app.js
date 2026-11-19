@@ -458,6 +458,7 @@ function applySettingsToInputs(settings) {
   setVal("leaderTimeoutInput", settings.leaderTimeoutMs ?? 1000);
   setVal("oneShotTimeoutInput", settings.oneShotTimeoutMs ?? 0);
   setVal("layerTimeoutInput", settings.layerTimeoutMs ?? 0);
+  setVal("layerLockTimeoutInput", settings.layerLockTimeoutMinutes ?? 0);
   setVal("autoMouseLayerSelect", settings.autoMouseLayer ?? 255);
   setVal("mouseTimeoutInput", settings.mouseTimeoutMs ?? 500);
   setVal("priorIdleInput", settings.requirePriorIdleMs ?? 0);

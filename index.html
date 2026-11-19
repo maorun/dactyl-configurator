@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dactyl Keyboard Configurator</title>
-  <link rel="stylesheet" href="style.css?v=18">
+  <link rel="stylesheet" href="style.css?v=19">
 </head>
 <body>
   <div class="app-container">
@@ -23,6 +23,12 @@
           <span class="mode-icon" id="configModeIcon">⌨️</span>
           <span class="mode-label">Modus:</span>
           <strong id="configModeText">Mac-Tastatur</strong>
+        </div>
+        <!-- Tippgeschwindigkeit der letzten 10 s, beide Hälften (js/heatmap.js, updateLiveWpmPill) -->
+        <div class="live-wpm-pill is-idle" id="liveWpmPill" title="Wörter pro Minute über die letzten 10 Sekunden (5 Anschläge = 1 Wort; zählt alle Tastendrücke beider Hälften, die per USB-Serial oder BLE ankommen)">
+          <span class="live-wpm-icon">⚡</span>
+          <span class="live-wpm-label">WPM:</span>
+          <strong id="liveWpmText">0</strong>
         </div>
         <div class="bluetooth-status-pill disconnected" id="btStatusPill">
           <span class="status-dot"></span>
@@ -1283,7 +1289,7 @@
   <script src="js/side-routing.js?v=6"></script>
   <!-- Klassische Skripte mit gemeinsamem globalem Scope; app.js lädt zuletzt und startet die App -->
   <script src="js/keycodes.js?v=3"></script>
-  <script src="js/config-model.js?v=14"></script>
+  <script src="js/config-model.js?v=15"></script>
   <script src="js/editor.js?v=7"></script>
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/key-overrides-ui.js?v=2"></script>
@@ -1296,7 +1302,7 @@
   <script src="js/ble.js?v=2"></script>
   <script src="js/serial.js?v=10"></script>
   <script src="js/live-monitor.js?v=2"></script>
-  <script src="js/heatmap.js?v=5"></script>
+  <script src="js/heatmap.js?v=6"></script>
   <script src="js/matrix-test.js?v=1"></script>
   <script src="js/diagnostics-ui.js?v=1"></script>
   <script src="js/layout-lint-ui.js?v=1"></script>

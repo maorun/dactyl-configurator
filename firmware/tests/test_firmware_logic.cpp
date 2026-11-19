@@ -145,6 +145,9 @@ static void testRemoteRelease(uint8_t r, uint8_t c) {
 #define REPEAT_REMOTE_RELEASE(r, c) testRemoteRelease(r, c)
 #define REPEAT_RECORDED() (testRecorded++)
 #define REPEAT_RELEASE_HELD_PAIRS() (testPairReleases++)
+// Wie dactyl_right.ino: der Treffer einer Hälften-Combo geht mit der linken Taste an die linke Hälfte (SPLIT_OP_COMBO_CONSUMED)
+static std::vector<std::pair<int, int>> testComboConsumed;
+#define COMBO_REMOTE_CONSUMED_SEND(r, c) testComboConsumed.push_back({(int)(r), (int)(c)})
 #include "../dactyl_right/DactylLogic.h"
 
 // ======================================================================// TEST SUITE ASSERTIONS
@@ -164,6 +167,8 @@ static int testsPassed = 0;
 
 // Reset mock state before tests
 void resetState() {
+  comboRemoteClear();
+  testComboConsumed.clear();
   swapClearAll();
   tapToggleReset();
   remoteMomentaryLayers = 0;
@@ -12474,6 +12479,284 @@ TEST(test_matrix_test_set_order_and_stray_off_throttle) {
   assert(matrixTestRefreshDue(true, true, rl, rsent, 1000 + MATRIX_TEST_REFRESH_MS));
   assert(!matrixTestRefreshDue(false, true, rl, rsent, 9000) && !rsent);
   assert(matrixTestRefreshDue(true, true, rl, rsent, 9001));
+}
+
+
+// -----------------------------------------------------------------------------
+// Hälften-Combos (sideFlags, SPLIT_OP_COMBO_KEY): eine Taste links, eine Taste rechts
+// -----------------------------------------------------------------------------
+// Master: Taste 1 = linke Taste R2C1 ('a'), Taste 2 = eigene Taste R2C2 ('k'); beide Hälften speichern die Combo.
+static void setUpBilateralMaster() {
+  KEYMAP[0][2][2] = 'k';
+  KEYMAP[0][3][3] = 'x';
+  comboTimeoutMs = 40;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 255 255 0 1 0", false);   // links R2C1 + rechts R2C2 -> Esc
+  assert(mockChar.value == "OK ADD_COMBO 0");
+}
+
+TEST(test_bilateral_combo_fires_when_a_left_and_a_right_key_arrive_in_the_window) {
+  resetState();
+  setUpBilateralMaster();
+  assert(comboIsBilateral(0) && userCombos[0].sideFlags == COMBO_SIDE_KEY1_LEFT);
+  assert(userCombos[0].r3 == COMBO_NO_KEY && comboKeyCount(0) == 2);
+  // Auf dem Master gehört nur Taste 2 (rechts R2C2) zur Combo; die linke Taste kennt er nur über COMBO_KEY
+  assert(comboContainsKey(0, 2, 2) && !comboContainsKey(0, 2, 1));
+  assert(isComboCandidateKey(2, 2) && !isComboCandidateKey(2, 1));
+
+  setMillis(1000);
+  comboRemoteKey(2, 1, true, 0, 1000);                       // die linke Hälfte meldet ihren Druck
+  setMillis(1015);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  assert(bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  assert(bleKeyboard.pressedKeys.empty());                   // 'k' ging nicht als Einzeltaste raus
+  assert(testComboConsumed.size() == 1 && testComboConsumed[0] == std::make_pair(2, 1));   // die linke Taste erfährt den Treffer
+  assert(keySentToHost[2][2]);
+  // Loslassen der linken Taste beendet die Combo; das spätere Loslassen sendet nichts nach
+  comboRemoteKey(2, 1, false, 0, 1100);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+  releaseKey(2, 2);
+  checkUserCombos();
+  assert(bleKeyboard.pressedKeys.empty() && bleKeyboard.writtenKeys.size() == 1);
+}
+
+TEST(test_bilateral_combo_fires_when_the_right_key_comes_first) {
+  resetState();
+  setUpBilateralMaster();
+  setMillis(1000);
+  pressKey(2, 2);
+  setMillis(1020);
+  comboRemoteKey(2, 1, true, 0, 1020);
+  checkUserCombos();
+  assert(comboRuntime[0].active && bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  assert(bleKeyboard.pressedKeys.empty());
+}
+
+TEST(test_bilateral_combo_does_not_fire_outside_the_window_and_the_key_goes_out_alone) {
+  resetState();
+  setUpBilateralMaster();
+  setMillis(1000);
+  comboRemoteKey(2, 1, true, 0, 1000);
+  setMillis(1100);                                           // 100 ms später: außerhalb von 40 ms
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active && bleKeyboard.writtenKeys.empty());
+  assert(testComboConsumed.empty());
+  runTicks(1300);                                            // die gepufferte rechte Taste geht als Einzeltaste
+  assert(!bleKeyboard.pressedKeys.empty() && bleKeyboard.pressedKeys[0] == 'k');
+}
+
+TEST(test_bilateral_combo_key_waits_for_the_split_grace_before_it_goes_out_alone) {
+  resetState();
+  setUpBilateralMaster();
+  // Das Fenster ist 40 ms; die Pakete der linken Hälfte brauchen etwas: die Einzeltaste wartet COMBO_SPLIT_GRACE_MS länger
+  assert(comboBufferMs(2, 2) == 40 + COMBO_SPLIT_GRACE_MS);
+  // Eine normale Combo derselben Taste behält das alte Fenster
+  handleConfigCommand("CLEAR_COMBOS", false);
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  assert(comboBufferMs(2, 2) == 40);
+}
+
+TEST(test_bilateral_combo_respects_the_layer_mask_of_the_remote_press) {
+  resetState();
+  comboTimeoutMs = 40;
+  KEYMAP[0][2][2] = 'k';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 2 255 255 0 1 0", false);   // nur Ebene 1
+  assert(mockChar.value == "OK ADD_COMBO 0");
+  setMillis(1000);
+  comboRemoteKey(2, 1, true, 0, 1000);                       // die linke Taste wurde auf Ebene 0 gedrückt
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active && bleKeyboard.writtenKeys.empty());
+}
+
+TEST(test_bilateral_combo_ignores_a_released_or_cleared_remote_key) {
+  resetState();
+  setUpBilateralMaster();
+  setMillis(1000);
+  comboRemoteKey(2, 1, true, 0, 1000);
+  comboRemoteKey(2, 1, false, 0, 1005);                      // vor dem Druck rechts wieder los
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+  // Link weg: alle gemeldeten Tasten gelten nicht mehr
+  releaseKey(2, 2);
+  comboRemoteKey(2, 1, true, 0, 2000);
+  comboRemoteClear();
+  setMillis(2010);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active && bleKeyboard.writtenKeys.empty());
+}
+
+TEST(test_bilateral_combo_window_includes_the_link_latency) {
+  resetState();
+  setUpBilateralMaster();                                    // Fenster 40 ms
+  setMillis(1000);
+  comboRemoteKey(2, 1, true, 0, 1000);
+  setMillis(1000 + 40 + COMBO_SPLIT_GRACE_MS - 1);           // knapp innerhalb von Fenster + Laufzeit
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+  // Eine normale Combo behält das enge Fenster
+  resetState();
+  comboTimeoutMs = 40;
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1000 + 40 + COMBO_SPLIT_GRACE_MS - 1);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+}
+
+TEST(test_bilateral_combo_new_press_after_a_lost_release_restamps_the_time) {
+  resetState();
+  setUpBilateralMaster();
+  comboRemoteKey(2, 1, true, 0, 1000);                       // das Loslassen ging verloren
+  setMillis(5000);
+  comboRemoteKey(2, 1, true, 0, 5000);                       // neuer Druck
+  setMillis(5010);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(comboRuntime[0].active);                            // mit der alten Zeit 1000 fiele die Combo nie ins Fenster
+  // Ein Retry-Duplikat innerhalb des Fensters ändert die Zeit nicht
+  resetState();
+  setUpBilateralMaster();
+  comboRemoteKey(2, 1, true, 0, 1000);
+  comboRemoteKey(2, 1, true, 0, 1030);
+  assert(remoteComboTime[2][1] == 1000);
+}
+
+TEST(test_bilateral_combo_nvs_version_three_only_with_a_bilateral_combo) {
+  resetState();
+  numCombos = 0;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  assert(saveCombosToNVS());
+  uint8_t buf[2 + 2 * COMBO_NVS_RECORD_BYTES];
+  preferences.getBytes("combos_v2", buf, 2 + COMBO_NVS_RECORD_BYTES);
+  assert(buf[0] == COMBO_NVS_VERSION);                       // ohne Hälften-Combo bleibt das Blob für alte Firmware lesbar
+  handleConfigCommand("ADD_COMBO 1 1 1 2 0 178 255 255 255 0 1 0", false);
+  assert(saveCombosToNVS());
+  preferences.getBytes("combos_v2", buf, 2 + 2 * COMBO_NVS_RECORD_BYTES);
+  // Version 3: eine Firmware vor der Hälften-Combo lehnt das Blob ab, statt die Combo auf den falschen Tasten zu laden
+  assert(buf[0] == COMBO_NVS_VERSION_SIDE && COMBO_NVS_VERSION_SIDE != COMBO_NVS_VERSION);
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 2 && comboIsBilateral(1));
+  // Eine Hälften-Markierung in einem Blob der Version 2 ist ungültig (sie stammt nie von dieser Firmware)
+  buf[0] = COMBO_NVS_VERSION;
+  preferences.putBytes("combos_v2", buf, 2 + 2 * COMBO_NVS_RECORD_BYTES);
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 2 && !comboIsBilateral(1) && userCombos[1].r3 == COMBO_NO_KEY);
+}
+
+TEST(test_bilateral_combo_does_not_trigger_from_two_right_keys) {
+  resetState();
+  setUpBilateralMaster();
+  KEYMAP[0][2][1] = 'a';
+  setMillis(1000);
+  pressKey(2, 1);                                            // eine rechte Taste an der Position der linken Taste
+  setMillis(1010);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active && bleKeyboard.writtenKeys.empty());
+}
+
+TEST(test_bilateral_combo_add_combo_validation_and_roundtrip) {
+  resetState();
+  // Genau eine Taste links, keine dritte Taste, Werte 0/1
+  const char *bad[] = {
+    "ADD_COMBO 2 1 2 2 0 177 255 255 255 0 1 1",   // beide links
+    "ADD_COMBO 2 1 2 2 0 177 255 255 255 0 0 0",   // beide rechts
+    "ADD_COMBO 2 1 2 2 0 177 255 2 3 0 1 0",       // dritte Taste
+    "ADD_COMBO 2 1 2 2 0 177 255 255 255 0 2 0",   // Wert 2
+    "ADD_COMBO 2 1 2 2 0 177 255 255 255 0 1",     // fünf Zusatzwerte
+    "ADD_COMBO 2 1 2 2 0 177 255 255 255 0 1 0 0", // sieben Zusatzwerte
+  };
+  for (const char *cmd : bad) {
+    numCombos = 0;
+    handleConfigCommand(cmd, false);
+    assert(mockChar.value.rfind("ERR ARGS", 0) == 0 && numCombos == 0);
+  }
+  numCombos = 0;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 255 255 25 0 1", false);
+  assert(mockChar.value == "OK ADD_COMBO 0" && userCombos[0].sideFlags == COMBO_SIDE_KEY2_LEFT && userCombos[0].windowMs == 25);
+  // GET_CONFIG: zwölf Werte, am Ende je Taste die Hälfte
+  mockChar.notifications.clear();
+  sendCombosPairsMacros();
+  bool found = false;
+  for (const std::string &n : mockChar.notifications) {
+    if (n.find("COMBO_DATA") != std::string::npos) {
+      found = true;
+      assert(n.find("[2,1,2,2,0,177,255,255,255,25,0,1]") != std::string::npos);
+    }
+  }
+  assert(found);
+}
+
+TEST(test_bilateral_combo_nvs_roundtrip_and_old_firmware_reads_no_third_key) {
+  resetState();
+  numCombos = 0;
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177 255 2 3 0", false);           // normale Combo mit dritter Taste
+  handleConfigCommand("ADD_COMBO 1 1 1 2 0 178 255 255 255 30 1 0", false);  // Hälften-Combo
+  handleConfigCommand("ADD_COMBO 0 1 0 2 0 179", false);                     // normale Combo
+  assert(numCombos == 3 && saveCombosToNVS());
+  assert(preferences.getBytesLength("combos_v2") == 2 + 3 * COMBO_NVS_RECORD_BYTES);   // Satzlänge bleibt 12
+  uint8_t buf[2 + 3 * COMBO_NVS_RECORD_BYTES];
+  preferences.getBytes("combos_v2", buf, sizeof(buf));
+  const uint8_t *rec = buf + 2 + COMBO_NVS_RECORD_BYTES;
+  // Eine Firmware vor der Hälften-Combo liest Byte 8 = 0xFE als "keine dritte Taste" (außerhalb der Matrix)
+  assert(rec[8] == COMBO_NVS_SIDE_MARK && COMBO_NVS_SIDE_MARK >= NUM_ROWS && rec[9] == COMBO_SIDE_KEY1_LEFT);
+  numCombos = 0;
+  for (int i = 0; i < MAX_COMBOS; i++) userCombos[i].sideFlags = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 3);
+  assert(!comboIsBilateral(0) && userCombos[0].r3 == 2 && userCombos[0].c3 == 3);
+  assert(comboIsBilateral(1) && userCombos[1].sideFlags == COMBO_SIDE_KEY1_LEFT && userCombos[1].windowMs == 30);
+  assert(userCombos[1].r3 == COMBO_NO_KEY && userCombos[1].c3 == COMBO_NO_KEY);
+  assert(!comboIsBilateral(2) && userCombos[2].sideFlags == 0);
+}
+
+TEST(test_bilateral_combo_nvs_rejects_invalid_side_flags) {
+  resetState();
+  numCombos = 0;
+  handleConfigCommand("ADD_COMBO 1 1 1 2 0 178 255 255 255 0 1 0", false);
+  assert(saveCombosToNVS());
+  uint8_t buf[2 + COMBO_NVS_RECORD_BYTES];
+  preferences.getBytes("combos_v2", buf, sizeof(buf));
+  buf[2 + 9] = 3;                                            // beide links: ungültig, die Combo lädt als normale Combo ohne dritte Taste
+  preferences.putBytes("combos_v2", buf, sizeof(buf));
+  numCombos = 0;
+  loadKeymapFromNVS();
+  assert(numCombos == 1 && !comboIsBilateral(0) && userCombos[0].r3 == COMBO_NO_KEY);
+}
+
+TEST(test_normal_combos_are_unchanged_by_the_bilateral_extension) {
+  resetState();
+  comboTimeoutMs = 40;
+  KEYMAP[0][2][1] = 'j';
+  KEYMAP[0][2][2] = 'k';
+  handleConfigCommand("ADD_COMBO 2 1 2 2 0 177", false);
+  assert(userCombos[0].sideFlags == 0 && !comboIsBilateral(0));
+  assert(comboContainsKey(0, 2, 1) && comboContainsKey(0, 2, 2));
+  setMillis(1000);
+  pressKey(2, 1);
+  setMillis(1010);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(comboRuntime[0].active && bleKeyboard.writtenKeys.size() == 1 && bleKeyboard.writtenKeys[0] == KEY_ESC);
+  assert(testComboConsumed.empty());                         // eine normale Combo meldet nichts an die linke Hälfte
+  // Ein Fremdschlüssel im Bestandsformat (Zeile ohne Hälften-Werte) bleibt gültig
+  mockChar.notifications.clear();
+  sendCombosPairsMacros();
+  for (const std::string &n : mockChar.notifications)
+    if (n.find("COMBO_DATA") != std::string::npos) assert(n.find("[2,1,2,2,0,177,255]") != std::string::npos);
 }
 
 int main() {

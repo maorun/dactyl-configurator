@@ -220,7 +220,12 @@ struct KeyCombo {
   uint8_t layerMask = COMBO_ALL_LAYERS;
   uint8_t r3 = COMBO_NO_KEY, c3 = COMBO_NO_KEY;
   uint16_t windowMs = 0;
+  // Hälften-Combo: 0 = normale Combo (alle Tasten auf der eigenen Hälfte). 1 = Taste 1 liegt links, Taste 2 rechts;
+  // 2 = Taste 1 rechts, Taste 2 links. Der Master löst sie aus; beide Hälften speichern sie (siehe FEATURES.md).
+  uint8_t sideFlags = 0;
 };
+#define COMBO_SIDE_KEY1_LEFT 1
+#define COMBO_SIDE_KEY2_LEFT 2
 
 // Separater flüchtiger Runtime-Zustand für Tasten-Chording
 struct ComboRuntime {

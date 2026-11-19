@@ -110,14 +110,15 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_KEY_PRESS, 'a', 1),     // sperrbarer Tastendruck
     makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 1, 1),     // sperrbarer Mausdruck
     makeSplitMouseSpeedEvent(2),                       // MOUSE_FAST gehalten
+    makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(3, 2, true, 5)),   // Taste einer Hälften-Combo gedrückt
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
-  // ACTIVITY, TAP_FLUSH, REPEAT_RUN, SLEEP, MASTER_PRESS und MATRIX_TEST sind die einzigen Ops nur der Rückrichtung.
-  // Jede dieser sechs fehlt, vier Ops stehen doppelt, KEY_PRESS und MOUSE_PRESS kommen zusätzlich mit arg 1 vor:
-  // SPLIT_OP_COUNT - 6 + 4 + 2.
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 6 + 4 + 2);
+  // ACTIVITY, TAP_FLUSH, REPEAT_RUN, SLEEP, MASTER_PRESS, MATRIX_TEST und COMBO_CONSUMED sind die einzigen Ops nur der Rückrichtung.
+  // Jede dieser sieben fehlt, vier Ops stehen doppelt, KEY_PRESS und MOUSE_PRESS kommen zusätzlich mit arg 1 vor:
+  // SPLIT_OP_COUNT - 7 + 4 + 2.
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 7 + 4 + 2);
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
-    if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP || op == SPLIT_OP_MASTER_PRESS || op == SPLIT_OP_MATRIX_TEST) continue;
+    if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP || op == SPLIT_OP_MASTER_PRESS || op == SPLIT_OP_MATRIX_TEST || op == SPLIT_OP_COMBO_CONSUMED) continue;
     bool seen = false;
     for (const SplitHidEvent &ev : ok) if (ev.op == op) seen = true;
     assert(seen); // jede Op links -> Master kommt vor: ein neuer Op-Wert ohne Eintrag fällt auf
@@ -186,6 +187,10 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(1, 1, true, 0), 1),
     makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(6, 1, true, 0)),   // Zeile außerhalb
     makeSplitHidEvent(SPLIT_OP_MATRIX_TEST, 1),                                 // nur Master -> links
+    makeSplitHidEvent(SPLIT_OP_COMBO_CONSUMED, splitKeyEventCode(1, 1, true, 0)), // nur Master -> links
+    makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(1, 1, true, 0), 1),   // arg muss 0 sein
+    makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(6, 1, true, 0)),      // Zeile außerhalb
+    makeSplitHidEvent(SPLIT_OP_COMBO_KEY, 0x0008),                                // Spalte 8 außerhalb
     makeSplitHidEvent(SPLIT_OP_COUNT),
     makeSplitHidEvent(0xFF),
   };
@@ -2197,8 +2202,9 @@ TEST(test_tap_ops_are_appended) {
   assert(SPLIT_OP_TAP_PENDING == 19 && SPLIT_OP_TAP_FLUSH == 20);
   assert(SPLIT_OP_REPEAT == 21 && SPLIT_OP_REPEAT_RUN == 22);
   assert(SPLIT_OP_HOLD_PENDING == 23 && SPLIT_OP_HOLD_RESOLVE == 24 && SPLIT_OP_MOUSE_MOVE == 25);
-  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_SENTENCE_CASE_TOGGLE == 30 && SPLIT_OP_COUNT == 35 && SPLIT_OP_MOUSE_SPEED == 31 && SPLIT_OP_CLEAR_STATE == 32);
+  assert(SPLIT_OP_SLEEP == 26 && SPLIT_OP_OSL == 27 && SPLIT_OP_KEY_LOCK == 28 && SPLIT_OP_MASTER_PRESS == 29 && SPLIT_OP_SENTENCE_CASE_TOGGLE == 30 && SPLIT_OP_COUNT == 37 && SPLIT_OP_MOUSE_SPEED == 31 && SPLIT_OP_CLEAR_STATE == 32);
   assert(SPLIT_OP_MATRIX_RAW == 33 && SPLIT_OP_MATRIX_TEST == 34);
+  assert(SPLIT_OP_COMBO_KEY == 35 && SPLIT_OP_COMBO_CONSUMED == 36);
 }
 
 TEST(test_tap_flush_accepted_only_from_master_without_values) {
@@ -4309,6 +4315,80 @@ TEST(test_master_press_packet_accepts_only_master_without_args) {
   // Die linke Hälfte sendet kein MASTER_PRESS an den Master; es ist kein Druck-Op
   assert(!parse(SPLIT_LEFT_MAC, makeSplitHidEvent(SPLIT_OP_MASTER_PRESS), out));
   assert(!splitIsPressOp(SPLIT_OP_MASTER_PRESS));
+}
+
+
+// Hälften-Combos: COMBO_KEY (links -> Master) und COMBO_CONSUMED (Master -> links)
+static std::vector<uint16_t> comboKeyCodes;
+static int comboKeyClears = 0;
+static void recordComboKey(const SplitHidEvent &ev) {
+  if (ev.op == SPLIT_OP_RELEASE_ALL) comboKeyClears++;
+  else comboKeyCodes.push_back(ev.code);
+}
+
+TEST(test_combo_key_reaches_the_master_without_hid_effect_and_with_or_without_host) {
+  for (int host = 0; host < 2; host++) {
+    Kbd k;
+    uint32_t droppedSeen = 0;
+    bool hostWas = host != 0;
+    comboKeyCodes.clear();
+    comboKeyClears = 0;
+    splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(2, 1, true, 3)));
+    SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, host != 0, 100, nullptr, nullptr, nullptr, nullptr,
+                                       nullptr, nullptr, SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, nullptr, nullptr, recordComboKey);
+    assert(comboKeyCodes.size() == 1 && comboKeyCodes[0] == splitKeyEventCode(2, 1, true, 3));
+    assert(rep.applied == 0 && k.log.empty());               // keine HID-Wirkung
+    assert(rep.keyEvents == 1);                              // zählt als Aktivität: Tippen links hält den Master wach
+    assert(k.splitLeft.linkUp && k.splitLeft.lastRxMs == 100);
+  }
+}
+
+TEST(test_combo_key_state_is_cleared_on_release_all_overflow_and_link_loss) {
+  Kbd k;
+  uint32_t droppedSeen = 0;
+  bool hostWas = true;
+  comboKeyCodes.clear();
+  comboKeyClears = 0;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_RELEASE_ALL));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 100, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, nullptr, nullptr, recordComboKey);
+  assert(comboKeyClears == 1);
+  // Link weg: nach SPLIT_LINK_TIMEOUT_MS ohne Paket löscht der Master die gemeldeten linken Tasten
+  comboKeyClears = 0;
+  splitRxPush(rxq, makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(2, 1, true, 0)));
+  splitProcessRx(k, rxq, droppedSeen, hostWas, true, 200, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                 SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, nullptr, nullptr, recordComboKey);
+  assert(comboKeyClears == 0);
+  SplitRxReport rep = splitProcessRx(k, rxq, droppedSeen, hostWas, true, 200 + SPLIT_LINK_TIMEOUT_MS + 10, nullptr, nullptr, nullptr,
+                                     nullptr, nullptr, nullptr, SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, nullptr, nullptr, recordComboKey);
+  assert(rep.linkLost && comboKeyClears == 1);
+  // Mac getrennt
+  comboKeyClears = 0;
+  rep = splitProcessRx(k, rxq, droppedSeen, hostWas, false, 20000, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+                       SPLIT_LINK_TIMEOUT_MS, nullptr, nullptr, nullptr, nullptr, recordComboKey);
+  assert(rep.hostLost && comboKeyClears >= 1);
+}
+
+TEST(test_combo_consumed_accepted_only_from_master_with_a_valid_position) {
+  SplitHidEvent out;
+  SplitHidEvent ok = makeSplitHidEvent(SPLIT_OP_COMBO_CONSUMED, splitKeyEventCode(2, 1, true, 0));
+  assert(parseSplitMasterPacket(SPLIT_MASTER_MAC, (const uint8_t *)&ok, sizeof(ok), out) && out.op == SPLIT_OP_COMBO_CONSUMED);
+  assert(!parseSplitMasterPacket(SPLIT_LEFT_MAC, (const uint8_t *)&ok, sizeof(ok), out));   // falscher Absender
+  SplitHidEvent bad[] = {
+    makeSplitHidEvent(SPLIT_OP_COMBO_CONSUMED, splitKeyEventCode(6, 1, true, 0)),   // Zeile außerhalb
+    makeSplitHidEvent(SPLIT_OP_COMBO_CONSUMED, 0x0007),                             // Spalte 7 außerhalb
+    makeSplitHidEvent(SPLIT_OP_COMBO_CONSUMED, splitKeyEventCode(2, 1, true, 0), 1),
+    makeSplitHidEvent(SPLIT_OP_COMBO_CONSUMED, 0x4000),                             // fremde Bits
+  };
+  for (const SplitHidEvent &ev : bad) assert(!parseSplitMasterPacket(SPLIT_MASTER_MAC, (const uint8_t *)&ev, sizeof(ev), out));
+  // Der Master nimmt COMBO_CONSUMED nie von der linken Hälfte an
+  assert(!parseSplitHidPacket(SPLIT_LEFT_MAC, (const uint8_t *)&ok, sizeof(ok), out));
+}
+
+TEST(test_combo_key_is_retryable_and_not_a_press_op) {
+  // Ein verlorenes Loslassen hielte die Taste am Master: COMBO_KEY wird wiederholt (zustandsbasiert, Duplikate harmlos)
+  assert(splitEventRetryable(makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(2, 1, true, 0))));
+  assert(!splitIsPressOp(SPLIT_OP_COMBO_KEY) && !splitIsPressOp(SPLIT_OP_COMBO_CONSUMED));
 }
 
 int main() {

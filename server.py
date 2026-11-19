@@ -405,7 +405,7 @@ STATIC_ALLOWLIST = {
     "/js/side-right.js": "js/side-right.js", "/js/side-left.js": "js/side-left.js",
 }
 # Module der Web-App (Reihenfolge in index.html)
-APP_MODULES = ("matrix-constants", "keycodes", "config-model", "editor", "key-pairs-ui", "key-overrides-ui", "leader-ui", "alt-repeats-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
+APP_MODULES = ("matrix-constants", "keycodes", "config-model", "editor", "key-pairs-ui", "key-overrides-ui", "leader-ui", "combos-ui", "alt-repeats-ui", "macros-ui", "layout-profiles-ui", "flash-log", "editor-events", "ble", "serial",
                "live-monitor", "heatmap", "matrix-test", "diagnostics-ui", "layout-lint-ui", "layer-sheet-ui", "practice-ui", "keyboard-hooks", "config-sync")
 STATIC_ALLOWLIST.update({f"/js/{name}.js": f"js/{name}.js" for name in APP_MODULES})
 
@@ -656,6 +656,17 @@ CLEAR_STATE_CPP = {"ACT_CLEAR_STATE"}
 # BLE-Host-Slots wechseln die Verbindung des Masters; als Combo-Aktion und auf der linken Hälfte ergeben sie nichts
 BLE_HOST_CPP = {f"(ACT_HOST_BASE + {n})" for n in range(3)}
 
+def combo_sides(cb):
+    """Hälften einer Hälften-Combo (side1, side2) oder None bei einer normalen Combo. Beide Felder oder keines, "L"/"R", verschieden."""
+    s1, s2 = cb.get("side1"), cb.get("side2")
+    if s1 is None and s2 is None:
+        return None
+    if s1 not in ("L", "R") or s2 not in ("L", "R") or s1 == s2:
+        raise ValueError("Combo: side1 und side2 müssen beide gesetzt sein, \"L\" oder \"R\" lauten und sich unterscheiden.")
+    if cb.get("key3") is not None:
+        raise ValueError("Combo: Eine Hälften-Combo hat keine dritte Taste.")
+    return s1, s2
+
 def generate_combos_cpp(combos):
     if combos is None:
         combos = []
@@ -665,11 +676,15 @@ def generate_combos_cpp(combos):
         raise ValueError(f"Zu viele Combos: maximal {MAX_COMBOS} erlaubt.")
     beh_map = {"KEY_PRESS": 0, "MODIFIER_HOLD": 1, "LAYER_TOGGLE": 2}
     cb_entries = []
+    bilateral_entries = []
     for cb in combos:
         if not isinstance(cb, dict):
             raise ValueError("Ungültiger Combo-Eintrag.")
+        sides = combo_sides(cb)
         r1, c1 = validate_combo_key(cb.get("key1"), "key1")
         r2, c2 = validate_combo_key(cb.get("key2"), "key2")
+        if sides and ((r1, c1) in ABSENT_KEYS[sides[0]] or (r2, c2) in ABSENT_KEYS[sides[1]]):
+            raise ValueError("Combo: Eine Taste der Hälften-Combo existiert auf ihrer Hälfte nicht.")
         # Dritte Taste (optional): muss sich von den ersten beiden unterscheiden
         r3, c3 = COMBO_NO_KEY, COMBO_NO_KEY
         if cb.get("key3") is not None:
@@ -716,11 +731,16 @@ def generate_combos_cpp(combos):
         # layerMask: Bit i = die Combo gilt auf Ebene i; fehlend = alle Ebenen
         mask = validate_combo_layer_mask(cb.get("layerMask"))
         # KeyCombo: r1, c1, r2, c2, behavior, action[, layerMask[, r3, c3, windowMs]]; ohne Zusatzwerte bleibt die Zeile wie bisher
-        if r3 != COMBO_NO_KEY or window:
+        # Hälften-Combo: zusätzlich Flags (Bit 0 = Taste 1 links, Bit 1 = Taste 2 links); sie stehen hinter den normalen Combos
+        if sides:
+            flags = (1 if sides[0] == "L" else 0) | (2 if sides[1] == "L" else 0)
+            extra = f", {mask}, {COMBO_NO_KEY}, {COMBO_NO_KEY}, {window}, {flags}"
+        elif r3 != COMBO_NO_KEY or window:
             extra = f", {mask}, {r3}, {c3}, {window}"
         else:
             extra = "" if mask == COMBO_ALL_LAYERS else f", {mask}"
-        cb_entries.append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act}{extra} }}")
+        (bilateral_entries if sides else cb_entries).append(f"  {{ {r1}, {c1}, {r2}, {c2}, {beh}, {act}{extra} }}")
+    cb_entries = cb_entries + bilateral_entries
     lines = [
         "// [[[START_COMBOS]]]",
         f"uint8_t numCombos = {len(cb_entries)};",
@@ -1283,11 +1303,14 @@ def validate_config(config, side="R"):
     generate_macros_cpp(config.get("macros"))
     generate_settings_cpp(config.get("settings"), side)
     for cb in config.get("combos") or []:
+        sides = combo_sides(cb)
         for field in ("key1", "key2", "key3"):
             if cb.get(field) is None:
                 continue
             key = (cb[field]["r"], cb[field]["c"])
-            if key in ABSENT_KEYS[side]:
+            # Hälften-Combo: jede Taste muss nur auf ihrer eigenen Hälfte existieren
+            key_side = sides[0 if field == "key1" else 1] if sides else side
+            if key in ABSENT_KEYS[key_side]:
                 raise ValueError(f"Combo-Taste R{key[0]}C{key[1]} existiert auf dieser Hälfte nicht.")
 
 def load_config_for_app(side="R"):

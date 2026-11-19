@@ -568,6 +568,9 @@ void masterRepeatRemoteRelease(uint8_t r, uint8_t c);
 #define REPEAT_RECORDED() (bleKeyboard.splitLeft.repeatLastLeft = false)
 void masterRepeatReleaseHeldPairs();
 #define REPEAT_RELEASE_HELD_PAIRS() masterRepeatReleaseHeldPairs()
+// Hälften-Combos (SPLIT_OP_COMBO_KEY / SPLIT_OP_COMBO_CONSUMED): der Master meldet der linken Hälfte den Treffer mit ihrer Taste
+void sendSplitComboConsumed(uint8_t r, uint8_t c);
+#define COMBO_REMOTE_CONSUMED_SEND(r, c) sendSplitComboConsumed(r, c)
 #include "DactylLogic.h"
 #include "DactylConfigBle.h"
 
@@ -892,6 +895,16 @@ static void runClearStateOnMaster() {
   clearStatePress();
   if (configMutex) xSemaphoreGive(configMutex);
 }
+// Hälften-Combo: Zustand einer linken Taste (COMBO_KEY) oder Löschen aller (RELEASE_ALL: Link weg, Ring voll, Mac getrennt)
+static void onSplitComboKey(const SplitHidEvent &ev) {
+  if (ev.op == SPLIT_OP_RELEASE_ALL) {
+    comboRemoteClear();
+    return;
+  }
+  comboRemoteKey(splitKeyEventRow(ev.code), splitKeyEventCol(ev.code), splitKeyEventPressed(ev.code),
+                 splitKeyEventLayer(ev.code), millis());
+}
+
 static void onSplitClearState(const SplitHidEvent &ev) {
   (void)ev;
   runClearStateOnMaster();
@@ -908,7 +921,7 @@ void processSplitEvents(unsigned long linkTimeoutMs = SPLIT_LINK_TIMEOUT_MS) {
                                      hostReady, now, onSplitApplied, onSplitKeyEvent, onSplitLayer,
                                      onSplitBeforeLeftPress, onSplitRepeat, onSplitHoldResolve,
                                      linkTimeoutMs, onSplitOsl, onSplitMouseSpeed, onSplitClearState,
-                                     onSplitMatrixRaw);
+                                     onSplitMatrixRaw, onSplitComboKey);
   // Mac getrennt oder Config Mode: nichts bleibt vorgemerkt (auch die eigene Vormerkung)
   if (rep.hostLost) oslClearAll();
   // Linke Hälfte gerade erreichbar (Start, Aufwachen) bei laufendem Matrix-Test: den Zustand erneut senden
@@ -962,6 +975,14 @@ static void sendSplitMasterPress() {
   if (!splitActivityPeerReady || isConfigMode) return;
   SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_MASTER_PRESS);
   esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
+}
+
+// Treffer einer Hälften-Combo an die linke Hälfte melden (SPLIT_OP_COMBO_CONSUMED). Kein Retry; zweimal gesendet, damit ein
+// verlorenes Paket selten ist. Geht der Treffer verloren, sendet die linke Hälfte ihre Taste nach Ablauf des Fensters allein.
+void sendSplitComboConsumed(uint8_t r, uint8_t c) {
+  if (!splitActivityPeerReady || isConfigMode) return;
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_COMBO_CONSUMED, splitKeyEventCode(r, c, true, 0));
+  for (int i = 0; i < 2; i++) esp_now_send(SPLIT_LEFT_MAC, (const uint8_t *)&ev, sizeof(ev));
 }
 
 // Vor Config Mode und Deep Sleep: eigene MO-Ebenen links lösen (sonst erst nach dem Verfall).

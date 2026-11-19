@@ -121,7 +121,7 @@ function triggerVisualKeyRelease(r, c, side = editSide) {
 function checkActiveCombos() {
   for (const side of browserKeySides(activeHandView, editSide, Dactyl.SIDE_IDS)) {
     for (const combo of configFor(side).combos) {
-      if (comboKeys(combo).every(k => activePressedKeys.has(`${side}_${k.r}_${k.c}`))) {
+      if (comboKeys(combo).every((k, i) => activePressedKeys.has(`${comboKeySide(combo, i, side)}_${k.r}_${k.c}`))) {
         showComboAlert(combo);
         return;
       }

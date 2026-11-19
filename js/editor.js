@@ -1363,7 +1363,7 @@ function createKeycapElement(r, c, side, keyData, isThumb = false) {
 
   // Check if part of an active combo
   const isComboKey = configFor(side).combos.some(combo => combo.key1 && combo.key2 &&
-    comboKeys(combo).some(k => k.r === r && k.c === c)
+    comboKeysOnSide(combo, side).some(k => k.r === r && k.c === c)
   );
   if (isComboKey) {
     keyEl.classList.add("has-combo");
@@ -1559,7 +1559,7 @@ function renderCombosTable() {
     const td1 = document.createElement("td");
     const badge1 = document.createElement("span");
     badge1.className = "combo-key-badge";
-    badge1.textContent = (combo.key1 && combo.key1.label) || `R${combo.key1?.r ?? 0}C${combo.key1?.c ?? 0}`;
+    badge1.textContent = comboKeyBadgeText(combo, 0, (combo.key1 && combo.key1.label) || `R${combo.key1?.r ?? 0}C${combo.key1?.c ?? 0}`);
     td1.appendChild(badge1);
 
     const tdPlus = document.createElement("td");
@@ -1570,7 +1570,7 @@ function renderCombosTable() {
     const td2 = document.createElement("td");
     const badge2 = document.createElement("span");
     badge2.className = "combo-key-badge";
-    badge2.textContent = (combo.key2 && combo.key2.label) || `R${combo.key2?.r ?? 0}C${combo.key2?.c ?? 0}`;
+    badge2.textContent = comboKeyBadgeText(combo, 1, (combo.key2 && combo.key2.label) || `R${combo.key2?.r ?? 0}C${combo.key2?.c ?? 0}`);
     td2.appendChild(badge2);
     // Dritte Taste: "+ Taste 3" in derselben Zelle
     const third = comboThirdKey(combo);

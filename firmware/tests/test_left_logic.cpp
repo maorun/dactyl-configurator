@@ -805,7 +805,7 @@ TEST(test_matrix_test_report_routes_usb_or_split) {
 }
 
 TEST(test_matrix_test_ops_are_appended_and_not_retried) {
-  assert(SPLIT_OP_MATRIX_RAW == 33 && SPLIT_OP_MATRIX_TEST == 34 && SPLIT_OP_COUNT == 35);
+  assert(SPLIT_OP_MATRIX_RAW == 33 && SPLIT_OP_MATRIX_TEST == 34 && SPLIT_OP_COUNT == 37);
   // Ein doppelt zugestelltes Paket zählte einen Druck doppelt: kein Retry
   assert(!splitEventRetryable(makeSplitHidEvent(SPLIT_OP_MATRIX_RAW, splitKeyEventCode(1, 1, true, 0))));
 }

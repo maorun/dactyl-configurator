@@ -386,10 +386,23 @@ void leftRepeatReleaseHeldPairs();
 static SplitTapPendingReporter tapPendingReporter = {};
 static void onDoubleTapFlushed();
 #define DOUBLE_TAP_FLUSHED() onDoubleTapFlushed()
+// Hälften-Combos: die linke Hälfte meldet dem Master ihre Taste (SPLIT_OP_COMBO_KEY) und erfährt den Treffer (SPLIT_OP_COMBO_CONSUMED)
+#define DEVICE_IS_LEFT 1
+static void queueComboKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer);
+#define COMBO_REMOTE_KEY_SEND(r, c, pressed, layer) queueComboKey(r, c, pressed, layer)
 // Diagnose (GET_DIAG): Füllstand und Verluste der Sendewarteschlange
 #define DIAG_SEND_QUEUE_MAX() sendQueue.highWater
 #define DIAG_SEND_QUEUE_DROPPED() sendQueue.dropped
 #include "../dactyl_right/DactylLogic.h"
+
+// COMBO_KEY gehört in die Reihenfolge der Warteschlange (kein Diagnose-Limit): ein verlorenes Loslassen hielte die Taste am Master
+static void queueComboKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer) {
+  if (isConfigMode || !bleKeyboard.isConnected()) return;
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(r, c, pressed, layer));
+  // Ein Loslassen geht nicht verloren: bei voller Warteschlange erst senden. Ein verlorener Druck kostet nur die Combo dieser Taste.
+  if (pressed) queuePush(sendQueue, ev);
+  else queuePushAfterDrain(sendQueue, ev, [] { flushSendQueue(150); });
+}
 
 static void onDoubleTapFlushed() {
   queueTapPendingIfChanged(sendQueue, tapPendingReporter, !isConfigMode && bleKeyboard.isConnected(),
@@ -446,6 +459,8 @@ static SplitLocalDefer leftDefer = {};
 // dürfen nicht verschwinden. Der Empfangs-Callback schreibt, loop() liest (SPSC-Ring).
 static SplitRxQueue masterRepeatRing;
 static SplitRepeatRun masterRepeatRun = {};
+// COMBO_CONSUMED des Masters in Reihenfolge (Treffer einer Hälften-Combo); der Empfangs-Callback schreibt, loop() liest
+static SplitRxQueue masterComboRing;
 // Repeat-Taste links: Nummern je Taste und die Notiz an den Master (DactylLeftLogic.h, getestet)
 static LeftRepeatLink leftRepeatLink = {};
 
@@ -488,6 +503,7 @@ static void onEspNowSent(const esp_now_send_info_t *info, esp_now_send_status_t 
 static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
   SplitHidEvent ev;
   if (info == nullptr || !parseSplitMasterPacket(info->src_addr, data, len, ev)) return;
+  if (ev.op == SPLIT_OP_COMBO_CONSUMED) { splitRxPush(masterComboRing, ev); return; }
   if (ev.op == SPLIT_OP_ACTIVITY) masterActivityReceived = true;
   else if (ev.op == SPLIT_OP_SLEEP) { masterSleepRequested = true; matrixTestSet(false); }
   else if (ev.op == SPLIT_OP_MATRIX_TEST) { if (!matrixTestUsb) matrixTestSet(ev.code != 0); }   // Master schaltet den Test; ein USB-Lauf an dieser Hälfte bleibt
@@ -624,6 +640,7 @@ static bool setupEspNow() {
   }
   // Vor der Registrierung des Empfangs-Callbacks: danach schreibt der Wi-Fi-Task in den Ring
   splitRxReset(masterRepeatRing);
+  splitRxReset(masterComboRing);
   masterRepeatRun = {};
   esp_now_register_send_cb(onEspNowSent);
   // Layer-Zustand sofort neu melden. Nach restartEspNow bleibt ein offenes SET offen (eigener Toggle aus
@@ -895,6 +912,10 @@ void loop() {
   if (scanMutexTaken) {
     unsigned long now = millis();
     processMasterRepeat();
+    {
+      SplitHidEvent comboEv;
+      while (splitRxPop(masterComboRing, comboEv)) comboRemoteConsumed(splitKeyEventRow(comboEv.code), splitKeyEventCol(comboEv.code));
+    }
     unsigned long masterPressMs;
     if (masterPriorPressTake(masterPriorPress, masterPressMs)) notePriorKeyPress(masterPressMs);
     // Zurückgehaltene Änderungen ausführen: der Master hat entschieden (HOLD_PENDING 0) oder die Zeitgrenze ist um.

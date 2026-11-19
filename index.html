@@ -1136,9 +1136,14 @@
             </div>
             <div class="combo-plus">+</div>
             <div class="form-group">
-              <label for="comboKey2Select">Taste 2:</label>
+              <label for="comboKey2Select">Taste 2<span id="comboKey2SideLabel"></span>:</label>
               <select id="comboKey2Select" class="form-control"></select>
             </div>
+          </div>
+
+          <div class="form-group">
+            <label><input type="checkbox" id="comboBilateralCheck"> Taste 2 liegt auf der anderen Hälfte (Hälften-Combo)</label>
+            <small class="form-hint">Beide Hälften speichern die Combo; sie löst aus, wenn je eine Taste beider Hälften im Zeitfenster gedrückt wird. Beide Hälften brauchen die neue Firmware.</small>
           </div>
 
           <div class="form-group">
@@ -1320,6 +1325,7 @@
   <script src="js/key-pairs-ui.js?v=1"></script>
   <script src="js/key-overrides-ui.js?v=2"></script>
   <script src="js/leader-ui.js?v=2"></script>
+  <script src="js/combos-ui.js?v=1"></script>
   <script src="js/alt-repeats-ui.js?v=1"></script>
   <script src="js/macros-ui.js?v=5"></script>
   <script src="js/layout-profiles-ui.js?v=2"></script>

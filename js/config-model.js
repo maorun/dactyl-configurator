@@ -1467,6 +1467,8 @@ function normalizeConfig(cfg, profile) {
 // Tipp-Statistik für Heatmap & WPM (DOM-frei, Zählung nur physischer Tasten der Hälfte aus profile)
 const WPM_WINDOW_MS = 60000;
 const CHARS_PER_WORD = 5;
+const LIVE_WPM_WINDOW_MS = 10000;
+const LIVE_WPM_MIN_SPAN_MS = 2000;
 const HEAT_LEVELS = 5;
 
 // Finger der Hände von außen nach innen, danach der Daumen (Reihenfolge der Anzeige)
@@ -1877,6 +1879,24 @@ function pruneRecentPresses(stats, nowMs) {
 function computeWpm(stats, nowMs) {
   pruneRecentPresses(stats, nowMs);
   return Math.round(stats.recent.length / CHARS_PER_WORD * (60000 / WPM_WINDOW_MS));
+}
+
+// Live-WPM für die Kopfzeile: gleitendes Fenster der letzten 10 s über die Anschläge aller übergebenen Hälften.
+// Zeitbasis ist die gelaufene Zeit seit dem ersten Anschlag im Fenster (höchstens das Fenster, mindestens
+// LIVE_WPM_MIN_SPAN_MS, damit ein einzelner Anschlag keinen Ausreißer erzeugt). Ändert die Statistik nicht.
+function computeLiveWpm(statsList, nowMs) {
+  let count = 0;
+  let first = nowMs;
+  for (const stats of statsList) {
+    for (const t of stats.recent) {
+      if (nowMs - t >= LIVE_WPM_WINDOW_MS || t > nowMs) continue;
+      count++;
+      if (t < first) first = t;
+    }
+  }
+  if (!count) return 0;
+  const spanMs = Math.max(LIVE_WPM_MIN_SPAN_MS, Math.min(LIVE_WPM_WINDOW_MS, nowMs - first));
+  return Math.round(count / CHARS_PER_WORD / (spanMs / 60000));
 }
 
 // Heat-Stufe 0 (nie gedrückt) bis HEAT_LEVELS (häufigste Taste)

@@ -23,7 +23,8 @@ const code = [
   section("js/editor.js", "// Alte Configs speichern Modifier-Halte-Aktionen", "function appendOptionGroup"),
   section("js/editor.js", "// Sichtbarkeit der Optionen bei einer Suche", "// Auswahl-IDs, deren Suche"),
   section("js/keyboard-hooks.js", "const ACTION_CODE_TO_EVENT_CODES", "// Gehaltene MO_x-Ebene einer Hälfte"),
-  section("js/keyboard-hooks.js", "// Löst einen Browser-Tastencode für eine Hälfte auf", "// Alle Treffer eines Tastendrucks")
+  section("js/keyboard-hooks.js", "// Löst einen Browser-Tastencode für eine Hälfte auf", "// Alle Treffer eines Tastendrucks"),
+  section("js/heatmap.js", "// Live-WPM-Pille", "// WPM und Anschläge der bearbeiteten Hälfte")
 ].join("\n");
 
 const ctx = { TextDecoder };
@@ -32,7 +33,7 @@ vm.runInContext(`${code}
 this.api = { keyToNumericActions, sanitizeCommandText, clampSetting, normalizeTriLayers, validateConfigShape,
              normalizeConfig, isPhysicalKey, findDefinitionByCode, actionCodeToNumeric, SETTINGS_RANGES,
              LEGACY_HOLD_CODES, normalizeHoldCode, holdSublabel,
-             createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, suggestErgonomicSwaps, suggestCombos, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, buildHeatmapCsv, exportKeyPressStatsJson, resetKeyPressStats, WPM_WINDOW_MS, HEAT_LEVELS,
+             createTypingStats, recordKeyPress, correctionShares, topCorrectedKeys, keyPressRole, CORRECTION_WINDOW_MS, CORRECTION_MIN_PRESSES, fingerOfKey, fingerLoad, halfLoad, topSameFingerPairs, sameFingerPairKey, FINGER_IDS, SAME_FINGER_MAX_GAP_MS, computeWpm, computeLiveWpm, LIVE_WPM_WINDOW_MS, LIVE_WPM_MIN_SPAN_MS, suggestErgonomicSwaps, suggestCombos, heatLevel, maxKeyCount, serializeTypingStats, heatmapCounts, buildHeatmapCsv, exportKeyPressStatsJson, resetKeyPressStats, WPM_WINDOW_MS, HEAT_LEVELS,
              isWiredSwitch, createMatrixTest, markMatrixKeyTested, summarizeMatrixTest, parseMatrixLine,
              parseMatrixRawLine, createMatrixRawState, applyMatrixRaw, resetMatrixRawState,
              recordMatrixBounce, MATRIX_BOUNCE_MS, lintLayouts, findActionUsages, findActionUsagesForSides, charPairIndexFromCode, clearAbsentKeyActions,
@@ -495,6 +496,79 @@ test("WPM: gleitendes 60-s-Fenster mit 5 Anschlägen pro Wort", () => {
   assert.strictEqual(api.computeWpm(s, api.WPM_WINDOW_MS + 10000), 0);
   // Gesamtzähler bleibt unabhängig vom Fenster
   assert.strictEqual(s.total, 50);
+});
+
+// Pille im Header: Fenster 10 s, Zeitbasis ist die gelaufene Zeit seit dem ersten Anschlag im Fenster
+function liveWpmDom(statsBySide) {
+  const text = { textContent: "" };
+  const classes = new Set();
+  const pill = { classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) } };
+  const els = { liveWpmPill: pill, liveWpmText: text };
+  const h = {
+    Dactyl: { SIDE_IDS: Object.keys(statsBySide) }, typingStatsFor: side => statsBySide[side],
+    computeLiveWpm: api.computeLiveWpm, document: { getElementById: id => els[id] || null }, Date
+  };
+  vm.createContext(h);
+  vm.runInContext(`${section("js/heatmap.js", "// Live-WPM-Pille", "// WPM und Anschläge der bearbeiteten Hälfte")}
+    this.update = updateLiveWpmPill;`, h);
+  return { text, classes, update: h.update };
+}
+
+test("Live-WPM: 50 Anschläge in 6 s ergeben 100 WPM in der Pille", () => {
+  const s = api.createTypingStats(null, R);
+  for (let i = 0; i < 50; i++) api.recordKeyPress(s, 0, 1, i * 120);
+  const dom = liveWpmDom({ R: s });
+  dom.update(6000);
+  assert.strictEqual(dom.text.textContent, "100");
+  assert.ok(!dom.classes.has("is-idle"));
+  // Die Pille steht im Header von index.html
+  const html = read("index.html");
+  assert.ok(html.includes('id="liveWpmPill"') && html.includes('id="liveWpmText"'));
+});
+
+test("Live-WPM: Anschlag der nicht bearbeiteten Hälfte aktualisiert die Pille sofort", () => {
+  const calls = [];
+  const h = { editSide: "R", heatmapEnabled: false, saveHeatmapSoon() {}, applyHeatmap() {},
+    updateTypingStatsUI: () => calls.push("edit"), updateLiveWpmPill: () => calls.push("pill") };
+  vm.createContext(h);
+  vm.runInContext(`${section("js/heatmap.js", "function onTypingStatsChanged", "// Lädt die Zähler beider")}
+    this.changed = onTypingStatsChanged;`, h);
+  h.changed("L");
+  assert.deepStrictEqual(calls, ["pill"]);
+  calls.length = 0;
+  h.changed("R");
+  assert.deepStrictEqual(calls, ["edit"]);
+});
+
+test("Live-WPM: Zeitstempel in der Zukunft zählen nicht", () => {
+  const s = api.createTypingStats(null, R);
+  for (let i = 0; i < 10; i++) api.recordKeyPress(s, 0, 1, 1000 + i * 100);
+  api.recordKeyPress(s, 0, 1, 50000);
+  // Ohne den Ausschluss zählte der Anschlag bei 50000 mit und die Spanne wäre negativ
+  assert.strictEqual(api.computeLiveWpm([s], 2000), Math.round(10 / 5 / (api.LIVE_WPM_MIN_SPAN_MS / 60000)));
+});
+
+test("Live-WPM: gleitendes 10-s-Fenster, Leerlauf und eine Taste allein", () => {
+  assert.strictEqual(api.LIVE_WPM_WINDOW_MS, 10000);
+  const s = api.createTypingStats(null, R);
+  for (let i = 0; i < 50; i++) api.recordKeyPress(s, 0, 1, i * 120);
+  // Nach 10 s ohne Anschlag ist das Fenster leer
+  assert.strictEqual(api.computeLiveWpm([s], 5880 + api.LIVE_WPM_WINDOW_MS), 0);
+  // Ein einzelner Anschlag erzeugt keinen Ausreißer (Mindestspanne)
+  const one = api.createTypingStats(null, R);
+  api.recordKeyPress(one, 0, 1, 100000);
+  assert.strictEqual(api.computeLiveWpm([one], 100000), Math.round(1 / 5 / (api.LIVE_WPM_MIN_SPAN_MS / 60000)));
+  // Beide Hälften zählen zusammen
+  const a = api.createTypingStats(null, R);
+  const b = api.createTypingStats(null, L);
+  for (let i = 0; i < 25; i++) { api.recordKeyPress(a, 0, 1, i * 240); api.recordKeyPress(b, 0, 1, i * 240 + 120); }
+  assert.strictEqual(api.computeLiveWpm([a, b], 6000), 100);
+  // Die Pille wird grau, wenn nichts zählt; die Statistik bleibt unverändert
+  const dom = liveWpmDom({ R: a });
+  dom.update(6000 + 3 * api.LIVE_WPM_WINDOW_MS);
+  assert.strictEqual(dom.text.textContent, "0");
+  assert.ok(dom.classes.has("is-idle"));
+  assert.strictEqual(a.total, 25);
 });
 
 test("WPM: Fenstergrenze und Zeitstempel in falscher Reihenfolge", () => {

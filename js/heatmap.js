@@ -76,6 +76,16 @@ function updateHeatmapLayerButton(btn) {
   btn.textContent = heatmapPerLayer ? "Aktuelle Ebene" : "Alle Ebenen";
 }
 
+// Live-WPM-Pille: gleitendes 10-s-Fenster über beide Hälften (computeLiveWpm), grau ohne Anschläge im Fenster
+function updateLiveWpmPill(nowMs = Date.now()) {
+  const textEl = document.getElementById("liveWpmText");
+  const pill = document.getElementById("liveWpmPill");
+  if (!textEl) return;
+  const wpm = computeLiveWpm(Dactyl.SIDE_IDS.map(typingStatsFor), nowMs);
+  textEl.textContent = String(wpm);
+  if (pill) pill.classList.toggle("is-idle", wpm === 0);
+}
+
 // WPM und Anschläge der bearbeiteten Hälfte
 function updateTypingStatsUI() {
   const stats = typingStatsFor(editSide);
@@ -83,6 +93,7 @@ function updateTypingStatsUI() {
   const totalEl = document.getElementById("liveKeyTotal");
   if (wpmEl) wpmEl.textContent = String(computeWpm(stats, Date.now()));
   if (totalEl) totalEl.textContent = String(stats.total);
+  updateLiveWpmPill();
   updateFingerLoadUI();
 }
 
@@ -217,7 +228,9 @@ function updateComboSuggestionsUI(stats) {
 
 function onTypingStatsChanged(side = editSide) {
   saveHeatmapSoon();
+  // Die Live-WPM-Pille zählt beide Hälften, auch einen Anschlag der nicht bearbeiteten Hälfte
   if (side === editSide) updateTypingStatsUI();
+  else updateLiveWpmPill();
   if (heatmapEnabled) applyHeatmap();
 }
 

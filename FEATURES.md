@@ -867,6 +867,12 @@ Rules for this file:
 - Storage: `serializeTypingStats` writes `{ "r_c": n, layers: { "<layer>": { "r_c": n } } }` to `localStorage` (same key per half). The total counters stay at the top level, so an older app version still reads them and discards `layers`. `createTypingStats` also reads the old form `{ "r_c": n }`: the total counters stay, the layer counters start empty. Invalid layers, keys and counts are discarded.
 - WPM and the press count stay over all layers.
 
+### Live WPM pill (`computeLiveWpm`, `js/heatmap.js`)
+
+- `computeLiveWpm(statsList, nowMs)` (`js/config-model.js`, no DOM) counts the presses of the given halves in the last `LIVE_WPM_WINDOW_MS` (10 s) and returns words per minute (5 presses = 1 word, `CHARS_PER_WORD`). The time base is the time since the first press in the window, at most 10 s and at least `LIVE_WPM_MIN_SPAN_MS` (2 s), so a single press gives no outlier. 50 presses in 6 s give 100 WPM. It does not change the statistics.
+- `updateLiveWpmPill` (`js/heatmap.js`) writes the value of both halves to `#liveWpmText` in the header pill `#liveWpmPill`. The pill has the class `is-idle` (gray) at 0 WPM. `onTypingStatsChanged` calls it after each counted press of either half (`updateTypingStatsUI` for the edited half), and the 2 s timer of the heatmap lets the value fall without new presses.
+- The presses come from the same `KEY_PRESS` and `SPLIT_KEY` lines as the heatmap (`recordKeyPress`). The 60 s WPM badge `#liveWpm` in the heatmap card stays unchanged.
+
 ### Backspace correction heatmap (`recordKeyPress`, `js/heatmap.js`)
 
 - `recordKeyPress(stats, r, c, nowMs, layer, role)` (`js/config-model.js`) counts a press with the role `backspace` as one correction of the key before it, if that key came at most `CORRECTION_WINDOW_MS` (1500 ms) earlier on the same half. The Backspace press clears the key before it, so a second or held Backspace corrects nothing more, and a press after the window creates no correction. The Backspace press itself counts as a normal press. `stats.corrections` holds `{ "r_c": n }`; `lastTypedId` and `lastTypedMs` are RAM only.

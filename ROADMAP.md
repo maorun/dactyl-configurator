@@ -30,15 +30,6 @@ Rules for this file:
 - **Goal:** Inject the Git short commit hash into `DactylVersion.h` during build and report `githash` in `DEVICE_INFO` and the diagnosis panel.
 - **Acceptance test:** Compiling firmware generates a valid commit macro; `GET_INFO` output contains `githash:"<hash>"`.
 
-### Interactive typing speed monitor in App (`wpmCounter`)
-
-- **Rank:** Feature model. Total 22/40 (typing 5, configuration 5, harmony 6, safety 6). Effort S. Estimate.
-- **Area:** App.
-- **Code:** `js/side-routing.js`, `js/editor.js`, `index.html`.
-- **Problem:** The app receives keypress events over USB serial for the heatmap, but provides no real-time typing speed feedback during practice.
-- **Goal:** Add a rolling 10-second WPM calculator based on received serial keypress timestamps. Render a live WPM indicator in the application header.
-- **Acceptance test:** An app unit test feeds 50 keystroke events across 6 seconds and expects a calculated WPM of 100 in the UI pill.
-
 ### Layer Lock timeout (`layerLockTimeoutMinutes`)
 
 - **Rank:** Feature model. Total 21/40 (typing 5, configuration 5, harmony 6, safety 5). Effort S. Estimate.

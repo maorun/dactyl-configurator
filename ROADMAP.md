@@ -23,15 +23,6 @@ Rules for this file:
 
 ## Priority 4
 
-### Leader sequence timeout indicator in App (`MODE_STATE: "ld"`)
-
-- **Rank:** Feature model. Total 20/40 (typing 4, configuration 5, harmony 6, safety 5). Effort S. Estimate.
-- **Area:** Firmware, App.
-- **Code:** `firmware/dactyl_right/DactylLogic.h`, `js/serial.js`, `index.html`.
-- **Problem:** After pressing `LEADER`, the user has no visual feedback indicating whether the leader window is active or timed out.
-- **Goal:** Add `ld` (leader state: 0 = idle, 1..4 = number of keys gathered) to `MODE_STATE`. Show a temporary "Leader..." pill in the app header while awaiting sequence keys.
-- **Acceptance test:** A firmware test presses `LEADER` and expects `MODE_STATE` with `"ld":1`, followed by `"ld":0` on timeout expiration.
-
 ### Macro single-step execution and debugger in App (`debugMacroStep`)
 
 - **Rank:** Feature model. Total 19/40 (typing 3, configuration 6, harmony 5, safety 5). Effort S. Estimate.

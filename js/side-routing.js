@@ -309,8 +309,9 @@
   const MODE_STATE_KEYS = ["cw", "nw", "sc", "sh", "ka"];
   const MODE_STATE_LABELS = { cw: "Caps Word", nw: "Num Word", sc: "Satzanfang", sh: "Swap Hands", ka: "Keep Awake" };
 
-  // MODE_STATE-Zeile {"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1,"ll":0|1,"lli":0..7}: aktive Modi des Masters.
+  // MODE_STATE-Zeile {"cw":0|1,"nw":0|1,"sc":0|1,"sh":0|1,"ka":0|1,"ll":0|1,"lli":0..7,"ld":0..4}: aktive Modi des Masters.
   // ll und lli fehlen in Firmware vor Version 54: dann gilt Layer Lock als aus.
+  // ld (Leader-Erfassung) fehlt in älterer Firmware: dann gilt sie als aus.
   // Rückgabe: Flags je Modus oder undefined bei einer fremden oder ungültigen Zeile.
   function parseModeStateLine(line, lineSide) {
     const D = root.Dactyl;
@@ -333,6 +334,8 @@
     if (raw.ll === 1 && raw.lli < 1) return undefined;   // Ebene 0 rastet nie ein
     out.ll = llPresent && raw.ll === 1;
     out.lli = out.ll ? raw.lli : 0;
+    if (raw.ld !== undefined && (!Number.isInteger(raw.ld) || raw.ld < 0 || raw.ld > 4)) return undefined;
+    out.ld = raw.ld | 0;
     return out;
   }
 
@@ -341,6 +344,7 @@
     if (!modes) return [];
     const list = MODE_STATE_KEYS.filter(k => modes[k] === true).map(k => ({ key: k, label: MODE_STATE_LABELS[k] }));
     if (modes.ll === true) list.push({ key: "ll", label: `Layer Lock (Ebene ${modes.lli | 0})` });
+    if (modes.ld >= 1) list.push({ key: "ld", label: "Leader…" });
     return list;
   }
 

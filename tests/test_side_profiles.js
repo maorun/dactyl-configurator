@@ -64,14 +64,19 @@ test("MODE_STATE: Parser nur für den Master, Anzeige und Firmware nur über USB
   const D = ctx.Dactyl;
   const plain = v => JSON.parse(JSON.stringify(v));
   const line = '{"cw":1,"nw":0,"sc":1,"sh":0,"ka":0}';
-  assert.deepStrictEqual(plain(D.parseModeStateLine("MODE_STATE:" + line, "R")), { cw: true, nw: false, sc: true, sh: false, ka: false, ll: false, lli: 0 });
-  assert.deepStrictEqual(plain(D.parseModeStateLine('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":3}', "R")), { cw: false, nw: false, sc: false, sh: false, ka: false, ll: true, lli: 3 });
+  assert.deepStrictEqual(plain(D.parseModeStateLine("MODE_STATE:" + line, "R")), { cw: true, nw: false, sc: true, sh: false, ka: false, ll: false, lli: 0, ld: 0 });
+  assert.deepStrictEqual(plain(D.parseModeStateLine('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":3}', "R")), { cw: false, nw: false, sc: false, sh: false, ka: false, ll: true, lli: 3, ld: 0 });
   for (const bad of ['{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":8}', '{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":2,"lli":0}', '{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":0}']) assert.strictEqual(D.parseModeStateLine("MODE_STATE:" + bad, "R"), undefined, bad);
   assert.deepStrictEqual(plain(D.describeModeState({ cw: false, ll: true, lli: 3 })).map(m => m.label), ["Layer Lock (Ebene 3)"]);
   assert.strictEqual(D.parseModeStateLine("MODE_STATE:" + line, "L"), undefined);
   for (const bad of ['{"cw":1}', '{"cw":1,"nw":0,"sc":1,"sh":0,"ka":2}', "kaputt", "null", ""]) assert.strictEqual(D.parseModeStateLine("MODE_STATE:" + bad, "R"), undefined, bad);
   assert.strictEqual(D.parseModeStateLine("HOST_LEDS:" + line, "R"), undefined);
   assert.deepStrictEqual(plain(D.describeModeState({ cw: true, nw: false, sc: false, sh: false, ka: true })).map(m => m.key), ["cw", "ka"]);
+  assert.strictEqual(D.parseModeStateLine("MODE_STATE:" + line, "R").ld, 0);   // ohne ld (ältere Firmware): Leader aus
+  assert.strictEqual(D.parseModeStateLine('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":0,"lli":0,"ld":3}', "R").ld, 3);
+  for (const bad of ['"ld":5', '"ld":-1', '"ld":1.5', '"ld":"1"']) assert.strictEqual(D.parseModeStateLine('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":0,"lli":0,' + bad + '}', "R"), undefined, bad);
+  assert.deepStrictEqual(plain(D.describeModeState({ ld: 2 })), [{ key: "ld", label: "Leader…" }]);
+  assert.deepStrictEqual(plain(D.describeModeState({ ld: 0 })), []);
   assert.deepStrictEqual(plain(D.describeModeState(null)), []);
   // Firmware: nur auf dem Master, nur über Serial
   const svc = logic.slice(logic.indexOf("inline void modeStateService"), logic.indexOf("inline void modeStateService") + 200);

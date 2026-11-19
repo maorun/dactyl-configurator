@@ -21,15 +21,6 @@ Rules for this file:
 
 ## Priority 3
 
-### Dynamic macro persistent slot save (`ACT_DM_SAVE`)
-
-- **Rank:** Feature model. Total 21/40 (typing 5, configuration 5, harmony 6, safety 5). Effort M. Estimate.
-- **Area:** Firmware, App, Server.
-- **Code:** `firmware/dactyl_right/DactylDynamicMacro.h`, `firmware/dactyl_right/DactylCommon.h`, `firmware/dactyl_right/DactylLogic.h`, `server.py`.
-- **Problem:** Dynamic macros recorded via `ACT_DM_REC` are stored only in RAM and are lost on deep sleep or board reset.
-- **Goal:** Add action `ACT_DM_SAVE` (`0x19B`). Pressing it persists the dynamic macro buffer into macro slot 0 in NVS, surviving reboots.
-- **Acceptance test:** A firmware test records a sequence via `DM_REC`, executes `DM_SAVE`, reloads macros from NVS and expects the saved macro in slot 0.
-
 ## Priority 4
 
 ### Leader sequence timeout indicator in App (`MODE_STATE: "ld"`)

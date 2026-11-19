@@ -1,7 +1,7 @@
 #pragma once
 /*
  * DactylDynamicMacro.h — Aufnahme eines dynamischen Makros auf dem Master (ACT_DM_REC, ACT_DM_PLAY).
- * Der Slot liegt nur im RAM: ein Neustart, Deep Sleep und der Config Mode leeren ihn, GET_CONFIG sendet ihn nie
+ * Der Slot liegt nur im RAM (nur ACT_DM_SAVE kopiert ihn ausdrücklich in das Makro 0 im NVS): ein Neustart, Deep Sleep und der Config Mode leeren ihn, GET_CONFIG sendet ihn nie
  * (er kann ein Passwort enthalten). SplitArbitratedKeyboard (DactylSplitHid.h) ruft noteDown/noteUp für jeden
  * Tastencode beider Hälften auf; die Makro-Engine (DactylLogic.h) spielt die Schritte ab.
  * Keine Arduino- oder BLE-Abhängigkeit, damit die Host-Tests den Produktionscode ausführen.

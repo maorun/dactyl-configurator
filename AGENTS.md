@@ -210,6 +210,7 @@ Keys in the matrix use `uint16_t` action codes:
 | `0x169` | Repeat (`REPEAT`) | Runs the last resolved action again, also across both halves; see "Repeat the last action" |
 | `0x16B` | Alternate Repeat (`ALT_REPEAT`) | Runs the opposite of the last resolved action (`altRepeatAction`), also across both halves; see `FEATURES.md`, section "Alternate repeat" |
 | `0x16C` .. `0x16D` | Dynamic Macro (`DM_REC`, `DM_PLAY`) | Records the keys of both halves into one RAM slot on the master and plays it back; see "Dynamic macro" |
+| `0x19B` | Dynamic Macro save (`DM_SAVE`) | Copies the slot into macro 0 in the NVS and overwrites a configured macro 0; see "Dynamic macro" |
 | `0x16E` | Leader (`LEADER`) | Starts a capture of up to four keys of the same half; a matching sequence from `userLeaderSeqs[]` runs its action (key, key pair or macro), the sequence keys send nothing; see `FEATURES.md`, section "Leader key" |
 | `0x16F` | Key Lock (`KEY_LOCK`) | The next key or mouse button press of either half stays held after the release; a second press releases it; layer keys, `KEY_LOCK` and macros are not locked; see `FEATURES.md`, section "Key lock" |
 | `0x188` .. `0x18A` | BLE host slot (`HOST_1`..`HOST_3`) | Master only: releases all keys, stores the slot in the NVS and restarts BLE with the static random address of the slot; see `FEATURES.md`, section "BLE host slots" |
@@ -271,7 +272,7 @@ Keys in the matrix use `uint16_t` action codes:
 
 ### Dynamic macro (`DactylDynamicMacro.h`)
 - Details: `FEATURES.md`, section "Dynamic macro". Read it only before you change this feature.
-- The slot lives only on the master, only in RAM, and is never in the NVS or in `GET_CONFIG` (it can hold a password). `DM_REC:0|1` goes only over USB serial, never over BLE. Never add the slot to `dactyl_left.ino`.
+- The slot lives only on the master and in RAM. It never goes to the NVS automatically and never into `GET_CONFIG` (it can hold a password). Only an explicit `DM_SAVE` press copies it into macro 0 (this overwrites macro 0); `DM_SAVE:{...}` goes only over USB serial. `DM_REC:0|1` goes only over USB serial, never over BLE. Never add the slot to `dactyl_left.ino`.
 
 ### Mod-Tap / Layer-Tap (`HOLDMAP`)
 - Details: `FEATURES.md`, section "Mod-Tap / Layer-Tap". Read it only before you change this feature.

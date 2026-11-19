@@ -288,7 +288,7 @@ KEY_TO_CPP = {
     "OSM_LCTRL": "ACT_OSM_LCTRL", "OSM_LSHIFT": "ACT_OSM_LSHIFT", "OSM_LALT": "ACT_OSM_LALT",
     "OSM_LGUI": "ACT_OSM_LGUI", "OSM_RCTRL": "ACT_OSM_RCTRL", "OSM_RSHIFT": "ACT_OSM_RSHIFT",
     "OSM_RALT": "ACT_OSM_RALT", "OSM_RGUI": "ACT_OSM_RGUI", "CAPS_WORD": "ACT_CAPS_WORD", "SENTENCE_CASE": "ACT_SENTENCE_CASE", "REPEAT": "ACT_REPEAT", "ALT_REPEAT": "ACT_ALT_REPEAT",
-    "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY", "LEADER": "ACT_LEADER", "KEY_LOCK": "ACT_KEY_LOCK",
+    "DM_REC": "ACT_DM_REC", "DM_PLAY": "ACT_DM_PLAY", "DM_SAVE": "ACT_DM_SAVE", "LEADER": "ACT_LEADER", "KEY_LOCK": "ACT_KEY_LOCK",
     "HOST_1": "(ACT_HOST_BASE + 0)", "HOST_2": "(ACT_HOST_BASE + 1)", "HOST_3": "(ACT_HOST_BASE + 2)", "SWAP_HANDS": "ACT_SWAP_HANDS", "NUM_WORD": "ACT_NUM_WORD", "TT_UP": "ACT_TT_UP", "TT_DOWN": "ACT_TT_DOWN", "KEEP_AWAKE": "ACT_KEEP_AWAKE", "DEEP_SLEEP": "ACT_DEEP_SLEEP", "CLEAR_STATE": "ACT_CLEAR_STATE",
     "MEDIA_PLAY_PAUSE": "ACT_MEDIA_PLAY_PAUSE",
     "MEDIA_MUTE": "ACT_MEDIA_MUTE",
@@ -627,7 +627,7 @@ ONE_SHOT_CPP = {f"ACT_OSM_{m}" for m in ("LCTRL", "LSHIFT", "LALT", "LGUI", "RCT
 MOUSE_MOVE_CPP = {"ACT_MOUSE_UP", "ACT_MOUSE_DOWN", "ACT_MOUSE_LEFT_MOVE", "ACT_MOUSE_RIGHT_MOVE", "ACT_MOUSE_SLOW", "ACT_MOUSE_FAST"}
 
 # Dynamisches Makro (Aufnahme im RAM des Masters): braucht eine Taste, keine Combo; links ohne Wirkung
-DYNAMIC_MACRO_CPP = {"ACT_DM_REC", "ACT_DM_PLAY"}
+DYNAMIC_MACRO_CPP = {"ACT_DM_REC", "ACT_DM_PLAY", "ACT_DM_SAVE"}
 
 # Die Leader-Taste startet eine Sequenz auf einer Taste; als Combo-Aktion ergibt sie nichts
 LEADER_CPP = {"ACT_LEADER"}
@@ -1267,7 +1267,7 @@ def validate_config(config, side="R"):
                 if side == "L" and (r_idx, c_idx) in ABSENT_KEYS["L"] and any(a not in ("", "NONE", "0") for a in cell_actions(cell)):
                     raise ValueError(f"Taste R{r_idx}C{c_idx} existiert auf der linken Hälfte nicht (Ebene {l_idx}).")
                 if side == "L" and any(code_to_cpp(a) in DYNAMIC_MACRO_CPP for a in cell_actions(cell)):
-                    raise ValueError(f"Dynamische Makros (DM_REC, DM_PLAY) gelten nur für die rechte Hälfte (Master), Taste R{r_idx}C{c_idx} in Ebene {l_idx}.")
+                    raise ValueError(f"Dynamische Makros (DM_REC, DM_PLAY, DM_SAVE) gelten nur für die rechte Hälfte (Master), Taste R{r_idx}C{c_idx} in Ebene {l_idx}.")
                 if side == "L" and any(code_to_cpp(a) in KEEP_AWAKE_CPP for a in cell_actions(cell)):
                     raise ValueError(f"Keep-awake (KEEP_AWAKE) gilt nur für die rechte Hälfte (Master), Taste R{r_idx}C{c_idx} in Ebene {l_idx}.")
                 if side == "L" and any(code_to_cpp(a) in BLE_HOST_CPP for a in cell_actions(cell)):

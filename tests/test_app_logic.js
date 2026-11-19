@@ -2325,7 +2325,7 @@ test("Korrekturen: Modifier dazwischen ändern die Taste davor nicht, Rollen der
   api.recordKeyPress(s, 0, 5, 20, undefined, api.keyPressRole("KEY_BACKSPACE"));
   assert.deepStrictEqual({ ...s.corrections }, { "2_2": 1 });
   assert.strictEqual(api.keyPressRole("KEY_BACKSPACE"), "backspace");
-  for (const t of ["NONE", "KEY_LEFT_GUI", "MO_1", "TG_2", "LAYER_UP", "OSL_1", "OSM_LSHIFT", "HOST_1"]) {
+  for (const t of ["NONE", "KEY_LEFT_GUI", "MO_1", "TG_2", "LAYER_UP", "OSL_1", "OSM_LSHIFT", "HOST_1", "DM_SAVE"]) {
     assert.strictEqual(api.keyPressRole(t), "silent", t);
   }
   for (const t of ["KEY_A", "KEY_SPACE", "KEY_RETURN", "PAIR_0", "MACRO_0"]) assert.strictEqual(api.keyPressRole(t), "typed", t);
@@ -3991,8 +3991,9 @@ test("Dynamisches Makro: DM_REC und DM_PLAY wie DactylCommon.h, Auswahl, Rückwe
   const fw = name => Number(new RegExp(`#define ACT_${name}\\s+(0x[0-9A-F]+)`).exec(common)[1]);
   assert.strictEqual(fw("DM_REC"), 0x16C);
   assert.strictEqual(fw("DM_PLAY"), 0x16D);
+  assert.strictEqual(fw("DM_SAVE"), 0x19B);
   const all = api.KEYCODES.flatMap(g => g.keys);
-  for (const code of ["DM_REC", "DM_PLAY"]) {
+  for (const code of ["DM_REC", "DM_PLAY", "DM_SAVE"]) {
     assert.strictEqual(api.actionCodeToNumeric(code), fw(code), code);
     assert.ok(all.some(k => k.code === code), `${code} in der Auswahl`);
     const label = api.ONE_SHOT_LABELS[code];
@@ -4017,6 +4018,7 @@ test("Dynamisches Makro: DM_REC und DM_PLAY wie DactylCommon.h, Auswahl, Rückwe
     const c = JSON.parse(JSON.stringify(profile.defaultConfig));
     c.combos = [];
     c.layers[0][2][1] = where === "tap" ? "DM_REC" : { tap: "KEY_A", [where]: "DM_PLAY" };
+    if (where === "dtap") c.layers[0][2][2] = "DM_SAVE";
     return c;
   };
   for (const where of ["tap", "hold", "dtap"]) {

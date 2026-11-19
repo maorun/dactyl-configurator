@@ -1168,13 +1168,13 @@ function validateConfigShape(cfg, profile) {
   if ((cfg.combos || []).some(cb => cb && isDeepSleepCode(cb.action))) throw new Error("Combos unterstützen kein Deep Sleep.");
   if ((cfg.combos || []).some(cb => cb && isClearStateCode(cb.action))) throw new Error("Combos unterstützen kein Clear State.");
   if ((cfg.combos || []).some(cb => cb && isBleHostCode(cb.action))) throw new Error("Combos unterstützen keine BLE-Host-Slots.");
-  // Den Slot hat nur der Master: auf der anderen Hälfte tun DM_REC und DM_PLAY nichts (wie validate_config in server.py)
+  // Den Slot hat nur der Master: auf der anderen Hälfte tun DM_REC, DM_PLAY und DM_SAVE nichts (wie validate_config in server.py)
   if (profile && !profile.master && Array.isArray(cfg.layers) &&
       cfg.layers.some(layer => Array.isArray(layer) && layer.some(row => Array.isArray(row) && row.some(cell => {
         const actions = typeof cell === "string" ? [cell] : (cell && typeof cell === "object" ? [cell.tap, cell.hold, cell.dtap] : []);
         return actions.some(isDynamicMacroCode);
       })))) {
-    throw new Error(`Dynamische Makros (DM_REC, DM_PLAY) gelten nur für die ${Dactyl.SIDE_PROFILES[Dactyl.getMasterSide()].label} (Master).`);
+    throw new Error(`Dynamische Makros (DM_REC, DM_PLAY, DM_SAVE) gelten nur für die ${Dactyl.SIDE_PROFILES[Dactyl.getMasterSide()].label} (Master).`);
   }
   // Auch den Host-Slot hat nur der Master (wie validate_config in server.py)
   if (profile && !profile.master && Array.isArray(cfg.layers) &&
@@ -1341,7 +1341,7 @@ function mirrorKeyPosition(r, c, srcProfile, dstProfile) {
 
 // Spiegelt eine Ebene der Hälfte srcProfile auf die andere Hälfte dstProfile. Gibt eine neue Ebene zurück
 // (nicht belegte Zielpositionen transparent); fehlende Tasten beider Hälften werden übersprungen. PAIR_n und MACRO_n
-// entfallen (Listen je Hälfte), ebenso Master-Aktionen (HOST_n, DM_REC, DM_PLAY) auf einer Zielhälfte ohne Master.
+// entfallen (Listen je Hälfte), ebenso Master-Aktionen (HOST_n, DM_REC, DM_PLAY, DM_SAVE) auf einer Zielhälfte ohne Master.
 function mirrorLayerAcrossSides(layer, srcProfile, dstProfile) {
   if (!Array.isArray(layer) || !srcProfile || !dstProfile || srcProfile === dstProfile) return null;
   const next = transparentLayer();
@@ -2002,7 +2002,7 @@ function keyPressRole(tap) {
   if (tap === "KEY_BACKSPACE") return "backspace";
   const n = actionCodeToNumeric(tap);
   const silent = n === 0 || (n >= 0x80 && n <= 0x87) || (n >= 0x100 && n <= 0x119) || (n >= 0x160 && n <= 0x167)
-    || (n >= 0x180 && n <= 0x19A);
+    || (n >= 0x180 && n <= 0x19B);
   return silent ? "silent" : "typed";
 }
 

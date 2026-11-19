@@ -78,6 +78,7 @@ const KEYCODES = [
     { code: "ALT_REPEAT", label: "Alt Repeat (Gegenteil der letzten Aktion)", char: "" },
     { code: "DM_REC", label: "Makro aufnehmen (Start/Stopp, nur Master)", char: "" },
     { code: "DM_PLAY", label: "Aufgenommenes Makro abspielen (nur Master)", char: "" },
+    { code: "DM_SAVE", label: "Aufgenommenes Makro in Makro 0 speichern (überschreibt Makro 0, nur Master)", char: "" },
     { code: "LEADER", label: "Leader-Taste (Sequenz mit bis zu 4 Tasten)", char: "" },
     { code: "KEY_LOCK", label: "Key Lock (nächste Taste bleibt gedrückt)", char: "" },
     { code: "HOST_1", label: "BLE-Host 1 (nur Master)", char: "" },
@@ -303,6 +304,7 @@ const ACTION_TO_NUMERIC = {
   "ALT_REPEAT": 0x16B,
   "DM_REC": 0x16C,
   "DM_PLAY": 0x16D,
+  "DM_SAVE": 0x19B,
   "LEADER": 0x16E,
   "KEY_LOCK": 0x16F,
   "HOST_1": 0x188,
@@ -356,7 +358,7 @@ const ONE_SHOT_LABELS = {
   OSM_LCTRL: "OS Ctrl", OSM_LSHIFT: "OS Shift", OSM_LALT: "OS Alt", OSM_LGUI: "OS Cmd",
   OSM_RCTRL: "OS RCtl", OSM_RSHIFT: "OS RSft", OSM_RALT: "OS RAlt", OSM_RGUI: "OS RCmd",
   CAPS_WORD: "CapsWd", SENTENCE_CASE: "Sentence", REPEAT: "Repeat", ALT_REPEAT: "AltRep", LAYER_LOCK: "Lock",
-  DM_REC: "DM Rec", DM_PLAY: "DM Play", LEADER: "Leader", KEY_LOCK: "KeyLock",
+  DM_REC: "DM Rec", DM_PLAY: "DM Play", DM_SAVE: "DM Save", LEADER: "Leader", KEY_LOCK: "KeyLock",
   HOST_1: "Host 1", HOST_2: "Host 2", HOST_3: "Host 3", SWAP_HANDS: "Swap", NUM_WORD: "NumWd", TT_UP: "TT+", TT_DOWN: "TT-", KEEP_AWAKE: "Awake", DEEP_SLEEP: "Sleep", CLEAR_STATE: "Clear"
 };
 
@@ -407,7 +409,7 @@ function isBleHostCode(code) {
 
 // true für dynamische Makros DM_REC und DM_PLAY (nur Master, keine Combo-Aktion)
 function isDynamicMacroCode(code) {
-  return /^(ACT_)?DM_(REC|PLAY)$/.test(String(code || ""));
+  return /^(ACT_)?DM_(REC|PLAY|SAVE)$/.test(String(code || ""));
 }
 
 // true für One-Shot-Ebenen OSL_0 .. OSL_7 (Combos führen sie nicht aus)

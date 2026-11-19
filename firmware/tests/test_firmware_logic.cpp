@@ -272,6 +272,7 @@ void resetState() {
   testDefaultsId = 0;
   Preferences::failWrites = false;
   Preferences::failBytesKey.clear();
+  Preferences::failBytesKeyOnce.clear();
   Preferences::failRemoveKey.clear();
   Preferences::failUCharKey.clear();
   _mock_mutex_busy = false;
@@ -8505,6 +8506,125 @@ TEST(test_dynamic_macro_stops_at_step_limit) {
   dmTap(0, 1);
   runTicks(4000);
   assert(bleKeyboard.keyEvents.size() == MAX_MACRO_STEPS);
+}
+
+TEST(test_dynamic_macro_save_persists_slot_into_macro_zero) {
+  resetState();
+  dmMapKeys();
+  KEYMAP[0][0][2] = ACT_DM_SAVE;
+  setMillis(1000);
+  dmTap(0, 0);
+  dmTap(2, 1);
+  dmTap(2, 2);
+  dmTap(0, 0);
+  assert(bleKeyboard.dynMacro.length == 4);
+  assert(numMacros == 0 && !preferences.isKey("macros_data"));  // die Aufnahme allein speichert nichts
+
+  dmTap(0, 2);                                    // DM_SAVE
+  assert(numMacros == 1 && macroLengths[0] == 4);
+  // Neustart: Makros aus dem NVS laden
+  numMacros = 0;
+  for (int i = 0; i < MAX_MACROS; i++) { macroLengths[i] = 0; userMacros[i][0] = {}; }
+  bleKeyboard.dynMacro = DynamicMacro();
+  loadKeymapFromNVS();
+  assert(numMacros == 1 && macroLengths[0] == 4);
+  assert(userMacros[0][0].type == MACRO_STEP_DOWN && userMacros[0][0].code == 'a');
+  assert(userMacros[0][1].type == MACRO_STEP_UP && userMacros[0][1].code == 'a');
+  assert(userMacros[0][2].type == MACRO_STEP_DOWN && userMacros[0][2].code == 'b');
+  assert(userMacros[0][3].type == MACRO_STEP_UP && userMacros[0][3].code == 'b');
+  assert(dmSerialCount("DM_SAVE:{\"slot\":0,\"steps\":4,\"overwrote\":0,\"ok\":1}") == 1);
+}
+
+TEST(test_dynamic_macro_save_reports_overwrite_and_ignores_empty_slot) {
+  resetState();
+  dmMapKeys();
+  KEYMAP[0][0][2] = ACT_DM_SAVE;
+  setMillis(1000);
+  numMacros = 2;
+  macroLengths[0] = 1;
+  userMacros[0][0] = { MACRO_STEP_TAP, 'z', 0 };
+  macroLengths[1] = 1;
+  userMacros[1][0] = { MACRO_STEP_TAP, 'y', 0 };
+  dmTap(0, 2);                                    // leerer Slot: Makro 0 bleibt
+  assert(macroLengths[0] == 1 && userMacros[0][0].code == 'z');
+  assert(!preferences.isKey("macros_data"));
+  dmTap(0, 0);
+  dmTap(2, 1);
+  dmTap(0, 0);
+  dmTap(0, 2);
+  assert(macroLengths[0] == 2 && userMacros[0][0].code == 'a');
+  assert(numMacros == 2 && macroLengths[1] == 1 && userMacros[1][0].code == 'y');  // Makro 1 bleibt
+  assert(dmSerialCount("DM_SAVE:{\"slot\":0,\"steps\":2,\"overwrote\":1,\"ok\":1}") == 1);
+  for (const auto &n : mockChar.notifications) assert(n.find("DM_SAVE:") == std::string::npos);  // nie über BLE
+}
+
+TEST(test_dynamic_macro_save_failure_keeps_old_macro_zero) {
+  resetState();
+  dmMapKeys();
+  KEYMAP[0][0][2] = ACT_DM_SAVE;
+  setMillis(1000);
+  numMacros = 1;
+  macroLengths[0] = 1;
+  userMacros[0][0] = { MACRO_STEP_TAP, 'z', 0 };
+  userMacroRepeat[0] = true;
+  assert(saveMacrosToNVS());                      // Altstand im NVS
+  dmTap(0, 0);
+  dmTap(2, 1);
+  dmTap(0, 0);
+  Preferences::failBytesKeyOnce = "macros_data";  // nur das Speichern schlägt fehl, das Zurückschreiben gelingt
+  dmTap(0, 2);
+  assert(dmSerialCount("DM_SAVE:{\"slot\":0,\"steps\":2,\"overwrote\":1,\"ok\":0}") == 1);
+  assert(numMacros == 1 && macroLengths[0] == 1 && userMacros[0][0].code == 'z' && userMacroRepeat[0]);
+  // Der Altstand steht wieder im NVS: der Neustart lädt Makro 0 unverändert
+  numMacros = 0;
+  macroLengths[0] = 0;
+  userMacroRepeat[0] = false;
+  loadKeymapFromNVS();
+  assert(numMacros == 1 && macroLengths[0] == 1 && userMacros[0][0].code == 'z' && userMacroRepeat[0]);
+}
+
+TEST(test_dynamic_macro_save_failure_without_stored_macros_writes_no_override) {
+  resetState();
+  dmMapKeys();
+  KEYMAP[0][0][2] = ACT_DM_SAVE;
+  setMillis(1000);
+  assert(!preferences.isKey("num_macros"));       // einkompilierte Makros, kein NVS-Stand
+  dmTap(0, 0);
+  dmTap(2, 1);
+  dmTap(0, 0);
+  Preferences::failBytesKey = "macros_data";
+  dmTap(0, 2);
+  Preferences::failBytesKey.clear();
+  assert(dmSerialCount("DM_SAVE:{\"slot\":0,\"steps\":2,\"overwrote\":0,\"ok\":0}") == 1);
+  assert(numMacros == 0 && macroLengths[0] == 0);
+  assert(!preferences.isKey("num_macros"));       // das Zurückschreiben legt keine Überschreibung der Defaults an
+}
+
+TEST(test_dynamic_macro_save_needs_idle_connected_and_no_config_mode) {
+  resetState();
+  dmMapKeys();
+  KEYMAP[0][0][2] = ACT_DM_SAVE;
+  setMillis(1000);
+  dmTap(0, 0);
+  dmTap(2, 1);
+  dmTap(0, 0);
+  assert(bleKeyboard.dynMacro.length == 2);
+  bleKeyboard.connected = false;
+  dmTap(0, 2);                                    // ohne Mac
+  bleKeyboard.connected = true;
+  isConfigMode = true;
+  dmTap(0, 2);                                    // Config Mode
+  isConfigMode = false;
+  assert(numMacros == 0 && !preferences.isKey("macros_data"));
+  dmTap(0, 0);                                    // laufende Aufnahme: SAVE speichert nichts
+  dmTap(0, 2);
+  assert(numMacros == 0 && !preferences.isKey("macros_data"));
+  dmTap(0, 0);
+  macroRun.active = true;                         // laufendes Makro
+  dmTap(0, 2);
+  macroRun.active = false;
+  assert(numMacros == 0 && !preferences.isKey("macros_data"));
+  for (const auto &l : Serial.outputLines) assert(l.find("DM_SAVE:") == std::string::npos);
 }
 
 TEST(test_dynamic_macro_does_not_record_its_own_keys) {

@@ -902,7 +902,7 @@ static void onSplitComboKey(const SplitHidEvent &ev) {
     return;
   }
   comboRemoteKey(splitKeyEventRow(ev.code), splitKeyEventCol(ev.code), splitKeyEventPressed(ev.code),
-                 splitKeyEventLayer(ev.code), millis());
+                 splitKeyEventLayer(ev.code), millis(), splitComboKeyRefreshAge(ev.code));
 }
 
 static void onSplitClearState(const SplitHidEvent &ev) {

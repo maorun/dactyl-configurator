@@ -12632,6 +12632,37 @@ TEST(test_bilateral_combo_new_press_after_a_lost_release_restamps_the_time) {
   assert(remoteComboTime[2][1] == 1000);
 }
 
+TEST(test_bilateral_combo_refresh_of_a_long_held_left_key_never_forms_a_combo) {
+  resetState();
+  setUpBilateralMaster();
+  comboRemoteKey(2, 1, true, 0, 1000);                       // Druck
+  // Auffrischungen alle 200 ms ändern die Zeit nicht, auch nicht über COMBO_WINDOW_MAX hinaus
+  for (unsigned long t = 1200; t <= 2000; t += 200) comboRemoteKey(2, 1, true, 0, t, 1 + (uint8_t)((t - 1000) / 100));
+  assert(remoteComboTime[2][1] == 1000);
+  setMillis(2010);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);                           // links seit 1 s gehalten: keine Combo
+  // Der Master hat den Zustand gelöscht (RELEASE_ALL): die Auffrischung stempelt mit dem gemeldeten Alter zurück
+  resetState();
+  setUpBilateralMaster();
+  comboRemoteClear();
+  comboRemoteKey(2, 1, true, 0, 3000, 1 + 6);                // gehalten seit 600 ms
+  setMillis(3010);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(!comboRuntime[0].active);
+  // Ein neuer Druck (Alter 0) gilt dagegen als frisch
+  resetState();
+  setUpBilateralMaster();
+  comboRemoteClear();
+  comboRemoteKey(2, 1, true, 0, 4000);
+  setMillis(4010);
+  pressKey(2, 2);
+  checkUserCombos();
+  assert(comboRuntime[0].active);
+}
+
 TEST(test_bilateral_combo_nvs_version_three_only_with_a_bilateral_combo) {
   resetState();
   numCombos = 0;

@@ -10221,5 +10221,5 @@ test("Makro schrittweise testen: Befehl, Button, Serial-Abbau und Firmware-Befeh
   assert.ok(read("firmware/dactyl_right/DactylLogic.h").includes('"OK DEBUG_MACRO_RELEASE"'));
   const logic = read("firmware/dactyl_right/DactylLogic.h");
   assert.ok(logic.includes('cmd.startsWith("DEBUG_MACRO_STEP ")') && logic.includes('"DEBUG_MACRO_STEP RELEASE"'));
-  assert.ok(Number(/DACTYL_FW_VERSION (\d+)/.exec(read("firmware/dactyl_right/DactylVersion.h"))[1]) >= 61);
+  assert.ok(Number(/DACTYL_FW_VERSION (\d+)/.exec(read("firmware/dactyl_right/DactylVersion.h"))[1]) >= 62);
 });

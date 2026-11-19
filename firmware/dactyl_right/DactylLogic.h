@@ -327,7 +327,7 @@ bool comboHasThirdKey(uint8_t i) {
 #define COMBO_SPLIT_GRACE_MS 20
 // Meldung der linken Taste an den Master (links: SPLIT_OP_COMBO_KEY) und des Treffers an die linke Hälfte (Master: SPLIT_OP_COMBO_CONSUMED)
 #ifndef COMBO_REMOTE_KEY_SEND
-#define COMBO_REMOTE_KEY_SEND(r, c, pressed, layer)
+#define COMBO_REMOTE_KEY_SEND(r, c, pressed, layer, refreshAge)
 #endif
 #ifndef COMBO_REMOTE_CONSUMED_SEND
 #define COMBO_REMOTE_CONSUMED_SEND(r, c)
@@ -372,9 +372,16 @@ void comboRemoteClear() {
   memset(remoteComboTime, 0, sizeof(remoteComboTime));
 }
 
-void comboRemoteKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer, unsigned long now) {
+// refreshAge: 0 = neuer Druck, sonst Auffrischung einer gehaltenen Taste (1 + Alter in 100 ms, splitComboKeyRefreshAge).
+// Eine Auffrischung ändert die Zeit einer gehaltenen Taste nie. Hat der Master den Zustand gelöscht, stempelt sie mit dem
+// gemeldeten Alter zurück: eine lange gehaltene Taste (zum Beispiel Shift) bildet so nie eine Combo.
+void comboRemoteKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer, unsigned long now, uint8_t refreshAge = 0) {
   if (r >= NUM_ROWS || c >= NUM_COLS) return;
-  if (pressed) {
+  if (pressed && refreshAge >= 1) {
+    if (!remoteComboDown[r][c]) remoteComboTime[r][c] = now - (unsigned long)(refreshAge - 1) * 100UL - (refreshAge - 1 >= SPLIT_COMBO_KEY_AGE_MAX ? COMBO_WINDOW_MAX : 0);
+    remoteComboDown[r][c] = true;
+    remoteComboLayer1[r][c] = (uint8_t)((layer & 7) + 1);
+  } else if (pressed) {
     // Ein Retry-Duplikat eines gehaltenen Drucks ändert die Zeit nicht. Ein Druck, der nach mehr als COMBO_WINDOW_MAX folgt,
     // ist ein neuer Druck (das Loslassen ging verloren): er stempelt neu, sonst fiele die Combo nie ins Fenster.
     if (!remoteComboDown[r][c] || (unsigned long)(now - remoteComboTime[r][c]) > COMBO_WINDOW_MAX) remoteComboTime[r][c] = now;
@@ -478,10 +485,10 @@ void comboRemoteNoteKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer) {
     if (!comboIsBilateralKey(r, c, layer)) return;
     comboRemoteSent[r][c] = true;
     comboRemoteRefreshAt[r][c] = millis();
-    COMBO_REMOTE_KEY_SEND(r, c, true, layer);
+    COMBO_REMOTE_KEY_SEND(r, c, true, layer, 0);
   } else if (comboRemoteSent[r][c]) {
     comboRemoteSent[r][c] = false;
-    COMBO_REMOTE_KEY_SEND(r, c, false, 0);
+    COMBO_REMOTE_KEY_SEND(r, c, false, 0, 0);
   }
 }
 
@@ -5688,7 +5695,9 @@ void comboRemoteRefresh(unsigned long now) {
       if (!keyState[r][c]) { comboRemoteSent[r][c] = false; continue; }
       if ((unsigned long)(now - comboRemoteRefreshAt[r][c]) < COMBO_REMOTE_REFRESH_MS) continue;
       comboRemoteRefreshAt[r][c] = now;
-      COMBO_REMOTE_KEY_SEND(r, c, true, comboLayerForKey(r, c));
+      unsigned long heldMs = (unsigned long)(now - keyPressTime[r][c]);
+      uint8_t ageSteps = heldMs >= 100UL * SPLIT_COMBO_KEY_AGE_MAX ? SPLIT_COMBO_KEY_AGE_MAX : (uint8_t)(heldMs / 100UL);
+      COMBO_REMOTE_KEY_SEND(r, c, true, comboLayerForKey(r, c), (uint8_t)(1 + ageSteps));
     }
   }
 }

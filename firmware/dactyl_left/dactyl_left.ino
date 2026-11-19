@@ -388,17 +388,17 @@ static void onDoubleTapFlushed();
 #define DOUBLE_TAP_FLUSHED() onDoubleTapFlushed()
 // Hälften-Combos: die linke Hälfte meldet dem Master ihre Taste (SPLIT_OP_COMBO_KEY) und erfährt den Treffer (SPLIT_OP_COMBO_CONSUMED)
 #define DEVICE_IS_LEFT 1
-static void queueComboKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer);
-#define COMBO_REMOTE_KEY_SEND(r, c, pressed, layer) queueComboKey(r, c, pressed, layer)
+static void queueComboKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer, uint8_t refreshAge);
+#define COMBO_REMOTE_KEY_SEND(r, c, pressed, layer, refreshAge) queueComboKey(r, c, pressed, layer, refreshAge)
 // Diagnose (GET_DIAG): Füllstand und Verluste der Sendewarteschlange
 #define DIAG_SEND_QUEUE_MAX() sendQueue.highWater
 #define DIAG_SEND_QUEUE_DROPPED() sendQueue.dropped
 #include "../dactyl_right/DactylLogic.h"
 
 // COMBO_KEY gehört in die Reihenfolge der Warteschlange (kein Diagnose-Limit): ein verlorenes Loslassen hielte die Taste am Master
-static void queueComboKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer) {
+static void queueComboKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer, uint8_t refreshAge) {
   if (isConfigMode || !bleKeyboard.isConnected()) return;
-  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(r, c, pressed, layer));
+  SplitHidEvent ev = makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitComboKeyCode(r, c, pressed, layer, refreshAge));
   // Ein Loslassen geht nicht verloren: bei voller Warteschlange erst senden. Ein verlorener Druck kostet nur die Combo dieser Taste.
   if (pressed) queuePush(sendQueue, ev);
   else queuePushAfterDrain(sendQueue, ev, [] { flushSendQueue(150); });

@@ -111,12 +111,13 @@ TEST(test_valid_event_per_op) {
     makeSplitHidEvent(SPLIT_OP_MOUSE_PRESS, 1, 1),     // sperrbarer Mausdruck
     makeSplitMouseSpeedEvent(2),                       // MOUSE_FAST gehalten
     makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(3, 2, true, 5)),   // Taste einer Hälften-Combo gedrückt
+    makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitComboKeyCode(3, 2, true, 5, 4)),   // Auffrischung mit Alter 300 ms
   };
   // Alle Ops links -> Master (LAYER_STATE als REPORT und SET, TAP_PENDING, REPEAT und HOLD_PENDING mit 1 und 0);
   // ACTIVITY, TAP_FLUSH, REPEAT_RUN, SLEEP, MASTER_PRESS, MATRIX_TEST und COMBO_CONSUMED sind die einzigen Ops nur der Rückrichtung.
   // Jede dieser sieben fehlt, vier Ops stehen doppelt, KEY_PRESS und MOUSE_PRESS kommen zusätzlich mit arg 1 vor:
-  // SPLIT_OP_COUNT - 7 + 4 + 2.
-  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 7 + 4 + 2);
+  // SPLIT_OP_COUNT - 7 + 4 + 3.
+  assert(sizeof(ok) / sizeof(ok[0]) == SPLIT_OP_COUNT - 7 + 4 + 3);
   for (uint8_t op = 0; op < SPLIT_OP_COUNT; op++) {
     if (op == SPLIT_OP_ACTIVITY || op == SPLIT_OP_TAP_FLUSH || op == SPLIT_OP_REPEAT_RUN || op == SPLIT_OP_SLEEP || op == SPLIT_OP_MASTER_PRESS || op == SPLIT_OP_MATRIX_TEST || op == SPLIT_OP_COMBO_CONSUMED) continue;
     bool seen = false;
@@ -189,6 +190,8 @@ TEST(test_invalid_values_are_rejected) {
     makeSplitHidEvent(SPLIT_OP_MATRIX_TEST, 1),                                 // nur Master -> links
     makeSplitHidEvent(SPLIT_OP_COMBO_CONSUMED, splitKeyEventCode(1, 1, true, 0)), // nur Master -> links
     makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(1, 1, true, 0), 1),   // arg muss 0 sein
+    makeSplitHidEvent(SPLIT_OP_COMBO_KEY, (uint16_t)(splitKeyEventCode(1, 1, false, 0) | SPLIT_COMBO_KEY_REFRESH_BIT)), // Loslassen ohne Auffrischung
+    makeSplitHidEvent(SPLIT_OP_COMBO_KEY, (uint16_t)(splitKeyEventCode(1, 1, true, 0) | 0x1000)),   // Alter ohne Auffrischungsbit
     makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(6, 1, true, 0)),      // Zeile außerhalb
     makeSplitHidEvent(SPLIT_OP_COMBO_KEY, 0x0008),                                // Spalte 8 außerhalb
     makeSplitHidEvent(SPLIT_OP_COUNT),

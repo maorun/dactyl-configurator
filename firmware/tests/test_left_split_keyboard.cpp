@@ -106,11 +106,11 @@ static void onDoubleTapFlushed();
 #define DOUBLE_TAP_FLUSHED() onDoubleTapFlushed()
 // Wie dactyl_left.ino: Hälften-Combos melden die linke Taste an den Master (SPLIT_OP_COMBO_KEY)
 #define DEVICE_IS_LEFT 1
-static void queueComboKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer) {
+static void queueComboKey(uint8_t r, uint8_t c, bool pressed, uint8_t layer, uint8_t refreshAge) {
   if (isConfigMode || !bleKeyboard.isConnected()) return;
-  queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitKeyEventCode(r, c, pressed, layer)));
+  queuePush(sendQueue, makeSplitHidEvent(SPLIT_OP_COMBO_KEY, splitComboKeyCode(r, c, pressed, layer, refreshAge)));
 }
-#define COMBO_REMOTE_KEY_SEND(r, c, pressed, layer) queueComboKey(r, c, pressed, layer)
+#define COMBO_REMOTE_KEY_SEND(r, c, pressed, layer, refreshAge) queueComboKey(r, c, pressed, layer, refreshAge)
 #include "../dactyl_right/DactylLogic.h"
 
 static void onDoubleTapFlushed() {
@@ -1388,6 +1388,32 @@ TEST(test_bilateral_combo_held_left_key_is_refreshed_after_the_master_cleared_it
   setMillis(5000);
   checkUserCombos();
   assert(drain().empty());
+}
+
+TEST(test_bilateral_combo_refresh_packet_carries_the_age_of_the_held_key) {
+  addLeftBilateralCombo();
+  setMillis(1000);
+  keyState[2][1] = true;
+  keyPressTime[2][1] = 1000;
+  onMatrixKeyChange(2, 1, true);
+  std::vector<SplitHidEvent> first = drain();
+  assert(first.size() == 1 && first[0].op == SPLIT_OP_COMBO_KEY && splitComboKeyRefreshAge(first[0].code) == 0);
+  setMillis(1000 + 5 * COMBO_REMOTE_REFRESH_MS + 1);          // 1 s gehalten, fünf Auffrischungen später
+  checkUserCombos();
+  std::vector<SplitHidEvent> ev = drain();
+  assert(ev.size() == 1 && ev[0].op == SPLIT_OP_COMBO_KEY && isValidSplitHidEvent(ev[0]));
+  assert(splitComboKeyRefreshAge(ev[0].code) == 1 + SPLIT_COMBO_KEY_AGE_MAX);   // auf 700 ms begrenzt
+}
+
+TEST(test_bilateral_combo_consumed_with_two_combos_on_one_left_key_marks_the_first_one) {
+  addLeftBilateralCombo();
+  numCombos = 2;
+  userCombos[1] = userCombos[0];
+  userCombos[1].r2 = 3;                                      // zweite Combo: dieselbe linke Taste, anderer rechter Partner
+  keyState[2][1] = true;
+  keyPressTime[2][1] = millis();
+  comboRemoteConsumed(2, 1);
+  assert(comboRuntime[0].active && !comboRuntime[1].active); // dokumentiertes Limit: nur die Taste ist bekannt
 }
 
 TEST(test_bilateral_combo_consumed_ignores_a_late_packet_for_a_new_press) {

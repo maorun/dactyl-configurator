@@ -4058,12 +4058,12 @@ test("serial.js: MODE_STATE zeigt die Modi nur vom Master über USB und endet mi
   const s = serialLineHarness();
   assert.strictEqual(s.modes(), null);
   s.handle('MODE_STATE:{"cw":1,"nw":0,"sc":0,"sh":0,"ka":1}', "R", "usb");
-  assert.deepStrictEqual(s.modes(), { cw: true, nw: false, sc: false, sh: false, ka: true, ll: false, lli: 0 });
+  assert.deepStrictEqual(s.modes(), { cw: true, nw: false, sc: false, sh: false, ka: true, ll: false, lli: 0, ld: 0 });
   // Linke Hälfte, BLE und ungültige Zeilen ändern den Stand nicht
   s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0}', "L", "usb");
   s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0}', "R", "ble");
   for (const bad of ['MODE_STATE:{"cw":2,"nw":0,"sc":0,"sh":0,"ka":0}', 'MODE_STATE:{"cw":1}', "MODE_STATE:kaputt", "MODE_STATE:null"]) s.handle(bad, "R", "usb");
-  assert.deepStrictEqual(s.modes(), { cw: true, nw: false, sc: false, sh: false, ka: true, ll: false, lli: 0 });
+  assert.deepStrictEqual(s.modes(), { cw: true, nw: false, sc: false, sh: false, ka: true, ll: false, lli: 0, ld: 0 });
   // Ohne USB zum Master gilt der Stand nicht mehr
   const gone = serialLineHarness({ serialUp: false, serialSide: null });
   gone.handle('MODE_STATE:{"cw":1,"nw":0,"sc":0,"sh":0,"ka":0}', "R", "usb");
@@ -4076,15 +4076,21 @@ test("serial.js: MODE_STATE zeigt die Modi nur vom Master über USB und endet mi
   assert.strictEqual(kept.modes().cw, true);
   // Layer Lock: ll und lli, Pill mit Ebenennummer, Ende mit ll 0
   s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":2}', "R", "usb");
-  assert.deepStrictEqual(s.modes(), { cw: false, nw: false, sc: false, sh: false, ka: false, ll: true, lli: 2 });
+  assert.deepStrictEqual(s.modes(), { cw: false, nw: false, sc: false, sh: false, ka: false, ll: true, lli: 2, ld: 0 });
   assert.deepStrictEqual(JSON.parse(JSON.stringify(s.describeModes())), [{ key: "ll", label: "Layer Lock (Ebene 2)" }]);
   s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":1,"lli":9}', "R", "usb");
   assert.strictEqual(s.modes().lli, 2);
   s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":0,"lli":0}', "R", "usb");
   assert.deepStrictEqual(s.describeModes(), []);
+  // Leader-Erfassung: ld 1..4 zeigt die Pill "Leader…", ld 0 blendet sie aus
+  s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":0,"lli":0,"ld":2}', "R", "usb");
+  assert.deepStrictEqual(JSON.parse(JSON.stringify(s.describeModes())), [{ key: "ld", label: "Leader…" }]);
+  s.handle('MODE_STATE:{"cw":0,"nw":0,"sc":0,"sh":0,"ka":0,"ll":0,"lli":0,"ld":0}', "R", "usb");
+  assert.deepStrictEqual(s.describeModes(), []);
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   assert.ok(/id="pillLayerLock"[^>]*\bhidden\b/.test(html));
   assert.ok(/id="modeStatePills"[^>]*\bhidden\b/.test(html));
+  assert.ok(/data-mode="ld"[^>]*\bhidden\b/.test(html));
   for (const k of ["cw", "nw", "sc", "sh", "ka"]) assert.ok(new RegExp(`data-mode="${k}"[^>]*\\bhidden\\b`).test(html), k);
   for (const f of ["js/serial.js", "js/ble.js"]) assert.ok(fs.readFileSync(path.join(__dirname, "..", f), "utf8").includes("forgetModeState();"), f);
 });

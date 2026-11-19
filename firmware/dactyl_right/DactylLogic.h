@@ -4168,7 +4168,8 @@ bool saveQuickTapToNVS(uint16_t ms) {
 
 #ifdef DEVICE_INFO_HOST_LEDS_BITS  // nur der Master
 // Aktive Modi (MODE_STATE): Bits cw, nw, sc, sh, ka, ll (Caps Word, Num Word, Sentence Case, Swap Hands, Keep Awake,
-// Layer Lock). lli = höchste eingerastete Ebene (0 ohne Layer Lock).
+// Layer Lock). lli = höchste eingerastete Ebene (0 ohne Layer Lock). ld = Leader-Erfassung der Master-Hälfte
+// (0 = aus, 1 = aktiv mit 0 oder 1 erfasster Taste, 2..4 = Zahl der erfassten Tasten; 4 Tasten enden sofort).
 // Nur der Master meldet sie, nur auf USB-Serial (nie über BLE). modeStateReported -1 = beim nächsten Durchlauf melden.
 #define MODE_STATE_CW 0x01
 #define MODE_STATE_NW 0x02
@@ -4189,6 +4190,11 @@ inline uint8_t modeStateBits() {
   return b;
 }
 
+inline uint8_t leaderStateIndicator() {
+  if (!leaderState.active) return 0;
+  return leaderState.count < 1 ? 1 : leaderState.count;
+}
+
 // Höchste gesetzte Ebene in layerLockedMask (0 ohne Layer Lock)
 inline uint8_t lockedLayerIndex() {
   for (int l = 7; l > 0; l--) if (layerLockedMask & (1u << l)) return (uint8_t)l;
@@ -4199,17 +4205,18 @@ inline uint8_t lockedLayerIndex() {
 // die gesperrte Ebene wechselt: lli geht in den Vergleichswert ein.
 inline bool modeStateTakeLine(uint8_t bits, char *buf, size_t size) {
   const uint8_t lli = (bits & MODE_STATE_LL) ? lockedLayerIndex() : 0;
-  const int16_t key = (int16_t)(bits | (lli << 8));
+  const uint8_t ld = leaderStateIndicator();
+  const int16_t key = (int16_t)(bits | (lli << 8) | (ld << 11));
   if (modeStateReported == key) return false;
   modeStateReported = key;
-  snprintf(buf, size, "MODE_STATE:{\"cw\":%d,\"nw\":%d,\"sc\":%d,\"sh\":%d,\"ka\":%d,\"ll\":%d,\"lli\":%d}",
+  snprintf(buf, size, "MODE_STATE:{\"cw\":%d,\"nw\":%d,\"sc\":%d,\"sh\":%d,\"ka\":%d,\"ll\":%d,\"lli\":%d,\"ld\":%d}",
            (bits & MODE_STATE_CW) ? 1 : 0, (bits & MODE_STATE_NW) ? 1 : 0, (bits & MODE_STATE_SC) ? 1 : 0,
-           (bits & MODE_STATE_SH) ? 1 : 0, (bits & MODE_STATE_KA) ? 1 : 0, (bits & MODE_STATE_LL) ? 1 : 0, lli);
+           (bits & MODE_STATE_SH) ? 1 : 0, (bits & MODE_STATE_KA) ? 1 : 0, (bits & MODE_STATE_LL) ? 1 : 0, lli, ld);
   return true;
 }
 
 inline void modeStateService() {
-  char line[96];
+  char line[112];
   if (modeStateTakeLine(modeStateBits(), line, sizeof(line))) Serial.println(line);
 }
 #endif

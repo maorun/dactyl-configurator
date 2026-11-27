@@ -199,6 +199,9 @@
       <button class="tab-btn" data-tab="matrix-test-tab">
         <span class="tab-icon">🔧</span> Matrix-Test
       </button>
+      <button class="tab-btn" data-tab="suggestions-tab">
+        <span class="tab-icon">💡</span> Vorschläge
+      </button>
     </nav>
 
     <!-- Tab 1: Matrix & Layers -->
@@ -781,16 +784,9 @@
           <span class="live-label">Fingerlast:</span>
           <div class="finger-load-halves" id="fingerLoadHalves"></div>
           <div class="finger-load-bars" id="fingerLoadBars"></div>
-          <span class="live-label">Gleicher Finger nacheinander:</span>
-          <span class="stat-badge" id="sameFingerTotal" title="Zwei verschiedene Tasten desselben Fingers (ohne Daumen) direkt nacheinander">0</span>
-          <span class="finger-load-pairs" id="sameFingerPairs"></span>
           <span class="live-label">Meist korrigiert:</span>
           <span class="finger-load-pairs" id="topCorrectedKeys" title="Die fünf Tasten mit dem höchsten Anteil an Korrekturen durch Backspace (ab 5 Anschlägen)"></span>
-          <button id="btnAltRepeatsFromPairs" class="hand-btn" type="button" title="Legt aus den häufigsten Folgen Alt-Repeat-Paare an (beide Richtungen, Tap-Aktion der Ebene 0)">+ Alt-Repeat-Paare</button>
-          <span class="live-label">Tausch-Vorschläge (Ebene 0):</span>
-          <div class="ergonomic-swaps" id="ergonomicSwaps"></div>
-          <span class="live-label">Combo-Vorschläge (häufige Nachbarn):</span>
-          <div class="ergonomic-swaps" id="comboSuggestions"></div>
+          <span class="form-hint">Tausch-, Combo- und Alt-Repeat-Vorschläge siehe Tab „💡 Vorschläge".</span>
         </div>
 
         <div class="combo-active-alert" id="comboActiveAlert" style="display: none;">
@@ -811,6 +807,28 @@
         <div class="matrix-test-grid" id="matrixTestGrid"></div>
         <div class="matrix-test-suspects" id="matrixTestSuspects"></div>
         <div class="matrix-test-suspects" id="matrixTestBounce"></div>
+      </div>
+    </main>
+
+    <!-- Tab 5: Vorschläge (Tastenkorrekturen aus der Heatmap: Tausch, Combo, Alt-Repeat) -->
+    <main class="tab-content" id="suggestions-tab">
+      <div class="settings-card">
+        <h3>Tausch-Vorschläge (Ebene 0)</h3>
+        <p class="form-hint">Jede Zeile zeigt beide Plätze mit ihrer aktuellen Taste, den Anschlägen und der Taste nach dem Tausch (Pfeil).</p>
+        <div class="ergonomic-swaps" id="ergonomicSwaps"></div>
+      </div>
+      <div class="settings-card">
+        <h3>Combo-Vorschläge (häufige Nachbarn)</h3>
+        <p class="form-hint">Die Einzeltasten behalten ihre Aktion; die Combo kommt als zusätzliche Aktion bei gleichzeitigem Druck hinzu.</p>
+        <div class="ergonomic-swaps" id="comboSuggestions"></div>
+      </div>
+      <div class="settings-card">
+        <h3>Alt-Repeat-Paare aus häufigen Folgen</h3>
+        <p class="form-hint">Zwei verschiedene Tasten desselben Fingers (ohne Daumen) direkt nacheinander, aktuell gezählt für die bearbeitete Hälfte.</p>
+        <span class="live-label">Gleicher Finger nacheinander:</span>
+        <span class="stat-badge" id="sameFingerTotal" title="Zwei verschiedene Tasten desselben Fingers (ohne Daumen) direkt nacheinander">0</span>
+        <span class="finger-load-pairs" id="sameFingerPairs"></span>
+        <button id="btnAltRepeatsFromPairs" class="hand-btn" type="button" title="Legt aus den häufigsten Folgen Alt-Repeat-Paare an (beide Richtungen, Tap-Aktion der Ebene 0)">+ Alt-Repeat-Paare</button>
       </div>
     </main>
 

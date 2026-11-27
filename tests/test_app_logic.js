@@ -7453,6 +7453,24 @@ test("UI-Restrukturierung: USB-Live-Monitor und Connect-Button liegen im Tab Mat
   assert.ok(!matrixTabContent.includes('id="liveMonitorCard"'), "liveMonitorCard darf nicht in matrix-tab liegen");
 });
 
+test("UI-Restrukturierung: Tausch-, Combo- und Alt-Repeat-Vorschläge liegen im eigenen Tab Vorschläge", () => {
+  const html = read("index.html");
+  assert.ok(html.includes('data-tab="suggestions-tab"'), "Tab-Button suggestions-tab fehlt");
+  const tabStart = html.indexOf('id="suggestions-tab"');
+  assert.ok(tabStart >= 0, "Tab-Content suggestions-tab fehlt");
+  const tabEnd = html.indexOf('</main>', tabStart);
+  const tabContent = html.slice(tabStart, tabEnd);
+  for (const id of ["ergonomicSwaps", "comboSuggestions", "btnAltRepeatsFromPairs", "sameFingerTotal", "sameFingerPairs"]) {
+    assert.ok(tabContent.includes(`id="${id}"`), `${id} fehlt im Tab suggestions-tab`);
+  }
+  const matrixTestStart = html.indexOf('id="matrix-test-tab"');
+  const matrixTestEnd = html.indexOf('</main>', matrixTestStart);
+  const matrixTestContent = html.slice(matrixTestStart, matrixTestEnd);
+  for (const id of ["ergonomicSwaps", "comboSuggestions", "btnAltRepeatsFromPairs", "sameFingerTotal", "sameFingerPairs"]) {
+    assert.ok(!matrixTestContent.includes(`id="${id}"`), `${id} darf nicht mehr im Tab matrix-test-tab liegen`);
+  }
+});
+
 test("UI-Restrukturierung: Drahtloser Konfig-Modus steht oberhalb der Tabs mit einklappbarer Erklärung", () => {
   const html = read("index.html");
   const configCardPos = html.indexOf('id="configModeGuideCard"');
@@ -9007,6 +9025,22 @@ test("Tausch-Vorschläge: Zähler der Ebene 0 zählen, Gesamtzähler nur als Rü
   assert.deepStrictEqual(JSON.parse(JSON.stringify(api.suggestErgonomicSwaps(legacy, ergoConfig(), R)[0].from)), { r: 1, c: 5 });
 });
 
+test("Tausch-Vorschläge: Anzeige zeigt je Position die aktuelle und die getauschte Belegung", () => {
+  const { w, dom } = uiHarness(`${section("js/heatmap.js", "function keyPositionLabel", "function updateFingerLoadUI")}
+${section("js/heatmap.js", "const ergonomicSwappedPositions", "function updateComboSuggestionsUI")}
+var currentConfig = ${JSON.stringify(ergoConfig({ "1_5": { tap: "KEY_U", label: "U" }, "2_0": { tap: "KEY_E", label: "E" } }))};
+var typingStatsBySide = { R: createTypingStats(null, SIDE_PROFILES.R) };
+function typingStatsFor(side) { return typingStatsBySide[side]; }
+function activeProfile() { return SIDE_PROFILES[editSide]; }
+var editSide = "R";`);
+  vm.runInContext(`for (let i = 0; i < 50; i++) recordKeyPress(typingStatsBySide.R, 1, 5, i);
+    updateErgonomicSwapsUI(typingStatsBySide.R);`, w);
+  const row = dom.document.getElementById("ergonomicSwaps").children[0].children[0].textContent;
+  // Vorher/Nachher je Position: die aktuelle Taste, ein Pfeil zur Taste nach dem Tausch, und die Anschläge
+  assert.ok(/R1C5: U → E \(50×\)/.test(row), row);
+  assert.ok(/R2C0: E → U \(0×\)/.test(row), row);
+});
+
 (async () => {
   for (const [name, fn] of asyncTests) {
     await fn();
@@ -9102,7 +9136,7 @@ function openComboModal(pair) { openedPair = pair; }`);
     updateComboSuggestionsUI(typingStatsBySide.R);`, w);
   const list = dom.document.getElementById("comboSuggestions");
   assert.strictEqual(list.children.length, 1);
-  assert.ok(/R1C1.*\+.*R1C2.*\(1×\)/.test(list.children[0].children[0].textContent));
+  assert.ok(/R1C1.*\+.*R1C2.*\(1×\).*Einzeltasten bleiben erhalten/.test(list.children[0].children[0].textContent));
   await list.children[0].children[1].click();
   assert.deepStrictEqual(JSON.parse(vm.runInContext("JSON.stringify(openedPair)", w)), { a: { r: 1, c: 1 }, b: { r: 1, c: 2 } });
 });

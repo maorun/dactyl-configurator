@@ -150,13 +150,21 @@ function ergonomicSwappedFor(side) {
 function updateErgonomicSwapsUI(stats) {
   const listEl = document.getElementById("ergonomicSwaps");
   if (!listEl) return;
-  const cellLabel = pos => {
+  const posLabel = pos => keyPositionLabel(`${pos.r}_${pos.c}`);
+  const actionLabel = pos => {
     const cell = currentConfig.layers[0][pos.r][pos.c];
-    return `${keyPositionLabel(`${pos.r}_${pos.c}`)} ${(cell && cell.label) || ""}`.trim();
+    return (cell && cell.label) || "";
   };
-  const swaps = suggestErgonomicSwaps(stats, currentConfig, activeProfile(), undefined, ergonomicSwappedFor(editSide)).map(s => ({
-    ...s, text: `${cellLabel(s.from)} (${s.fromCount}) ⇄ ${cellLabel(s.to)} (${s.toCount}) · ${s.reason}`
-  }));
+  // Zeigt je Position die aktuelle Belegung (mit Anschlägen) und die Belegung nach dem Tausch, damit die
+  // Auswirkung ohne weiteren Klick erkennbar ist: "Position: alt → neu (Anschläge)".
+  const swaps = suggestErgonomicSwaps(stats, currentConfig, activeProfile(), undefined, ergonomicSwappedFor(editSide)).map(s => {
+    const fromLabel = actionLabel(s.from);
+    const toLabel = actionLabel(s.to);
+    return {
+      ...s,
+      text: `${posLabel(s.from)}: ${fromLabel} → ${toLabel} (${s.fromCount}×)  ⇄  ${posLabel(s.to)}: ${toLabel} → ${fromLabel} (${s.toCount}×) · ${s.reason}`
+    };
+  });
   const signature = JSON.stringify(swaps);
   if (listEl.dataset.signature === signature) return;
   listEl.dataset.signature = signature;
@@ -200,7 +208,7 @@ function updateComboSuggestionsUI(stats) {
     return `${keyPositionLabel(`${pos.r}_${pos.c}`)} ${(cell && cell.label) || ""}`.trim();
   };
   const suggestions = suggestCombos(stats, currentConfig, activeProfile()).map(s => ({
-    ...s, text: `${cellLabel(s.a)} + ${cellLabel(s.b)} (${s.count}×)`
+    ...s, text: `${cellLabel(s.a)} + ${cellLabel(s.b)} (${s.count}×) · Einzeltasten bleiben erhalten`
   }));
   const signature = JSON.stringify(suggestions);
   if (listEl.dataset.signature === signature) return;
